@@ -22,6 +22,12 @@ def _completed(stdout: str = "", returncode: int = 0) -> subprocess.CompletedPro
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
 
 
+def _reverse_asserted(calls: list[list[str]], port: int = 8765) -> bool:
+    """True if any adb call issued the reverse assertion (ignoring the -s transport prefix)."""
+    spec = f"tcp:{port}"
+    return any(cmd[-3:] == ["reverse", spec, spec] for cmd in calls)
+
+
 class _FakeAdb:
     """Scripts adb output keyed by the first meaningful subcommand token."""
 
@@ -31,9 +37,13 @@ class _FakeAdb:
 
     def __call__(self, cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         self.calls.append(cmd)
-        # cmd is [adb, <sub>, ...]; key on "reverse --list" vs "reverse" vs "devices".
-        key = cmd[1]
-        if key == "reverse" and len(cmd) >= 3 and cmd[2] == "--list":
+        # cmd is [adb, (-s serial)?, <sub>, ...]; drop the optional transport selector, then
+        # key on "reverse --list" vs "reverse" vs "devices".
+        args = cmd[1:]
+        if len(args) >= 2 and args[0] == "-s":
+            args = args[2:]
+        key = args[0] if args else ""
+        if key == "reverse" and len(args) >= 2 and args[1] == "--list":
             key = "reverse --list"
         value = self._responses.get(key, _completed())
         if isinstance(value, Exception):
@@ -97,10 +107,10 @@ def test_existing_tunnel_is_reported_without_reasserting() -> None:
             "reverse --list": _completed("UsbFfs tcp:8765 tcp:8765\n"),
         }
     )
-    status = ensure_tablet_reverse(fake, 8765, adb=_ADB)
+    status = ensure_tablet_reverse(fake, 8765, adb=_ADB, env={})
     assert status == TunnelStatus(True, "tunnel-up", "tcp:8765 -> tcp:8765")
     # It must NOT issue a `reverse tcp:8765 tcp:8765` assertion when already present.
-    assert not any(cmd[1:] == ["reverse", "tcp:8765", "tcp:8765"] for cmd in fake.calls)
+    assert not _reverse_asserted(fake.calls)
 
 
 def test_missing_tunnel_is_asserted_then_verified() -> None:
@@ -112,10 +122,10 @@ def test_missing_tunnel_is_asserted_then_verified() -> None:
             "reverse --list": lambda _cmd: _completed(next(listings)),
         }
     )
-    status = ensure_tablet_reverse(fake, 8765, adb=_ADB)
+    status = ensure_tablet_reverse(fake, 8765, adb=_ADB, env={})
     assert status.state == "tunnel-up"
     assert status.ok is True
-    assert any(cmd[1:] == ["reverse", "tcp:8765", "tcp:8765"] for cmd in fake.calls)
+    assert _reverse_asserted(fake.calls)
 
 
 def test_reverse_assertion_that_does_not_stick_fails_loud() -> None:
@@ -125,7 +135,7 @@ def test_reverse_assertion_that_does_not_stick_fails_loud() -> None:
             "reverse --list": _completed(""),  # never present, even after assert
         }
     )
-    status = ensure_tablet_reverse(fake, 8765, adb=_ADB)
+    status = ensure_tablet_reverse(fake, 8765, adb=_ADB, env={})
     assert status.state == "tunnel-down"
     assert status.ok is False
 
@@ -138,7 +148,7 @@ def test_reverse_list_pair_match_is_not_substring_fooled() -> None:
             "reverse --list": _completed("UsbFfs tcp:87650 tcp:87650\n"),
         }
     )
-    status = ensure_tablet_reverse(fake, 8765, adb=_ADB)
+    status = ensure_tablet_reverse(fake, 8765, adb=_ADB, env={})
     # 8765 is absent → keeper asserts it; the scripted list still lacks it → tunnel-down.
     assert status.state == "tunnel-down"
 
@@ -151,3 +161,43 @@ def test_adb_devices_spawn_failure_fails_loud() -> None:
 
 
 _KEEPER: Callable[..., TunnelStatus] = ensure_tablet_reverse  # module-symbol smoke
+
+
+def test_single_device_uses_transport_selector() -> None:
+    """The reverse commands carry -s <serial> so they don't depend on a default transport."""
+    fake = _FakeAdb(
+        {
+            "devices": _completed("List of devices attached\nSER123\tdevice\n"),
+            "reverse --list": _completed("UsbFfs tcp:8765 tcp:8765\n"),
+        }
+    )
+    status = ensure_tablet_reverse(fake, 8765, adb=_ADB, env={})
+    assert status.state == "tunnel-up"
+    # every reverse call selected the transport explicitly
+    reverse_calls = [c for c in fake.calls if "reverse" in c]
+    assert reverse_calls
+    assert all(c[1:3] == ["-s", "SER123"] for c in reverse_calls)
+
+
+def test_multiple_devices_without_serial_fails_loud() -> None:
+    fake = _FakeAdb(
+        {"devices": _completed("List of devices attached\nSER1\tdevice\nSER2\tdevice\n")}
+    )
+    status = ensure_tablet_reverse(fake, 8765, adb=_ADB, env={})
+    assert status.state == "multiple-devices"
+    assert status.ok is False
+    # must NOT blindly issue a reverse without picking a transport
+    assert not _reverse_asserted(fake.calls)
+
+
+def test_multiple_devices_with_serial_override_selects_it() -> None:
+    fake = _FakeAdb(
+        {
+            "devices": _completed("List of devices attached\nSER1\tdevice\nSER2\tdevice\n"),
+            "reverse --list": _completed("UsbFfs tcp:8765 tcp:8765\n"),
+        }
+    )
+    status = ensure_tablet_reverse(fake, 8765, adb=_ADB, env={"AC_COPILOT_ADB_SERIAL": "SER2"})
+    assert status.state == "tunnel-up"
+    reverse_calls = [c for c in fake.calls if "reverse" in c]
+    assert all(c[1:3] == ["-s", "SER2"] for c in reverse_calls)

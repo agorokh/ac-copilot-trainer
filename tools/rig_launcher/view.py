@@ -273,6 +273,27 @@ class LauncherView:
 
     # -- refresh --------------------------------------------------------------
 
+    def mark_pending(self) -> None:
+        """Show a neutral 'checking' state until the first real status lands.
+
+        The launcher polls asynchronously (#568 review): if the first poll is slow — e.g. a
+        wedged ADB/USB stack on the managed tablet path — the window must not read as a green
+        READY-TO-DRIVE before any probe has actually run. Seed a dim, non-committal state.
+        """
+        self._summary_field.configure(
+            text="CHECKING…",
+            bg=theme.color_for_tone("idle"),
+            fg=theme.FIELD_INK.get("idle", theme.CHALK),
+        )
+        self._summary_caption.configure(text="running first status check…")
+        for widgets in self._rows.values():
+            state = widgets["state"]
+            if isinstance(state, tk.Label):
+                state.configure(text="…", fg=theme.DIM)
+            detail = widgets["detail"]
+            if isinstance(detail, tk.Label):
+                detail.configure(text="")
+
     def update(self, status: GamePointStatus) -> None:
         """Repaint the summary chip and every status row from a fresh snapshot."""
         text, tone, caption = theme.summary_for(status, port=self._port)

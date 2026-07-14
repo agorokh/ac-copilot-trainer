@@ -417,7 +417,15 @@ class GamePointSupervisor:
         self._close_log_handles()
         return ProbeResult("sidecar", True, "stopped")
 
-    def poll_status(self) -> GamePointStatus:
+    def poll_status(self, *, start_simhub: bool | None = None) -> GamePointStatus:
+        """Snapshot every probe and persist status.json.
+
+        ``start_simhub`` gates the SimHub *launch* side effect: ``None`` (default) honors the
+        configured auto-start (preserves the one-shot START/toggle behavior), while an explicit
+        ``False`` makes the poll **read-only** — the continuous GUI tick passes ``False`` so a
+        closed/crashed SimHub is not relaunched on every 5 s interval (#568 review).
+        """
+        start_sim = self.config.start_simhub if start_simhub is None else start_simhub
         checks = self.preflight()
         sidecar = self._sidecar_process_status()
         health, health_payload = self._read_health_payload()
@@ -429,7 +437,7 @@ class GamePointSupervisor:
             sidecar=sidecar,
             screen=screen,
             voice=self.probe_voice(health_payload),
-            simhub=self.probe_simhub(start=self.config.start_simhub),
+            simhub=self.probe_simhub(start=start_sim),
             tablet=self.probe_tablet(health_payload),
             log_path=str(self.paths.sidecar_log_path),
             status_path=str(self.paths.status_path),
@@ -471,6 +479,19 @@ class GamePointSupervisor:
 
         result = ensure_tablet_reverse(self._run, self.config.port, env=self._environ)
         if result.state == "tunnel-up" and isinstance(health_payload, Mapping):
+            # A stale sidecar adopted from a previous launcher run may not serve /tablet/dash —
+            # the tunnel is up but the page still 426s. Reject it here (using the endpoint set
+            # /health now advertises) so the GUI doesn't read READY while the dash is broken;
+            # the operator must rebuild the launcher (#568 review). Only gate when the payload
+            # actually carries `endpoints` (older sidecars omit it → don't false-fail).
+            endpoints = health_payload.get("endpoints")
+            if isinstance(endpoints, list) and "/tablet/dash" not in endpoints:
+                return ProbeResult(
+                    "tablet",
+                    False,
+                    "stale-sidecar",
+                    "adopted sidecar does not serve /tablet/dash — rebuild the launcher",
+                )
             try:
                 browser_peers = int(health_payload.get("browser_peers") or 0)
             except (TypeError, ValueError):

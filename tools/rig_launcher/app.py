@@ -270,7 +270,9 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
 
     def _poll_worker() -> None:
         try:
-            status = supervisor.poll_status()
+            # Read-only: the continuous poll must never re-launch SimHub on each tick — starting
+            # it is an explicit user action (START / toggle-on) below (#568 review).
+            status = supervisor.poll_status(start_simhub=False)
         finally:
             _poll_busy["v"] = False
 
@@ -299,6 +301,10 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
 
     def start() -> None:
         supervisor.start_sidecar()
+        # START is the explicit "bring the rig up" action — launch SimHub once here (not on the
+        # read-only status ticks) if the operator opted into auto-start.
+        if supervisor.config.start_simhub:
+            supervisor.probe_simhub(start=True)
         refresh()
 
     def open_logs() -> None:
@@ -333,10 +339,12 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
             messagebox.showerror("Setup Diff", str(exc), parent=root)
 
     def toggle_simhub(enabled: bool) -> None:
-        # Apply the checkbox's new state (the view passes it in, so the model follows the
-        # UI) and refresh so it takes effect immediately: poll_status starts/adopts SimHub
-        # when enabled, or just reports it absent — SimHub is never a blocking status row.
+        # Apply the checkbox's new state (the view passes it in, so the model follows the UI).
+        # Toggling ON is an explicit action → launch SimHub once here; the read-only status
+        # ticks never (re)start it. SimHub is never a blocking status row.
         supervisor.set_start_simhub(enabled)
+        if enabled:
+            supervisor.probe_simhub(start=True)
         refresh()
 
     view = build_launcher_view(
@@ -367,6 +375,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
         except tk.TclError:
             return
 
+    view.mark_pending()  # neutral state until the first async poll lands (#568 review)
     refresh()
     root.after(_GUI_POLL_INTERVAL_MS, poll_tick)
     root.mainloop()

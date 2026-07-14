@@ -130,6 +130,19 @@ def _device_state(devices_stdout: str) -> str:
     return "none"
 
 
+def _authorized_serials(devices_stdout: str) -> list[str]:
+    """Serials of every authorized (``device``-state) transport in ``adb devices`` output."""
+    serials: list[str] = []
+    for line in devices_stdout.splitlines():
+        line = line.strip()
+        if not line or line.lower().startswith("list of devices"):
+            continue
+        parts = line.split()
+        if len(parts) >= 2 and parts[1].lower() == "device":
+            serials.append(parts[0])
+    return serials
+
+
 def _reverse_present(reverse_list_stdout: str, port: int) -> bool:
     """True iff ``adb reverse --list`` already maps ``tcp:<port>`` → ``tcp:<port>``.
 
@@ -193,12 +206,37 @@ def ensure_tablet_reverse(
             "device-offline",
             "tablet present but offline/unusable — wake it or re-seat the USB cable",
         )
+    # Pick the transport explicitly: with more than one authorized device/emulator, a bare
+    # `adb reverse` errors "more than one device/emulator" and the tunnel would read
+    # tunnel-down even though the tablet is fine. Use the sole serial, or an operator-chosen
+    # AC_COPILOT_ADB_SERIAL; refuse to guess among several (#568 review).
+    serials = _authorized_serials(devices.stdout or "")
+    env_map = env if env is not None else os.environ
+    chosen = (env_map.get("AC_COPILOT_ADB_SERIAL") or "").strip()
+    if chosen:
+        if chosen not in serials:
+            return TunnelStatus(
+                False,
+                "no-device",
+                f"AC_COPILOT_ADB_SERIAL={chosen} not among connected devices {serials}",
+            )
+        serial = chosen
+    elif len(serials) == 1:
+        serial = serials[0]
+    else:
+        return TunnelStatus(
+            False,
+            "multiple-devices",
+            f"{len(serials)} authorized devices {serials} — "
+            "set AC_COPILOT_ADB_SERIAL to the tablet's serial",
+        )
+    sel = ["-s", serial]
     spec = f"tcp:{port}"
-    listing = _run_adb(run, adb, ["reverse", "--list"])
+    listing = _run_adb(run, adb, [*sel, "reverse", "--list"])
     if listing is not None and _reverse_present(listing.stdout or "", port):
         return TunnelStatus(True, "tunnel-up", f"{spec} -> {spec}")
-    _run_adb(run, adb, ["reverse", spec, spec])
-    verify = _run_adb(run, adb, ["reverse", "--list"])
+    _run_adb(run, adb, [*sel, "reverse", spec, spec])
+    verify = _run_adb(run, adb, [*sel, "reverse", "--list"])
     if verify is not None and _reverse_present(verify.stdout or "", port):
         return TunnelStatus(True, "tunnel-up", f"asserted {spec} -> {spec}")
     return TunnelStatus(False, "tunnel-down", f"failed to assert `adb reverse {spec} {spec}`")

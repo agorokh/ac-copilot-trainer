@@ -1488,12 +1488,15 @@ def test_probe_tablet_managed_asserts_reverse_and_reports_dash(tmp_path: Path) -
 
     def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         calls.append(cmd)
-        sub = cmd[1]
+        args = cmd[1:]
+        if len(args) >= 2 and args[0] == "-s":
+            args = args[2:]  # drop the transport selector
+        sub = args[0] if args else ""
         if sub == "devices":
             return subprocess.CompletedProcess(
                 cmd, 0, "List of devices attached\n1c00\tdevice\n", ""
             )
-        if sub == "reverse" and len(cmd) >= 3 and cmd[2] == "--list":
+        if sub == "reverse" and len(args) >= 2 and args[1] == "--list":
             return subprocess.CompletedProcess(cmd, 0, "UsbFfs tcp:8765 tcp:8765\n", "")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -1504,14 +1507,16 @@ def test_probe_tablet_managed_asserts_reverse_and_reports_dash(tmp_path: Path) -
         urlopen=_refused_urlopen,
         run=fake_run,
     )
-    tablet = sup.probe_tablet({"browser_peers": 0})
+    # health advertising /tablet/dash → not stale
+    healthy = {"endpoints": ["/health", "/tablet/dash", "/tablet/voice"], "browser_peers": 0}
+    tablet = sup.probe_tablet(healthy)
     assert tablet.state == "tunnel-up"
     assert tablet.ok is True
 
-    tablet2 = sup.probe_tablet({"browser_peers": 1})
+    tablet2 = sup.probe_tablet({**healthy, "browser_peers": 1})
     assert tablet2.state == "dash-connected"
     assert "browser_peers=1" in tablet2.detail
-    assert any(cmd[1] == "devices" for cmd in calls)
+    assert any("devices" in cmd for cmd in calls)
 
 
 def test_self_test_endpoints_flags_stale_build(tmp_path: Path) -> None:
@@ -1687,3 +1692,54 @@ def test_self_test_cli_stops_sidecar_it_started(tmp_path: Path, monkeypatch) -> 
     rc = app.main(["--self-test"])
     assert rc == 0
     assert made[0].events == ["start", "selftest", "stop", "close"]
+
+
+def test_probe_tablet_flags_stale_adopted_sidecar(tmp_path: Path) -> None:
+    """P2 (#568 review): an adopted stale sidecar whose /health omits /tablet/dash must not
+    read as a healthy tunnel — the dash would still 426."""
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+
+    def fake_run(cmd: list[str], **_k: Any) -> subprocess.CompletedProcess[str]:
+        sub = cmd[2] if len(cmd) > 2 and cmd[1] == "-s" else cmd[1]
+        if sub == "devices":
+            return subprocess.CompletedProcess(
+                cmd, 0, "List of devices attached\nSER\tdevice\n", ""
+            )
+        if "reverse" in cmd and "--list" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "UsbFfs tcp:8765 tcp:8765\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    cfg = GamePointConfig(manage_tablet_tunnel=True, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(
+        cfg, environ={"AC_COPILOT_ADB": str(adb)}, urlopen=_refused_urlopen, run=fake_run
+    )
+    # health from a stale build: endpoints present but missing /tablet/dash
+    stale = {"endpoints": ["/health", "/metrics"], "browser_peers": 0}
+    tablet = sup.probe_tablet(stale)
+    assert tablet.state == "stale-sidecar"
+    assert tablet.ok is False
+
+
+def test_poll_status_read_only_does_not_start_simhub(tmp_path: Path) -> None:
+    """P2 (#568 review): the continuous read-only poll must not relaunch SimHub every tick."""
+    exe = tmp_path / "SimHub" / "SimHubWPF.exe"
+    exe.parent.mkdir()
+    exe.write_text("", encoding="utf-8")
+    spawned: list[Any] = []
+
+    def fake_popen(*args: Any, **kwargs: Any) -> _Proc:
+        spawned.append(args)
+        return _Proc()
+
+    cfg = GamePointConfig(start_simhub=True, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(
+        cfg,
+        environ={"ProgramFiles": str(tmp_path)},
+        popen=fake_popen,
+        urlopen=_refused_urlopen,
+        run=_no_simhub_run,
+    )
+    status = sup.poll_status(start_simhub=False)
+    assert status.simhub.state == "available"  # discovered, NOT started
+    assert spawned == []  # SimHub was never launched by a read-only poll

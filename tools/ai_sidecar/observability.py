@@ -79,6 +79,10 @@ def build_commit() -> str:
             text=True,
             timeout=2,
             check=False,
+            # Anchor to THIS module's source tree so a sidecar launched from elsewhere (a desktop
+            # shortcut, or a frozen EXE that happens to sit inside an unrelated git repo) can't
+            # report a foreign commit (#568 self-hosted reviewer).
+            cwd=os.path.dirname(os.path.abspath(__file__)),
         )
         commit = completed.stdout.strip()
     except (OSError, subprocess.SubprocessError):
