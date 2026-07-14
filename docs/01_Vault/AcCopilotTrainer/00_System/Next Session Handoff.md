@@ -104,21 +104,25 @@ reconciled −1.76 s QSS vs stock (91.39 vs 93.15 s, Magione stock line near-opt
 4 review rounds, 12 findings all fixed (incl. daemon HIGH → the shared gate). `make ci-fast`
 green; classification: no flags. Detail: [[issue-572-alien-pipeline-2026-07-14]].
 
-**G1 first unseen combo PASS (same session):** `auto_alien --car ks_ferrari_488_gt3 --track
-magione` from nothing — handshake+ID (fit promoted), line built vs the 488's own plant
-(QSS 91.94 s), drive PASS lap 1:58.751 `is_valid:true`, zero recoveries end-to-end. Attempt 1
-failed honestly on a ten-day-stale AC app junction (primary checkout detached at `73ebe82`,
-pre-#543 Lua → `car:"function_0xff"` archives, no fit); primary checkout synced to the merged
-main tip, detection gap filed as
-[#575](https://github.com/agorokh/ac-copilot-trainer/issues/575). Node updated:
+**G1 unseen-combo sample 3/3 PASS (same session):** identical unmodified `auto_alien` command,
+three never-identified combos, each nothing → identified plant (fit promoted) → per-combo line →
+AC-valid autonomous lap, zero recoveries: 488@magione **1:58.751**, 488@spa **3:33.818**
+(cross-archetype), huracan@magione **2:02.847** (different manufacturer). Cold-start mechanics
+proven; the G1 *pace* criterion is deliberately NOT claimed (conservative first laps; the
+uncertainty bins bind — both Magione plants share the 91.94 s QSS floor). Attempt 1 failed
+honestly on a ten-day-stale AC app junction (primary checkout detached at `73ebe82`, pre-#543
+Lua → `car:"function_0xff"` archives, no fit); primary checkout synced to the merged main tip,
+detection gap filed as [#575](https://github.com/agorokh/ac-copilot-trainer/issues/575). Node:
 [[issue-572-alien-pipeline-2026-07-14]].
 
-**Resume (EPIC #529):** G1 on 1–2 more unseen combos (pick a different track archetype, e.g.
-spa or mugello with the 488) via the same one-button command, then P3 (corner BVP + stint layer,
-attack the 82.7 s Magione floor). Note: the composed run stops shortly after the first asserted
-lap (`--wait-lap` semantics), so a flying-lap pace proof needs a longer tap window — consider a
-`--laps N` budget when P3 starts. **Rig invariant to hold:** the AC app junction serves the
-primary checkout — keep it at the merged main tip (or land #575 so preflight catches drift).
+**Resume (EPIC #529):** implement **P3 =
+[#577](https://github.com/agorokh/ac-copilot-trainer/issues/577)** — `--laps N` flying-lap
+windows in `auto_drive`, progressive-envelope self-play in `auto_alien` (refine fit from new
+archives → line cache auto-invalidates via the plant-fit hash → re-drive; keep-last-valid), then
+corridor-constrained corner refinement. Target: monotonic lap-time trajectory toward the 82.7 s
+Magione floor. **Rig invariants:** AC app junction's primary checkout stays at the merged main
+tip (until #575 lands); plants for GT3R/488/huracan + alien lines already persisted under
+`Documents/Assetto Corsa/{plant_id,alien_line}/`.
 
 ## Delivered (2026-07-14) — #567 tablet dash connection hardening CLOSED (PR #568 MERGED `ae54ce9`)
 
