@@ -1692,9 +1692,7 @@ def _count_matching_lap_archives(
     return count
 
 
-def _archive_matches_combo(
-    payload: dict, *, car_id: str, track_id: str, layout: str | None
-) -> bool:
+def archive_matches_combo(payload: dict, *, car_id: str, track_id: str, layout: str | None) -> bool:
     """Return whether a current-run archive can belong to the requested combo."""
     car = payload.get("car") if isinstance(payload.get("car"), dict) else {}
     track = payload.get("track") if isinstance(payload.get("track"), dict) else {}
@@ -3345,8 +3343,8 @@ def _main_impl(
     timed_laps_observed = len(report.lap_times_ms)
     expected_archives = max(handshake_laps_used, timed_laps_observed)
 
-    def archive_matches_combo(payload: dict) -> bool:
-        return _archive_matches_combo(
+    def _combo_predicate(payload: dict) -> bool:
+        return archive_matches_combo(
             payload,
             car_id=config.car_id,
             track_id=config.track_id,
@@ -3377,7 +3375,7 @@ def _main_impl(
         # Defensive: without a car identity the predicate can never match, so it must not gate
         # ANY counting path (min_valid_count is handshake-only and handshake requires --car, so
         # this is unreachable today — kept consistent regardless; #579 daemon MEDIUM).
-        valid_archive_predicate=archive_matches_combo if config.car_id else None,
+        valid_archive_predicate=_combo_predicate if config.car_id else None,
         timeout_s=20.0 if batch_mode else 8.0,
     )
     # Report the dir the archive was actually found in (correct even for a renamed install), so the

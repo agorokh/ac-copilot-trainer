@@ -37,7 +37,7 @@ from pathlib import Path
 
 from tools.ac_harness.auto_drive import (
     ALIEN_MAX_OVERSPEED_SCALE,
-    _archive_matches_combo,
+    archive_matches_combo,
     resolve_ac_user_dir,
     resolve_setup_ini,
     validate_ac_id,
@@ -198,7 +198,7 @@ def combo_filter_payloads(
     kept = [
         p
         for p in payloads
-        if _archive_matches_combo(p, car_id=car_id, track_id=track_id, layout=layout)
+        if archive_matches_combo(p, car_id=car_id, track_id=track_id, layout=layout)
     ]
     return kept, len(payloads) - len(kept)
 
