@@ -1149,3 +1149,101 @@ def test_apply_handshake_outcome_success_notes():
     apply_handshake_outcome(report, sink)
     assert report.ok is True
     assert report.notes and "handshake ok" in report.notes[0]
+
+
+# --------------------------------------------------------------------------- #577 self-play refine
+def _selfplay_thermal_archive(lap_uuid: str, *, lateral_g: float = 1.3, lap_n: int = 1) -> dict:
+    """A fit-eligible lap archive for the pipeline's own combo (test_car/test_oval)."""
+    from tools.ac_harness.reference_lap import TRACE_FIELDS
+
+    fields = list(TRACE_FIELDS)
+    samples = []
+    for i in range(600):
+        values = dict.fromkeys(fields, 0.0)
+        speed = 50.0 + float((i // 50) % 11) * 10.0
+        braking = i % 2 == 0
+        values.update(
+            {
+                "spline": i / 600.0,
+                "speed": speed,
+                "eMs": i * 10.0,
+                "brake": 0.8 if braking else 0.0,
+                "throttle": 0.0 if braking else 1.0,
+                "accG_lat": lateral_g,
+                "accG_long": -1.25 if braking else 0.75,
+            }
+        )
+        for wheel in ("fl", "fr", "rl", "rr"):
+            values[f"tyreCoreTemp_{wheel}"] = 90.0
+            values[f"tyreTempInner_{wheel}"] = 92.0
+            values[f"tyreTempMid_{wheel}"] = 90.0
+            values[f"tyreTempOuter_{wheel}"] = 88.0
+            values[f"wheelsPressure_{wheel}"] = 27.0
+            values[f"dy_{wheel}"] = 1.5
+        samples.append([values[field] for field in fields])
+    return {
+        "schema_version": 1,
+        "source": "in_game",
+        "lap_uuid": lap_uuid,
+        "car": {"id": "test_car"},
+        "track": {"id": "test_oval", "layout": None},
+        "lap": {"lap_n": lap_n, "lap_ms": 90000, "is_valid": True},
+        "setup": {"hash": "setup-a"},
+        "tyres": {"compoundIndex": 1, "name": "M", "optimalTempC": 90.0},
+        "trace": {"fields": fields, "samples": samples, "samples_count": len(samples)},
+    }
+
+
+def _selfplay_artifact() -> dict:
+    artifact = _result_dict()
+    artifact["schema_version"] = PLANT_SCHEMA_VERSION
+    artifact["created_utc"] = "2026-07-01T00:00:00Z"
+    artifact["ggv"] = {"ok": True, "model": _uncertain_prior().to_dict(), "reason": "ok"}
+    return artifact
+
+
+def test_selfplay_refine_requires_current_fit_and_archives():
+    from tools.ac_harness.plant_id import selfplay_refine_result
+
+    no_fit = _result_dict()
+    result, block = selfplay_refine_result(no_fit, [], generic_gt3_ggv())
+    assert result is None and "#543" in block["reason"]
+
+    result, block = selfplay_refine_result(_selfplay_artifact(), [], generic_gt3_ggv())
+    assert result is None  # batch refit degraded -> keep last valid, reason named
+    assert block["ok"] is False
+    assert "no thermally consistent" in block["reason"]
+
+
+def test_selfplay_refine_merges_monotonically_and_strips_stale_meta(tmp_path):
+    from tools.ac_harness.ggv_profile import GGVModel as _GGV
+    from tools.ac_harness.plant_id import selfplay_refine_result
+
+    artifact = _selfplay_artifact()
+    current = plant_ggv_model(artifact)
+    archives = [
+        _selfplay_thermal_archive("sp-1", lateral_g=1.35, lap_n=1),
+        _selfplay_thermal_archive("sp-2", lateral_g=1.35, lap_n=2),
+    ]
+    result, block = selfplay_refine_result(artifact, archives, generic_gt3_ggv())
+    assert result is not None
+    assert block["ok"] is True
+    assert "selfplay_merge" in block
+    # Stale identity meta is stripped so save_plant_artifact stamps fresh values.
+    assert "schema_version" not in result and "created_utc" not in result
+    merged = _GGV.from_dict(result["ggv"]["model"])
+    assert merged.uncertainty_aware
+    for cur_bin, new_bin in zip(
+        current.uncertainty_bins, merged.uncertainty_bins, strict=True
+    ):
+        assert new_bin["lateral"]["safe_g"] >= cur_bin["lateral"]["safe_g"]
+        assert dict(new_bin["brake"]) == dict(cur_bin["brake"])
+    # The refined result persists through the SAME artifact gate every plant rides.
+    path = save_plant_artifact(tmp_path, result)
+    reloaded = load_plant_artifact(tmp_path, "test_car", "test_oval")
+    assert reloaded is not None
+    assert plant_ggv_model(reloaded) is not None
+    assert reloaded["ggv"]["selfplay_merge"] == block["selfplay_merge"]
+    assert path.exists()
+    # The original artifact object was never mutated (deep-copied inside).
+    assert artifact["ggv"]["reason"] == "ok"

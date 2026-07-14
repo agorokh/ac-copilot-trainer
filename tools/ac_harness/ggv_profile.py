@@ -700,10 +700,13 @@ def merge_selfplay_model(current: GGVModel, batch: GGVModel) -> tuple[GGVModel, 
     handshake laps already proved, and adopting it verbatim would ratchet the plant (and every
     QSS profile built from it) downward. Merge rules, per speed bin:
 
-    * **lateral** — measured evidence wins over prior; when BOTH are measured, keep the posterior
-      with the higher ``safe_g`` (grip once proven stays proven within the combo's cohort; the
-      keep-last-valid falsification oracle in ``auto_alien`` is the safety valve when a raised
-      envelope turns out wrong on track).
+    * **lateral** — a batch posterior is adopted ONLY when it raises ``safe_g`` (strict
+      monotonicity). Measured provenance alone is not enough: a lap driven at 0.81x the planned
+      envelope "measures" less grip than even the prior's lower-confidence bound already grants,
+      and adopting it would ratchet the envelope (and every QSS profile built from it) downward.
+      Grip once proven stays proven within the combo's cohort; the keep-last-valid falsification
+      oracle in ``auto_alien`` is the safety valve when a raised envelope turns out wrong on
+      track.
     * **brake / drive** — always the current model's bins: longitudinal bins only learn from
       controlled probes (``brake_probe`` / ``accel_sweep`` rows), which a non-handshake self-play
       drive never produces, so a batch refit can only regress them to the prior.
@@ -737,14 +740,15 @@ def merge_selfplay_model(current: GGVModel, batch: GGVModel) -> tuple[GGVModel, 
         new_lat = dict(new_bin["lateral"])
         cur_measured = cur_lat.get("source") == "measured"
         new_measured = new_lat.get("source") == "measured"
-        if new_measured and not cur_measured:
+        # Strictly monotone: only a measured batch posterior that RAISES safe_g wins. A measured-
+        # but-lower posterior (a soft lap, or evidence below the prior's own LCB) never regresses
+        # the envelope.
+        if new_measured and float(new_lat["safe_g"]) > float(cur_lat["safe_g"]):
             lateral = new_lat
-            lateral_adopted += 1
-        elif new_measured and cur_measured and float(new_lat["safe_g"]) > float(
-            cur_lat["safe_g"]
-        ):
-            lateral = new_lat
-            lateral_raised += 1
+            if cur_measured:
+                lateral_raised += 1
+            else:
+                lateral_adopted += 1
         else:
             lateral = cur_lat
         merged_bins.append(

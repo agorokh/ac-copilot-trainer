@@ -246,3 +246,282 @@ def test_stage_argv_builders(tmp_path):
     assert "--strict" in drive
     assert "--wait-lap" in drive
     assert str(tmp_path / "drive") in drive
+
+
+# --------------------------------------------------------------------------- #577 self-play
+import json as _json
+from pathlib import Path
+
+from tools.ac_harness.auto_alien import (
+    evaluate_selfplay_iteration,
+    iteration_scale,
+    load_stage_outcome,
+    resolve_drive_seconds,
+    stage_lap_archives,
+    stage_lap_times_ms,
+)
+
+
+def test_resolve_drive_seconds_scales_with_lap_window(tmp_path):
+    assert resolve_drive_seconds(_args(tmp_path)) == 300.0
+    assert resolve_drive_seconds(_args(tmp_path, "--laps", "3")) == 180.0 + 240.0 * 3
+    # An explicit budget always wins ("N laps or the time budget, whichever first").
+    assert resolve_drive_seconds(_args(tmp_path, "--laps", "3", "--drive-seconds", "200")) == 200.0
+
+
+def test_drive_argv_carries_lap_window_scale_and_overspeed(tmp_path):
+    args = _args(tmp_path, "--laps", "3")
+    drive = drive_argv(args, tmp_path / "d")
+    assert ["--laps", "3"] == drive[drive.index("--laps") : drive.index("--laps") + 2]
+    assert "--alien-allow-overspeed" not in drive  # scale 0.9: no opt-in
+    drive = drive_argv(args, tmp_path / "d", ggv_scale=1.05)
+    scale_at = drive.index("--ggv-scale")
+    assert ["--ggv-scale", "1.05"] == drive[scale_at : scale_at + 2]
+    assert "--alien-allow-overspeed" in drive  # >1 requires the explicit drive-stage opt-in
+    assert "--alien-rebuild-line" not in drive
+    drive = drive_argv(args, tmp_path / "d", rebuild_line=True)
+    assert "--alien-rebuild-line" in drive
+
+
+def test_iteration_scale_ladder_caps():
+    assert iteration_scale(0.9, 0.05, 1, 1.1) == 0.95
+    assert iteration_scale(0.9, 0.05, 4, 1.1) == 1.1
+    assert iteration_scale(0.9, 0.05, 40, 1.1) == 1.1
+
+
+def _stage_outcome(lap_times, *, recoveries=0, archives=(), stage="done", error=None):
+    return {
+        "report": {
+            "ok": True,
+            "stage": stage,
+            "error": error,
+            "lap_times_ms": list(lap_times),
+            "drive": {"recoveries": recoveries},
+        },
+        "lap_archives": [str(p) for p in archives],
+    }
+
+
+def _archive_payload(lap_n=1, valid=True):
+    return {"lap": {"lap_n": lap_n, "lap_ms": 90000, "is_valid": valid}}
+
+
+def test_evaluate_selfplay_iteration_falsification_branches():
+    ok_payloads = [_archive_payload(1), _archive_payload(2)]
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000]), ok_payloads)
+    assert valid and "AC-valid" in reason
+
+    valid, reason = evaluate_selfplay_iteration(0, None, ok_payloads)
+    assert not valid and "report missing" in reason
+
+    valid, reason = evaluate_selfplay_iteration(
+        1, _stage_outcome([95000], stage="drive", error="boom"), ok_payloads
+    )
+    assert not valid and "exit 1" in reason and "boom" in reason
+
+    valid, reason = evaluate_selfplay_iteration(
+        0, _stage_outcome([95000], recoveries=2), ok_payloads
+    )
+    assert not valid and "recovery" in reason
+
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([]), ok_payloads)
+    assert not valid and "no timed lap" in reason
+
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000]), [])
+    assert not valid and "no lap archives" in reason
+
+    bad = [_archive_payload(1), _archive_payload(2, valid=False)]
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 96000]), bad)
+    assert not valid and "AC-invalid lap" in reason and "lap_n=2" in reason
+
+
+def test_stage_outcome_readers_round_trip(tmp_path):
+    stage = tmp_path / "drive"
+    stage.mkdir()
+    payload = _stage_outcome([95000], archives=[tmp_path / "lap_1.json"])
+    (stage / "report.json").write_text(_json.dumps(payload), encoding="utf-8")
+    outcome = load_stage_outcome(stage)
+    assert stage_lap_times_ms(outcome) == [95000]
+    assert stage_lap_archives(outcome) == [str(tmp_path / "lap_1.json")]
+    assert load_stage_outcome(tmp_path / "missing") is None
+    assert stage_lap_times_ms(None) == []
+    assert stage_lap_archives(None) == []
+
+
+def test_pipeline_rejects_bad_selfplay_flags(monkeypatch, tmp_path):
+    _usable_plant(monkeypatch, True)
+    with pytest.raises(ValueError, match="--laps"):
+        run_pipeline(_args(tmp_path, "--laps", "-1"), run_stage=_Runner([0]))
+    with pytest.raises(ValueError, match="--iterations"):
+        run_pipeline(_args(tmp_path, "--iterations", "-2"), run_stage=_Runner([0]))
+    with pytest.raises(ValueError, match="--scale-step"):
+        run_pipeline(
+            _args(tmp_path, "--iterations", "1", "--scale-step", "0"), run_stage=_Runner([0])
+        )
+    with pytest.raises(ValueError, match="--max-scale"):
+        run_pipeline(
+            _args(tmp_path, "--iterations", "1", "--max-scale", "1.5"), run_stage=_Runner([0])
+        )
+
+
+class _SelfplayHarness:
+    """Fakes the drive stages + plant persistence for the iterate-loop orchestration tests."""
+
+    def __init__(self, monkeypatch, tmp_path, stage_specs, refine_ok=True):
+        self.tmp_path = tmp_path
+        self.stage_specs = list(stage_specs)  # per drive call: (exit, lap_times, archive_valids)
+        self.refine_ok = refine_ok
+        self.refine_calls: list[list[dict]] = []
+        self.plant_path = tmp_path / "plant_id" / "car_a__trk.json"
+        self.plant_path.parent.mkdir(parents=True, exist_ok=True)
+        self.plant_path.write_text('{"v": "original"}', encoding="utf-8")
+        self.saves = 0
+
+        _usable_plant(monkeypatch, True)
+        monkeypatch.setattr(auto_alien, "wait_sidecar_port_settled", lambda url, **kw: "released")
+        monkeypatch.setattr(auto_alien, "plant_artifact_path", lambda *a, **kw: self.plant_path)
+
+        def fake_refine(artifact, payloads, prior, **kw):
+            self.refine_calls.append(list(payloads))
+            if not self.refine_ok:
+                return None, {"ok": False, "reason": "batch refit degraded (test)"}
+            return {"ok": True}, {"ok": True, "selfplay_merge": {"lateral_bins_raised": 1}}
+
+        def fake_save(user_dir, result):
+            self.saves += 1
+            self.plant_path.write_text(_json.dumps({"v": f"iter{self.saves}"}), encoding="utf-8")
+            return self.plant_path
+
+        import tools.ac_harness.plant_id as plant_id_mod
+
+        monkeypatch.setattr(plant_id_mod, "selfplay_refine_result", fake_refine)
+        monkeypatch.setattr(plant_id_mod, "save_plant_artifact", fake_save)
+
+    def runner(self):
+        state = {"i": 0}
+
+        def run(argv: list[str]) -> int:
+            exit_code, lap_times, archive_valids = self.stage_specs[state["i"]]
+            state["i"] += 1
+            stage_dir = Path(argv[argv.index("--evidence-dir") + 1])
+            stage_dir.mkdir(parents=True, exist_ok=True)
+            paths = []
+            for n, valid in enumerate(archive_valids, start=1):
+                p = stage_dir / f"lap_{n}.json"
+                p.write_text(
+                    _json.dumps({"lap": {"lap_n": n, "lap_ms": 90000, "is_valid": valid}}),
+                    encoding="utf-8",
+                )
+                paths.append(str(p))
+            payload = {
+                "report": {
+                    "ok": exit_code == 0,
+                    "stage": "done" if exit_code == 0 else "drive",
+                    "lap_times_ms": lap_times,
+                    "drive": {"recoveries": 0},
+                },
+                "lap_archives": paths,
+            }
+            (stage_dir / "report.json").write_text(_json.dumps(payload), encoding="utf-8")
+            return exit_code
+
+        return run
+
+
+def test_selfplay_ladder_progresses_and_reports_trajectory(monkeypatch, tmp_path):
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (0, [93000], [True]),  # iteration 1
+            (0, [91000], [True]),  # iteration 2
+        ],
+    )
+    args = _args(
+        tmp_path,
+        "--evidence-dir",
+        str(tmp_path / "ev"),
+        "--laps",
+        "1",
+        "--iterations",
+        "2",
+        "--scale-step",
+        "0.05",
+        "--max-scale",
+        "1.1",
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0 and report["ok"]
+    selfplay = report["selfplay"]
+    assert selfplay["stopped"] == "completed"
+    assert selfplay["lap_trajectory_ms"] == [[95000], [93000], [91000]]
+    assert selfplay["best_lap_ms"] == 91000
+    scales = [entry["ggv_scale"] for entry in selfplay["iterations"]]
+    assert scales == [0.95, 1.0]
+    assert all(entry["valid"] for entry in selfplay["iterations"])
+    # Each refine consumed the PREVIOUS drive's batch (provenance-bound self-play).
+    assert len(harness.refine_calls) == 2
+    assert harness.saves == 2
+    # The plant on disk is the last refined fit (no falsification -> no revert).
+    assert _json.loads(harness.plant_path.read_text(encoding="utf-8")) == {"v": "iter2"}
+
+
+def test_selfplay_falsified_step_reverts_plant_and_stops(monkeypatch, tmp_path):
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive: valid
+            (0, [94000, 96000], [True, False]),  # iteration 1: AC-invalid lap -> falsified
+        ],
+    )
+    args = _args(
+        tmp_path,
+        "--evidence-dir",
+        str(tmp_path / "ev"),
+        "--laps",
+        "2",
+        "--iterations",
+        "3",
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0 and report["ok"]  # the base pipeline passed; the ladder ended honestly
+    selfplay = report["selfplay"]
+    assert "falsified at iteration 1" in selfplay["stopped"]
+    assert "AC-invalid lap" in selfplay["stopped"]
+    assert len(selfplay["iterations"]) == 1  # never silently retried
+    entry = selfplay["iterations"][0]
+    assert entry["valid"] is False and entry["reverted"] is True
+    # Keep-last-valid: the falsified refined fit was rolled back on disk.
+    assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "original"}'
+
+
+def test_selfplay_refuses_identical_envelope_retry(monkeypatch, tmp_path):
+    # Scale already capped at the base value AND the refit failed -> the envelope cannot change;
+    # driving again would retry the identical envelope, which the ladder must refuse.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[(0, [95000], [True])],
+        refine_ok=False,
+    )
+    args = _args(
+        tmp_path,
+        "--evidence-dir",
+        str(tmp_path / "ev"),
+        "--laps",
+        "1",
+        "--iterations",
+        "2",
+        "--max-scale",
+        "0.9",
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0
+    selfplay = report["selfplay"]
+    assert "envelope unchanged" in selfplay["stopped"]
+    assert selfplay["iterations"][0].get("skipped") is True
+    assert selfplay["iterations"][0]["refine"]["ok"] is False
+    # The plant was never touched.
+    assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "original"}'

@@ -2683,3 +2683,107 @@ def test_cli_new_flags_map_to_config(tmp_path):
     assert cfg.max_recoveries == 3
     assert cfg.progress_stall_seconds == 8.0
     assert cfg.spawn_to_line is False
+
+
+# --------------------------------------------------------------------------- #577 flying-lap window
+def _timed_lap_snap(ms: int | None) -> dict:
+    return {"type": "state.snapshot", "topic": "lap", "v": 1, "payload": {"last_lap_ms": ms}}
+
+
+def test_multi_lap_window_passes_lap_count_and_reports_lap_times():
+    record: dict = {}
+    tap_record: dict = {}
+    frames = [
+        *CONTINUOUS,
+        _snap("session"),
+        _timed_lap_snap(None),  # teleport/out-lap boundary: not counted
+        _timed_lap_snap(95000),
+        _timed_lap_snap(93000),
+        _timed_lap_snap(91500),
+    ]
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, target_laps=3),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, laps=3), record),
+            tap=_tap_returning(frames, tap_record),
+        )
+    )
+    assert report.ok is True
+    assert tap_record["lap_count"] == 3  # the tap holds the window open for the batch
+    assert report.lap_times_ms == [95000, 93000, 91500]
+    assert report.laps_requested == 3
+    assert not any("requested 3" in n for n in report.notes)  # no shortfall note when met
+
+
+def test_multi_lap_window_shortfall_is_noted_not_failed():
+    record: dict = {}
+    frames = [*CONTINUOUS, _snap("session"), _timed_lap_snap(96000)]
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, target_laps=3),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, laps=1), record),
+            tap=_tap_returning(frames, record),
+        )
+    )
+    # "N laps or the time budget, whichever first": one timed lap still satisfies require_lap;
+    # the shortfall is reported honestly for the self-play verdict to consume.
+    assert report.ok is True
+    assert report.lap_times_ms == [96000]
+    assert any("requested 3, observed 1" in n for n in report.notes)
+
+
+def test_single_lap_wait_keeps_legacy_tap_contract():
+    record: dict = {}
+    frames = [*CONTINUOUS, _snap("session"), _snap("lap")]
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, laps=1), record),
+            tap=_tap_returning(frames, record),
+        )
+    )
+    assert report.ok is True
+    assert "lap_count" not in record  # legacy single-lap wait: no batch kwarg
+    assert report.lap_times_ms == []  # untimed boundary carries no trajectory
+
+
+def test_cli_laps_implies_wait_lap_and_rejects_negative():
+    args = _build_arg_parser().parse_args(["--car", "c", "--track", "t", "--laps", "3"])
+    cfg = _config_from_args(args)
+    assert cfg.wait_lap is True
+    assert cfg.target_laps == 3
+    args = _build_arg_parser().parse_args(["--car", "c", "--track", "t"])
+    cfg = _config_from_args(args)
+    assert cfg.wait_lap is False and cfg.target_laps == 0
+    from tools.ac_harness.auto_drive import _main
+
+    assert _main(["--car", "c", "--track", "magione", "--laps", "-1"]) == 2
+
+
+def test_build_driver_alien_overspeed_optin_is_bounded():
+    # #577: the self-play ladder may probe above the uncertainty-safe envelope, but only via the
+    # explicit opt-in and never above the hard cap.
+    from tools.ac_harness.auto_drive import ALIEN_MAX_OVERSPEED_SCALE
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    cfg = _cfg(
+        driver="alien",
+        alien_line=_LINE,
+        alien_v_target=[40.0] * 4,
+        plant_kwargs=dict(_ALIEN_PLANT_KWARGS),
+        ggv_scale=1.1,
+        alien_overspeed=True,
+    )
+    d = _build_driver(cfg, _LINE, None)
+    assert isinstance(d, RacingDriver)
+    assert max(d.profile) == pytest.approx(40.0 * 1.1)
+    with pytest.raises(ValueError, match="ggv_scale"):
+        _build_driver(replace(cfg, ggv_scale=ALIEN_MAX_OVERSPEED_SCALE + 0.01), _LINE, None)
+    with pytest.raises(ValueError, match="ggv_scale"):
+        _build_driver(replace(cfg, alien_overspeed=False), _LINE, None)

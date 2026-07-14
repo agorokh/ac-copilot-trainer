@@ -188,3 +188,38 @@ def test_frames_from_jsonl_round_trip(tmp_path):
     p.write_text("\n".join(lines) + "\n", encoding="utf-8")
     frames = frames_from_jsonl(str(p))
     assert [f["topic"] for f in frames] == ["connection", "session", "lap"]
+
+
+# --------------------------------------------------------------------------- #577 timed-lap helpers
+def _timed_lap(ms: int | float | None) -> dict:
+    frame = _f("lap")
+    frame["payload"] = {"last_lap_ms": ms}
+    return frame
+
+
+def test_is_timed_lap_frame_requires_snapshot_lap_topic_and_positive_time():
+    from tools.ac_harness.sequence_probe import is_timed_lap_frame
+
+    assert is_timed_lap_frame(_timed_lap(91234)) is True
+    assert is_timed_lap_frame(_timed_lap(None)) is False  # out-lap / teleport boundary
+    assert is_timed_lap_frame(_timed_lap(0)) is False
+    assert is_timed_lap_frame(_timed_lap("nope")) is False
+    assert is_timed_lap_frame(_f("lap")) is False  # no payload time
+    assert is_timed_lap_frame(_f("tire_temps")) is False
+    assert is_timed_lap_frame(_other("lap")) is False  # non-snapshot never counts
+
+
+def test_timed_lap_times_ms_orders_and_skips_untimed_boundaries():
+    from tools.ac_harness.sequence_probe import timed_lap_times_ms
+
+    frames = [
+        _f("connection"),
+        _timed_lap(None),  # out-lap boundary: no time, not counted
+        _timed_lap(95000),
+        _f("coaching.snapshot"),
+        _timed_lap(92500.7),  # float ms from the wire -> int
+        _other("lap"),  # diagnostic frame: never counts
+        _timed_lap(91800),
+    ]
+    assert timed_lap_times_ms(frames) == [95000, 92500, 91800]
+    assert timed_lap_times_ms([]) == []
