@@ -1,6 +1,6 @@
 ---
 type: investigation
-status: active
+status: completed
 memory_tier: canonical
 created: 2026-07-14
 updated: 2026-07-14
@@ -15,11 +15,10 @@ relates_to:
 
 # #577 — flying-lap windows + progressive-envelope self-play (EPIC #529 P3)
 
-**PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) review-converged at
-`6907e42`, MERGE-PENDING (operator click)** — the session permission rail refuses an agent
-merging its own PR without in-session named authorization. Everything else is done: CI green,
-0 unresolved threads, resolve-gate ledger clean, self-hosted reviewer no-HIGH, cooldowns
-completed, live-verified pre-merge. After merge: `/post-merge 579`.
+**PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) MERGED** as
+[`5b8fe0a`](https://github.com/agorokh/ac-copilot-trainer/commit/5b8fe0a51f6df3dc3ecaef1a39d4a8138de67ee9)
+at 2026-07-14T22:17:17Z. Linked issue #577 auto-closed two seconds later. Merged-main CI and
+governance-conformance are green; post-merge classification found no operational flags.
 
 ## Shipped contract
 
@@ -82,11 +81,12 @@ slash-command triggers from Git-Bash get MSYS-mangled (`/gemini` → `C:/Program
   then wants to rewrite hundreds of files. Fix: delete + `git checkout --` the `w/crlf` files
   (`git ls-files --eol`); `git checkout-index -f` does NOT renormalize in place.
 
-## Remaining
+## Remaining / tracking truth
 
-- **Operator: merge PR #579** (one click; everything staged), then `/post-merge 579`.
-- **#577 open scope after merge**: L3 corridor-constrained per-corner refinement (issue "What"
-  item 3 — trail-brake shape + curb usage inside QSS entry/exit corridors under a slip-angle
-  stability margin; no AC attached). The floor attack continues cheaply: more iterations
-  (`--iterations 6 --max-scale 1.15`) on the merged main.
+- GitHub closed #577 with PR #579, but issue-body item 3—L3 corridor-constrained per-corner
+  refinement (trail-brake shape + curb usage inside QSS entry/exit corridors under a slip-angle
+  stability margin)—did **not** ship. Reopen #577 or create a non-overlapping follow-up before
+  implementation; CLOSED is not delivery evidence for that item.
+- The floor attack can continue experimentally on merged main with more iterations
+  (`--iterations 6 --max-scale 1.15`); this is optional evidence gathering, not post-merge debt.
 - Rig invariant unchanged: AC app junction → primary checkout at merged main tip (#575 open).
