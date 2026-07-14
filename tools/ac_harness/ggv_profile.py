@@ -691,6 +691,92 @@ def with_binned_uncertainty(
     return replace(point_model, provenance=provenance, uncertainty_bins=tuple(bins))
 
 
+def merge_selfplay_model(current: GGVModel, batch: GGVModel) -> tuple[GGVModel, dict]:
+    """Merge one self-play batch refit into the current identified plant, monotonically (#577).
+
+    The self-play loop drives the alien line, refits the friction envelope from ONLY that batch's
+    lap archives, and must never *lose* previously proven grip to a smaller/softer batch: a lap
+    driven at 0.9x the planned envelope produces measured lateral evidence BELOW what the
+    handshake laps already proved, and adopting it verbatim would ratchet the plant (and every
+    QSS profile built from it) downward. Merge rules, per speed bin:
+
+    * **lateral** — measured evidence wins over prior; when BOTH are measured, keep the posterior
+      with the higher ``safe_g`` (grip once proven stays proven within the combo's cohort; the
+      keep-last-valid falsification oracle in ``auto_alien`` is the safety valve when a raised
+      envelope turns out wrong on track).
+    * **brake / drive** — always the current model's bins: longitudinal bins only learn from
+      controlled probes (``brake_probe`` / ``accel_sweep`` rows), which a non-handshake self-play
+      drive never produces, so a batch refit can only regress them to the prior.
+
+    Top-level lateral grip takes ``max(current, batch)`` (the point model is the operating
+    ceiling the bins derate — proven-harder cornering may raise it, a soft batch never lowers
+    it); every other coefficient, the caps, ``ellipse_n`` and the supported-longitudinal
+    overrides stay the current model's. Both models must carry the identical uncertainty-bin
+    grid (same schema-v3 fit pipeline) — anything else is a wiring bug and raises.
+    """
+    if not current.uncertainty_aware or not batch.uncertainty_aware:
+        raise ValueError("selfplay merge requires two uncertainty-aware (schema-v3) models")
+    if len(current.uncertainty_bins) != len(batch.uncertainty_bins):
+        raise ValueError(
+            "selfplay merge: uncertainty-bin grids differ "
+            f"({len(current.uncertainty_bins)} vs {len(batch.uncertainty_bins)} bins)"
+        )
+    merged_bins: list[dict] = []
+    lateral_adopted = 0
+    lateral_raised = 0
+    for cur_bin, new_bin in zip(current.uncertainty_bins, batch.uncertainty_bins, strict=True):
+        if not math.isclose(
+            float(cur_bin["speed_min_kmh"]), float(new_bin["speed_min_kmh"])
+        ) or not math.isclose(float(cur_bin["speed_max_kmh"]), float(new_bin["speed_max_kmh"])):
+            raise ValueError(
+                "selfplay merge: bin speed ranges differ "
+                f"({cur_bin['speed_min_kmh']}-{cur_bin['speed_max_kmh']} vs "
+                f"{new_bin['speed_min_kmh']}-{new_bin['speed_max_kmh']} km/h)"
+            )
+        cur_lat = dict(cur_bin["lateral"])
+        new_lat = dict(new_bin["lateral"])
+        cur_measured = cur_lat.get("source") == "measured"
+        new_measured = new_lat.get("source") == "measured"
+        if new_measured and not cur_measured:
+            lateral = new_lat
+            lateral_adopted += 1
+        elif new_measured and cur_measured and float(new_lat["safe_g"]) > float(
+            cur_lat["safe_g"]
+        ):
+            lateral = new_lat
+            lateral_raised += 1
+        else:
+            lateral = cur_lat
+        merged_bins.append(
+            {
+                "speed_min_kmh": float(cur_bin["speed_min_kmh"]),
+                "speed_max_kmh": float(cur_bin["speed_max_kmh"]),
+                "lateral": lateral,
+                "brake": dict(cur_bin["brake"]),
+                "drive": dict(cur_bin["drive"]),
+            }
+        )
+    mu_before = current.mu_lat_g
+    mu_after = max(current.mu_lat_g, batch.mu_lat_g)
+    provenance = copy.deepcopy(current.provenance)
+    history = provenance.setdefault("selfplay_merges", [])
+    stats = {
+        "lateral_bins_adopted": lateral_adopted,
+        "lateral_bins_raised": lateral_raised,
+        "mu_lat_g_before": round(mu_before, 6),
+        "mu_lat_g_after": round(mu_after, 6),
+        "batch_mu_lat_g": round(batch.mu_lat_g, 6),
+    }
+    history.append(stats)
+    merged = replace(
+        current,
+        mu_lat_g=mu_after,
+        provenance=provenance,
+        uncertainty_bins=tuple(merged_bins),
+    )
+    return merged, dict(stats)
+
+
 def observe_lap_tyre_state(
     archive: dict,
     *,

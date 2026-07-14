@@ -52,6 +52,7 @@ from tools.ac_harness.ggv_profile import (
     fit_steer_feedforward,
     ggv_from_lap_archives,
     ggv_from_telemetry,
+    merge_selfplay_model,
     seg_lengths,
     signed_curvature_profile,
 )
@@ -1558,6 +1559,66 @@ def refine_ggv_from_lap_archives(
     block["reason"] = "ok"
     result["ggv"] = block
     return block
+
+
+def selfplay_refine_result(
+    artifact: dict,
+    archives: list[str | Path | dict],
+    prior: GGVModel,
+    *,
+    prior_name: str = "generic_gt3_ggv",
+) -> tuple[dict | None, dict]:
+    """Refit from ONE self-play lap batch and merge monotonically into the plant (#577).
+
+    ``artifact`` is the combo's loaded plant artifact (the persisted handshake result). The batch
+    ``archives`` must be provenance-bound to the pipeline's own drive stage (collected by the same
+    run, combo-matched) — that is the ``archives_same_run=True`` contract. Returns
+    ``(result_to_persist, refine_block)``:
+
+    * on success, ``result_to_persist`` is a deep-copied result whose ``ggv`` block carries the
+      monotonically merged model (see :func:`~tools.ac_harness.ggv_profile.merge_selfplay_model`);
+      persist it through :func:`save_plant_artifact` — the SAME gate every plant rides — so the
+      plant-fit provenance hash changes and every cached alien line derived from the previous fit
+      invalidates.
+    * on any failure (no current fit, batch refit degraded, bin-grid mismatch),
+      ``result_to_persist`` is ``None`` and the block names the reason — the caller keeps the
+      last-valid plant and MUST say so (never a silent fallback).
+    """
+    import copy
+
+    current = plant_ggv_model(artifact)
+    if current is None:
+        return None, {
+            "ok": False,
+            "reason": "artifact has no uncertainty-aware friction fit to refine (#543)",
+        }
+    result = copy.deepcopy(artifact)
+    # save_plant_artifact stamps fresh schema_version/created_utc; stale copies must not shadow
+    # them (dict-splat order puts result keys last).
+    result.pop("schema_version", None)
+    result.pop("created_utc", None)
+    block = refine_ggv_from_lap_archives(
+        result,
+        archives,
+        prior,
+        prior_name=prior_name,
+        archives_same_run=True,
+    )
+    if not block.get("ok"):
+        return None, block
+    try:
+        batch_model = GGVModel.from_dict(block["model"])
+        merged, merge_stats = merge_selfplay_model(current, batch_model)
+    except (ValueError, TypeError) as exc:
+        return None, {
+            "ok": False,
+            "reason": f"selfplay merge failed: {type(exc).__name__}: {exc}",
+            "batch_refit": {k: v for k, v in block.items() if k != "model"},
+        }
+    block["model"] = merged.to_dict()
+    block["selfplay_merge"] = merge_stats
+    block["reason"] = "ok (self-play monotonic merge)"
+    return result, block
 
 
 def _setup_stem(setup: str | None) -> str | None:
