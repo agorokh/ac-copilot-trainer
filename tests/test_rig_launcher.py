@@ -1743,3 +1743,50 @@ def test_poll_status_read_only_does_not_start_simhub(tmp_path: Path) -> None:
     status = sup.poll_status(start_simhub=False)
     assert status.simhub.state == "available"  # discovered, NOT started
     assert spawned == []  # SimHub was never launched by a read-only poll
+
+
+def test_supervisor_handle_access_is_thread_safe(tmp_path: Path) -> None:
+    """HIGH (#568 review): the GUI worker reads the sidecar handle while START/stop mutate it on
+    the Tk thread. The _proc_lock must serialize those so concurrent access never crashes or
+    tears state. Smoke-stress the locked read against start/stop cycles."""
+    import threading as _threading
+
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+
+    def fake_popen(*_a: Any, **_k: Any) -> _Proc:
+        return _Proc()
+
+    sup = GamePointSupervisor(
+        cfg,
+        environ={},
+        popen=fake_popen,
+        urlopen=_refused_urlopen,  # never adopts → always spawns the fake
+        run=_no_simhub_run,
+    )
+    errors: list[BaseException] = []
+
+    def reader() -> None:
+        try:
+            for _ in range(300):
+                sup._sidecar_process_status()
+        except BaseException as exc:  # noqa: BLE001 - capture any race-induced failure
+            errors.append(exc)
+
+    def cycler() -> None:
+        try:
+            for _ in range(150):
+                sup.start_sidecar()
+                sup.stop_sidecar()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [_threading.Thread(target=reader) for _ in range(3)]
+    threads += [_threading.Thread(target=cycler) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, errors
+    # Final state is coherent (stopped after the last cycle's stop).
+    assert sup._sidecar_process_status().state in {"stopped", "running", "exited"}
+    sup.close()

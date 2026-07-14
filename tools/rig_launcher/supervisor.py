@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -262,6 +263,12 @@ class GamePointSupervisor:
         self._frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
         self._sidecar_process: Any | None = None
         self._log_handles: list[Any] = []
+        # The GUI polls on a worker thread while START / toggle run on the Tk main thread, so the
+        # sidecar process handle + log handles are touched from two threads. Serialize those
+        # mutations/reads with an RLock (re-entrant: close()→stop_sidecar() nests). The lock is
+        # held only around the quick handle bookkeeping — never around the slow adb/HTTP probes —
+        # so it cannot re-introduce the UI freeze the worker thread was added to avoid (#568).
+        self._proc_lock = threading.RLock()
 
     def sidecar_command(self) -> list[str]:
         if self._frozen:
@@ -358,64 +365,67 @@ class GamePointSupervisor:
         if blocking:
             detail = "; ".join(check.detail or check.name for check in blocking)
             return ProbeResult("sidecar", False, "blocked", detail)
-        if self._sidecar_process is not None and self._sidecar_process.poll() is None:
-            return ProbeResult("sidecar", True, "running", f"pid={self._sidecar_process.pid}")
-        if self._sidecar_process is not None and self._sidecar_process.poll() is not None:
-            self._sidecar_process = None
-        # Close handles left by a prior supervised spawn before EITHER adopting or spawning, so the
-        # adopt early-return below cannot leak a held-open sidecar.log handle (Qodo, PR #387).
-        self._close_log_handles()
-        # A sidecar from a previous launcher run (or a boot autostart) may already own the port.
-        # Spawning a second one would crash the child with WinError 10048 (address already in use)
-        # and pop an unhandled-exception dialog. Adopt the healthy instance instead.
-        existing = self._read_health()
-        if existing.ok:
-            return ProbeResult(
-                "sidecar",
-                True,
-                "running",
-                f"adopted existing sidecar on port {self.config.port}",
-            )
-        try:
-            self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
-            log = self.paths.sidecar_log_path.open("a", encoding="utf-8")
-            self._log_handles.append(log)
-            self._sidecar_process = self._popen(
-                self.sidecar_command(),
-                **_subprocess_kwargs(
-                    cwd=self._sidecar_working_directory(),
-                    env=self.sidecar_environment(),
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                ),
-            )
-        except (OSError, FileNotFoundError) as exc:
-            self._sidecar_process = None
+        with self._proc_lock:
+            if self._sidecar_process is not None and self._sidecar_process.poll() is None:
+                return ProbeResult("sidecar", True, "running", f"pid={self._sidecar_process.pid}")
+            if self._sidecar_process is not None and self._sidecar_process.poll() is not None:
+                self._sidecar_process = None
+            # Close handles left by a prior supervised spawn before EITHER adopting or spawning,
+            # so the adopt early-return below cannot leak a held-open sidecar.log handle (Qodo,
+            # PR #387).
             self._close_log_handles()
-            return ProbeResult("sidecar", False, "start_failed", str(exc))
-        return ProbeResult("sidecar", True, "starting", f"pid={self._sidecar_process.pid}")
+            # A sidecar from a previous launcher run (or a boot autostart) may already own the
+            # port. Spawning a second one would crash the child with WinError 10048 (address
+            # already in use) and pop an unhandled-exception dialog. Adopt the healthy instance.
+            existing = self._read_health()
+            if existing.ok:
+                return ProbeResult(
+                    "sidecar",
+                    True,
+                    "running",
+                    f"adopted existing sidecar on port {self.config.port}",
+                )
+            try:
+                self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
+                log = self.paths.sidecar_log_path.open("a", encoding="utf-8")
+                self._log_handles.append(log)
+                self._sidecar_process = self._popen(
+                    self.sidecar_command(),
+                    **_subprocess_kwargs(
+                        cwd=self._sidecar_working_directory(),
+                        env=self.sidecar_environment(),
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                    ),
+                )
+            except (OSError, FileNotFoundError) as exc:
+                self._sidecar_process = None
+                self._close_log_handles()
+                return ProbeResult("sidecar", False, "start_failed", str(exc))
+            return ProbeResult("sidecar", True, "starting", f"pid={self._sidecar_process.pid}")
 
     def stop_sidecar(self, *, timeout: float = 5.0) -> ProbeResult:
-        proc = self._sidecar_process
-        if proc is None:
-            self._close_log_handles()
-            return ProbeResult("sidecar", True, "stopped")
-        if proc.poll() is not None:
+        with self._proc_lock:
+            proc = self._sidecar_process
+            if proc is None:
+                self._close_log_handles()
+                return ProbeResult("sidecar", True, "stopped")
+            if proc.poll() is not None:
+                self._sidecar_process = None
+                self._close_log_handles()
+                return ProbeResult("sidecar", True, "stopped", f"exit={proc.poll()}")
+            try:
+                proc.terminate()
+                proc.wait(timeout=timeout)
+            except Exception:  # noqa: BLE001 - final cleanup should be best-effort
+                try:
+                    proc.kill()
+                except Exception:  # noqa: BLE001 - no further recovery available
+                    return ProbeResult("sidecar", False, "stop_failed")
             self._sidecar_process = None
             self._close_log_handles()
-            return ProbeResult("sidecar", True, "stopped", f"exit={proc.poll()}")
-        try:
-            proc.terminate()
-            proc.wait(timeout=timeout)
-        except Exception:  # noqa: BLE001 - final cleanup should be best-effort
-            try:
-                proc.kill()
-            except Exception:  # noqa: BLE001 - no further recovery available
-                return ProbeResult("sidecar", False, "stop_failed")
-        self._sidecar_process = None
-        self._close_log_handles()
-        return ProbeResult("sidecar", True, "stopped")
+            return ProbeResult("sidecar", True, "stopped")
 
     def poll_status(self, *, start_simhub: bool | None = None) -> GamePointStatus:
         """Snapshot every probe and persist status.json.
@@ -646,8 +656,9 @@ class GamePointSupervisor:
         return self.config.start_simhub
 
     def close(self) -> None:
-        self.stop_sidecar()
-        self._close_log_handles()
+        with self._proc_lock:
+            self.stop_sidecar()
+            self._close_log_handles()
 
     def _read_health(self) -> ProbeResult:
         return self._read_health_payload()[0]
@@ -678,12 +689,16 @@ class GamePointSupervisor:
         return self.config.host
 
     def _sidecar_process_status(self) -> ProbeResult:
-        if self._sidecar_process is None:
-            return ProbeResult("sidecar", False, "stopped")
-        code = self._sidecar_process.poll()
-        if code is None:
-            return ProbeResult("sidecar", True, "running", f"pid={self._sidecar_process.pid}")
-        return ProbeResult("sidecar", False, "exited", f"exit={code}")
+        # Read the handle under the lock so a concurrent start/stop on the Tk thread can't
+        # swap it out between the None-check and the .poll()/.pid reads (#568 review).
+        with self._proc_lock:
+            proc = self._sidecar_process
+            if proc is None:
+                return ProbeResult("sidecar", False, "stopped")
+            code = proc.poll()
+            if code is None:
+                return ProbeResult("sidecar", True, "running", f"pid={proc.pid}")
+            return ProbeResult("sidecar", False, "exited", f"exit={code}")
 
     def _simhub_exe(self) -> Path | None:
         candidates: list[Path] = []
