@@ -2914,62 +2914,7 @@ def _main_impl(
         except (FileNotFoundError, ValueError):
             config.setup_ini = None  # unresolved -> basename-only key (best effort)
 
-    # #532: resolve the combo's identified plant for the ggv path. `auto` silently falls back to
-    # the generic plant when no artifact exists; `full` REQUIRES one (measured steering must never
-    # silently degrade to hand constants — that is the failure mode the handshake exists to end).
     plant_artifact_used: str | None = None
-    if config.driver == "ggv" and args.use_plant != "off" and config.car_id:
-        from tools.ac_harness.plant_id import (
-            load_plant_artifact,
-            plant_artifact_path,
-            plant_driver_kwargs,
-            plant_ggv_model,
-        )
-
-        # Key by layout plus setup CONTENT (#532/#552): neither another physical course nor another
-        # setup may reuse this plant. Uses the same track_layout + config.setup_ini identity that
-        # the handshake result carries into save_plant_artifact.
-        setup_key = Path(config.setup).stem if config.setup else None
-        setup_ini_key = config.setup_ini
-        artifact = load_plant_artifact(
-            user_dir,
-            config.car_id,
-            config.track_id,
-            setup_key,
-            setup_ini_key,
-            layout=config.track_layout,
-        )
-        if artifact is not None:
-            config.plant_kwargs = plant_driver_kwargs(artifact, steer=args.use_plant == "full")
-            # #532 Part B: also consume the identified friction plant (GGVModel) when the artifact
-            # carries a fitted ggv block. Applies on `auto` and `full` alike — the friction plant
-            # shapes the SPEED profile, orthogonal to the steering mode. None => generic plant.
-            config.plant_ggv = plant_ggv_model(artifact)
-            plant_artifact_used = str(
-                plant_artifact_path(
-                    user_dir,
-                    config.car_id,
-                    config.track_id,
-                    setup_key,
-                    setup_ini_key,
-                    layout=config.track_layout,
-                )
-            )
-            ggv_note = (
-                "identified friction plant" if config.plant_ggv is not None else "generic plant"
-            )
-            print(
-                f"auto-drive: plant artifact loaded ({args.use_plant}: "
-                f"{sorted(config.plant_kwargs)}; {ggv_note}) <- {plant_artifact_used}"
-            )
-        elif args.use_plant == "full":
-            print(
-                "auto-drive: --use-plant full requires a plant artifact for this combo; "
-                "run --driver handshake first"
-            )
-            return 2
-        else:
-            print("auto-drive: no plant artifact for this combo; using the generic GT3 plant")
 
     # #572: reject an overspeed scale on the alien path BEFORE any launch work. The alien QSS
     # profile is envelope-verified at build time; a scale above 1 would multiply corner speeds
@@ -3050,11 +2995,70 @@ def _main_impl(
     cleanup.callback(rig_lock.release)
     print(f"auto-drive: rig lock acquired -> {rig_lock.path}")
 
+    # Plant/line artifact resolution happens AFTER preflight (actionable content errors, and
+    # --preflight-only never writes state) and AFTER the machine-global rig lock, for EVERY
+    # consumer of the plant artifact: a peer worktree may have re-identified this combo while we
+    # waited on the lock, and resolving pre-lock would drive a stale in-memory plant that the
+    # on-disk artifact has already superseded (#572 Codex + daemon review — same rule for the
+    # ggv path, not just alien).
+    if config.driver == "ggv" and args.use_plant != "off" and config.car_id:
+        # #532: `auto` silently falls back to the generic plant when no artifact exists; `full`
+        # REQUIRES one (measured steering must never silently degrade to hand constants — that is
+        # the failure mode the handshake exists to end).
+        from tools.ac_harness.plant_id import (
+            load_plant_artifact,
+            plant_artifact_path,
+            plant_driver_kwargs,
+            plant_ggv_model,
+        )
+
+        # Key by layout plus setup CONTENT (#532/#552): neither another physical course nor another
+        # setup may reuse this plant. Uses the same track_layout + config.setup_ini identity that
+        # the handshake result carries into save_plant_artifact.
+        setup_key = Path(config.setup).stem if config.setup else None
+        setup_ini_key = config.setup_ini
+        artifact = load_plant_artifact(
+            user_dir,
+            config.car_id,
+            config.track_id,
+            setup_key,
+            setup_ini_key,
+            layout=config.track_layout,
+        )
+        if artifact is not None:
+            config.plant_kwargs = plant_driver_kwargs(artifact, steer=args.use_plant == "full")
+            # #532 Part B: also consume the identified friction plant (GGVModel) when the artifact
+            # carries a fitted ggv block. Applies on `auto` and `full` alike — the friction plant
+            # shapes the SPEED profile, orthogonal to the steering mode. None => generic plant.
+            config.plant_ggv = plant_ggv_model(artifact)
+            plant_artifact_used = str(
+                plant_artifact_path(
+                    user_dir,
+                    config.car_id,
+                    config.track_id,
+                    setup_key,
+                    setup_ini_key,
+                    layout=config.track_layout,
+                )
+            )
+            ggv_note = (
+                "identified friction plant" if config.plant_ggv is not None else "generic plant"
+            )
+            print(
+                f"auto-drive: plant artifact loaded ({args.use_plant}: "
+                f"{sorted(config.plant_kwargs)}; {ggv_note}) <- {plant_artifact_used}"
+            )
+        elif args.use_plant == "full":
+            print(
+                "auto-drive: --use-plant full requires a plant artifact for this combo; "
+                "run --driver handshake first"
+            )
+            return 2
+        else:
+            print("auto-drive: no plant artifact for this combo; using the generic GT3 plant")
+
     # #572 alien pipeline: resolve the identified plant (mandatory, full-steering semantics) and
     # the optimized line + QSS profile artifact (cache-or-build, identity + provenance gated).
-    # Deliberately AFTER preflight (actionable content errors, and --preflight-only never writes
-    # the line cache) and AFTER the rig lock (a peer worktree may have re-identified this combo
-    # while we waited — resolve from the on-disk state we now own) (#572 Codex review).
     if config.driver == "alien":
         alien_error, plant_artifact_used, alien_line_used = _resolve_alien_assets(
             config, user_dir, rebuild=args.alien_rebuild_line
