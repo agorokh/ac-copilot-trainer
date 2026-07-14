@@ -39,6 +39,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
 import uuid
 from dataclasses import asdict, dataclass
@@ -1567,6 +1568,7 @@ def selfplay_refine_result(
     prior: GGVModel,
     *,
     prior_name: str = "generic_gt3_ggv",
+    setup_ini: str | Path | None = None,
 ) -> tuple[dict | None, dict]:
     """Refit from ONE self-play lap batch and merge monotonically into the plant (#577).
 
@@ -1597,6 +1599,10 @@ def selfplay_refine_result(
     # them (dict-splat order puts result keys last).
     result.pop("schema_version", None)
     result.pop("created_utc", None)
+    # A portable artifact can retain its creator's absolute setup path.  Self-play persistence
+    # must use the caller-resolved identity so a moved setup cannot fork the refined plant into a
+    # different filename.  Keep this schema/identity mutation inside the artifact owner module.
+    result["setup_ini"] = str(setup_ini) if setup_ini else None
     block = refine_ggv_from_lap_archives(
         result,
         archives,
@@ -1741,6 +1747,92 @@ def save_plant_artifact(user_dir: Path, result: dict) -> Path:
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     tmp.replace(path)
     return path
+
+
+def persist_selfplay_refinement(
+    user_dir: Path,
+    result: dict,
+    *,
+    expected_path: str | Path,
+    expected_current_bytes: bytes | None,
+    lock_timeout: float = 0.0,
+) -> tuple[Path | None, bytes | None, str | None]:
+    """Conditionally persist one self-play refinement under machine-global ownership.
+
+    The caller refined ``expected_current_bytes``.  Holding the same cross-worktree rig lock used
+    by handshake producers closes the compare/write race with another harness before the canonical
+    :func:`save_plant_artifact` gate runs.  A peer update or identity drift is a clean skip, not an
+    overwrite.  Artifact path derivation and raw I/O stay owned by this module.
+    """
+    from tools.ac_harness.rig_lock import (
+        RigSessionLock,
+        RigSessionOwner,
+        default_rig_session_lock_path,
+    )
+
+    car_id = str(result.get("car_id") or "")
+    track_id = str(result.get("track_id") or "")
+    path = plant_artifact_path(
+        user_dir,
+        car_id,
+        track_id,
+        result.get("setup"),
+        result.get("setup_ini"),
+        layout=result.get("layout"),
+    )
+    expected = Path(expected_path)
+    if path != expected:
+        return (
+            None,
+            None,
+            f"refined identity keys to {path}, not the driven plant {expected} — "
+            "refusing a forked plant file",
+        )
+
+    owner = RigSessionOwner(pid=os.getpid(), cwd=str(Path.cwd()), car=car_id, track=track_id)
+    with RigSessionLock(default_rig_session_lock_path(), owner=owner, timeout=lock_timeout):
+        current_bytes = path.read_bytes() if path.exists() else None
+        if current_bytes != expected_current_bytes:
+            return (
+                None,
+                None,
+                "plant artifact changed between load and save (peer re-identification?) — "
+                "refinement of stale bytes not persisted",
+            )
+        saved = save_plant_artifact(user_dir, result)
+        return saved, saved.read_bytes(), None
+
+
+def revert_plant_artifact(
+    path: str | Path,
+    previous_bytes: bytes,
+    *,
+    expected_current_bytes: bytes | None,
+    car_id: str,
+    track_id: str,
+    lock_timeout: float = 0.0,
+) -> bool:
+    """Restore a last-valid plant iff this iteration's candidate is still current.
+
+    Returns ``False`` when a peer replaced the candidate first; in that case restoring our older
+    bytes would be the unsafe action.  I/O failures propagate so the orchestrator can fail closed.
+    """
+    from tools.ac_harness.rig_lock import (
+        RigSessionLock,
+        RigSessionOwner,
+        default_rig_session_lock_path,
+    )
+
+    artifact_path = Path(path)
+    owner = RigSessionOwner(pid=os.getpid(), cwd=str(Path.cwd()), car=car_id, track=track_id)
+    with RigSessionLock(default_rig_session_lock_path(), owner=owner, timeout=lock_timeout):
+        current_bytes = artifact_path.read_bytes() if artifact_path.exists() else b""
+        if current_bytes != expected_current_bytes:
+            return False
+        tmp = artifact_path.with_suffix(".json.tmp")
+        tmp.write_bytes(previous_bytes)
+        tmp.replace(artifact_path)
+        return True
 
 
 def load_plant_artifact(

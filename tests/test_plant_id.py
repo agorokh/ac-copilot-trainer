@@ -1245,3 +1245,72 @@ def test_selfplay_refine_merges_monotonically_and_strips_stale_meta(tmp_path):
     assert path.exists()
     # The original artifact object was never mutated (deep-copied inside).
     assert artifact["ggv"]["reason"] == "ok"
+
+
+def test_selfplay_refine_owns_the_caller_resolved_setup_identity(tmp_path):
+    from tools.ac_harness.plant_id import selfplay_refine_result
+
+    setup_ini = tmp_path / "moved-setup.ini"
+    setup_ini.write_text("[GEARS]\nFINAL=3.4\n", encoding="utf-8")
+    artifact = _selfplay_artifact()
+    artifact["setup"] = "moved-setup"
+    artifact["setup_ini"] = "C:/old-host/creator-path.ini"
+    archives = [
+        _selfplay_thermal_archive("sp-identity-1", lateral_g=1.35, lap_n=1),
+        _selfplay_thermal_archive("sp-identity-2", lateral_g=1.35, lap_n=2),
+    ]
+    result, block = selfplay_refine_result(
+        artifact,
+        archives,
+        generic_gt3_ggv(),
+        setup_ini=setup_ini,
+    )
+    assert block["ok"] is True and result is not None
+    assert result["setup_ini"] == str(setup_ini)
+    assert artifact["setup_ini"] == "C:/old-host/creator-path.ini"
+
+
+def test_selfplay_persist_and_revert_are_peer_safe(monkeypatch, tmp_path):
+    from tools.ac_harness import rig_lock
+    from tools.ac_harness.plant_id import persist_selfplay_refinement, revert_plant_artifact
+
+    monkeypatch.setattr(
+        rig_lock,
+        "default_rig_session_lock_path",
+        lambda: tmp_path / "state" / "rig-session.lock",
+    )
+    artifact = _selfplay_artifact()
+    path = save_plant_artifact(tmp_path, artifact)
+    previous_bytes = path.read_bytes()
+    candidate = load_plant_artifact(tmp_path, "test_car", "test_oval")
+    assert candidate is not None
+    candidate.pop("schema_version", None)
+    candidate.pop("created_utc", None)
+    candidate["ggv"]["reason"] = "ok (self-play test candidate)"
+
+    saved, candidate_bytes, skipped = persist_selfplay_refinement(
+        tmp_path,
+        candidate,
+        expected_path=path,
+        expected_current_bytes=previous_bytes,
+    )
+    assert saved == path and candidate_bytes == path.read_bytes() and skipped is None
+    assert revert_plant_artifact(
+        path,
+        previous_bytes,
+        expected_current_bytes=candidate_bytes,
+        car_id="test_car",
+        track_id="test_oval",
+    )
+    assert path.read_bytes() == previous_bytes
+
+    path.write_text('{"peer": true}', encoding="utf-8")
+    saved, candidate_bytes, skipped = persist_selfplay_refinement(
+        tmp_path,
+        candidate,
+        expected_path=path,
+        expected_current_bytes=previous_bytes,
+    )
+    assert saved is None and candidate_bytes is None
+    assert "changed between load and save" in str(skipped)
+    assert path.read_text(encoding="utf-8") == '{"peer": true}'

@@ -282,7 +282,12 @@ def run_selfplay(
     than re-driving the identical envelope.
     """
     from tools.ac_harness.auto_drive import generic_gt3_ggv
-    from tools.ac_harness.plant_id import save_plant_artifact, selfplay_refine_result
+    from tools.ac_harness.plant_id import (
+        persist_selfplay_refinement,
+        revert_plant_artifact,
+        selfplay_refine_result,
+    )
+    from tools.ac_harness.rig_lock import RigSessionBusy
 
     plant_path = plant_artifact_path(
         user_dir, args.car, args.track, setup_key, setup_ini, layout=args.track_layout
@@ -294,6 +299,7 @@ def run_selfplay(
         "scale_step": args.scale_step,
         "max_scale": args.max_scale,
         "iterations": [],
+        "ok": True,
         "stopped": "completed",
         "lap_trajectory_ms": [],
         "best_lap_ms": None,
@@ -368,7 +374,11 @@ def run_selfplay(
                         layout=args.track_layout,
                     )
                     result, block = selfplay_refine_result(
-                        artifact, archive_payloads, generic_gt3_ggv(), prior_name="generic_gt3_ggv"
+                        artifact,
+                        archive_payloads,
+                        generic_gt3_ggv(),
+                        prior_name="generic_gt3_ggv",
+                        setup_ini=setup_ini,
                     )
                     entry["refine"] = {
                         k: v for k, v in block.items() if k not in ("model", "tyre_states")
@@ -398,46 +408,22 @@ def run_selfplay(
                             "change) — plant left as-is"
                         )
                     elif result is not None:
-                        current_bytes = plant_path.read_bytes() if plant_path.exists() else None
-                        # Re-key the save with the CALLER-resolved setup identity: a portable/
-                        # moved artifact keeps its creator's absolute setup_ini path, and saving
-                        # under that stale key would write a DIFFERENT plant filename than the
-                        # one this pipeline loads and drives (#579 Codex P2).
-                        result["setup_ini"] = str(setup_ini) if setup_ini else None
-                        expected_path = plant_artifact_path(
+                        saved, persisted_bytes, save_skipped = persist_selfplay_refinement(
                             user_dir,
-                            str(result.get("car_id") or ""),
-                            str(result.get("track_id") or ""),
-                            result.get("setup"),
-                            result.get("setup_ini"),
-                            layout=result.get("layout"),
+                            result,
+                            expected_path=plant_path,
+                            expected_current_bytes=pre_refine_bytes,
+                            lock_timeout=args.rig_lock_timeout,
                         )
-                        if current_bytes != pre_refine_bytes:
-                            entry["refine"]["save_skipped"] = (
-                                "plant artifact changed between load and save (peer "
-                                "re-identification?) — refinement of stale bytes not persisted"
-                            )
-                            print(
-                                f"auto-alien: iteration {index} refine save SKIPPED — "
-                                f"{entry['refine']['save_skipped']}"
-                            )
-                        elif Path(expected_path) != Path(plant_path):
-                            # Refuse a forked plant file OUTRIGHT: writing the refinement under
-                            # a different identity key would leave the driven plant untouched
-                            # and strand a falsified candidate at a path the revert cannot
-                            # reach (#579 daemon HIGH).
-                            entry["refine"]["save_skipped"] = (
-                                f"refined identity keys to {expected_path}, not the driven "
-                                f"plant {plant_path} — refusing a forked plant file"
-                            )
+                        if save_skipped:
+                            entry["refine"]["save_skipped"] = save_skipped
                             print(
                                 f"auto-alien: iteration {index} refine save SKIPPED — "
                                 f"{entry['refine']['save_skipped']}"
                             )
                         else:
                             last_valid_bytes = pre_refine_bytes
-                            saved = save_plant_artifact(user_dir, result)
-                            candidate_bytes = Path(saved).read_bytes()
+                            candidate_bytes = persisted_bytes
                             refined = True
                             print(
                                 f"auto-alien: iteration {index} plant refined "
@@ -450,7 +436,7 @@ def run_selfplay(
                             f"auto-alien: iteration {index} refine FAILED — keeping the "
                             f"last-valid plant ({block.get('reason')})"
                         )
-        except OSError as exc:
+        except (OSError, RigSessionBusy) as exc:
             # Fail loud IN the report: keep-last-valid integrity can no longer be guaranteed
             # once artifact I/O errors, so the ladder stops with the named reason.
             entry.setdefault("refine", {})["ok"] = False
@@ -510,11 +496,14 @@ def run_selfplay(
             entry["falsified"] = reason
             if refined and last_valid_bytes is not None:
                 try:
-                    current = plant_path.read_bytes() if plant_path.exists() else b""
-                    if current == candidate_bytes:
-                        tmp = plant_path.with_suffix(".json.tmp")
-                        tmp.write_bytes(last_valid_bytes)
-                        tmp.replace(plant_path)
+                    if revert_plant_artifact(
+                        plant_path,
+                        last_valid_bytes,
+                        expected_current_bytes=candidate_bytes,
+                        car_id=args.car,
+                        track_id=args.track,
+                        lock_timeout=args.rig_lock_timeout,
+                    ):
                         entry["reverted"] = True
                         print(
                             f"auto-alien: iteration {index} FALSIFIED ({reason}) — plant "
@@ -530,11 +519,12 @@ def run_selfplay(
                             f"auto-alien: iteration {index} FALSIFIED ({reason}); "
                             f"{entry['revert_skipped']}"
                         )
-                except OSError as exc:
-                    # The falsified candidate may still be on disk — say so loudly in the
-                    # report rather than crash before it is written (#579 Qodo reliability).
+                except (OSError, RigSessionBusy) as exc:
+                    # The falsified candidate may still be on disk.  This is a pipeline failure,
+                    # not an honest early stop: future alien runs could consume unsafe state.
                     entry["reverted"] = False
-                    entry["revert_error"] = f"filesystem error during revert: {exc}"
+                    entry["revert_error"] = f"artifact rollback failed: {type(exc).__name__}: {exc}"
+                    selfplay["ok"] = False
                     print(
                         f"auto-alien: iteration {index} FALSIFIED ({reason}); REVERT FAILED — "
                         f"{entry['revert_error']} (the falsified fit may still be persisted; "
@@ -545,7 +535,13 @@ def run_selfplay(
                     f"auto-alien: iteration {index} FALSIFIED ({reason}) — plant unchanged "
                     "this iteration (nothing to revert)"
                 )
-            selfplay["stopped"] = f"falsified at iteration {index}: {reason}"
+            if selfplay["ok"]:
+                selfplay["stopped"] = f"falsified at iteration {index}: {reason}"
+            else:
+                selfplay["stopped"] = (
+                    f"rollback failed at iteration {index}: {entry['revert_error']} "
+                    f"(falsified: {reason})"
+                )
             break
 
         print(
@@ -883,6 +879,10 @@ def run_pipeline(
             setup_ini=setup_ini,
             base_outcome=base_outcome,
         )
+        if not report["selfplay"].get("ok", True):
+            report["error"] = report["selfplay"]["stopped"]
+            report["ok"] = False
+            return 1, report
         best = report["selfplay"].get("best_lap_ms")
         print(
             f"auto-alien: selfplay done — {report['selfplay']['stopped']}"

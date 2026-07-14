@@ -430,15 +430,42 @@ class _SelfplayHarness:
                 return None, {"ok": False, "reason": "batch refit degraded (test)"}
             return {"ok": True}, {"ok": True, "selfplay_merge": dict(self.merge_stats)}
 
-        def fake_save(user_dir, result):
+        def fake_persist(
+            user_dir,
+            result,
+            *,
+            expected_path,
+            expected_current_bytes,
+            lock_timeout=0.0,
+        ):
+            del user_dir, result, lock_timeout
+            if Path(expected_path).read_bytes() != expected_current_bytes:
+                return None, None, "plant artifact changed between load and save (test peer)"
             self.saves += 1
             self.plant_path.write_text(_json.dumps({"v": f"iter{self.saves}"}), encoding="utf-8")
-            return self.plant_path
+            return self.plant_path, self.plant_path.read_bytes(), None
+
+        def fake_revert(
+            path,
+            previous_bytes,
+            *,
+            expected_current_bytes,
+            car_id,
+            track_id,
+            lock_timeout=0.0,
+        ):
+            del car_id, track_id, lock_timeout
+            path = Path(path)
+            if path.read_bytes() != expected_current_bytes:
+                return False
+            path.write_bytes(previous_bytes)
+            return True
 
         import tools.ac_harness.plant_id as plant_id_mod
 
         monkeypatch.setattr(plant_id_mod, "selfplay_refine_result", fake_refine)
-        monkeypatch.setattr(plant_id_mod, "save_plant_artifact", fake_save)
+        monkeypatch.setattr(plant_id_mod, "persist_selfplay_refinement", fake_persist)
+        monkeypatch.setattr(plant_id_mod, "revert_plant_artifact", fake_revert)
 
     def runner(self):
         state = {"i": 0}
@@ -535,6 +562,36 @@ def test_selfplay_falsified_step_reverts_plant_and_stops(monkeypatch, tmp_path):
     assert entry["valid"] is False and entry["reverted"] is True
     # Keep-last-valid: the falsified refined fit was rolled back on disk.
     assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "original"}'
+
+
+def test_selfplay_revert_failure_fails_the_pipeline(monkeypatch, tmp_path):
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),
+            (0, [94000], [False]),
+        ],
+    )
+
+    def exploding_revert(*args, **kwargs):
+        raise OSError("disk became read-only")
+
+    import tools.ac_harness.plant_id as plant_id_mod
+
+    monkeypatch.setattr(plant_id_mod, "revert_plant_artifact", exploding_revert)
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "1"
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 1 and report["ok"] is False
+    assert report["selfplay"]["ok"] is False
+    assert "rollback failed at iteration 1" in report["error"]
+    entry = report["selfplay"]["iterations"][0]
+    assert entry["reverted"] is False
+    assert "disk became read-only" in entry["revert_error"]
+    # The unsafe candidate remains visible in the test fixture, so a green exit is forbidden.
+    assert harness.plant_path.read_text(encoding="utf-8") != '{"v": "original"}'
 
 
 def test_selfplay_refuses_identical_envelope_retry(monkeypatch, tmp_path):

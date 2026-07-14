@@ -3414,11 +3414,12 @@ def _main_impl(
         # The handshake result flows out via DriveStats.payload (report.drive.payload), not a
         # config side-channel (daemon review).
         sink = dict(report.drive.payload) if report.drive and report.drive.payload else {}
+        matching_valid_archives = _count_valid_lap_archives(lap_archives, _combo_predicate)
         if (
             sink.get("ok")
             and isinstance(sink.get("result"), dict)
             and handshake_laps_used > 0
-            and _count_valid_lap_archives(lap_archives, archive_matches_combo) < handshake_laps_used
+            and matching_valid_archives < handshake_laps_used
         ):
             # The bounded writer wait expired with a partial lap set. Do not promote a model from
             # lap 1 while the thermal/probe-relevant lap 2 is absent; constants may still persist.
@@ -3427,7 +3428,7 @@ def _main_impl(
                 "model": None,
                 "reason": (
                     "incomplete handshake lap archive set: "
-                    f"{_count_valid_lap_archives(lap_archives, archive_matches_combo)} "
+                    f"{matching_valid_archives} "
                     f"matching valid < {handshake_laps_used}"
                 ),
             }
