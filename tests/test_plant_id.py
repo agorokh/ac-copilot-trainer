@@ -8,6 +8,7 @@ failure path. No game, no Windows, no I/O beyond tmp_path.
 
 from __future__ import annotations
 
+import json
 import math
 from types import SimpleNamespace
 
@@ -1314,3 +1315,36 @@ def test_selfplay_persist_and_revert_are_peer_safe(monkeypatch, tmp_path):
     assert saved is None and candidate_bytes is None
     assert "changed between load and save" in str(skipped)
     assert path.read_text(encoding="utf-8") == '{"peer": true}'
+
+
+def test_selfplay_persist_keeps_resolved_path_when_setup_becomes_unreadable(monkeypatch, tmp_path):
+    from tools.ac_harness import rig_lock
+    from tools.ac_harness.plant_id import persist_selfplay_refinement
+
+    monkeypatch.setattr(
+        rig_lock,
+        "default_rig_session_lock_path",
+        lambda: tmp_path / "state" / "rig-session.lock",
+    )
+    setup_ini = tmp_path / "race-setup.ini"
+    setup_ini.write_text("[GEARS]\nFINAL=3.4\n", encoding="utf-8")
+    artifact = _selfplay_artifact()
+    artifact["setup"] = "race-setup"
+    artifact["setup_ini"] = str(setup_ini)
+    path = save_plant_artifact(tmp_path, artifact)
+    previous_bytes = path.read_bytes()
+    candidate = json.loads(previous_bytes)
+    candidate["ggv"]["reason"] = "ok (self-play setup-race candidate)"
+
+    # The driven identity was resolved while the setup was readable. Persistence must not derive
+    # a different, unhashed filename if that same file disappears before the conditional write.
+    setup_ini.unlink()
+    saved, candidate_bytes, skipped = persist_selfplay_refinement(
+        tmp_path,
+        candidate,
+        expected_path=path,
+        expected_current_bytes=previous_bytes,
+    )
+    assert saved == path and candidate_bytes == path.read_bytes() and skipped is None
+    assert path.exists()
+    assert not (tmp_path / "plant_id" / "test_car__test_oval__setup-race-setup.json").exists()

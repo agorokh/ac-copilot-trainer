@@ -2739,7 +2739,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-speed", type=float, default=240.0, help="racing/ggv: speed cap (km/h)")
     p.add_argument(
         "--drive-seconds",
-        type=float,
+        type=_positive_float,
         default=None,
         help="drive time budget (default: 300, or 180+240*laps for a flying-lap window)",
     )
@@ -2880,7 +2880,10 @@ def resolve_lap_window_drive_seconds(explicit: float | None, target_laps: int) -
     rule in ``auto_drive`` ensures direct CLI users and orchestrators share one contract.
     """
     if explicit is not None:
-        return float(explicit)
+        value = float(explicit)
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"drive seconds must be finite and > 0 (got {explicit!r})")
+        return value
     if target_laps > 0:
         return 180.0 + 240.0 * target_laps
     return 300.0

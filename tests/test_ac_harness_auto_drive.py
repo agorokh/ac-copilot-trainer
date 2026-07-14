@@ -1592,7 +1592,7 @@ def test_positive_float_flags_reject_bad_values():
     # race_ini_setup_bake_loop, and not as a never-expiring hijack deadline (#482 review). `inf`
     # would make `deadline = monotonic() + probe` never expire — the exact hang #466 removes.
     base = ["--car", "ks_porsche_911_gt3_r_2016", "--track", "spa"]
-    for flag in ("--setup-rebake-interval", "--hijack-probe-seconds"):
+    for flag in ("--setup-rebake-interval", "--hijack-probe-seconds", "--drive-seconds"):
         for bad in ("0", "-0.5", "inf", "nan"):
             with pytest.raises(SystemExit):
                 _build_arg_parser().parse_args(base + [flag, bad])
@@ -2763,6 +2763,11 @@ def test_cli_laps_implies_wait_lap_and_rejects_negative():
         ["--car", "c", "--track", "t", "--laps", "3", "--drive-seconds", "200"]
     )
     assert _config_from_args(explicit).drive_seconds == 200.0
+    from tools.ac_harness.auto_drive import resolve_lap_window_drive_seconds
+
+    for bad in (0.0, -1.0, float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="drive seconds must be finite and > 0"):
+            resolve_lap_window_drive_seconds(bad, 3)
     args = _build_arg_parser().parse_args(["--car", "c", "--track", "t"])
     cfg = _config_from_args(args)
     assert cfg.wait_lap is False and cfg.target_laps == 0 and cfg.drive_seconds == 300.0

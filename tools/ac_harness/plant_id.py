@@ -1711,12 +1711,8 @@ def plant_artifact_path(
     return Path(user_dir) / "plant_id" / f"{stem}.json"
 
 
-def save_plant_artifact(user_dir: Path, result: dict) -> Path:
-    """Persist a PASSED handshake result as the combo's plant artifact (atomic write).
-
-    The artifact is keyed by car+track+layout+setup. ``layout=None`` keeps the exact legacy
-    car+track+setup filename so existing single-layout artifacts remain loadable.
-    """
+def _plant_artifact_payload(result: dict) -> dict:
+    """Validate one plant result and stamp its persisted schema metadata."""
     if not result.get("ok"):
         raise ValueError("refusing to persist a failed handshake as a plant artifact")
     ggv = result.get("ggv")
@@ -1731,22 +1727,38 @@ def save_plant_artifact(user_dir: Path, result: dict) -> Path:
     track_id = str(result.get("track_id") or "")
     if not car_id or not track_id:
         raise ValueError(f"plant artifact needs car_id and track_id (got {car_id!r}/{track_id!r})")
-    setup = result.get("setup")
-    setup_ini = result.get("setup_ini")
-    layout = result.get("layout")
     from datetime import UTC, datetime
 
-    payload = {
+    return {
         "schema_version": PLANT_SCHEMA_VERSION,
         "created_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         **result,
     }
-    path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini, layout=layout)
+
+
+def _write_plant_payload(path: Path, payload: dict) -> Path:
+    """Atomically write an already-validated payload to an already-resolved artifact path."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     tmp.replace(path)
     return path
+
+
+def save_plant_artifact(user_dir: Path, result: dict) -> Path:
+    """Persist a PASSED handshake result as the combo's plant artifact (atomic write).
+
+    The artifact is keyed by car+track+layout+setup. ``layout=None`` keeps the exact legacy
+    car+track+setup filename so existing single-layout artifacts remain loadable.
+    """
+    payload = _plant_artifact_payload(result)
+    car_id = str(payload["car_id"])
+    track_id = str(payload["track_id"])
+    setup = payload.get("setup")
+    setup_ini = payload.get("setup_ini")
+    layout = payload.get("layout")
+    path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini, layout=layout)
+    return _write_plant_payload(path, payload)
 
 
 def persist_selfplay_refinement(
@@ -1760,9 +1772,10 @@ def persist_selfplay_refinement(
     """Conditionally persist one self-play refinement under machine-global ownership.
 
     The caller refined ``expected_current_bytes``.  Holding the same cross-worktree rig lock used
-    by handshake producers closes the compare/write race with another harness before the canonical
-    :func:`save_plant_artifact` gate runs.  A peer update or identity drift is a clean skip, not an
-    overwrite.  Artifact path derivation and raw I/O stay owned by this module.
+    by handshake producers closes the compare/write race with another harness. The driven path is
+    already content-hash-resolved, so persistence validates stable identity fields against the
+    loaded artifact and writes that exact path without re-reading a setup file. A peer update or
+    identity drift is a clean skip, not an overwrite. Raw I/O stays owned by this module.
     """
     from tools.ac_harness.rig_lock import (
         RigSessionLock,
@@ -1770,28 +1783,40 @@ def persist_selfplay_refinement(
         default_rig_session_lock_path,
     )
 
-    car_id = str(result.get("car_id") or "")
-    track_id = str(result.get("track_id") or "")
-    path = plant_artifact_path(
-        user_dir,
-        car_id,
-        track_id,
-        result.get("setup"),
-        result.get("setup_ini"),
-        layout=result.get("layout"),
-    )
+    payload = _plant_artifact_payload(result)
+    car_id = str(payload["car_id"])
+    track_id = str(payload["track_id"])
     expected = Path(expected_path)
-    if path != expected:
+    plant_root = (Path(user_dir) / "plant_id").resolve()
+    try:
+        expected.resolve().relative_to(plant_root)
+    except ValueError:
         return (
             None,
             None,
-            f"refined identity keys to {path}, not the driven plant {expected} — "
-            "refusing a forked plant file",
+            f"driven plant {expected} is outside approved root {plant_root} — refusing persist",
+        )
+    try:
+        driven_payload = json.loads(expected_current_bytes) if expected_current_bytes else None
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        driven_payload = None
+    if not isinstance(driven_payload, dict):
+        return None, None, "driven plant bytes are absent or malformed — refusing persist"
+    identity_fields = ("car_id", "track_id", "layout")
+    identity_matches = all(payload.get(key) == driven_payload.get(key) for key in identity_fields)
+    identity_matches = identity_matches and _setup_stem(payload.get("setup")) == _setup_stem(
+        driven_payload.get("setup")
+    )
+    if not identity_matches:
+        return (
+            None,
+            None,
+            "refined non-hash identity differs from the driven plant — refusing persist",
         )
 
     owner = RigSessionOwner(pid=os.getpid(), cwd=str(Path.cwd()), car=car_id, track=track_id)
     with RigSessionLock(default_rig_session_lock_path(), owner=owner, timeout=lock_timeout):
-        current_bytes = path.read_bytes() if path.exists() else None
+        current_bytes = expected.read_bytes() if expected.exists() else None
         if current_bytes != expected_current_bytes:
             return (
                 None,
@@ -1799,7 +1824,7 @@ def persist_selfplay_refinement(
                 "plant artifact changed between load and save (peer re-identification?) — "
                 "refinement of stale bytes not persisted",
             )
-        saved = save_plant_artifact(user_dir, result)
+        saved = _write_plant_payload(expected, payload)
         return saved, saved.read_bytes(), None
 
 
