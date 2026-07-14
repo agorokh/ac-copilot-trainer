@@ -93,6 +93,13 @@ def _refused_urlopen(_url: str, timeout: float) -> _Response:
     raise OSError("connection refused")
 
 
+def _serving_urlopen(_target: object, timeout: float) -> _Response:
+    """A sidecar that answers 200 for any GET — used by managed-tablet tests where probe_tablet
+    now ground-truth-probes /tablet/dash (returns 200 → the dash actually loads)."""
+    del timeout
+    return _Response({"status": "ok"})
+
+
 def _no_simhub_run(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
     """`tasklist` stub reporting no SimHub — keeps probe_simhub tests off the real machine.
 
@@ -1504,10 +1511,10 @@ def test_probe_tablet_managed_asserts_reverse_and_reports_dash(tmp_path: Path) -
     sup = GamePointSupervisor(
         cfg,
         environ={"AC_COPILOT_ADB": str(adb)},
-        urlopen=_refused_urlopen,
+        urlopen=_serving_urlopen,  # /tablet/dash ground-truth probe returns 200
         run=fake_run,
     )
-    # health advertising /tablet/dash → not stale
+    # sidecar serves /tablet/dash (200) → not stale
     healthy = {"endpoints": ["/health", "/tablet/dash", "/tablet/voice"], "browser_peers": 0}
     tablet = sup.probe_tablet(healthy)
     assert tablet.state == "tunnel-up"
@@ -1895,7 +1902,7 @@ def test_probe_tablet_routes_config_adb_serial(tmp_path: Path) -> None:
         adb_serial="BBB",  # two devices attached; config picks BBB
         paths=LauncherPaths(tmp_path),
     )
-    sup = GamePointSupervisor(cfg, environ={}, urlopen=_refused_urlopen, run=fake_run)
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=_serving_urlopen, run=fake_run)
     tablet = sup.probe_tablet({"endpoints": ["/tablet/dash"], "browser_peers": 0})
     assert tablet.state == "tunnel-up"
 
@@ -1932,3 +1939,70 @@ def test_probe_tablet_tunnel_up_when_sidecar_down_is_not_stale(tmp_path: Path) -
     assert tablet.ok is True
     # must NOT have probed /tablet/dash against the dead port
     assert not any("/tablet/dash" in u for u in probed)
+
+
+def test_probe_tablet_flags_missing_asset_even_when_advertised(tmp_path: Path) -> None:
+    """P2 (#568 review): handler compiled in (so /health advertises /tablet/dash) but the bundled
+    HTML asset is missing → GET 404. The ground-truth probe must catch it (advertisement lies)."""
+    import urllib.error
+
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+
+    def fake_run(cmd: list[str], **_k: Any) -> subprocess.CompletedProcess[str]:
+        args = cmd[2:] if len(cmd) > 2 and cmd[1] == "-s" else cmd[1:]
+        if args and args[0] == "devices":
+            return subprocess.CompletedProcess(
+                cmd, 0, "List of devices attached\nSER\tdevice\n", ""
+            )
+        if "reverse" in cmd and "--list" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "UsbFfs tcp:8765 tcp:8765\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def urlopen(url: str, timeout: float) -> _Response:
+        del timeout
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)  # asset missing
+
+    cfg = GamePointConfig(
+        manage_tablet_tunnel=True, adb_path=str(adb), paths=LauncherPaths(tmp_path)
+    )
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=urlopen, run=fake_run)
+    # /health advertises the route, but the page 404s
+    tablet = sup.probe_tablet({"endpoints": ["/tablet/dash"], "browser_peers": 0})
+    assert tablet.state == "stale-sidecar"
+    assert tablet.ok is False
+
+
+def test_self_test_cli_refuses_to_validate_adopted_sidecar(tmp_path: Path, monkeypatch) -> None:
+    """P2 (#568 review): --self-test must not pass by validating a foreign adopted sidecar."""
+    import tools.rig_launcher.app as app
+
+    monkeypatch.setenv("AC_COPILOT_GAME_POINT_DIR", str(tmp_path))
+    made: list[Any] = []
+
+    class _AdoptingSup:
+        config = GamePointConfig(paths=LauncherPaths(tmp_path))
+
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            self.events: list[str] = []
+            made.append(self)
+
+        def start_sidecar(self) -> ProbeResult:
+            self.events.append("start")
+            return ProbeResult("sidecar", True, "running", "adopted existing sidecar on port 8765")
+
+        def self_test_endpoints(self, **_k: Any) -> tuple[ProbeResult, ...]:
+            self.events.append("selftest")  # must NOT be reached
+            return ()
+
+        def stop_sidecar(self, **_k: Any) -> ProbeResult:
+            self.events.append("stop")
+            return ProbeResult("sidecar", True, "stopped")
+
+        def close(self) -> None:
+            self.events.append("close")
+
+    monkeypatch.setattr(app, "GamePointSupervisor", _AdoptingSup)
+    rc = app.main(["--self-test"])
+    assert rc == 1
+    assert "selftest" not in made[0].events  # refused before validating the foreign process

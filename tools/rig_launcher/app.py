@@ -223,7 +223,20 @@ def main(argv: list[str] | None = None) -> int:
             # a release-gate run never leaves an orphaned sidecar for the next launch to adopt
             # (#568 review — the outer finally also closes it, but the ownership is explicit here).
             # stop_sidecar() is a no-op when start_sidecar() adopted an already-running instance.
-            supervisor.start_sidecar()
+            started = supervisor.start_sidecar()
+            # If a sidecar was already listening on the port, start_sidecar ADOPTS it — the
+            # self-test would then validate that OTHER process (e.g. a fresh source sidecar),
+            # so a stale packaged EXE could pass. Refuse: the release gate must exercise the
+            # build under test, not a foreign one (#568 review). stop_sidecar won't kill the
+            # adopted process (we didn't spawn it).
+            if started.ok and "adopted" in (started.detail or ""):
+                print(
+                    "self-test: another sidecar is already running on port "
+                    f"{supervisor.config.port} and was adopted — cannot validate this build. "
+                    "Stop the existing sidecar and retry.",
+                    file=sys.stderr,
+                )
+                return 1
             try:
                 results = supervisor.self_test_endpoints()
             finally:

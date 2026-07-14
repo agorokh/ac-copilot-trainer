@@ -513,21 +513,20 @@ class GamePointSupervisor:
         # not stale — and its own row already surfaces that; the tunnel itself is up, so don't
         # false-flag `stale-sidecar` off a probe against a dead port (#568 self-hosted reviewer).
         if result.state == "tunnel-up" and isinstance(health_payload, Mapping):
-            # A stale sidecar adopted from a previous launcher run may not serve /tablet/dash —
-            # the tunnel is up but the page still 426s, so the GUI must not read READY (#568).
-            # Fast path: trust the endpoint set /health advertises when it's present. But a
-            # sidecar predating that field (the ORIGINAL stale-EXE case) omits `endpoints`
-            # entirely while ALSO 426ing the dash — so when the advertisement is absent or
-            # doesn't list the route, confirm against reality with a direct (loopback,
-            # token-aware) probe rather than assuming healthy.
-            endpoints = health_payload.get("endpoints")
-            advertises_dash = isinstance(endpoints, list) and "/tablet/dash" in endpoints
-            if not advertises_dash and self._probe_endpoint_status("/tablet/dash") != 200:
+            # The tunnel being up doesn't prove the DASHBOARD loads: a stale sidecar 426s the
+            # route (not compiled in), and a build with the handler but a missing bundled HTML
+            # asset 404s it — the /health `endpoints` advertisement (a static list) can't
+            # distinguish either. So confirm against REALITY with a direct loopback, token-aware
+            # GET /tablet/dash == 200 before accepting the tunnel as usable (#568 review). The
+            # probe only runs when the sidecar answered /health (payload present); a stopped
+            # sidecar is handled by its own row, not flagged here.
+            if self._probe_endpoint_status("/tablet/dash") != 200:
                 return ProbeResult(
                     "tablet",
                     False,
                     "stale-sidecar",
-                    "adopted sidecar does not serve /tablet/dash — rebuild the launcher",
+                    "sidecar does not serve /tablet/dash (stale build or missing asset) — "
+                    "rebuild the launcher",
                 )
             try:
                 browser_peers = int(health_payload.get("browser_peers") or 0)
