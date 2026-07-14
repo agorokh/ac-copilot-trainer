@@ -212,6 +212,14 @@ def evaluate_selfplay_iteration(
         return False, "no timed lap completed within the drive budget"
     if not archive_payloads:
         return False, "no lap archives collected (cannot verify lap validity or refine)"
+    if len(archive_payloads) < len(lap_times):
+        # Every counted lap must be verifiable: a partial archive set (writer flake / poll
+        # timeout) leaves timed laps whose validity cannot be proven, and refining from it
+        # would under-represent the batch (#579 Codex P2).
+        return False, (
+            f"archive count {len(archive_payloads)} < {len(lap_times)} timed laps "
+            "(cannot verify every counted lap)"
+        )
     for payload in archive_payloads:
         lap = payload.get("lap") if isinstance(payload.get("lap"), dict) else {}
         if lap.get("is_valid") is False:
@@ -471,8 +479,10 @@ def drive_argv(
     if args.laps > 0:
         argv += ["--laps", str(args.laps)]
     if scale > 1.0:
-        # The self-play ladder may probe above the uncertainty-safe envelope; the drive stage
-        # keeps its hard 1.2 cap and the falsification oracle guards every step (#577).
+        # Only a self-play iteration override can be > 1 (run_pipeline rejects a bare
+        # --ggv-scale > 1, so the one-shot base drive keeps the #572 gate — #579 Codex P1);
+        # the drive stage still enforces its hard 1.2 cap and the falsification oracle guards
+        # every step (#577).
         argv.append("--alien-allow-overspeed")
     if args.strict:
         argv.append("--strict")
@@ -589,9 +599,22 @@ def run_pipeline(
         raise ValueError(f"--laps must be >= 0 (got {args.laps})")
     if args.iterations < 0:
         raise ValueError(f"--iterations must be >= 0 (got {args.iterations})")
+    # The BASE drive keeps the #572 one-shot gate: above-1 envelopes are reachable only through
+    # the falsification-gated self-play ladder (per-iteration scale overrides), never by passing
+    # a bare --ggv-scale > 1 (#579 Codex P1).
+    if not 0.0 < args.ggv_scale <= 1.0:
+        raise ValueError(
+            f"--ggv-scale must be in (0, 1] (got {args.ggv_scale}); envelopes above 1 are "
+            "reachable only via the --iterations keep-last-valid ladder (--max-scale)"
+        )
     if args.iterations > 0:
         import math as _math
 
+        if args.laps < 1:
+            raise ValueError(
+                "--iterations requires --laps >= 1 (self-play refines from timed-lap batches; "
+                "the legacy any-boundary --wait-lap window cannot provide them)"
+            )
         if not (_math.isfinite(args.scale_step) and args.scale_step > 0):
             raise ValueError(f"--scale-step must be finite and > 0 (got {args.scale_step})")
         if not (_math.isfinite(args.max_scale) and 0 < args.max_scale <= ALIEN_MAX_OVERSPEED_SCALE):

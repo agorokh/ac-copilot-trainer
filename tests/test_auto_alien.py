@@ -330,6 +330,12 @@ def test_evaluate_selfplay_iteration_falsification_branches():
     valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 96000]), bad)
     assert not valid and "AC-invalid lap" in reason and "lap_n=2" in reason
 
+    # A partial archive set leaves counted laps unverifiable -> falsified (#579 Codex P2).
+    valid, reason = evaluate_selfplay_iteration(
+        0, _stage_outcome([95000, 93000, 92000]), [_archive_payload(1)]
+    )
+    assert not valid and "archive count 1 < 3 timed laps" in reason
+
 
 def test_stage_outcome_readers_round_trip(tmp_path):
     stage = tmp_path / "drive"
@@ -350,13 +356,22 @@ def test_pipeline_rejects_bad_selfplay_flags(monkeypatch, tmp_path):
         run_pipeline(_args(tmp_path, "--laps", "-1"), run_stage=_Runner([0]))
     with pytest.raises(ValueError, match="--iterations"):
         run_pipeline(_args(tmp_path, "--iterations", "-2"), run_stage=_Runner([0]))
+    # The base drive keeps the #572 one-shot gate: a bare overspeed scale is rejected here,
+    # never silently forwarded with --alien-allow-overspeed (#579 Codex P1).
+    with pytest.raises(ValueError, match="--ggv-scale"):
+        run_pipeline(_args(tmp_path, "--ggv-scale", "1.05"), run_stage=_Runner([0]))
+    # Self-play needs timed-lap batches; legacy any-boundary --wait-lap cannot provide them.
+    with pytest.raises(ValueError, match="--iterations requires --laps"):
+        run_pipeline(_args(tmp_path, "--iterations", "1"), run_stage=_Runner([0]))
     with pytest.raises(ValueError, match="--scale-step"):
         run_pipeline(
-            _args(tmp_path, "--iterations", "1", "--scale-step", "0"), run_stage=_Runner([0])
+            _args(tmp_path, "--iterations", "1", "--laps", "1", "--scale-step", "0"),
+            run_stage=_Runner([0]),
         )
     with pytest.raises(ValueError, match="--max-scale"):
         run_pipeline(
-            _args(tmp_path, "--iterations", "1", "--max-scale", "1.5"), run_stage=_Runner([0])
+            _args(tmp_path, "--iterations", "1", "--laps", "1", "--max-scale", "1.5"),
+            run_stage=_Runner([0]),
         )
 
 

@@ -3307,7 +3307,12 @@ def _main_impl(
         resolve=lambda: candidate_journal_laps_dirs(user_dir),
         wait_for_first=wait_for_archives,
         min_count=max(1, expected_archives),
-        min_valid_count=expected_archives if batch_mode and expected_archives > 0 else None,
+        # Valid-count gating is HANDSHAKE-only (the fit must never promote from a partial valid
+        # set). A flying-lap batch must not gate on validity: an AC-invalid lap still writes its
+        # archive, that archive IS the falsification evidence the self-play verdict needs
+        # promptly, and no amount of waiting turns it valid — gating on it would stall the poll
+        # to full timeout on every falsified batch (#579 Qodo).
+        min_valid_count=handshake_laps_used if handshake_laps_used > 0 else None,
         valid_archive_predicate=archive_matches_combo,
         timeout_s=20.0 if batch_mode else 8.0,
     )
