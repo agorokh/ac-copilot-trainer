@@ -340,9 +340,18 @@ def load_alien_line_artifact(
         math.isfinite(v) and v > 0 for v in vt
     ):
         return None
-    # A refined (#582) artifact must carry a sane QSS fallback profile alongside the refined one;
-    # a refined artifact missing/corrupting it is rejected like any other malformed payload.
-    if "l3" in payload:
+    # A refined (#582) artifact must carry a sane QSS fallback profile alongside the refined one.
+    # L3-typing is decided by the IDENTITY block (params.l3), not by the presence of the payload
+    # "l3" report: an artifact whose params say L3 but whose l3 report / QSS fallback is missing
+    # is malformed (it would silently drop the fallback + reporting for an L3-identified cache),
+    # and an "l3" report without the params identity is equally inconsistent (#583 Qodo).
+    params_block = payload.get("params")
+    is_l3 = isinstance(params_block, dict) and params_block.get("l3") is not None
+    if is_l3 != ("l3" in payload):
+        return None
+    if is_l3:
+        if not isinstance(payload.get("l3"), dict):
+            return None
         v_qss = payload.get("v_target_qss_mps")
         if not isinstance(v_qss, list) or len(v_qss) != len(vt):
             return None
@@ -398,6 +407,10 @@ def verify_alien_line_artifact(
                 f"cached point {i} outside the corridor bounds: alpha={alpha:.3f} "
                 f"not in [{lo:.3f}, {hi:.3f}]"
             )
+    # L3-typing keys on the identity block (params.l3), consistent with the loader (#583 Qodo).
+    verify_params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    if (verify_params.get("l3") is not None) != ("l3" in payload):
+        return "l3 identity/params mismatch: params.l3 and the l3 report must be present together"
     if "l3" in payload:
         # #582: a refined profile deliberately exceeds the safe LCB envelope inside refined
         # corners — its contract is the stability barrier instead, re-derived from the CURRENT
@@ -405,7 +418,7 @@ def verify_alien_line_artifact(
         # ``L3Params.from_dict`` and reject the cache). The persisted QSS fallback must still
         # honor the plain safe envelope.
         try:
-            l3_params = L3Params.from_dict((payload.get("params") or {}).get("l3"))
+            l3_params = L3Params.from_dict(verify_params.get("l3"))
         except ValueError as exc:
             return f"cached l3 params invalid: {exc}"
         v_qss = payload.get("v_target_qss_mps") or []
@@ -418,6 +431,16 @@ def verify_alien_line_artifact(
             _verify_lateral_envelope(cached_plane, v_qss, plant)
         except ValueError as exc:
             return f"cached QSS fallback fails the current plant envelope: {exc}"
+        # The build contract is refined >= QSS pointwise (a reverted corner keeps QSS exactly).
+        # An edited durable JSON that inflates the fallback above the refined profile (or slows
+        # refined points below it) breaks that invariant even when both profiles individually
+        # respect their envelopes — reject it like any other tamper (#583 Codex P2).
+        for i, (v_ref, v_fallback) in enumerate(zip(v_target, v_qss, strict=True)):
+            if v_ref < v_fallback - 1e-6:
+                return (
+                    f"cached refined profile falls below its QSS fallback at point {i}: "
+                    f"{v_ref:.3f} < {v_fallback:.3f} m/s"
+                )
         kappa = curvature_profile(cached_plane)
         reason = verify_refined_profile(cached_plane, kappa, v_target, plant, l3_params)
         if reason is not None:

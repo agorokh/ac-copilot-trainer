@@ -260,9 +260,16 @@ def segment_corners(
 
 
 def _cyclic_overlap(s1: int, l1: int, s2: int, l2: int, n: int) -> bool:
+    """Whether two cyclic arcs share an index OR touch (end-to-start adjacency).
+
+    Adjacency counts as overlap on purpose: two padded windows that touch form one contiguous
+    covered arc, and leaving them as separate windows would pin a "boundary" speed at a point
+    that is itself inside the other corner's padded approach (#583 Qodo). Arc 1 is expanded by
+    one index on each side, so a shared-index test also catches exact touching.
+    """
     covered = [False] * n
-    for k in range(l1):
-        covered[(s1 + k) % n] = True
+    for k in range(min(n, l1 + 2)):
+        covered[(s1 - 1 + k) % n] = True
     return any(covered[(s2 + k) % n] for k in range(l2))
 
 
@@ -466,6 +473,11 @@ def refine_profile(
             for b in spanned
             if _relaxable_channel(dict(b["brake"]), params.max_rel_std)
         ]
+        relaxable_drive = [
+            f"{int(b['speed_min_kmh'])}-{int(b['speed_max_kmh'])}"
+            for b in spanned
+            if _relaxable_channel(dict(b["drive"]), params.max_rel_std)
+        ]
         if not relaxable_lateral:
             lo = min(v_window_qss) * 3.6
             hi = max(v_window_qss) * 3.6
@@ -511,6 +523,9 @@ def refine_profile(
         entry["z"] = z
         entry["relaxed_lateral_bins_kmh"] = relaxable_lateral
         entry["relaxed_brake_bins_kmh"] = relaxable_brake
+        # The forward pass consumes relaxed drive bins too (ax_drive_avail) — report them so the
+        # per-corner provenance names every channel the refinement leaned on (#583 Codex P2).
+        entry["relaxed_drive_bins_kmh"] = relaxable_drive
         entry["gain_ms"] = int(round(gain_s * 1000.0))
         entry["v_apex_qss_kmh"] = round(min(v_window_qss) * 3.6, 1)
         entry["v_apex_l3_kmh"] = round(min(speeds) * 3.6, 1)

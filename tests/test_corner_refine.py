@@ -212,6 +212,19 @@ def test_segment_merges_adjacent_runs_into_one_window():
     assert windows[0][0] == 77 and windows[0][-1] == 116
 
 
+def test_segment_merges_exactly_touching_padded_runs():
+    # Gap exactly 2*pad: the padded windows touch (no shared index) — the documented contract
+    # says they merge into one window (#583 Qodo).
+    kappa = [0.0] * _N
+    for i in range(80, 95):
+        kappa[i] = _KAPPA_CORNER
+    for i in range(101, 116):  # gap 95..100 = 6 points = 2*pad
+        kappa[i] = _KAPPA_CORNER
+    windows = segment_corners(kappa, kappa_threshold=0.005, pad_points=3, min_corner_points=5)
+    assert len(windows) == 1
+    assert windows[0][0] == 77 and windows[0][-1] == 118
+
+
 def test_segment_no_corner_and_all_corner_return_empty():
     straight = [0.0] * _N
     circle = [_KAPPA_CORNER] * _N
@@ -257,6 +270,19 @@ def test_refine_improves_conservative_corner_within_barrier():
     assert ay_apex > safe_limit  # beyond QSS-safe...
     assert ay_apex <= barrier_limit + 1e-6  # ...but never beyond the barrier
     assert verify_refined_profile([(0.0, 0.0)] * _N, kappa, v_ref, plant, params) is None
+
+
+def test_refined_corner_reports_every_relaxed_channel():
+    plant = _plant()
+    seg, kappa, v_qss = _qss(plant)
+    _v_ref, report = refine_profile(seg, kappa, v_qss, plant, L3Params(), v_top_ms=61.0)
+    corner = report["corners"][0]
+    assert corner["status"] == "refined"
+    # The synthetic plant measures only the lateral channel; brake/drive stay prior — the
+    # per-corner provenance must name exactly the channels the refinement leaned on (#583).
+    assert corner["relaxed_lateral_bins_kmh"]
+    assert corner["relaxed_brake_bins_kmh"] == []
+    assert corner["relaxed_drive_bins_kmh"] == []
 
 
 def test_refine_is_deterministic():

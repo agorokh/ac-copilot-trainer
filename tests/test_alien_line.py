@@ -614,6 +614,35 @@ def test_l3_cache_identity_and_revalidation(tmp_path, stadium_lane):
     assert reason is not None and "l3 params invalid" in reason
     _ = pts_now
 
+    # An inflated QSS fallback (above the refined profile) breaks the refined>=QSS build
+    # contract even when both profiles respect their envelopes -> revalidation rejects it
+    # (#583 Codex P2).
+    _artq, srcq = ensure_alien_line_artifact(
+        tmp_path, path, plant, plant_art, l3_params=L3Params(), **kw
+    )
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    payload["v_target_qss_mps"] = [v * 1.01 for v in payload["v_target_mps"]]
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+    _artq2, srcq2 = ensure_alien_line_artifact(
+        tmp_path, path, plant, plant_art, l3_params=L3Params(), **kw
+    )
+    assert srcq2 == "built"
+
+    # L3 identity without the l3 report/fallback (or vice versa) is inconsistent: an artifact
+    # whose params say L3 must carry the report + fallback, and a plain-identity artifact must
+    # not smuggle one in (#583 Qodo).
+    _arti, _srci = ensure_alien_line_artifact(
+        tmp_path, path, plant, plant_art, l3_params=L3Params(), **kw
+    )
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    del payload["l3"]
+    del payload["v_target_qss_mps"]  # params still say l3 -> must reject, not accept as plain
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+    _arti2, srci2 = ensure_alien_line_artifact(
+        tmp_path, path, plant, plant_art, l3_params=L3Params(), **kw
+    )
+    assert srci2 == "built"
+
     # A refined cache missing its QSS fallback is malformed -> rejected at load.
     _art7, src7 = ensure_alien_line_artifact(
         tmp_path, path, plant, plant_art, l3_params=L3Params(), **kw

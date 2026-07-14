@@ -177,11 +177,14 @@ def stage_l3_summary(outcome: dict | None) -> dict | None:
     Keeps the composed pipeline report honest about what each stage actually drove: how many
     corners ran the refined interior, how many reverted to safe-QSS, and the planner's predicted
     gain — the full per-corner report stays in the stage's own artifact/report.
+
+    ``write_evidence`` stores the alien-line detail under the TOP-LEVEL ``run`` extras of
+    ``report.json`` (``run.alien_line``), not inside the ``report`` block (#583 Codex P2).
     """
-    report = (outcome or {}).get("report")
-    if not isinstance(report, dict):
+    run = (outcome or {}).get("run")
+    if not isinstance(run, dict):
         return None
-    alien = report.get("alien_line")
+    alien = run.get("alien_line")
     if not isinstance(alien, dict):
         return None
     l3 = alien.get("l3")

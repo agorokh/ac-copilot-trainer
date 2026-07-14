@@ -297,10 +297,13 @@ def test_stage_l3_summary_extraction():
     from tools.ac_harness.auto_alien import stage_l3_summary
 
     assert stage_l3_summary(None) is None
-    assert stage_l3_summary({"report": {}}) is None
-    assert stage_l3_summary({"report": {"alien_line": {"qss": {}}}}) is None
+    assert stage_l3_summary({"run": {}}) is None
+    assert stage_l3_summary({"run": {"alien_line": {"qss": {}}}}) is None
+    # write_evidence stores alien-line detail under the TOP-LEVEL run extras, not report
+    # (#583 Codex P2) — a report-nested payload must not match.
+    assert stage_l3_summary({"report": {"alien_line": {"l3": {"refined_corners": 1}}}}) is None
     outcome = {
-        "report": {
+        "run": {
             "alien_line": {
                 "l3": {
                     "refined_corners": 3,
@@ -316,7 +319,7 @@ def test_stage_l3_summary_extraction():
         "reverted_corners": 1,
         "predicted_gain_ms": 412,
     }
-    outcome["report"]["alien_line"]["l3"] = {
+    outcome["run"]["alien_line"]["l3"] = {
         "refined_corners": 0,
         "reverted_corners": 0,
         "predicted_gain_ms": 0,
