@@ -2762,8 +2762,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--alien-allow-overspeed",
         action="store_true",
-        help="#577 self-play only: permit --ggv-scale in (1, 1.2] on the alien path as a "
-        "deliberate, falsifiable envelope probe (the one-shot alien path keeps the <=1 gate)",
+        help="EXPERT opt-in (#577): permit --ggv-scale in (1, 1.2] on the alien path — drives "
+        "ABOVE the uncertainty-safe envelope. The keep-last-valid falsification protection "
+        "exists only under auto_alien --iterations (which passes this per ladder step); a "
+        "direct overspeed drive carries spin/damage risk on the operator",
     )
     p.add_argument("--strict", action="store_true", help="require session+lap, enforce ordering")
     p.add_argument("--skip-launch", action="store_true", help="AC already LIVE; only hijack+drive")
@@ -3372,7 +3374,10 @@ def _main_impl(
         min_matching_count=(
             expected_archives if batch_mode and expected_archives > 0 and config.car_id else None
         ),
-        valid_archive_predicate=archive_matches_combo,
+        # Defensive: without a car identity the predicate can never match, so it must not gate
+        # ANY counting path (min_valid_count is handshake-only and handshake requires --car, so
+        # this is unreachable today — kept consistent regardless; #579 daemon MEDIUM).
+        valid_archive_predicate=archive_matches_combo if config.car_id else None,
         timeout_s=20.0 if batch_mode else 8.0,
     )
     # Report the dir the archive was actually found in (correct even for a renamed install), so the

@@ -382,6 +382,12 @@ def test_pipeline_rejects_bad_selfplay_flags(monkeypatch, tmp_path):
             _args(tmp_path, "--iterations", "1", "--laps", "1", "--max-scale", "1.5"),
             run_stage=_Runner([0]),
         )
+    # A cap below the base scale would make iteration 1 an EASIER envelope than the base drive.
+    with pytest.raises(ValueError, match="must be >= --ggv-scale"):
+        run_pipeline(
+            _args(tmp_path, "--iterations", "1", "--laps", "1", "--max-scale", "0.8"),
+            run_stage=_Runner([0]),
+        )
 
 
 class _SelfplayHarness:

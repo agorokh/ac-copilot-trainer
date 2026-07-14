@@ -776,6 +776,13 @@ def run_pipeline(
             raise ValueError(
                 f"--max-scale must be in (0, {ALIEN_MAX_OVERSPEED_SCALE}] (got {args.max_scale})"
             )
+        if args.max_scale < args.ggv_scale:
+            # A cap below the base would make "iteration 1" an EASIER envelope than the base
+            # drive — a regression probe, not the progressive ladder (#579 Codex P2).
+            raise ValueError(
+                f"--max-scale ({args.max_scale}) must be >= --ggv-scale ({args.ggv_scale}); "
+                "the ladder only steps upward from the base envelope"
+            )
     user_dir = resolve_ac_user_dir(args.ac_user_dir)
     setup_key = Path(args.setup).stem if args.setup else None
     setup_ini = None
