@@ -820,10 +820,12 @@ async def run_auto_drive(
             # the 180 s default, Spa ~7 km); #459 F / #516.
             tap_kwargs["settle_timeout"] = tap_settle_s
             tap_kwargs["lap_timeout"] = lap_deadline
-            if config.target_laps > 1:
-                # #577 flying-lap window: hold the tap open until N timed laps (or the shared
-                # deadline). The deadline stays the drive-budget-derived one — "N laps or the
-                # time budget, whichever first" — so a shortfall ends honestly, never hangs.
+            if config.target_laps > 0:
+                # #577 flying-lap window: hold the tap open until N TIMED laps (or the shared
+                # deadline). Includes N == 1 — a requested one-lap batch must not exit on an
+                # untimed out-lap/teleport boundary the way plain --wait-lap may (#579 daemon
+                # HIGH). The deadline stays the drive-budget-derived one — "N laps or the time
+                # budget, whichever first" — so a shortfall ends honestly, never hangs.
                 tap_kwargs["lap_count"] = config.target_laps
         frames = await tap(config.sidecar_url, **tap_kwargs)
         result = evaluate_sequence(
@@ -837,7 +839,7 @@ async def run_auto_drive(
             from tools.ac_harness.sequence_probe import timed_lap_times_ms
 
             lap_times_ms = timed_lap_times_ms(frames)
-            if config.target_laps > 1 and len(lap_times_ms) < config.target_laps:
+            if config.target_laps > 0 and len(lap_times_ms) < config.target_laps:
                 notes.append(
                     f"laps: requested {config.target_laps}, observed "
                     f"{len(lap_times_ms)} timed within the drive budget"
@@ -3294,18 +3296,20 @@ def _main_impl(
             layout=config.track_layout,
         )
 
-    # Legacy single-lap (--wait-lap) runs keep their exact pre-#577 poll (any first archive,
-    # short constant timeout); only handshake and multi-lap batches gate on combo-matched counts.
-    multi_lap_batch = timed_laps_observed > 1 or handshake_laps_used > 0
+    # Legacy --wait-lap runs (no --laps) keep their exact pre-#577 poll (any first archive,
+    # short constant timeout). Batch semantics key on INTENT (--laps requested / handshake), not
+    # on the observed count — a requested 1-lap batch still gets the strict combo-matched
+    # validation its archives_same_run=True provenance depends on (#579 daemon MEDIUM).
+    batch_mode = config.target_laps > 0 or handshake_laps_used > 0
     lap_archives = collect_lap_archives(
         None,
         run_started_epoch,
         resolve=lambda: candidate_journal_laps_dirs(user_dir),
         wait_for_first=wait_for_archives,
         min_count=max(1, expected_archives),
-        min_valid_count=expected_archives if multi_lap_batch else None,
+        min_valid_count=expected_archives if batch_mode and expected_archives > 0 else None,
         valid_archive_predicate=archive_matches_combo,
-        timeout_s=20.0 if multi_lap_batch else 8.0,
+        timeout_s=20.0 if batch_mode else 8.0,
     )
     # Report the dir the archive was actually found in (correct even for a renamed install), so the
     # metadata matches the multi-dir scan, not the canonical-preferring discover (#516 review).

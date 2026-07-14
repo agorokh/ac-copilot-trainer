@@ -2787,3 +2787,23 @@ def test_build_driver_alien_overspeed_optin_is_bounded():
         _build_driver(replace(cfg, ggv_scale=ALIEN_MAX_OVERSPEED_SCALE + 0.01), _LINE, None)
     with pytest.raises(ValueError, match="ggv_scale"):
         _build_driver(replace(cfg, alien_overspeed=False), _LINE, None)
+
+
+def test_one_lap_batch_requires_a_timed_lap_window():
+    # #579 daemon HIGH: --laps 1 is a BATCH of one TIMED lap, not the legacy any-boundary wait —
+    # the tap must receive lap_count=1 so an untimed out-lap/teleport boundary cannot end the
+    # window with zero timed laps (which would falsify a healthy self-play iteration).
+    record: dict = {}
+    frames = [*CONTINUOUS, _snap("session"), _timed_lap_snap(97000)]
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, target_laps=1),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, laps=1), record),
+            tap=_tap_returning(frames, record),
+        )
+    )
+    assert report.ok is True
+    assert record["lap_count"] == 1
+    assert report.lap_times_ms == [97000]

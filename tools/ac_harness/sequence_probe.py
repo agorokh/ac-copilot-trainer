@@ -267,7 +267,7 @@ async def tap_frames(
     wait_for_lap: bool = False,
     settle_timeout: float = 120.0,
     lap_timeout: float = 180.0,
-    lap_count: int = 1,
+    lap_count: int | None = None,
 ) -> list[dict]:
     """Tap the sidecar and return the frames received (live; needs AC driving).
 
@@ -275,20 +275,21 @@ async def tap_frames(
     ``settle_timeout``) for the car to be on track, then waits (up to ``lap_timeout``) for a ``lap``
     frame — so a slow real lap is captured rather than false-failing a fixed 20 s window.
 
-    ``lap_count > 1`` (#577 flying-lap windows): keep the window open until that many TIMED lap
-    boundaries (``payload.last_lap_ms > 0``) arrive, sharing ONE ``lap_timeout`` deadline for the
-    whole batch — the drive's ``--drive-seconds`` budget stays the honest cap ("N laps or the time
-    budget, whichever first"). A deadline expiry with at least one lap already seen returns the
-    frames collected so far rather than raising: the run continues to evaluation, where the
-    shortfall is reported honestly. ``lap_count == 1`` keeps the exact legacy single-lap wait
-    (any ``lap`` frame, timed or not — the #516 grace/archive logic gates on timed separately).
+    ``lap_count`` (#577 flying-lap windows): an explicit N >= 1 keeps the window open until that
+    many TIMED lap boundaries (``payload.last_lap_ms > 0``) arrive — including N == 1, so a
+    requested one-lap batch never exits on an untimed out-lap/teleport boundary (#579 daemon
+    HIGH). One ``lap_timeout`` deadline covers the whole batch — the drive's ``--drive-seconds``
+    budget stays the honest cap ("N laps or the time budget, whichever first"); a deadline expiry
+    returns the frames collected so far and the shortfall is reported honestly downstream.
+    ``lap_count=None`` keeps the exact legacy ``--wait-lap`` wait (any ``lap`` frame, timed or
+    not — the #516 grace/archive logic gates on timed separately).
 
     Always closes the client (try/finally) and fails fast on a missing hello handshake. Imported
     lazily so the pure evaluator has no hard dependency on the sidecar client.
     """
     from tools.ai_sidecar.harness_client import HarnessClient
 
-    if lap_count < 1:
+    if lap_count is not None and lap_count < 1:
         raise ValueError(f"lap_count must be >= 1 (got {lap_count})")
     hc = HarnessClient(url)
     try:
@@ -303,7 +304,7 @@ async def tap_frames(
                 lambda f: any(_is_snapshot(f, t) for t in _CONTINUOUS_SET),
                 timeout=settle_timeout,
             )
-            if lap_count == 1:
+            if lap_count is None:
                 await hc.wait_for(lambda f: _is_snapshot(f, "lap"), timeout=lap_timeout)
             else:
                 # `wait_for` returns None on timeout (never raises) — mirror the single-lap
