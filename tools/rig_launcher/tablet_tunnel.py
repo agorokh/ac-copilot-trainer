@@ -152,6 +152,7 @@ def ensure_tablet_reverse(
     *,
     env: Mapping[str, str] | None = None,
     adb: str | None = None,
+    serial: str | None = None,
 ) -> TunnelStatus:
     """Assert (and self-heal) the ``adb reverse tcp:<port> tcp:<port>`` tablet tunnel.
 
@@ -182,7 +183,9 @@ def ensure_tablet_reverse(
         return TunnelStatus(False, "adb-missing", "adb present but not responding to `devices`")
     inv = _device_inventory(devices.stdout or "")
     env_map = env if env is not None else os.environ
-    chosen = (env_map.get("AC_COPILOT_ADB_SERIAL") or "").strip()
+    # Explicit serial (routed from GamePointConfig, #568 review) wins; fall back to the raw env
+    # var so the keeper stays usable standalone.
+    chosen = (serial if serial is not None else env_map.get("AC_COPILOT_ADB_SERIAL") or "").strip()
     # An explicit serial that names a known-good authorized device wins outright — the operator
     # has disambiguated, so other unusable/extra devices don't matter.
     if chosen:

@@ -1850,3 +1850,38 @@ def test_probe_tablet_ground_truth_probe_catches_pre531_stale(tmp_path: Path) ->
     tablet = sup.probe_tablet({"browser_peers": 0})  # no endpoints field
     assert tablet.state == "stale-sidecar"
     assert tablet.ok is False
+
+
+def test_config_reads_adb_overrides_from_env(tmp_path: Path) -> None:
+    cfg = GamePointConfig.from_env(
+        {"AC_COPILOT_ADB": "/opt/adb", "AC_COPILOT_ADB_SERIAL": "SER"},
+        paths=LauncherPaths(tmp_path),
+    )
+    assert cfg.adb_path == "/opt/adb"
+    assert cfg.adb_serial == "SER"
+
+
+def test_probe_tablet_routes_config_adb_serial(tmp_path: Path) -> None:
+    """#568 review: the tablet serial comes from GamePointConfig, not an ad-hoc env read."""
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+
+    def fake_run(cmd: list[str], **_k: Any) -> subprocess.CompletedProcess[str]:
+        args = cmd[2:] if len(cmd) > 2 and cmd[1] == "-s" else cmd[1:]
+        if args and args[0] == "devices":
+            return subprocess.CompletedProcess(
+                cmd, 0, "List of devices attached\nAAA\tdevice\nBBB\tdevice\n", ""
+            )
+        if "reverse" in cmd and "--list" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "UsbFfs tcp:8765 tcp:8765\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    cfg = GamePointConfig(
+        manage_tablet_tunnel=True,
+        adb_path=str(adb),
+        adb_serial="BBB",  # two devices attached; config picks BBB
+        paths=LauncherPaths(tmp_path),
+    )
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=_refused_urlopen, run=fake_run)
+    tablet = sup.probe_tablet({"endpoints": ["/tablet/dash"], "browser_peers": 0})
+    assert tablet.state == "tunnel-up"

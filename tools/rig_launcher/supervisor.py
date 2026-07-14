@@ -148,6 +148,11 @@ class GamePointConfig:
     #: (house pattern, cf. ``start_simhub``): off by default so CI / non-rig hosts never
     #: shell out to adb; the rig sets ``AC_COPILOT_MANAGE_TABLET_TUNNEL=1``.
     manage_tablet_tunnel: bool = False
+    #: Tablet-tunnel adb overrides, routed through the config SSOT rather than read ad-hoc
+    #: (#568 review): explicit ``adb`` path, and the device serial to disambiguate when more
+    #: than one authorized device is attached.
+    adb_path: str | None = None
+    adb_serial: str | None = None
     paths: LauncherPaths | None = None
 
     @classmethod
@@ -182,6 +187,8 @@ class GamePointConfig:
             default=False,
         )
         return cls(
+            adb_path=_none_if_blank(env_map.get("AC_COPILOT_ADB")),
+            adb_serial=_none_if_blank(env_map.get("AC_COPILOT_ADB_SERIAL")),
             port=port,
             external_bind=external_bind,
             token=token,
@@ -494,7 +501,13 @@ class GamePointSupervisor:
             )
         from tools.rig_launcher.tablet_tunnel import ensure_tablet_reverse
 
-        result = ensure_tablet_reverse(self._run, self.config.port, env=self._environ)
+        result = ensure_tablet_reverse(
+            self._run,
+            self.config.port,
+            env=self._environ,
+            adb=self.config.adb_path,
+            serial=self.config.adb_serial,
+        )
         if result.state == "tunnel-up":
             # A stale sidecar adopted from a previous launcher run may not serve /tablet/dash —
             # the tunnel is up but the page still 426s, so the GUI must not read READY (#568).
