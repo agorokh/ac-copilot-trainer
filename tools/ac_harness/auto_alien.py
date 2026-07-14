@@ -171,6 +171,32 @@ def stage_lap_archives(outcome: dict | None) -> list[str]:
     return [str(p) for p in archives if isinstance(p, str) and p]
 
 
+def stage_l3_summary(outcome: dict | None) -> dict | None:
+    """Condensed #582 L3 refinement summary from a drive stage's report, or ``None`` when absent.
+
+    Keeps the composed pipeline report honest about what each stage actually drove: how many
+    corners ran the refined interior, how many reverted to safe-QSS, and the planner's predicted
+    gain — the full per-corner report stays in the stage's own artifact/report.
+    """
+    report = (outcome or {}).get("report")
+    if not isinstance(report, dict):
+        return None
+    alien = report.get("alien_line")
+    if not isinstance(alien, dict):
+        return None
+    l3 = alien.get("l3")
+    if not isinstance(l3, dict):
+        return None
+    summary = {
+        "refined_corners": l3.get("refined_corners"),
+        "reverted_corners": l3.get("reverted_corners"),
+        "predicted_gain_ms": l3.get("predicted_gain_ms"),
+    }
+    if l3.get("reverted_all"):
+        summary["reverted_all"] = l3.get("reverted_all")
+    return summary
+
+
 def load_archive_payloads(paths: list[str]) -> tuple[list[dict], list[str]]:
     """Load lap-archive JSON payloads; unreadable files are reported, never silently dropped."""
     payloads: list[dict] = []
@@ -319,6 +345,9 @@ def run_selfplay(
     )
     base_valid, base_reason = evaluate_selfplay_iteration(0, base_outcome, base_payloads)
     selfplay["base"] = {"valid": base_valid, "reason": base_reason, "lap_times_ms": base_laps}
+    base_l3 = stage_l3_summary(base_outcome)
+    if base_l3 is not None:
+        selfplay["base"]["l3"] = base_l3
     if base_load_errors:
         # Unreadable/corrupt archives must be DISCLOSED, not hidden behind the generic validity
         # reason (#579 Qodo observability; same class as the repo's no-silent-swallowing pitfall).
@@ -475,6 +504,9 @@ def run_selfplay(
         entry["exit_code"] = code
         entry["evidence_dir"] = str(stage_dir)
         outcome = load_stage_outcome(stage_dir)
+        iter_l3 = stage_l3_summary(outcome)
+        if iter_l3 is not None:
+            entry["l3"] = iter_l3
         archives = stage_lap_archives(outcome)
         archive_payloads, load_errors = load_archive_payloads(archives)
         archive_payloads, foreign = combo_filter_payloads(
@@ -622,6 +654,12 @@ def drive_argv(
     ]
     if args.laps > 0:
         argv += ["--laps", str(args.laps)]
+    if not args.no_l3:
+        # #582 L3 rides every alien stage of the pipeline by default: the per-corner refinement
+        # only relaxes measured, low-variance bins under the stability barrier, and the same
+        # keep-last-valid oracle that guards the envelope ladder falsifies a refined profile
+        # that reality rejects.
+        argv.append("--l3")
     if scale > 1.0:
         # Only a self-play iteration override can be > 1 (run_pipeline rejects a bare
         # --ggv-scale > 1, so the one-shot base drive keeps the #572 gate — #579 Codex P1);
@@ -704,6 +742,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=1.1,
         help="self-play envelope ladder cap (hard limit 1.2; >1 probes above the uncertainty-"
         "safe QSS floor, falsification-gated)",
+    )
+    p.add_argument(
+        "--no-l3",
+        action="store_true",
+        help="disable the #582 beyond-QSS per-corner refinement on the alien stages "
+        "(default: enabled — corners without measured low-variance evidence revert to "
+        "safe-QSS per corner anyway, named in the stage report)",
     )
     p.add_argument(
         "--strict", action="store_true", help="alien stage: require session+lap, enforce ordering"
