@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-14T22:01:03Z
+last_updated: 2026-07-14T22:22:12Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-577-alien-selfplay-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-572-alien-pipeline-2026-07-14.md
@@ -88,42 +88,37 @@ relates_to:
 
 # Next session handoff
 
-## Review resolution resumed (2026-07-14) — PR #579 at `28ef8a7`
+## Delivered (2026-07-14) — #577 flying-lap self-play (PR #579 MERGED `5b8fe0a`)
 
 PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) for
-[#577](https://github.com/agorokh/ac-copilot-trainer/issues/577) is open and non-draft. Its
-resolution branch now includes current `main` (`8f1297d`) and code fix
-[`28ef8a7`](https://github.com/agorokh/ac-copilot-trainer/commit/28ef8a7). The earlier resolution
-round at `5b6d68c` fixed handshake combo counting and made plant persistence/revert peer-safe and
-fail-closed. The resumed round fixes the optional `rig_lock_timeout=None` path before persistence
-and moves the implicit `--laps N` time-budget policy into `auto_drive`, so direct CLI and composed
-alien runs both receive `180 + 240*N` seconds unless the operator passes an explicit budget.
-The latest advisory-hardening round rejects non-finite/non-positive explicit budgets and makes
-self-play persistence write the already-resolved content-hashed driven path after stable identity
-validation, avoiding a second `setup.ini` read that could fork or skip the artifact. Regression
-coverage proves both failure boundaries and the stable path under a disappearing setup file. The
-final Codex P2 round makes any refine-persistence I/O exception set `selfplay.ok=false`, including a
-failure after the candidate write, so the composed pipeline cannot expose an unverified plant with
-exit 0. Canonical-venv local parity is green: **2,865 passed, 77 skipped, 86.68% coverage,
-`ci-fast: OK`**.
+[#577](https://github.com/agorokh/ac-copilot-trainer/issues/577) squash-merged to `main` as
+[`5b8fe0a`](https://github.com/agorokh/ac-copilot-trainer/commit/5b8fe0a51f6df3dc3ecaef1a39d4a8138de67ee9)
+at 2026-07-14T22:17:17Z; GitHub marked the linked issue **CLOSED** at 22:17:19Z.
 
-**Next:** do not merge until the current-head push completes its full 10-minute cooldown, all
-required checks are green, the complete GraphQL thread ledger is resolved, resolve-gate is clean,
-and the current-SHA daemon body has no unaddressed HIGH finding. Then merge PR #579 when desired
-and run `/post-merge 579`. Issue #577 remains open for the explicitly out-of-scope L3
-corridor-constrained per-corner refinement.
+**Shipped:** `auto_drive --laps N` now captures completed flying-lap windows and every lap archive;
+`auto_alien --iterations K --laps N` refines the plant from its own prior valid batch, rebuilds the
+provenance-gated line/QSS profile, advances a bounded scale ladder, and keeps the last valid plant on
+falsification. Review hardening added direct/composed budget parity, finite-positive budget
+validation, machine-global conditional persistence/revert, stable content-hashed setup identity,
+and fail-closed late I/O handling so an unverified persisted candidate cannot return green.
 
-## Delivery context (2026-07-14 evening) — #577 self-play live proof
+**Verification:** final canonical-venv parity was **2,865 passed, 77 skipped, 86.68% coverage,
+`ci-fast: OK`**. Before merge, required checks were green, 0/20 GraphQL threads were unresolved,
+and resolve-gate was clean after the final cooldown. After merge, main CI run
+[`29372492766`](https://github.com/agorokh/ac-copilot-trainer/actions/runs/29372492766) passed
+`make ci-fast`; governance-conformance also passed. `post_merge_classify.py --pr 579` reported no
+flags: no migration, environment, dependency, workflow, or other operator action is required.
 
-**PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) (#577, EPIC #529 P3) is fully
-review-converged at `6907e42` and awaits ONLY the operator's merge** — the session permission rail
-refuses an agent merging its own PR without in-session named authorization. Converged state: CI
-green, 0 unresolved threads (6 fix rounds, ~15 bot findings fixed, WONTFIXes reply-audited),
-resolve-gate ledger clean, self-hosted reviewer no-HIGH, post-push cooldowns completed.
-**Steps: (1) merge #579 (squash); (2) `/post-merge 579`; (3) continue the floor attack from
-merged main** — `python -m tools.ac_harness.auto_alien --car ks_porsche_911_gt3_r_2016 --track
-magione --laps 3 --iterations 6 --max-scale 1.15` (the 3-iteration proof ended on budget with
-headroom).
+**Resume / tracking gap:** issue-body item 3—corridor-constrained L3 per-corner refinement—did
+**not** ship, even though GitHub auto-closed #577 with the PR. Before taking up L3, explicitly reopen
+#577 or create a non-overlapping follow-up issue. A longer merged-main ladder
+(`--iterations 6 --max-scale 1.15`) remains a useful experiment, not a closeout requirement.
+
+## Live proof context (2026-07-14 evening) — #577 self-play
+
+PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) is merged and its shipped scope
+was review-converged before merge: required checks green, 0 unresolved threads, resolve-gate clean,
+and all mandatory post-push cooldowns complete.
 
 **What shipped + live proof:** flying-lap windows (`--laps N`, timed-lap batches, per-lap times in
 the report) + progressive-envelope self-play (`--iterations K`: refit from own archives →
@@ -133,8 +128,8 @@ flying laps 107.009 → 101.642 → 96.624 → 92.567 s, strictly monotonic, all
 recoveries** — the 91.94 s *predicted* QSS floor beaten by a *measured* lap; honest gap to the
 82.7 s TT floor ~11.9 %. Evidence:
 [#577 comment](https://github.com/agorokh/ac-copilot-trainer/issues/577#issuecomment-4972586933) +
-`.scratch/harness-evidence/alien-577-selfplay-911-magione/`. After merge, #577's remaining open
-scope is L3 corridor-constrained per-corner refinement (no AC attached). Detail:
+`.scratch/harness-evidence/alien-577-selfplay-911-magione/`. L3 corridor-constrained per-corner
+refinement remains unshipped and currently lacks an open tracking issue. Detail:
 [[issue-577-alien-selfplay-2026-07-14]].
 
 ## Delivered (2026-07-14) — #572 one-button alien pipeline CLOSED (PR #573 MERGED `dfd4b7e`) — EPIC #529 P2
