@@ -550,9 +550,16 @@ def profile_utilisation(kappa: list[float], v_target: list[float], model: GGVMod
         )
     worst = 0.0
     for i, v in enumerate(v_target):
+        # NaN comparisons are False, so max(worst, nan) silently KEEPS worst — exactly the
+        # under-report this function exists to prevent. Reject non-finite inputs loudly
+        # (#583 Qodo).
+        if not (math.isfinite(v) and math.isfinite(kappa[i])):
+            raise ValueError(f"non-finite profile input at point {i}: v={v!r}, kappa={kappa[i]!r}")
         limit = model.ay_max(v)
-        if limit <= 0.0:
-            raise ValueError(f"lateral envelope non-positive at point {i} (v={v:.1f} m/s)")
+        if not math.isfinite(limit) or limit <= 0.0:
+            raise ValueError(
+                f"lateral envelope non-finite/non-positive at point {i} (v={v:.1f} m/s)"
+            )
         worst = max(worst, (v * v * abs(kappa[i])) / limit)
     return worst
 

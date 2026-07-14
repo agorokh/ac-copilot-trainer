@@ -354,6 +354,11 @@ def test_profile_utilisation_reports_scaled_overspeed_beyond_barrier():
     assert profile_utilisation(kappa, driven, barrier) > 1.0
     with pytest.raises(ValueError, match="length mismatch"):
         profile_utilisation(kappa[:-1], v_ref, barrier)
+    # NaN comparisons are False, so an unguarded max() would silently under-report (#583 Qodo).
+    with pytest.raises(ValueError, match="non-finite"):
+        profile_utilisation(kappa, [float("nan")] + v_ref[1:], barrier)
+    with pytest.raises(ValueError, match="non-finite"):
+        profile_utilisation([float("nan")] + kappa[1:], v_ref, barrier)
 
 
 def test_verify_refined_profile_catches_tampered_speeds():
