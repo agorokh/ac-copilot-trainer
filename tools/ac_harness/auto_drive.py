@@ -1986,6 +1986,13 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
                 "alien driver requires the combo's measured plant constants "
                 "(ff_sign/ff_c1/ff_c2 + shift points) — run --driver handshake first"
             )
+        # The stored v_target is envelope-verified at build time; scaling above 1 would push
+        # corner speeds past the verified plant envelope AFTER that check (#572 Codex review).
+        if not 0.0 < config.ggv_scale <= 1.0:
+            raise ValueError(
+                f"alien driver requires 0 < ggv_scale <= 1 (got {config.ggv_scale}); the scale "
+                "is a safety margin under the envelope-verified profile"
+            )
         v_target = [v * config.ggv_scale for v in config.alien_v_target]
         return RacingDriver.from_ggv_profile(config.alien_line, v_target, **config.plant_kwargs)
     if config.driver == "handshake":
@@ -2743,6 +2750,121 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
     return AutoDriveConfig(**kwargs)
 
 
+def _resolve_alien_assets(
+    config: AutoDriveConfig, user_dir: Path, *, rebuild: bool
+) -> tuple[str | None, str | None, dict | None]:
+    """Resolve the alien drive's plant + optimized-line artifacts from current on-disk state.
+
+    Returns ``(error, plant_artifact_used, alien_line_used)`` — ``error`` is a printable message
+    (caller exits 2) or ``None`` on success, in which case ``config.plant_kwargs`` /
+    ``config.plant_ggv`` / ``config.alien_line`` / ``config.alien_v_target`` are populated.
+
+    MUST be called **after the machine-global rig lock is held** (#572 Codex review): a peer
+    worktree waiting on the lock may re-identify the same combo; resolving before the lock could
+    drive an in-memory plant/line that a newer on-disk plant artifact has already superseded,
+    bypassing the cache/provenance gates.
+    """
+    from tools.ac_harness.alien_line import alien_line_path, ensure_alien_line_artifact
+    from tools.ac_harness.plant_id import (
+        load_plant_artifact,
+        plant_artifact_path,
+        plant_driver_kwargs,
+        plant_ggv_model,
+    )
+
+    setup_key = Path(config.setup).stem if config.setup else None
+    artifact = load_plant_artifact(
+        user_dir,
+        config.car_id,
+        config.track_id,
+        setup_key,
+        config.setup_ini,
+        layout=config.track_layout,
+    )
+    if artifact is None:
+        expected = plant_artifact_path(
+            user_dir,
+            config.car_id,
+            config.track_id,
+            setup_key,
+            config.setup_ini,
+            layout=config.track_layout,
+        )
+        return (
+            f"--driver alien requires this combo's plant artifact ({expected}); "
+            "run --driver handshake first (or python -m tools.ac_harness.auto_alien for the "
+            "one-button pipeline)",
+            None,
+            None,
+        )
+    plant = plant_ggv_model(artifact)
+    if plant is None:
+        return (
+            "this combo's plant artifact has no uncertainty-aware friction fit; "
+            "re-run --driver handshake (#543) before the alien drive",
+            None,
+            None,
+        )
+    # Alien implies the full measured plant: curvature-FF steering + shift points. A missing
+    # steering constant raises inside plant_driver_kwargs — surface it as a CLI error.
+    try:
+        config.plant_kwargs = plant_driver_kwargs(artifact, steer=True)
+    except ValueError as exc:
+        return (str(exc), None, None)
+    config.plant_ggv = plant
+    plant_artifact_used = str(
+        plant_artifact_path(
+            user_dir,
+            config.car_id,
+            config.track_id,
+            setup_key,
+            config.setup_ini,
+            layout=config.track_layout,
+        )
+    )
+    try:
+        fast_path = resolve_fast_lane(config.ac_root, config.track_id, config.track_layout)
+        line_artifact, line_source = ensure_alien_line_artifact(
+            user_dir,
+            fast_path,
+            plant,
+            artifact,
+            car_id=config.car_id,
+            track_id=config.track_id,
+            layout=config.track_layout,
+            setup=setup_key,
+            setup_ini=config.setup_ini,
+            v_top_kmh=config.racing_max_speed_kmh,
+            rebuild=rebuild,
+        )
+    except (OSError, ValueError) as exc:
+        return (f"alien line build failed — {exc}", plant_artifact_used, None)
+    config.alien_line = line_artifact["line"]
+    config.alien_v_target = line_artifact["v_target_mps"]
+    alien_path = alien_line_path(
+        user_dir,
+        config.car_id,
+        config.track_id,
+        setup_key,
+        config.setup_ini,
+        layout=config.track_layout,
+    )
+    alien_line_used = {
+        "path": str(alien_path),
+        "source": line_source,
+        "plant_provenance": line_artifact.get("plant_provenance"),
+        "qss": line_artifact.get("qss"),
+        "corridor": line_artifact.get("corridor"),
+    }
+    qss = line_artifact.get("qss") or {}
+    print(
+        f"auto-drive: alien line {line_source} "
+        f"(QSS {qss.get('qss_laptime_s')}s, vmax {qss.get('vmax_kmh')} km/h, "
+        f"plant fit {line_artifact.get('plant_provenance', {}).get('sha12')}) <- {alien_path}"
+    )
+    return (None, plant_artifact_used, alien_line_used)
+
+
 def _main_impl(
     argv: list[str] | None, cleanup: ExitStack
 ) -> int:  # pragma: no cover - rig-only CLI wiring
@@ -2849,108 +2971,16 @@ def _main_impl(
         else:
             print("auto-drive: no plant artifact for this combo; using the generic GT3 plant")
 
-    # #572 alien pipeline: resolve the identified plant (mandatory, full-steering semantics) and
-    # the optimized line + QSS profile artifact (cache-or-build, identity + provenance gated).
+    # #572: reject an overspeed scale on the alien path BEFORE any launch work. The alien QSS
+    # profile is envelope-verified at build time; a scale above 1 would multiply corner speeds
+    # past the verified plant envelope after that check (Codex review).
     alien_line_used: dict | None = None
-    if config.driver == "alien":
-        from tools.ac_harness.alien_line import alien_line_path, ensure_alien_line_artifact
-        from tools.ac_harness.plant_id import (
-            load_plant_artifact,
-            plant_artifact_path,
-            plant_driver_kwargs,
-            plant_ggv_model,
-        )
-
-        setup_key = Path(config.setup).stem if config.setup else None
-        artifact = load_plant_artifact(
-            user_dir,
-            config.car_id,
-            config.track_id,
-            setup_key,
-            config.setup_ini,
-            layout=config.track_layout,
-        )
-        if artifact is None:
-            expected = plant_artifact_path(
-                user_dir,
-                config.car_id,
-                config.track_id,
-                setup_key,
-                config.setup_ini,
-                layout=config.track_layout,
-            )
-            print(
-                f"auto-drive: --driver alien requires this combo's plant artifact ({expected}); "
-                "run --driver handshake first (or python -m tools.ac_harness.auto_alien for the "
-                "one-button pipeline)"
-            )
-            return 2
-        plant = plant_ggv_model(artifact)
-        if plant is None:
-            print(
-                "auto-drive: this combo's plant artifact has no uncertainty-aware friction fit; "
-                "re-run --driver handshake (#543) before the alien drive"
-            )
-            return 2
-        # Alien implies the full measured plant: curvature-FF steering + shift points. A missing
-        # steering constant raises inside plant_driver_kwargs — surface it as a CLI error.
-        try:
-            config.plant_kwargs = plant_driver_kwargs(artifact, steer=True)
-        except ValueError as exc:
-            print(f"auto-drive: {exc}")
-            return 2
-        config.plant_ggv = plant
-        plant_artifact_used = str(
-            plant_artifact_path(
-                user_dir,
-                config.car_id,
-                config.track_id,
-                setup_key,
-                config.setup_ini,
-                layout=config.track_layout,
-            )
-        )
-        fast_path = resolve_fast_lane(config.ac_root, config.track_id, config.track_layout)
-        try:
-            line_artifact, line_source = ensure_alien_line_artifact(
-                user_dir,
-                fast_path,
-                plant,
-                artifact,
-                car_id=config.car_id,
-                track_id=config.track_id,
-                layout=config.track_layout,
-                setup=setup_key,
-                setup_ini=config.setup_ini,
-                v_top_kmh=config.racing_max_speed_kmh,
-                rebuild=args.alien_rebuild_line,
-            )
-        except (OSError, ValueError) as exc:
-            print(f"auto-drive: alien line build failed — {exc}")
-            return 2
-        config.alien_line = line_artifact["line"]
-        config.alien_v_target = line_artifact["v_target_mps"]
-        alien_path = alien_line_path(
-            user_dir,
-            config.car_id,
-            config.track_id,
-            setup_key,
-            config.setup_ini,
-            layout=config.track_layout,
-        )
-        alien_line_used = {
-            "path": str(alien_path),
-            "source": line_source,
-            "plant_provenance": line_artifact.get("plant_provenance"),
-            "qss": line_artifact.get("qss"),
-            "corridor": line_artifact.get("corridor"),
-        }
-        qss = line_artifact.get("qss") or {}
+    if config.driver == "alien" and not 0.0 < config.ggv_scale <= 1.0:
         print(
-            f"auto-drive: alien line {line_source} "
-            f"(QSS {qss.get('qss_laptime_s')}s, vmax {qss.get('vmax_kmh')} km/h, "
-            f"plant fit {line_artifact.get('plant_provenance', {}).get('sha12')}) <- {alien_path}"
+            f"auto-drive: --driver alien requires 0 < --ggv-scale <= 1 (got {config.ggv_scale}); "
+            "the scale is a safety margin under the envelope-verified profile, never above it"
         )
+        return 2
 
     car_tag = config.car_id or "car"
     evidence_dir = args.evidence_dir or (
@@ -3019,6 +3049,19 @@ def _main_impl(
         return 3
     cleanup.callback(rig_lock.release)
     print(f"auto-drive: rig lock acquired -> {rig_lock.path}")
+
+    # #572 alien pipeline: resolve the identified plant (mandatory, full-steering semantics) and
+    # the optimized line + QSS profile artifact (cache-or-build, identity + provenance gated).
+    # Deliberately AFTER preflight (actionable content errors, and --preflight-only never writes
+    # the line cache) and AFTER the rig lock (a peer worktree may have re-identified this combo
+    # while we waited — resolve from the on-disk state we now own) (#572 Codex review).
+    if config.driver == "alien":
+        alien_error, plant_artifact_used, alien_line_used = _resolve_alien_assets(
+            config, user_dir, rebuild=args.alien_rebuild_line
+        )
+        if alien_error is not None:
+            print(f"auto-drive: {alien_error}")
+            return 2
 
     sidecar_proc = None
     try:

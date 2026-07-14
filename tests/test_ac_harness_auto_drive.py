@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import pathlib
 import threading
+from dataclasses import replace
 
 import pytest
 
@@ -677,6 +678,22 @@ def test_build_driver_alien_requires_line_and_plant():
         _build_driver(
             _cfg(driver="alien", alien_line=_LINE, alien_v_target=[40.0] * 4), _LINE, None
         )
+
+
+def test_build_driver_alien_rejects_overspeed_scale():
+    # The artifact's v_target is envelope-verified at build time; a scale above 1 would push
+    # corner speeds past the verified plant envelope after that check.
+    cfg = _cfg(
+        driver="alien",
+        alien_line=_LINE,
+        alien_v_target=[40.0] * 4,
+        plant_kwargs=dict(_ALIEN_PLANT_KWARGS),
+        ggv_scale=1.1,
+    )
+    with pytest.raises(ValueError, match="ggv_scale"):
+        _build_driver(cfg, _LINE, None)
+    with pytest.raises(ValueError, match="ggv_scale"):
+        _build_driver(replace(cfg, ggv_scale=0.0), _LINE, None)
 
 
 def test_generic_gt3_ggv_is_realistic():

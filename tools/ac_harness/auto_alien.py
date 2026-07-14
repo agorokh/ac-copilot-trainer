@@ -30,9 +30,62 @@ from tools.ac_harness.plant_id import load_plant_artifact, plant_ggv_model
 
 StageRunner = Callable[[list[str]], int]
 
+DEFAULT_SIDECAR_URL = "ws://127.0.0.1:8765"
+
 
 def _utc_stamp() -> str:
     return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+
+
+def _probe_tcp(url: str) -> bool:
+    """Whether something is listening on the sidecar URL's host:port right now."""
+    import socket
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 8765
+    try:
+        with socket.create_connection((host, port), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
+def wait_sidecar_port_settled(
+    url: str,
+    *,
+    probe: Callable[[str], bool] | None = None,
+    timeout_s: float = 12.0,
+    stable_s: float = 4.0,
+    poll_s: float = 0.5,
+    sleep=time.sleep,
+    now=time.monotonic,
+) -> str:
+    """Let the previous stage's auto-started sidecar finish dying before the next stage starts.
+
+    The identify stage may auto-start a loopback sidecar that ``auto_drive`` terminates on stage
+    exit; starting the drive stage immediately can observe the dying process's port as listening
+    and adopt it, only for it to exit under the tap (#572 Codex review). Two settled states:
+
+    * port stops answering within ``timeout_s`` → released (the next stage auto-starts its own);
+    * port answers continuously for ``stable_s`` → a stable pre-existing sidecar (one the stage
+      did not terminate) → safe to adopt.
+    """
+    check = probe or _probe_tcp
+    deadline = now() + timeout_s
+    stable_since: float | None = None
+    while now() < deadline:
+        if check(url):
+            t = now()
+            if stable_since is None:
+                stable_since = t
+            elif t - stable_since >= stable_s:
+                return "stable"
+        else:
+            return "released"
+        sleep(poll_s)
+    return "timeout"
 
 
 def needs_identification(
@@ -253,6 +306,11 @@ def run_pipeline(
             print(f"auto-alien: FAIL — {report['error']}")
             return 1, report
         print("auto-alien: plant artifact verified after identification")
+        # The identify stage may have auto-started (and then terminated) a loopback sidecar;
+        # let its port settle so the drive stage never adopts a dying process (#572 review).
+        settled = wait_sidecar_port_settled(args.sidecar_url or DEFAULT_SIDECAR_URL)
+        report["sidecar_port_between_stages"] = settled
+        print(f"auto-alien: sidecar port between stages: {settled}")
 
     stage_dir = evidence_root / "drive"
     code = run_stage(drive_argv(args, stage_dir))

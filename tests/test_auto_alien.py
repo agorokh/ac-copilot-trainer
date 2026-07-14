@@ -86,6 +86,12 @@ def test_pipeline_runs_identification_then_drive(monkeypatch, tmp_path):
         auto_alien, "load_plant_artifact", lambda *a, **kw: {"x": 1} if state["usable"] else None
     )
     monkeypatch.setattr(auto_alien, "plant_ggv_model", lambda art: object())
+    settled_urls: list[str] = []
+    monkeypatch.setattr(
+        auto_alien,
+        "wait_sidecar_port_settled",
+        lambda url, **kw: settled_urls.append(url) or "released",
+    )
 
     def persist(argv):
         if "handshake" in argv:
@@ -101,6 +107,52 @@ def test_pipeline_runs_identification_then_drive(monkeypatch, tmp_path):
     assert "alien" in runner.calls[1]
     assert report["stages"]["identify"]["exit_code"] == 0
     assert report["stages"]["drive"]["exit_code"] == 0
+    # The sidecar port settle runs between the stages (drive never adopts a dying sidecar).
+    assert settled_urls == [auto_alien.DEFAULT_SIDECAR_URL]
+    assert report["sidecar_port_between_stages"] == "released"
+
+
+def test_wait_sidecar_port_settled_released_and_stable_and_timeout():
+    from tools.ac_harness.auto_alien import wait_sidecar_port_settled
+
+    clock = {"t": 0.0}
+
+    def now():
+        return clock["t"]
+
+    def sleep(s):
+        clock["t"] += s
+
+    # Port answers twice then dies -> released (the terminated stage sidecar let go).
+    answers = iter([True, True, False])
+    assert (
+        wait_sidecar_port_settled(
+            "ws://127.0.0.1:8765", probe=lambda u: next(answers), sleep=sleep, now=now
+        )
+        == "released"
+    )
+    # Port answers continuously -> stable pre-existing sidecar, safe to adopt.
+    clock["t"] = 0.0
+    assert (
+        wait_sidecar_port_settled(
+            "ws://127.0.0.1:8765", probe=lambda u: True, sleep=sleep, now=now, stable_s=2.0
+        )
+        == "stable"
+    )
+    # Port answers but never reaches the stability window within the budget -> timeout
+    # (the pipeline proceeds; the drive stage's own sidecar handling takes over).
+    clock["t"] = 0.0
+    assert (
+        wait_sidecar_port_settled(
+            "ws://127.0.0.1:8765",
+            probe=lambda u: True,
+            sleep=sleep,
+            now=now,
+            timeout_s=3.0,
+            stable_s=10.0,
+        )
+        == "timeout"
+    )
 
 
 def test_pipeline_aborts_when_identification_fails(monkeypatch, tmp_path):
