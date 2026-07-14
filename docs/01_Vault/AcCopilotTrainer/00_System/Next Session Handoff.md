@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-14T10:20:00Z
+last_updated: 2026-07-14T19:55:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-577-alien-selfplay-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-572-alien-pipeline-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-543-uncertainty-aware-plant-id-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-555-cross-worktree-rig-ownership-2026-07-13.md
@@ -86,6 +87,30 @@ relates_to:
 ---
 
 # Next session handoff
+
+## RESUME FIRST (2026-07-14 evening) — #577 self-play: PR #579 review-converged, MERGE-PENDING (operator click)
+
+**PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) (#577, EPIC #529 P3) is fully
+review-converged at `6907e42` and awaits ONLY the operator's merge** — the session permission rail
+refuses an agent merging its own PR without in-session named authorization. Converged state: CI
+green, 0 unresolved threads (6 fix rounds, ~15 bot findings fixed, WONTFIXes reply-audited),
+resolve-gate ledger clean, self-hosted reviewer no-HIGH, post-push cooldowns completed.
+**Steps: (1) merge #579 (squash); (2) `/post-merge 579`; (3) continue the floor attack from
+merged main** — `python -m tools.ac_harness.auto_alien --car ks_porsche_911_gt3_r_2016 --track
+magione --laps 3 --iterations 6 --max-scale 1.15` (the 3-iteration proof ended on budget with
+headroom).
+
+**What shipped + live proof:** flying-lap windows (`--laps N`, timed-lap batches, per-lap times in
+the report) + progressive-envelope self-play (`--iterations K`: refit from own archives →
+strictly-monotone merge → provenance-hash line rebuild → ggv-scale ladder → keep-last-valid
+falsification). **Live on the rig pre-merge (911 GT3 R @ Magione, one unmodified command):
+flying laps 107.009 → 101.642 → 96.624 → 92.567 s, strictly monotonic, all AC-valid, zero
+recoveries** — the 91.94 s *predicted* QSS floor beaten by a *measured* lap; honest gap to the
+82.7 s TT floor ~11.9 %. Evidence:
+[#577 comment](https://github.com/agorokh/ac-copilot-trainer/issues/577#issuecomment-4972586933) +
+`.scratch/harness-evidence/alien-577-selfplay-911-magione/`. After merge, #577's remaining open
+scope is L3 corridor-constrained per-corner refinement (no AC attached). Detail:
+[[issue-577-alien-selfplay-2026-07-14]].
 
 ## Delivered (2026-07-14) — #572 one-button alien pipeline CLOSED (PR #573 MERGED `dfd4b7e`) — EPIC #529 P2
 
