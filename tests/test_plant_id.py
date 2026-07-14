@@ -1009,11 +1009,20 @@ def test_refine_ggv_accepts_current_run_archive_when_writer_omits_layout():
         "track": {"id": "test_oval"},
         "lap_uuid": "fresh-layout-run",
     }
-    block = refine_ggv_from_lap_archives(result, [archive], generic_gt3_ggv())
+    block = refine_ggv_from_lap_archives(
+        result, [archive], generic_gt3_ggv(), archives_same_run=True
+    )
     assert block["ok"] is False  # no thermal trace, but identity was accepted
     assert block["lap_archives_loaded"] == 1
     assert block["load_errors"] == []
     assert any("omitted layout" in note for note in block["identity_notes"])
+
+    result = _result_dict()
+    result["ggv"] = {"ok": False, "reason": "awaiting thermally tagged lap archive"}
+    result["layout"] = "gp"
+    block = refine_ggv_from_lap_archives(result, [archive], generic_gt3_ggv())
+    assert block["lap_archives_loaded"] == 0
+    assert any("outside current-run scope" in error for error in block["load_errors"])
 
 
 def test_artifact_v1_still_loads_without_ggv(tmp_path):

@@ -2225,6 +2225,44 @@ def test_collect_lap_archives_waits_for_expected_handshake_count(tmp_path):
     assert clock["t"] >= 1.0
 
 
+def test_collect_lap_archives_waits_for_expected_valid_handshake_count(tmp_path):
+    import os
+
+    laps = tmp_path / "laps"
+    laps.mkdir()
+    invalid = laps / "lap_invalid.json"
+    first = laps / "lap_valid_1.json"
+    invalid.write_text('{"lap":{"is_valid":false}}')
+    first.write_text('{"lap":{"is_valid":true}}')
+    os.utime(invalid, (2_000_000, 2_000_000))
+    os.utime(first, (2_000_001, 2_000_001))
+    second = laps / "lap_valid_2.json"
+    clock = {"t": 0.0}
+
+    def _clock() -> float:
+        return clock["t"]
+
+    def _sleep(dt: float) -> None:
+        clock["t"] += dt
+        if clock["t"] >= 1.0 and not second.exists():
+            second.write_text('{"lap":{"is_valid":true}}')
+            os.utime(second, (2_000_002, 2_000_002))
+
+    got = collect_lap_archives(
+        laps,
+        since_epoch=1_500_000,
+        wait_for_first=True,
+        min_count=2,
+        min_valid_count=2,
+        timeout_s=8.0,
+        poll_s=0.5,
+        _clock=_clock,
+        _sleep=_sleep,
+    )
+    assert got == [str(second), str(first), str(invalid)]
+    assert clock["t"] >= 1.0
+
+
 def test_collect_lap_archives_rejects_invalid_required_count(tmp_path):
     with pytest.raises(ValueError, match="min_count"):
         collect_lap_archives(tmp_path, since_epoch=0, min_count=0)

@@ -742,7 +742,7 @@ def test_lap_archive_passive_longitudinal_is_prior_until_probe_rows_exist():
     nonce_model, nonce_summary = ggv_from_lap_archives(
         [resumed_session], prior, probe_rows=nonce_rows, probe_run_id="run-543"
     )
-    assert nonce_summary["probe_attribution"] == "current-run nonce"
+    assert nonce_summary["probe_attribution"] == "current-run nonce (complete thermal cohort)"
     assert nonce_summary["probe_rows"] == len(nonce_rows)
     assert nonce_model.uncertainty_bins[6]["brake"]["source"] == "measured"
 
@@ -751,6 +751,17 @@ def test_lap_archive_passive_longitudinal_is_prior_until_probe_rows_exist():
     )
     assert wrong_nonce_summary["probe_rows"] == 0
     assert wrong_nonce.uncertainty_bins[6]["brake"]["source"] == "prior"
+
+    invalid = _thermal_archive("invalid", core_c=55.0, lap_n=40)
+    invalid["lap"]["is_valid"] = False
+    gated, gated_summary = ggv_from_lap_archives(
+        [invalid, resumed_session], prior, probe_rows=nonce_rows, probe_run_id="run-543"
+    )
+    assert gated_summary["probe_attribution"] == (
+        "current-run nonce rejected (incomplete thermal cohort)"
+    )
+    assert gated_summary["probe_rows"] == 0
+    assert gated.uncertainty_bins[6]["brake"]["source"] == "prior"
 
 
 def test_lap_archive_fit_never_mixes_compound_or_setup_cohorts():

@@ -1017,13 +1017,20 @@ def ggv_from_lap_archives(
         and not isinstance(archive["lap"].get("lap_n"), bool)
     }
     valid_probe_run_id = isinstance(probe_run_id, str) and bool(probe_run_id.strip())
-    if valid_probe_run_id:
+    complete_run_cohort = len(selected) == len(archives)
+    if valid_probe_run_id and complete_run_cohort:
         thermal_probe_rows = [
             dict(row)
             for row in (probe_rows or [])
             if isinstance(row, dict) and row.get("probe_run_id") == probe_run_id
         ]
-        probe_attribution = "current-run nonce"
+        probe_attribution = "current-run nonce (complete thermal cohort)"
+    elif valid_probe_run_id:
+        # The nonce proves invocation identity, not tyre state. If any current-run archive is
+        # invalid, thermally ineligible, or belongs to another cohort, conservatively keep every
+        # longitudinal bin on the prior rather than assigning a probe to the wrong tyre regime.
+        thermal_probe_rows = []
+        probe_attribution = "current-run nonce rejected (incomplete thermal cohort)"
     else:
         thermal_probe_rows = [
             dict(row)

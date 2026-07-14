@@ -1492,6 +1492,12 @@ def refine_ggv_from_lap_archives(
             )
             continue
         if expected_layout is not None and actual_layout is None:
+            if not archives_same_run:
+                load_errors.append(
+                    f"archive {payload.get('lap_uuid') or '?'} omitted layout outside "
+                    "current-run scope"
+                )
+                continue
             # The current in-game archive schema does not serialize layout. These paths are
             # restricted to archives written after this run started, while car+track still match;
             # preserve the missing-layout fact rather than rejecting every multi-layout handshake.

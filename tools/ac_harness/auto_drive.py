@@ -1488,6 +1488,7 @@ def collect_lap_archives(
     resolve: Callable[[], list[Path]] | None = None,
     wait_for_first: bool = False,
     min_count: int = 1,
+    min_valid_count: int | None = None,
     timeout_s: float = 8.0,
     poll_s: float = 0.5,
     _clock: Callable[[], float] = time.monotonic,
@@ -1502,8 +1503,9 @@ def collect_lap_archives(
     naive single scan then reports an empty list even though a lap was produced (#515).
 
     With ``wait_for_first`` (set when the run produced a lap) this polls up to ``timeout_s`` for
-    ``min_count`` archives instead of racing the writer. A handshake passes its completed-lap count
-    so refinement cannot consume lap 1 while the thermally relevant lap 2 is still being finalized.
+    ``min_count`` archives and, when supplied, ``min_valid_count`` valid archives instead of racing
+    the writer. The latter is essential in hotlap mode: invalid boundaries still produce archive
+    files but do not advance AC's completed-lap counter.
     It returns immediately with no wait when ``wait_for_first`` is false (a run that produced no
     lap).
 
@@ -1525,16 +1527,42 @@ def collect_lap_archives(
 
     if isinstance(min_count, bool) or not isinstance(min_count, int) or min_count < 1:
         raise ValueError("min_count must be a positive integer")
+    if min_valid_count is not None and (
+        isinstance(min_valid_count, bool)
+        or not isinstance(min_valid_count, int)
+        or min_valid_count < 1
+    ):
+        raise ValueError("min_valid_count must be a positive integer or None")
+
+    def _enough(paths: list[str]) -> bool:
+        return len(paths) >= min_count and (
+            min_valid_count is None or _count_valid_lap_archives(paths) >= min_valid_count
+        )
+
     found = _scan_lap_archives(_current(), since_epoch)
-    if len(found) >= min_count or not wait_for_first:
+    if _enough(found) or not wait_for_first:
         return found
     deadline = _clock() + max(0.0, timeout_s)
     while _clock() < deadline:
         _sleep(max(0.0, poll_s))
         found = _scan_lap_archives(_current(), since_epoch)
-        if len(found) >= min_count:
+        if _enough(found):
             return found
     return found
+
+
+def _count_valid_lap_archives(paths: list[str]) -> int:
+    """Count finalized archive files whose canonical lap validity is explicitly true."""
+    count = 0
+    for item in paths:
+        try:
+            payload = json.loads(Path(item).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            continue
+        lap = payload.get("lap") if isinstance(payload, dict) else None
+        if isinstance(lap, dict) and lap.get("is_valid") is True:
+            count += 1
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -2728,6 +2756,7 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         resolve=lambda: candidate_journal_laps_dirs(user_dir),
         wait_for_first=wait_for_archives,
         min_count=max(1, handshake_laps_used),
+        min_valid_count=handshake_laps_used if handshake_laps_used > 0 else None,
         timeout_s=20.0 if handshake_laps_used > 0 else 8.0,
     )
     # Report the dir the archive was actually found in (correct even for a renamed install), so the
@@ -2769,7 +2798,7 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
             sink.get("ok")
             and isinstance(sink.get("result"), dict)
             and handshake_laps_used > 0
-            and len(lap_archives) < handshake_laps_used
+            and _count_valid_lap_archives(lap_archives) < handshake_laps_used
         ):
             # The bounded writer wait expired with a partial lap set. Do not promote a model from
             # lap 1 while the thermal/probe-relevant lap 2 is absent; constants may still persist.
@@ -2778,7 +2807,7 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
                 "model": None,
                 "reason": (
                     "incomplete handshake lap archive set: "
-                    f"{len(lap_archives)} < {handshake_laps_used}"
+                    f"{_count_valid_lap_archives(lap_archives)} valid < {handshake_laps_used}"
                 ),
             }
         elif sink.get("ok") and isinstance(sink.get("result"), dict):
