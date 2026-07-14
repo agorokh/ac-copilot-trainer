@@ -333,99 +333,134 @@ def run_selfplay(
         selfplay["iterations"].append(entry)
 
         # 1) Refine the plant from the previous drive's batch (keep-last-valid on any failure).
+        #    All artifact I/O is OSError-guarded: a filesystem failure must surface as an honest
+        #    stopped reason in the composed report, never crash the pipeline before the report
+        #    is written (#579 Qodo reliability).
         refined = False
         last_valid_bytes: bytes | None = None
         candidate_bytes: bytes | None = None
-        if not prev_archives:
-            entry["refine"] = {"ok": False, "reason": "no lap archives from the previous drive"}
-        else:
-            # Snapshot the artifact bytes BEFORE loading: the refine-save runs outside the drive
-            # stage's machine-global rig lock, so a peer worktree may refresh the same plant
-            # between our load and our save — persisting a refinement of stale bytes would
-            # silently clobber the peer's newer fit (#579 Codex P2).
-            pre_refine_bytes = plant_path.read_bytes() if plant_path.exists() else None
-            artifact = load_plant_artifact(
-                user_dir, args.car, args.track, setup_key, setup_ini, layout=args.track_layout
-            )
-            if artifact is None:
+        try:
+            if not prev_archives:
                 entry["refine"] = {
                     "ok": False,
-                    "reason": f"plant artifact unloadable ({plant_path})",
+                    "reason": "no lap archives from the previous drive",
                 }
             else:
-                archive_payloads, load_errors = load_archive_payloads(prev_archives)
-                archive_payloads, foreign = combo_filter_payloads(
-                    archive_payloads,
-                    car_id=args.car,
-                    track_id=args.track,
-                    layout=args.track_layout,
+                # Snapshot the artifact bytes BEFORE loading: the refine-save runs outside the
+                # drive stage's machine-global rig lock, so a peer worktree may refresh the same
+                # plant between our load and our save — persisting a refinement of stale bytes
+                # would silently clobber the peer's newer fit (#579 Codex P2).
+                pre_refine_bytes = plant_path.read_bytes() if plant_path.exists() else None
+                artifact = load_plant_artifact(
+                    user_dir, args.car, args.track, setup_key, setup_ini, layout=args.track_layout
                 )
-                result, block = selfplay_refine_result(
-                    artifact, archive_payloads, generic_gt3_ggv(), prior_name="generic_gt3_ggv"
-                )
-                entry["refine"] = {
-                    k: v for k, v in block.items() if k not in ("model", "tyre_states")
-                }
-                if load_errors:
-                    entry["refine"]["archive_load_errors"] = load_errors
-                if foreign:
-                    entry["refine"]["foreign_archives_dropped"] = foreign
-                merge_stats = block.get("selfplay_merge", {}) if result is not None else {}
-                merge_changed = bool(
-                    merge_stats.get("lateral_bins_adopted")
-                    or merge_stats.get("lateral_bins_raised")
-                    or (
-                        merge_stats.get("mu_lat_g_after", 0.0)
-                        > merge_stats.get("mu_lat_g_before", 0.0)
+                if artifact is None:
+                    entry["refine"] = {
+                        "ok": False,
+                        "reason": f"plant artifact unloadable ({plant_path})",
+                    }
+                else:
+                    archive_payloads, load_errors = load_archive_payloads(prev_archives)
+                    archive_payloads, foreign = combo_filter_payloads(
+                        archive_payloads,
+                        car_id=args.car,
+                        track_id=args.track,
+                        layout=args.track_layout,
                     )
-                )
-                if result is not None and not merge_changed:
-                    # A refit that changed nothing (no bin adopted/raised, ceiling unchanged) is
-                    # a no-op: persisting it would only churn provenance (a pointless identical
-                    # line rebuild) while the PHYSICAL envelope stays the same — which must not
-                    # count as "the envelope changed" for the retry guard (#579 Codex P2).
-                    entry["refine"]["no_op"] = True
-                    print(
-                        f"auto-alien: iteration {index} refit was a no-op (no envelope change) "
-                        "— plant left as-is"
+                    result, block = selfplay_refine_result(
+                        artifact, archive_payloads, generic_gt3_ggv(), prior_name="generic_gt3_ggv"
                     )
-                elif result is not None:
-                    current_bytes = plant_path.read_bytes() if plant_path.exists() else None
-                    if current_bytes != pre_refine_bytes:
-                        entry["refine"]["save_skipped"] = (
-                            "plant artifact changed between load and save (peer "
-                            "re-identification?) — refinement of stale bytes not persisted"
+                    entry["refine"] = {
+                        k: v for k, v in block.items() if k not in ("model", "tyre_states")
+                    }
+                    if load_errors:
+                        entry["refine"]["archive_load_errors"] = load_errors
+                    if foreign:
+                        entry["refine"]["foreign_archives_dropped"] = foreign
+                    merge_stats = block.get("selfplay_merge", {}) if result is not None else {}
+                    merge_changed = bool(
+                        merge_stats.get("lateral_bins_adopted")
+                        or merge_stats.get("lateral_bins_raised")
+                        or (
+                            merge_stats.get("mu_lat_g_after", 0.0)
+                            > merge_stats.get("mu_lat_g_before", 0.0)
                         )
+                    )
+                    if result is not None and not merge_changed:
+                        # A refit that changed nothing (no bin adopted/raised, ceiling unchanged)
+                        # is a no-op: persisting it would only churn provenance (a pointless
+                        # identical line rebuild) while the PHYSICAL envelope stays the same —
+                        # which must not count as "the envelope changed" for the retry guard
+                        # (#579 Codex P2).
+                        entry["refine"]["no_op"] = True
                         print(
-                            f"auto-alien: iteration {index} refine save SKIPPED — "
-                            f"{entry['refine']['save_skipped']}"
+                            f"auto-alien: iteration {index} refit was a no-op (no envelope "
+                            "change) — plant left as-is"
                         )
-                    else:
+                    elif result is not None:
+                        current_bytes = plant_path.read_bytes() if plant_path.exists() else None
                         # Re-key the save with the CALLER-resolved setup identity: a portable/
                         # moved artifact keeps its creator's absolute setup_ini path, and saving
                         # under that stale key would write a DIFFERENT plant filename than the
                         # one this pipeline loads and drives (#579 Codex P2).
                         result["setup_ini"] = str(setup_ini) if setup_ini else None
-                        last_valid_bytes = pre_refine_bytes
-                        saved = save_plant_artifact(user_dir, result)
-                        candidate_bytes = Path(saved).read_bytes()
-                        refined = True
-                        if Path(saved) != Path(plant_path):
-                            entry["refine"]["save_path_mismatch"] = str(saved)
-                            print(
-                                f"auto-alien: WARNING — refined plant saved to {saved}, "
-                                f"expected {plant_path} (setup identity drift?)"
-                            )
-                        print(
-                            f"auto-alien: iteration {index} plant refined "
-                            f"(lateral bins adopted={merge_stats.get('lateral_bins_adopted')} "
-                            f"raised={merge_stats.get('lateral_bins_raised')}) -> {saved}"
+                        expected_path = plant_artifact_path(
+                            user_dir,
+                            str(result.get("car_id") or ""),
+                            str(result.get("track_id") or ""),
+                            result.get("setup"),
+                            result.get("setup_ini"),
+                            layout=result.get("layout"),
                         )
-                else:
-                    print(
-                        f"auto-alien: iteration {index} refine FAILED — keeping the last-valid "
-                        f"plant ({block.get('reason')})"
-                    )
+                        if current_bytes != pre_refine_bytes:
+                            entry["refine"]["save_skipped"] = (
+                                "plant artifact changed between load and save (peer "
+                                "re-identification?) — refinement of stale bytes not persisted"
+                            )
+                            print(
+                                f"auto-alien: iteration {index} refine save SKIPPED — "
+                                f"{entry['refine']['save_skipped']}"
+                            )
+                        elif Path(expected_path) != Path(plant_path):
+                            # Refuse a forked plant file OUTRIGHT: writing the refinement under
+                            # a different identity key would leave the driven plant untouched
+                            # and strand a falsified candidate at a path the revert cannot
+                            # reach (#579 daemon HIGH).
+                            entry["refine"]["save_skipped"] = (
+                                f"refined identity keys to {expected_path}, not the driven "
+                                f"plant {plant_path} — refusing a forked plant file"
+                            )
+                            print(
+                                f"auto-alien: iteration {index} refine save SKIPPED — "
+                                f"{entry['refine']['save_skipped']}"
+                            )
+                        else:
+                            last_valid_bytes = pre_refine_bytes
+                            saved = save_plant_artifact(user_dir, result)
+                            candidate_bytes = Path(saved).read_bytes()
+                            refined = True
+                            print(
+                                f"auto-alien: iteration {index} plant refined "
+                                f"(lateral bins adopted="
+                                f"{merge_stats.get('lateral_bins_adopted')} "
+                                f"raised={merge_stats.get('lateral_bins_raised')}) -> {saved}"
+                            )
+                    else:
+                        print(
+                            f"auto-alien: iteration {index} refine FAILED — keeping the "
+                            f"last-valid plant ({block.get('reason')})"
+                        )
+        except OSError as exc:
+            # Fail loud IN the report: keep-last-valid integrity can no longer be guaranteed
+            # once artifact I/O errors, so the ladder stops with the named reason.
+            entry.setdefault("refine", {})["ok"] = False
+            entry["refine"]["reason"] = f"filesystem error during refine persist: {exc}"
+            selfplay["stopped"] = (
+                f"filesystem error at iteration {index} ({exc}) — self-play stopped "
+                "(keep-last-valid integrity cannot be guaranteed past an I/O failure)"
+            )
+            print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
+            break
 
         # 2) Refuse to re-drive an identical envelope: no refit AND no scale movement means the
         #    step could only repeat the previous iteration verbatim (#577 AC: never silently
@@ -474,25 +509,36 @@ def run_selfplay(
             #    may have re-identified the combo meanwhile.
             entry["falsified"] = reason
             if refined and last_valid_bytes is not None:
-                current = plant_path.read_bytes() if plant_path.exists() else b""
-                if current == candidate_bytes:
-                    tmp = plant_path.with_suffix(".json.tmp")
-                    tmp.write_bytes(last_valid_bytes)
-                    tmp.replace(plant_path)
-                    entry["reverted"] = True
-                    print(
-                        f"auto-alien: iteration {index} FALSIFIED ({reason}) — plant reverted "
-                        "to the last-valid fit"
-                    )
-                else:
+                try:
+                    current = plant_path.read_bytes() if plant_path.exists() else b""
+                    if current == candidate_bytes:
+                        tmp = plant_path.with_suffix(".json.tmp")
+                        tmp.write_bytes(last_valid_bytes)
+                        tmp.replace(plant_path)
+                        entry["reverted"] = True
+                        print(
+                            f"auto-alien: iteration {index} FALSIFIED ({reason}) — plant "
+                            "reverted to the last-valid fit"
+                        )
+                    else:
+                        entry["reverted"] = False
+                        entry["revert_skipped"] = (
+                            "plant artifact changed since this iteration persisted it "
+                            "(peer re-identification?) — revert skipped"
+                        )
+                        print(
+                            f"auto-alien: iteration {index} FALSIFIED ({reason}); "
+                            f"{entry['revert_skipped']}"
+                        )
+                except OSError as exc:
+                    # The falsified candidate may still be on disk — say so loudly in the
+                    # report rather than crash before it is written (#579 Qodo reliability).
                     entry["reverted"] = False
-                    entry["revert_skipped"] = (
-                        "plant artifact changed since this iteration persisted it "
-                        "(peer re-identification?) — revert skipped"
-                    )
+                    entry["revert_error"] = f"filesystem error during revert: {exc}"
                     print(
-                        f"auto-alien: iteration {index} FALSIFIED ({reason}); "
-                        f"{entry['revert_skipped']}"
+                        f"auto-alien: iteration {index} FALSIFIED ({reason}); REVERT FAILED — "
+                        f"{entry['revert_error']} (the falsified fit may still be persisted; "
+                        "re-run --force-identify to rebuild the plant)"
                     )
             else:
                 print(

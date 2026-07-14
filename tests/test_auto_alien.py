@@ -654,3 +654,28 @@ def test_selfplay_oracle_ignores_foreign_combo_archives(monkeypatch, tmp_path):
         [own, foreign], car_id="car_a", track_id="trk", layout=None
     )
     assert kept == [own] and dropped == 1
+
+
+def test_selfplay_filesystem_error_stops_with_named_reason(monkeypatch, tmp_path):
+    # #579 Qodo reliability: an OSError during the refine persist must surface as an honest
+    # selfplay.stopped reason in the composed report, never crash the pipeline.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+        ],
+    )
+
+    def exploding_read(*a, **kw):
+        raise OSError("disk on fire")
+
+    monkeypatch.setattr(type(harness.plant_path), "read_bytes", exploding_read)
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0  # the base pipeline passed; the ladder stopped honestly
+    selfplay = report["selfplay"]
+    assert "filesystem error at iteration 1" in selfplay["stopped"]
+    assert "disk on fire" in selfplay["iterations"][0]["refine"]["reason"]

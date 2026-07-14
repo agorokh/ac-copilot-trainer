@@ -3366,7 +3366,12 @@ def _main_impl(
         # app/combo's fresh archives, which must not satisfy the batch before this combo's own
         # writer finishes (#579 Codex P2).
         min_valid_count=handshake_laps_used if handshake_laps_used > 0 else None,
-        min_matching_count=expected_archives if batch_mode and expected_archives > 0 else None,
+        # The combo gate needs a car identity to match against: a preset-only run (--cm-preset
+        # without --car) has none, so the predicate could never match and the poll would always
+        # burn its full timeout (#579 Qodo perf).
+        min_matching_count=(
+            expected_archives if batch_mode and expected_archives > 0 and config.car_id else None
+        ),
         valid_archive_predicate=archive_matches_combo,
         timeout_s=20.0 if batch_mode else 8.0,
     )
