@@ -535,6 +535,28 @@ def refine_profile(
     return v_out, report
 
 
+def profile_utilisation(kappa: list[float], v_target: list[float], model: GGVModel) -> float:
+    """Max lateral utilisation of a speed profile vs ``model.ay_max`` (1.0 = on the envelope).
+
+    Pure and reusable: the build reports the refined profile vs the barrier and vs the safe
+    envelope, and the run evidence reports the DRIVEN target (``v_target * ggv_scale``) vs the
+    barrier — a scaled overspeed probe must never be recorded as within-barrier (#583 Codex P2).
+    Raises on a length mismatch or a non-positive envelope (reporting must fail loud, not
+    under-report).
+    """
+    if len(kappa) != len(v_target):
+        raise ValueError(
+            f"profile_utilisation arrays length mismatch: kappa={len(kappa)}, v={len(v_target)}"
+        )
+    worst = 0.0
+    for i, v in enumerate(v_target):
+        limit = model.ay_max(v)
+        if limit <= 0.0:
+            raise ValueError(f"lateral envelope non-positive at point {i} (v={v:.1f} m/s)")
+        worst = max(worst, (v * v * abs(kappa[i])) / limit)
+    return worst
+
+
 def verify_refined_profile(
     plane: list[tuple[float, float]],
     kappa: list[float],

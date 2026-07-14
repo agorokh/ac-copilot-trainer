@@ -30,6 +30,7 @@ from pathlib import Path
 from tools.ac_harness.corner_refine import (
     L3Params,
     barrier_ggv,
+    profile_utilisation,
     refine_profile,
     verify_refined_profile,
 )
@@ -236,12 +237,10 @@ def build_alien_line_artifact(
         # point of L3, and the number the run evidence must not under-report; #583 Codex P2).
         barrier = barrier_ggv(plant, l3_params.max_rel_std)
         l3_block["max_ay_utilisation_vs_barrier"] = round(
-            max((v * v * abs(kappa[i])) / barrier.ay_max(v) for i, v in enumerate(v_target)),
-            4,
+            profile_utilisation(kappa, v_target, barrier), 4
         )
         l3_block["max_ay_utilisation_vs_safe"] = round(
-            max((v * v * abs(kappa[i])) / plant.ay_max(v) for i, v in enumerate(v_target)),
-            4,
+            profile_utilisation(kappa, v_target, plant), 4
         )
         params["l3"] = l3_params.to_dict()
     artifact = {

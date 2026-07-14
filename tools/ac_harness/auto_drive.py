@@ -3056,6 +3056,29 @@ def _resolve_alien_assets(
     }
     l3_report = line_artifact.get("l3")
     if isinstance(l3_report, dict):
+        # The driver multiplies the artifact's v_target by config.ggv_scale AFTER this report
+        # snapshot, so the artifact's own (unscaled) utilisation metrics would under-report an
+        # overspeed probe as within-barrier. Recompute the DRIVEN target's utilisation exactly
+        # against the same barrier; a failure is disclosed in the report, never swallowed
+        # (#583 Codex P2).
+        from tools.ac_harness.corner_refine import barrier_ggv, profile_utilisation
+        from tools.ac_harness.ggv_profile import curvature_profile
+
+        l3_report = dict(l3_report)
+        scale = float(config.ggv_scale)
+        l3_report["ggv_scale"] = scale
+        try:
+            l3p = L3Params.from_dict((line_artifact.get("params") or {}).get("l3"))
+            plane = [(p[0], p[2]) for p in line_artifact["line"]]
+            driven = [float(v) * scale for v in line_artifact["v_target_mps"]]
+            l3_report["driven_max_ay_utilisation_vs_barrier"] = round(
+                profile_utilisation(
+                    curvature_profile(plane), driven, barrier_ggv(plant, l3p.max_rel_std)
+                ),
+                4,
+            )
+        except (TypeError, ValueError, KeyError) as exc:
+            l3_report["driven_utilisation_error"] = f"{type(exc).__name__}: {exc}"
         alien_line_used["l3"] = l3_report
     qss = line_artifact.get("qss") or {}
     print(

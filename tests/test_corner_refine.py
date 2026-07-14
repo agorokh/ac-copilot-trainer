@@ -339,6 +339,23 @@ def test_refine_validates_inputs():
         refine_profile(seg, kappa, v_qss, plant, L3Params(), v_top_ms=0.0)
 
 
+def test_profile_utilisation_reports_scaled_overspeed_beyond_barrier():
+    from tools.ac_harness.corner_refine import profile_utilisation
+
+    plant = _plant()
+    seg, kappa, v_qss = _qss(plant)
+    params = L3Params()
+    v_ref, _report = refine_profile(seg, kappa, v_qss, plant, params, v_top_ms=61.0)
+    barrier = barrier_ggv(plant, params.max_rel_std)
+    # The unscaled refined profile honors the barrier; a ggv_scale>1 overspeed probe (the #577
+    # ladder) must be REPORTED beyond it — the run evidence's driven-utilisation contract (#583).
+    assert profile_utilisation(kappa, v_ref, barrier) <= 1.0 + 1e-6
+    driven = [v * 1.05 for v in v_ref]
+    assert profile_utilisation(kappa, driven, barrier) > 1.0
+    with pytest.raises(ValueError, match="length mismatch"):
+        profile_utilisation(kappa[:-1], v_ref, barrier)
+
+
 def test_verify_refined_profile_catches_tampered_speeds():
     plant = _plant()
     seg, kappa, v_qss = _qss(plant)
