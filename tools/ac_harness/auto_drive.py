@@ -2871,9 +2871,16 @@ def _main_impl(
             layout=config.track_layout,
         )
         if artifact is None:
+            expected = plant_artifact_path(
+                user_dir,
+                config.car_id,
+                config.track_id,
+                setup_key,
+                config.setup_ini,
+                layout=config.track_layout,
+            )
             print(
-                "auto-drive: --driver alien requires this combo's plant artifact "
-                f"({plant_artifact_path(user_dir, config.car_id, config.track_id, setup_key, config.setup_ini, layout=config.track_layout)}); "
+                f"auto-drive: --driver alien requires this combo's plant artifact ({expected}); "
                 "run --driver handshake first (or python -m tools.ac_harness.auto_alien for the "
                 "one-button pipeline)"
             )

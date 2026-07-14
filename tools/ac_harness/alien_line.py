@@ -5,7 +5,8 @@ durable, identity-gated artifact next to the plant artifact:
 
 * **Build** — min-curvature line within the track corridor (``min_curvature_line`` bounded by the
   ``fast_lane.ai`` ``sideLeft``/``sideRight`` extras), then the forward-backward QSS min-time speed
-  profile against the combo's identified uncertainty-aware :class:`~tools.ac_harness.ggv_profile.GGVModel`.
+  profile against the combo's identified uncertainty-aware
+  :class:`~tools.ac_harness.ggv_profile.GGVModel`.
 * **Cache** — persisted under ``Documents/Assetto Corsa/alien_line/`` (durable AC state, NEVER
   ``.scratch/`` — a gitignored scratch dir is disposable by contract and this repo has already lost
   runtime state to a cleanup once). Keyed by the same combo identity stem as the plant artifact
@@ -168,9 +169,7 @@ def build_alien_line_artifact(
     opt_plane, alpha = min_curvature_line(
         plane, side_left, side_right, margin_m=margin_m, iters=iters
     )
-    optimized = [
-        (opt_plane[i][0], fast_line[i][1], opt_plane[i][1]) for i in range(len(fast_line))
-    ]
+    optimized = [(opt_plane[i][0], fast_line[i][1], opt_plane[i][1]) for i in range(len(fast_line))]
     v_target, summ = ggv_speed_profile_from_model(optimized, plant, v_top_kmh=v_top_kmh)
     worst_ay = _verify_lateral_envelope(opt_plane, v_target, plant)
     return {

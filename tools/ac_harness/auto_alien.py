@@ -52,9 +52,7 @@ def needs_identification(
     """
     if force:
         return True, "forced (--force-identify)"
-    artifact = load_plant_artifact(
-        user_dir, car_id, track_id, setup, setup_ini, layout=layout
-    )
+    artifact = load_plant_artifact(user_dir, car_id, track_id, setup, setup_ini, layout=layout)
     if artifact is None:
         return True, "no plant artifact for this combo"
     if plant_ggv_model(artifact) is None:
@@ -167,7 +165,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--evidence-dir",
         type=Path,
         default=None,
-        help="pipeline evidence root (default: .scratch/harness-evidence/<ts>_alien_<car>_<track>/)",
+        help="pipeline evidence root (default: .scratch/harness-evidence/<ts>_alien_...)",
     )
     return p
 

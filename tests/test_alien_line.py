@@ -270,15 +270,11 @@ def test_ensure_builds_then_caches_then_invalidates(tmp_path, lane):
     assert src2 == "cache"
     assert art2["v_target_mps"] == pytest.approx(art1["v_target_mps"])
 
-    _art3, src3 = ensure_alien_line_artifact(
-        tmp_path, path, plant, plant_art, rebuild=True, **kw
-    )
+    _art3, src3 = ensure_alien_line_artifact(tmp_path, path, plant, plant_art, rebuild=True, **kw)
     assert src3 == "built"
 
     # A re-identified plant invalidates the cache without an explicit rebuild.
-    _art4, src4 = ensure_alien_line_artifact(
-        tmp_path, path, plant, _plant_artifact(seed="b"), **kw
-    )
+    _art4, src4 = ensure_alien_line_artifact(tmp_path, path, plant, _plant_artifact(seed="b"), **kw)
     assert src4 == "built"
 
 
