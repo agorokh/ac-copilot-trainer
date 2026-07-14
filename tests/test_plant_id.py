@@ -8,6 +8,7 @@ failure path. No game, no Windows, no I/O beyond tmp_path.
 
 from __future__ import annotations
 
+import json
 import math
 from types import SimpleNamespace
 
@@ -1149,3 +1150,201 @@ def test_apply_handshake_outcome_success_notes():
     apply_handshake_outcome(report, sink)
     assert report.ok is True
     assert report.notes and "handshake ok" in report.notes[0]
+
+
+# --------------------------------------------------------------------------- #577 self-play refine
+def _selfplay_thermal_archive(lap_uuid: str, *, lateral_g: float = 1.3, lap_n: int = 1) -> dict:
+    """A fit-eligible lap archive for the pipeline's own combo (test_car/test_oval)."""
+    from tools.ac_harness.reference_lap import TRACE_FIELDS
+
+    fields = list(TRACE_FIELDS)
+    samples = []
+    for i in range(600):
+        values = dict.fromkeys(fields, 0.0)
+        speed = 50.0 + float((i // 50) % 11) * 10.0
+        braking = i % 2 == 0
+        values.update(
+            {
+                "spline": i / 600.0,
+                "speed": speed,
+                "eMs": i * 10.0,
+                "brake": 0.8 if braking else 0.0,
+                "throttle": 0.0 if braking else 1.0,
+                "accG_lat": lateral_g,
+                "accG_long": -1.25 if braking else 0.75,
+            }
+        )
+        for wheel in ("fl", "fr", "rl", "rr"):
+            values[f"tyreCoreTemp_{wheel}"] = 90.0
+            values[f"tyreTempInner_{wheel}"] = 92.0
+            values[f"tyreTempMid_{wheel}"] = 90.0
+            values[f"tyreTempOuter_{wheel}"] = 88.0
+            values[f"wheelsPressure_{wheel}"] = 27.0
+            values[f"dy_{wheel}"] = 1.5
+        samples.append([values[field] for field in fields])
+    return {
+        "schema_version": 1,
+        "source": "in_game",
+        "lap_uuid": lap_uuid,
+        "car": {"id": "test_car"},
+        "track": {"id": "test_oval", "layout": None},
+        "lap": {"lap_n": lap_n, "lap_ms": 90000, "is_valid": True},
+        "setup": {"hash": "setup-a"},
+        "tyres": {"compoundIndex": 1, "name": "M", "optimalTempC": 90.0},
+        "trace": {"fields": fields, "samples": samples, "samples_count": len(samples)},
+    }
+
+
+def _selfplay_artifact() -> dict:
+    artifact = _result_dict()
+    artifact["schema_version"] = PLANT_SCHEMA_VERSION
+    artifact["created_utc"] = "2026-07-01T00:00:00Z"
+    artifact["ggv"] = {"ok": True, "model": _uncertain_prior().to_dict(), "reason": "ok"}
+    return artifact
+
+
+def test_selfplay_refine_requires_current_fit_and_archives():
+    from tools.ac_harness.plant_id import selfplay_refine_result
+
+    no_fit = _result_dict()
+    result, block = selfplay_refine_result(no_fit, [], generic_gt3_ggv())
+    assert result is None and "#543" in block["reason"]
+
+    result, block = selfplay_refine_result(_selfplay_artifact(), [], generic_gt3_ggv())
+    assert result is None  # batch refit degraded -> keep last valid, reason named
+    assert block["ok"] is False
+    assert "no thermally consistent" in block["reason"]
+
+
+def test_selfplay_refine_merges_monotonically_and_strips_stale_meta(tmp_path):
+    from tools.ac_harness.ggv_profile import GGVModel as _GGV
+    from tools.ac_harness.plant_id import selfplay_refine_result
+
+    artifact = _selfplay_artifact()
+    current = plant_ggv_model(artifact)
+    archives = [
+        _selfplay_thermal_archive("sp-1", lateral_g=1.35, lap_n=1),
+        _selfplay_thermal_archive("sp-2", lateral_g=1.35, lap_n=2),
+    ]
+    result, block = selfplay_refine_result(artifact, archives, generic_gt3_ggv())
+    assert result is not None
+    assert block["ok"] is True
+    assert "selfplay_merge" in block
+    # Stale identity meta is stripped so save_plant_artifact stamps fresh values.
+    assert "schema_version" not in result and "created_utc" not in result
+    merged = _GGV.from_dict(result["ggv"]["model"])
+    assert merged.uncertainty_aware
+    for cur_bin, new_bin in zip(current.uncertainty_bins, merged.uncertainty_bins, strict=True):
+        assert new_bin["lateral"]["safe_g"] >= cur_bin["lateral"]["safe_g"]
+        assert dict(new_bin["brake"]) == dict(cur_bin["brake"])
+    # The refined result persists through the SAME artifact gate every plant rides.
+    path = save_plant_artifact(tmp_path, result)
+    reloaded = load_plant_artifact(tmp_path, "test_car", "test_oval")
+    assert reloaded is not None
+    assert plant_ggv_model(reloaded) is not None
+    assert reloaded["ggv"]["selfplay_merge"] == block["selfplay_merge"]
+    assert path.exists()
+    # The original artifact object was never mutated (deep-copied inside).
+    assert artifact["ggv"]["reason"] == "ok"
+
+
+def test_selfplay_refine_owns_the_caller_resolved_setup_identity(tmp_path):
+    from tools.ac_harness.plant_id import selfplay_refine_result
+
+    setup_ini = tmp_path / "moved-setup.ini"
+    setup_ini.write_text("[GEARS]\nFINAL=3.4\n", encoding="utf-8")
+    artifact = _selfplay_artifact()
+    artifact["setup"] = "moved-setup"
+    artifact["setup_ini"] = "C:/old-host/creator-path.ini"
+    archives = [
+        _selfplay_thermal_archive("sp-identity-1", lateral_g=1.35, lap_n=1),
+        _selfplay_thermal_archive("sp-identity-2", lateral_g=1.35, lap_n=2),
+    ]
+    result, block = selfplay_refine_result(
+        artifact,
+        archives,
+        generic_gt3_ggv(),
+        setup_ini=setup_ini,
+    )
+    assert block["ok"] is True and result is not None
+    assert result["setup_ini"] == str(setup_ini)
+    assert artifact["setup_ini"] == "C:/old-host/creator-path.ini"
+
+
+def test_selfplay_persist_and_revert_are_peer_safe(monkeypatch, tmp_path):
+    from tools.ac_harness import rig_lock
+    from tools.ac_harness.plant_id import persist_selfplay_refinement, revert_plant_artifact
+
+    monkeypatch.setattr(
+        rig_lock,
+        "default_rig_session_lock_path",
+        lambda: tmp_path / "state" / "rig-session.lock",
+    )
+    artifact = _selfplay_artifact()
+    path = save_plant_artifact(tmp_path, artifact)
+    previous_bytes = path.read_bytes()
+    candidate = load_plant_artifact(tmp_path, "test_car", "test_oval")
+    assert candidate is not None
+    candidate.pop("schema_version", None)
+    candidate.pop("created_utc", None)
+    candidate["ggv"]["reason"] = "ok (self-play test candidate)"
+
+    saved, candidate_bytes, skipped = persist_selfplay_refinement(
+        tmp_path,
+        candidate,
+        expected_path=path,
+        expected_current_bytes=previous_bytes,
+    )
+    assert saved == path and candidate_bytes == path.read_bytes() and skipped is None
+    assert revert_plant_artifact(
+        path,
+        previous_bytes,
+        expected_current_bytes=candidate_bytes,
+        car_id="test_car",
+        track_id="test_oval",
+    )
+    assert path.read_bytes() == previous_bytes
+
+    path.write_text('{"peer": true}', encoding="utf-8")
+    saved, candidate_bytes, skipped = persist_selfplay_refinement(
+        tmp_path,
+        candidate,
+        expected_path=path,
+        expected_current_bytes=previous_bytes,
+    )
+    assert saved is None and candidate_bytes is None
+    assert "changed between load and save" in str(skipped)
+    assert path.read_text(encoding="utf-8") == '{"peer": true}'
+
+
+def test_selfplay_persist_keeps_resolved_path_when_setup_becomes_unreadable(monkeypatch, tmp_path):
+    from tools.ac_harness import rig_lock
+    from tools.ac_harness.plant_id import persist_selfplay_refinement
+
+    monkeypatch.setattr(
+        rig_lock,
+        "default_rig_session_lock_path",
+        lambda: tmp_path / "state" / "rig-session.lock",
+    )
+    setup_ini = tmp_path / "race-setup.ini"
+    setup_ini.write_text("[GEARS]\nFINAL=3.4\n", encoding="utf-8")
+    artifact = _selfplay_artifact()
+    artifact["setup"] = "race-setup"
+    artifact["setup_ini"] = str(setup_ini)
+    path = save_plant_artifact(tmp_path, artifact)
+    previous_bytes = path.read_bytes()
+    candidate = json.loads(previous_bytes)
+    candidate["ggv"]["reason"] = "ok (self-play setup-race candidate)"
+
+    # The driven identity was resolved while the setup was readable. Persistence must not derive
+    # a different, unhashed filename if that same file disappears before the conditional write.
+    setup_ini.unlink()
+    saved, candidate_bytes, skipped = persist_selfplay_refinement(
+        tmp_path,
+        candidate,
+        expected_path=path,
+        expected_current_bytes=previous_bytes,
+    )
+    assert saved == path and candidate_bytes == path.read_bytes() and skipped is None
+    assert path.exists()
+    assert not (tmp_path / "plant_id" / "test_car__test_oval__setup-race-setup.json").exists()

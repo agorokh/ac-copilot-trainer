@@ -223,6 +223,43 @@ def _is_snapshot(frame: dict, topic: str) -> bool:
     )
 
 
+def is_timed_lap_frame(frame: dict) -> bool:
+    """Whether a frame is a ``lap`` snapshot carrying a positive time (``payload.last_lap_ms``).
+
+    An out-lap / teleport boundary still emits a ``lap`` frame but with no time; only a TIMED
+    boundary counts as a completed lap for the #577 multi-lap window (the trainer only archives
+    timed laps, so counting untimed boundaries would overclaim the collected evidence).
+    """
+    if not _is_snapshot(frame, "lap"):
+        return False
+    payload = frame.get("payload")
+    ms = payload.get("last_lap_ms") if isinstance(payload, dict) else None
+    try:
+        return ms is not None and float(ms) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def timed_lap_times_ms(frames: list[dict]) -> list[int]:
+    """Per-lap times (ms, stream order) of every timed ``lap`` boundary in the frame stream.
+
+    Pure — the #577 report consumes this so a multi-lap run carries its full lap-time
+    trajectory, not just "a lap happened". Each ``lap`` snapshot is one boundary event
+    (the trainer emits it once per completed lap; it is not re-emitted on subscribe).
+    """
+    out: list[int] = []
+    for frame in frames:
+        if not is_timed_lap_frame(frame):
+            continue
+        payload = frame.get("payload")
+        ms = payload.get("last_lap_ms") if isinstance(payload, dict) else None
+        try:
+            out.append(int(float(ms)))
+        except (TypeError, ValueError):  # pragma: no cover - is_timed_lap_frame already vetted
+            continue
+    return out
+
+
 async def tap_frames(
     url: str = "ws://127.0.0.1:8765",
     *,
@@ -230,6 +267,7 @@ async def tap_frames(
     wait_for_lap: bool = False,
     settle_timeout: float = 120.0,
     lap_timeout: float = 180.0,
+    lap_count: int | None = None,
 ) -> list[dict]:
     """Tap the sidecar and return the frames received (live; needs AC driving).
 
@@ -237,11 +275,22 @@ async def tap_frames(
     ``settle_timeout``) for the car to be on track, then waits (up to ``lap_timeout``) for a ``lap``
     frame — so a slow real lap is captured rather than false-failing a fixed 20 s window.
 
+    ``lap_count`` (#577 flying-lap windows): an explicit N >= 1 keeps the window open until that
+    many TIMED lap boundaries (``payload.last_lap_ms > 0``) arrive — including N == 1, so a
+    requested one-lap batch never exits on an untimed out-lap/teleport boundary (#579 daemon
+    HIGH). One ``lap_timeout`` deadline covers the whole batch — the drive's ``--drive-seconds``
+    budget stays the honest cap ("N laps or the time budget, whichever first"); a deadline expiry
+    returns the frames collected so far and the shortfall is reported honestly downstream.
+    ``lap_count=None`` keeps the exact legacy ``--wait-lap`` wait (any ``lap`` frame, timed or
+    not — the #516 grace/archive logic gates on timed separately).
+
     Always closes the client (try/finally) and fails fast on a missing hello handshake. Imported
     lazily so the pure evaluator has no hard dependency on the sidecar client.
     """
     from tools.ai_sidecar.harness_client import HarnessClient
 
+    if lap_count is not None and lap_count < 1:
+        raise ValueError(f"lap_count must be >= 1 (got {lap_count})")
     hc = HarnessClient(url)
     try:
         await hc.connect(retries=40, retry_delay=0.25)
@@ -249,13 +298,28 @@ async def tap_frames(
             raise RuntimeError("sidecar hello handshake timed out (no hello_ack)")
         await hc.subscribe(list(ALL_TAP_TOPICS))
         if wait_for_lap:
-            # Wait for the car to be on track (any continuous topic), then for a lap boundary.
+            # Wait for the car to be on track (any continuous topic), then for lap boundaries.
             # `wait_for` consumes from a separate queue; `hc.frames` still accrues the full stream.
             await hc.wait_for(
                 lambda f: any(_is_snapshot(f, t) for t in _CONTINUOUS_SET),
                 timeout=settle_timeout,
             )
-            await hc.wait_for(lambda f: _is_snapshot(f, "lap"), timeout=lap_timeout)
+            if lap_count is None:
+                await hc.wait_for(lambda f: _is_snapshot(f, "lap"), timeout=lap_timeout)
+            else:
+                # `wait_for` returns None on timeout (never raises) — mirror the single-lap
+                # contract: return whatever was collected and let evaluate_sequence /
+                # the report surface the shortfall honestly (require_lap fails at 0 laps).
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + lap_timeout
+                seen = 0
+                while seen < lap_count:
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        break  # partial batch: reported downstream, laps so far kept
+                    if await hc.wait_for(is_timed_lap_frame, timeout=remaining) is None:
+                        break
+                    seen += 1
         else:
             await asyncio.sleep(seconds)
         return list(hc.frames)

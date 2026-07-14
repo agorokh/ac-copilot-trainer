@@ -1592,7 +1592,7 @@ def test_positive_float_flags_reject_bad_values():
     # race_ini_setup_bake_loop, and not as a never-expiring hijack deadline (#482 review). `inf`
     # would make `deadline = monotonic() + probe` never expire — the exact hang #466 removes.
     base = ["--car", "ks_porsche_911_gt3_r_2016", "--track", "spa"]
-    for flag in ("--setup-rebake-interval", "--hijack-probe-seconds"):
+    for flag in ("--setup-rebake-interval", "--hijack-probe-seconds", "--drive-seconds"):
         for bad in ("0", "-0.5", "inf", "nan"):
             with pytest.raises(SystemExit):
                 _build_arg_parser().parse_args(base + [flag, bad])
@@ -2683,3 +2683,214 @@ def test_cli_new_flags_map_to_config(tmp_path):
     assert cfg.max_recoveries == 3
     assert cfg.progress_stall_seconds == 8.0
     assert cfg.spawn_to_line is False
+
+
+# --------------------------------------------------------------------------- #577 flying-lap window
+def _timed_lap_snap(ms: int | None) -> dict:
+    return {"type": "state.snapshot", "topic": "lap", "v": 1, "payload": {"last_lap_ms": ms}}
+
+
+def test_multi_lap_window_passes_lap_count_and_reports_lap_times():
+    record: dict = {}
+    tap_record: dict = {}
+    frames = [
+        *CONTINUOUS,
+        _snap("session"),
+        _timed_lap_snap(None),  # teleport/out-lap boundary: not counted
+        _timed_lap_snap(95000),
+        _timed_lap_snap(93000),
+        _timed_lap_snap(91500),
+    ]
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, target_laps=3),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, laps=3), record),
+            tap=_tap_returning(frames, tap_record),
+        )
+    )
+    assert report.ok is True
+    assert tap_record["lap_count"] == 3  # the tap holds the window open for the batch
+    assert report.lap_times_ms == [95000, 93000, 91500]
+    assert report.laps_requested == 3
+    assert not any("requested 3" in n for n in report.notes)  # no shortfall note when met
+
+
+def test_multi_lap_window_shortfall_is_noted_not_failed():
+    record: dict = {}
+    frames = [*CONTINUOUS, _snap("session"), _timed_lap_snap(96000)]
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, target_laps=3),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, laps=1), record),
+            tap=_tap_returning(frames, record),
+        )
+    )
+    # "N laps or the time budget, whichever first": one timed lap still satisfies require_lap;
+    # the shortfall is reported honestly for the self-play verdict to consume.
+    assert report.ok is True
+    assert report.lap_times_ms == [96000]
+    assert any("requested 3, observed 1" in n for n in report.notes)
+
+
+def test_single_lap_wait_keeps_legacy_tap_contract():
+    record: dict = {}
+    frames = [*CONTINUOUS, _snap("session"), _snap("lap")]
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, laps=1), record),
+            tap=_tap_returning(frames, record),
+        )
+    )
+    assert report.ok is True
+    assert "lap_count" not in record  # legacy single-lap wait: no batch kwarg
+    assert report.lap_times_ms == []  # untimed boundary carries no trajectory
+
+
+def test_cli_laps_implies_wait_lap_and_rejects_negative():
+    args = _build_arg_parser().parse_args(["--car", "c", "--track", "t", "--laps", "3"])
+    cfg = _config_from_args(args)
+    assert cfg.wait_lap is True
+    assert cfg.target_laps == 3
+    assert cfg.drive_seconds == 180.0 + 240.0 * 3
+    explicit = _build_arg_parser().parse_args(
+        ["--car", "c", "--track", "t", "--laps", "3", "--drive-seconds", "200"]
+    )
+    assert _config_from_args(explicit).drive_seconds == 200.0
+    from tools.ac_harness.auto_drive import resolve_lap_window_drive_seconds
+
+    for bad in (0.0, -1.0, float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="drive seconds must be finite and > 0"):
+            resolve_lap_window_drive_seconds(bad, 3)
+    args = _build_arg_parser().parse_args(["--car", "c", "--track", "t"])
+    cfg = _config_from_args(args)
+    assert cfg.wait_lap is False and cfg.target_laps == 0 and cfg.drive_seconds == 300.0
+    from tools.ac_harness.auto_drive import _main
+
+    assert _main(["--car", "c", "--track", "magione", "--laps", "-1"]) == 2
+
+
+def test_build_driver_alien_overspeed_optin_is_bounded():
+    # #577: the self-play ladder may probe above the uncertainty-safe envelope, but only via the
+    # explicit opt-in and never above the hard cap.
+    from tools.ac_harness.auto_drive import ALIEN_MAX_OVERSPEED_SCALE
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    cfg = _cfg(
+        driver="alien",
+        alien_line=_LINE,
+        alien_v_target=[40.0] * 4,
+        plant_kwargs=dict(_ALIEN_PLANT_KWARGS),
+        ggv_scale=1.1,
+        alien_overspeed=True,
+    )
+    d = _build_driver(cfg, _LINE, None)
+    assert isinstance(d, RacingDriver)
+    assert max(d.profile) == pytest.approx(40.0 * 1.1)
+    with pytest.raises(ValueError, match="ggv_scale"):
+        _build_driver(replace(cfg, ggv_scale=ALIEN_MAX_OVERSPEED_SCALE + 0.01), _LINE, None)
+    with pytest.raises(ValueError, match="ggv_scale"):
+        _build_driver(replace(cfg, alien_overspeed=False), _LINE, None)
+
+
+def test_one_lap_batch_requires_a_timed_lap_window():
+    # #579 daemon HIGH: --laps 1 is a BATCH of one TIMED lap, not the legacy any-boundary wait —
+    # the tap must receive lap_count=1 so an untimed out-lap/teleport boundary cannot end the
+    # window with zero timed laps (which would falsify a healthy self-play iteration).
+    record: dict = {}
+    frames = [*CONTINUOUS, _snap("session"), _timed_lap_snap(97000)]
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, target_laps=1),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, laps=1), record),
+            tap=_tap_returning(frames, record),
+        )
+    )
+    assert report.ok is True
+    assert record["lap_count"] == 1
+    assert report.lap_times_ms == [97000]
+
+
+def test_lap_window_with_zero_timed_laps_fails_honestly():
+    # #579 Codex P2: --laps N + only an untimed boundary must FAIL the run, not exit 0 with an
+    # empty trajectory (require_lap alone is satisfiable by the untimed frame).
+    record: dict = {}
+    frames = [*CONTINUOUS, _snap("session"), _timed_lap_snap(None)]
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, target_laps=1),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, laps=0), record),
+            tap=_tap_returning(frames, record),
+        )
+    )
+    assert report.ok is False
+    assert report.lap_times_ms == []
+    assert any("observed ZERO" in n for n in report.notes)
+
+
+def test_collect_lap_archives_matching_count_is_validity_agnostic(tmp_path):
+    # #579 Qodo + Codex: the batch gate waits for THIS combo's archives (a foreign app/combo's
+    # file must not satisfy it) but never gates on validity (an AC-invalid archive is
+    # falsification evidence that can never turn valid by waiting).
+    import json as _json
+
+    journal = tmp_path / "journal"
+    journal.mkdir()
+
+    def _write(name, car, valid):
+        (journal / name).write_text(
+            _json.dumps(
+                {
+                    "car": {"id": car},
+                    "track": {"id": "imola", "layout": None},
+                    "lap": {"lap_n": 1, "lap_ms": 90000, "is_valid": valid},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    _write("lap_own_invalid.json", "car_a", False)
+    _write("lap_foreign_valid.json", "other_car", True)
+
+    def predicate(payload: dict) -> bool:
+        return str(payload.get("car", {}).get("id")) == "car_a"
+
+    clock = _Clock()
+    # One own-combo (AC-invalid) archive satisfies min_matching_count=1 immediately — validity
+    # never gates the batch poll.
+    found = collect_lap_archives(
+        journal,
+        0.0,
+        wait_for_first=True,
+        min_count=1,
+        min_matching_count=1,
+        valid_archive_predicate=predicate,
+        timeout_s=5.0,
+        _clock=clock.monotonic,
+        _sleep=clock.sleep,
+    )
+    assert len(found) == 2 and clock.now == 0.0  # returned on the first scan, no waiting
+    # A foreign valid archive alone can NOT satisfy the matching gate: the poll runs to its
+    # bounded timeout and returns what exists (honest shortfall, no hang).
+    found = collect_lap_archives(
+        journal,
+        0.0,
+        wait_for_first=True,
+        min_count=1,
+        min_matching_count=2,
+        valid_archive_predicate=predicate,
+        timeout_s=5.0,
+        _clock=clock.monotonic,
+        _sleep=clock.sleep,
+    )
+    assert len(found) == 2 and clock.now >= 5.0  # waited the bounded budget, then honest return

@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-14T19:55:00Z
+last_updated: 2026-07-14T22:01:03Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/issue-577-alien-selfplay-2026-07-14.md
@@ -32,7 +32,22 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**ACTIVE (2026-07-14 evening):** [#577](https://github.com/agorokh/ac-copilot-trainer/issues/577)
+**Active (2026-07-14, latest):** PR
+[#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) for
+[#577](https://github.com/agorokh/ac-copilot-trainer/issues/577) has its review-resolution branch
+merged with current `main` at `8f1297d`; the latest code fix is
+[`28ef8a7`](https://github.com/agorokh/ac-copilot-trainer/commit/28ef8a7). In addition to the
+peer-safe plant persistence/revert work at `5b6d68c`, direct `auto_drive --laps N` now owns the
+scaled flying-lap time budget and self-play normalizes the optional rig-lock timeout before
+persistence. The latest advisory-hardening round rejects invalid explicit drive budgets and keeps
+the already-resolved content-hashed plant path stable if `setup.ini` becomes unreadable during
+persistence. Late persistence I/O errors now mark the ladder and composed pipeline failed, so an
+already-written but unverified candidate can never return green. Local parity is green (**2,865
+passed, 77 skipped, 86.68% coverage**). Merge only
+after the current-head post-push cooldown, GraphQL thread audit, resolve-gate, and daemon review
+all converge; then `/post-merge 579`. #577 keeps its separate L3 per-corner refinement scope open.
+
+**Live delivery basis (2026-07-14 evening):** [#577](https://github.com/agorokh/ac-copilot-trainer/issues/577)
 (**EPIC #529 P3** — flying-lap windows + progressive-envelope self-play) implemented and
 **live-proven**; PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579)
 review-converged at `6907e42`, **MERGE-PENDING (operator click — agent self-merge denied by the

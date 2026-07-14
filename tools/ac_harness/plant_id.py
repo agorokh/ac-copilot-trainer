@@ -39,6 +39,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
 import uuid
 from dataclasses import asdict, dataclass
@@ -52,6 +53,7 @@ from tools.ac_harness.ggv_profile import (
     fit_steer_feedforward,
     ggv_from_lap_archives,
     ggv_from_telemetry,
+    merge_selfplay_model,
     seg_lengths,
     signed_curvature_profile,
 )
@@ -1560,6 +1562,71 @@ def refine_ggv_from_lap_archives(
     return block
 
 
+def selfplay_refine_result(
+    artifact: dict,
+    archives: list[str | Path | dict],
+    prior: GGVModel,
+    *,
+    prior_name: str = "generic_gt3_ggv",
+    setup_ini: str | Path | None = None,
+) -> tuple[dict | None, dict]:
+    """Refit from ONE self-play lap batch and merge monotonically into the plant (#577).
+
+    ``artifact`` is the combo's loaded plant artifact (the persisted handshake result). The batch
+    ``archives`` must be provenance-bound to the pipeline's own drive stage (collected by the same
+    run, combo-matched) — that is the ``archives_same_run=True`` contract. Returns
+    ``(result_to_persist, refine_block)``:
+
+    * on success, ``result_to_persist`` is a deep-copied result whose ``ggv`` block carries the
+      monotonically merged model (see :func:`~tools.ac_harness.ggv_profile.merge_selfplay_model`);
+      persist it through :func:`save_plant_artifact` — the SAME gate every plant rides — so the
+      plant-fit provenance hash changes and every cached alien line derived from the previous fit
+      invalidates.
+    * on any failure (no current fit, batch refit degraded, bin-grid mismatch),
+      ``result_to_persist`` is ``None`` and the block names the reason — the caller keeps the
+      last-valid plant and MUST say so (never a silent fallback).
+    """
+    import copy
+
+    current = plant_ggv_model(artifact)
+    if current is None:
+        return None, {
+            "ok": False,
+            "reason": "artifact has no uncertainty-aware friction fit to refine (#543)",
+        }
+    result = copy.deepcopy(artifact)
+    # save_plant_artifact stamps fresh schema_version/created_utc; stale copies must not shadow
+    # them (dict-splat order puts result keys last).
+    result.pop("schema_version", None)
+    result.pop("created_utc", None)
+    # A portable artifact can retain its creator's absolute setup path.  Self-play persistence
+    # must use the caller-resolved identity so a moved setup cannot fork the refined plant into a
+    # different filename.  Keep this schema/identity mutation inside the artifact owner module.
+    result["setup_ini"] = str(setup_ini) if setup_ini else None
+    block = refine_ggv_from_lap_archives(
+        result,
+        archives,
+        prior,
+        prior_name=prior_name,
+        archives_same_run=True,
+    )
+    if not block.get("ok"):
+        return None, block
+    try:
+        batch_model = GGVModel.from_dict(block["model"])
+        merged, merge_stats = merge_selfplay_model(current, batch_model)
+    except (ValueError, TypeError) as exc:
+        return None, {
+            "ok": False,
+            "reason": f"selfplay merge failed: {type(exc).__name__}: {exc}",
+            "batch_refit": {k: v for k, v in block.items() if k != "model"},
+        }
+    block["model"] = merged.to_dict()
+    block["selfplay_merge"] = merge_stats
+    block["reason"] = "ok (self-play monotonic merge)"
+    return result, block
+
+
 def _setup_stem(setup: str | None) -> str | None:
     """The setup basename without ``.ini`` (or None), for a path-free identity sanity-check."""
     if not setup:
@@ -1644,12 +1711,8 @@ def plant_artifact_path(
     return Path(user_dir) / "plant_id" / f"{stem}.json"
 
 
-def save_plant_artifact(user_dir: Path, result: dict) -> Path:
-    """Persist a PASSED handshake result as the combo's plant artifact (atomic write).
-
-    The artifact is keyed by car+track+layout+setup. ``layout=None`` keeps the exact legacy
-    car+track+setup filename so existing single-layout artifacts remain loadable.
-    """
+def _plant_artifact_payload(result: dict) -> dict:
+    """Validate one plant result and stamp its persisted schema metadata."""
     if not result.get("ok"):
         raise ValueError("refusing to persist a failed handshake as a plant artifact")
     ggv = result.get("ggv")
@@ -1664,22 +1727,137 @@ def save_plant_artifact(user_dir: Path, result: dict) -> Path:
     track_id = str(result.get("track_id") or "")
     if not car_id or not track_id:
         raise ValueError(f"plant artifact needs car_id and track_id (got {car_id!r}/{track_id!r})")
-    setup = result.get("setup")
-    setup_ini = result.get("setup_ini")
-    layout = result.get("layout")
     from datetime import UTC, datetime
 
-    payload = {
+    return {
         "schema_version": PLANT_SCHEMA_VERSION,
         "created_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         **result,
     }
-    path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini, layout=layout)
+
+
+def _write_plant_payload(path: Path, payload: dict) -> Path:
+    """Atomically write an already-validated payload to an already-resolved artifact path."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     tmp.replace(path)
     return path
+
+
+def save_plant_artifact(user_dir: Path, result: dict) -> Path:
+    """Persist a PASSED handshake result as the combo's plant artifact (atomic write).
+
+    The artifact is keyed by car+track+layout+setup. ``layout=None`` keeps the exact legacy
+    car+track+setup filename so existing single-layout artifacts remain loadable.
+    """
+    payload = _plant_artifact_payload(result)
+    car_id = str(payload["car_id"])
+    track_id = str(payload["track_id"])
+    setup = payload.get("setup")
+    setup_ini = payload.get("setup_ini")
+    layout = payload.get("layout")
+    path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini, layout=layout)
+    return _write_plant_payload(path, payload)
+
+
+def persist_selfplay_refinement(
+    user_dir: Path,
+    result: dict,
+    *,
+    expected_path: str | Path,
+    expected_current_bytes: bytes | None,
+    lock_timeout: float = 0.0,
+) -> tuple[Path | None, bytes | None, str | None]:
+    """Conditionally persist one self-play refinement under machine-global ownership.
+
+    The caller refined ``expected_current_bytes``.  Holding the same cross-worktree rig lock used
+    by handshake producers closes the compare/write race with another harness. The driven path is
+    already content-hash-resolved, so persistence validates stable identity fields against the
+    loaded artifact and writes that exact path without re-reading a setup file. A peer update or
+    identity drift is a clean skip, not an overwrite. Raw I/O stays owned by this module.
+    """
+    from tools.ac_harness.rig_lock import (
+        RigSessionLock,
+        RigSessionOwner,
+        default_rig_session_lock_path,
+    )
+
+    payload = _plant_artifact_payload(result)
+    car_id = str(payload["car_id"])
+    track_id = str(payload["track_id"])
+    expected = Path(expected_path)
+    plant_root = (Path(user_dir) / "plant_id").resolve()
+    try:
+        expected.resolve().relative_to(plant_root)
+    except ValueError:
+        return (
+            None,
+            None,
+            f"driven plant {expected} is outside approved root {plant_root} — refusing persist",
+        )
+    try:
+        driven_payload = json.loads(expected_current_bytes) if expected_current_bytes else None
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        driven_payload = None
+    if not isinstance(driven_payload, dict):
+        return None, None, "driven plant bytes are absent or malformed — refusing persist"
+    identity_fields = ("car_id", "track_id", "layout")
+    identity_matches = all(payload.get(key) == driven_payload.get(key) for key in identity_fields)
+    identity_matches = identity_matches and _setup_stem(payload.get("setup")) == _setup_stem(
+        driven_payload.get("setup")
+    )
+    if not identity_matches:
+        return (
+            None,
+            None,
+            "refined non-hash identity differs from the driven plant — refusing persist",
+        )
+
+    owner = RigSessionOwner(pid=os.getpid(), cwd=str(Path.cwd()), car=car_id, track=track_id)
+    with RigSessionLock(default_rig_session_lock_path(), owner=owner, timeout=lock_timeout):
+        current_bytes = expected.read_bytes() if expected.exists() else None
+        if current_bytes != expected_current_bytes:
+            return (
+                None,
+                None,
+                "plant artifact changed between load and save (peer re-identification?) — "
+                "refinement of stale bytes not persisted",
+            )
+        saved = _write_plant_payload(expected, payload)
+        return saved, saved.read_bytes(), None
+
+
+def revert_plant_artifact(
+    path: str | Path,
+    previous_bytes: bytes,
+    *,
+    expected_current_bytes: bytes | None,
+    car_id: str,
+    track_id: str,
+    lock_timeout: float = 0.0,
+) -> bool:
+    """Restore a last-valid plant iff this iteration's candidate is still current.
+
+    Returns ``False`` when a peer replaced the candidate first; in that case restoring our older
+    bytes would be the unsafe action.  I/O failures propagate so the orchestrator can fail closed.
+    """
+    from tools.ac_harness.rig_lock import (
+        RigSessionLock,
+        RigSessionOwner,
+        default_rig_session_lock_path,
+    )
+
+    artifact_path = Path(path)
+    owner = RigSessionOwner(pid=os.getpid(), cwd=str(Path.cwd()), car=car_id, track=track_id)
+    with RigSessionLock(default_rig_session_lock_path(), owner=owner, timeout=lock_timeout):
+        current_bytes = artifact_path.read_bytes() if artifact_path.exists() else b""
+        if current_bytes != expected_current_bytes:
+            return False
+        tmp = artifact_path.with_suffix(".json.tmp")
+        tmp.write_bytes(previous_bytes)
+        tmp.replace(artifact_path)
+        return True
 
 
 def load_plant_artifact(

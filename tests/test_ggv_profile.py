@@ -1099,3 +1099,93 @@ def test_disjoint_longitudinal_bins_do_not_claim_continuous_support():
     assert m.provenance["brake_speed_range_kmh"] is None
     blended = blend_ggv_safe(m, _prior())
     assert blended.provenance["blend_source"]["brake"] == "prior"
+
+
+# --------------------------------------------------------------------------- #577 self-play merge
+def _selfplay_batch_rows(spec: dict[int, float]) -> list[dict]:
+    """Passive lateral rows for the given {bin_low_kmh: lateral_g} — a self-play drive's evidence
+    (no probe rows: a non-handshake drive never runs brake/accel probes)."""
+    rows: list[dict] = []
+    for low, lat in spec.items():
+        for _ in range(50):
+            rows.append(
+                {"speed_kmh": low + 5.0, "accg_lat": lat, "accg_lon": 0.0, "source": "passive"}
+            )
+    return rows
+
+
+def test_merge_selfplay_lateral_monotonic_and_longitudinal_preserved():
+    from tools.ac_harness.ggv_profile import merge_selfplay_model
+
+    prior = _prior()
+    current = with_binned_uncertainty(prior, _uncertainty_rows(), prior)
+    # Batch: harder cornering at 60-70 (raise), softer at 80-90 (must NOT regress), and fresh
+    # supra-LCB evidence at 200-210 where the current model still runs on the prior (adopt).
+    batch = with_binned_uncertainty(
+        prior, _selfplay_batch_rows({60: 1.35, 80: 0.95, 200: 1.3}), prior
+    )
+    merged, stats = merge_selfplay_model(current, batch)
+    assert merged.uncertainty_aware
+    # 60-70 km/h: both measured, batch proves more grip -> raised to the batch posterior.
+    assert (
+        merged.uncertainty_bins[6]["lateral"]["safe_g"]
+        == batch.uncertainty_bins[6]["lateral"]["safe_g"]
+    )
+    # 80-90 km/h: batch measured LOWER (soft lap) -> the proven envelope is kept.
+    assert (
+        merged.uncertainty_bins[8]["lateral"]["safe_g"]
+        == current.uncertainty_bins[8]["lateral"]["safe_g"]
+    )
+    # 200-210 km/h: prior-source in the current model, measured in the batch -> adopted.
+    assert current.uncertainty_bins[20]["lateral"]["source"] == "prior"
+    assert merged.uncertainty_bins[20]["lateral"] == dict(batch.uncertainty_bins[20]["lateral"])
+    # Global monotonicity: no lateral bin ever drops.
+    for cur_bin, merged_bin in zip(current.uncertainty_bins, merged.uncertainty_bins, strict=True):
+        assert merged_bin["lateral"]["safe_g"] >= cur_bin["lateral"]["safe_g"]
+    # Longitudinal bins: the batch had no probe rows, so brake/drive stay the current model's
+    # verbatim (a batch refit must never regress probe-measured braking to the prior).
+    for cur_bin, merged_bin in zip(current.uncertainty_bins, merged.uncertainty_bins, strict=True):
+        assert merged_bin["brake"] == dict(cur_bin["brake"])
+        assert merged_bin["drive"] == dict(cur_bin["drive"])
+    assert stats["lateral_bins_raised"] >= 1
+    assert stats["lateral_bins_adopted"] >= 1
+    assert merged.provenance["selfplay_merges"][-1] == stats
+
+
+def test_merge_selfplay_point_model_never_drops_and_history_accumulates():
+    from dataclasses import replace as dc_replace
+
+    import pytest
+
+    from tools.ac_harness.ggv_profile import merge_selfplay_model
+
+    prior = _prior()
+    current = with_binned_uncertainty(prior, _uncertainty_rows(), prior)
+    softer = with_binned_uncertainty(
+        dc_replace(prior, mu_lat_g=prior.mu_lat_g - 0.3), _selfplay_batch_rows({60: 1.0}), prior
+    )
+    merged, _ = merge_selfplay_model(current, softer)
+    assert merged.mu_lat_g == current.mu_lat_g  # a soft batch never lowers the ceiling
+    harder = with_binned_uncertainty(
+        dc_replace(prior, mu_lat_g=prior.mu_lat_g + 0.1), _selfplay_batch_rows({60: 1.3}), prior
+    )
+    merged2, stats2 = merge_selfplay_model(merged, harder)
+    assert merged2.mu_lat_g == pytest.approx(prior.mu_lat_g + 0.1)
+    assert len(merged2.provenance["selfplay_merges"]) == 2
+    assert merged2.provenance["selfplay_merges"][-1] == stats2
+    # Brake/drive coefficients and the ellipse stay the identified plant's.
+    assert merged2.brake_b0_g == current.brake_b0_g
+    assert merged2.ellipse_n == current.ellipse_n
+
+
+def test_merge_selfplay_requires_uncertainty_aware_models():
+    import pytest
+
+    from tools.ac_harness.ggv_profile import merge_selfplay_model
+
+    prior = _prior()
+    aware = with_binned_uncertainty(prior, _uncertainty_rows(), prior)
+    with pytest.raises(ValueError, match="uncertainty-aware"):
+        merge_selfplay_model(prior, aware)
+    with pytest.raises(ValueError, match="uncertainty-aware"):
+        merge_selfplay_model(aware, prior)

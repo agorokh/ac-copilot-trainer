@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-14T19:55:00Z
+last_updated: 2026-07-14T22:01:03Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-577-alien-selfplay-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-572-alien-pipeline-2026-07-14.md
@@ -88,7 +88,32 @@ relates_to:
 
 # Next session handoff
 
-## RESUME FIRST (2026-07-14 evening) — #577 self-play: PR #579 review-converged, MERGE-PENDING (operator click)
+## Review resolution resumed (2026-07-14) — PR #579 at `28ef8a7`
+
+PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) for
+[#577](https://github.com/agorokh/ac-copilot-trainer/issues/577) is open and non-draft. Its
+resolution branch now includes current `main` (`8f1297d`) and code fix
+[`28ef8a7`](https://github.com/agorokh/ac-copilot-trainer/commit/28ef8a7). The earlier resolution
+round at `5b6d68c` fixed handshake combo counting and made plant persistence/revert peer-safe and
+fail-closed. The resumed round fixes the optional `rig_lock_timeout=None` path before persistence
+and moves the implicit `--laps N` time-budget policy into `auto_drive`, so direct CLI and composed
+alien runs both receive `180 + 240*N` seconds unless the operator passes an explicit budget.
+The latest advisory-hardening round rejects non-finite/non-positive explicit budgets and makes
+self-play persistence write the already-resolved content-hashed driven path after stable identity
+validation, avoiding a second `setup.ini` read that could fork or skip the artifact. Regression
+coverage proves both failure boundaries and the stable path under a disappearing setup file. The
+final Codex P2 round makes any refine-persistence I/O exception set `selfplay.ok=false`, including a
+failure after the candidate write, so the composed pipeline cannot expose an unverified plant with
+exit 0. Canonical-venv local parity is green: **2,865 passed, 77 skipped, 86.68% coverage,
+`ci-fast: OK`**.
+
+**Next:** do not merge until the current-head push completes its full 10-minute cooldown, all
+required checks are green, the complete GraphQL thread ledger is resolved, resolve-gate is clean,
+and the current-SHA daemon body has no unaddressed HIGH finding. Then merge PR #579 when desired
+and run `/post-merge 579`. Issue #577 remains open for the explicitly out-of-scope L3
+corridor-constrained per-corner refinement.
+
+## Delivery context (2026-07-14 evening) — #577 self-play live proof
 
 **PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) (#577, EPIC #529 P3) is fully
 review-converged at `6907e42` and awaits ONLY the operator's merge** — the session permission rail
