@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-13T18:02:56Z
+last_updated: 2026-07-14T01:28:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-543-uncertainty-aware-plant-id-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-555-cross-worktree-rig-ownership-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-531-phase1-tablet-dash-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-537-ac1-rig-verify-2026-07-13.md
@@ -84,6 +85,22 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-13) — #543 uncertainty-aware plant ID CLOSED (PR #564 MERGED `3193e1b`)
+
+**PR [#564](https://github.com/agorokh/ac-copilot-trainer/pull/564) MERGED**, closing
+[#543](https://github.com/agorokh/ac-copilot-trainer/issues/543). The automated harness now owns
+the full identification experiment: nonce-bound brake/traction probes, complete thermal cohorts,
+combo/layout/setup provenance, uncertainty-carrying measured support, conservative consumer lookup,
+and durable plant persistence. No computer-control driving was used.
+
+Real AC proof through `python -m tools.ac_harness.auto_drive`: strict identification PASS, two laps,
+4,984 m, 141.5 km/h, 431/431 attributed probe rows, 4,000 friction rows, 30 uncertainty bins, and
+zero recoveries. A second automated consumer run loaded the artifact and completed a 122.990 s lap
+at 199.8 km/h with zero recoveries; its auxiliary WS tap missed the heartbeat and is explicitly not
+claimed as strict-pipeline proof. Final `make ci-fast`: 2,715 passed, 113 skipped, 87.30% coverage;
+GitHub build/docs/conformance green, review threads zero, resolve gate clean. Post-merge
+classification: no flags. Detail: [[issue-543-uncertainty-aware-plant-id-2026-07-13]].
 
 ## Delivered (2026-07-13) — #555 cross-worktree rig ownership CLOSED (PR #563 MERGED `a195b38`)
 

@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-07-13
+updated: 2026-07-14
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -13,6 +13,7 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [issue-543-uncertainty-aware-plant-id-2026-07-13.md](issue-543-uncertainty-aware-plant-id-2026-07-13.md) | **#543 CLOSED** by PR #564 (`3193e1b`): `auto_drive --identify-plant` now executes a provenance-bound brake/traction experiment, completes thermal cohorts, fits uncertainty-carrying measured brake/drive support, and persists a combo/layout/setup-qualified plant artifact. Real AC proof used the automated harness only: strict PASS, 2 laps / 4,984 m / 431 probe rows / 4,000 friction rows / zero recoveries; a consumer run loaded the artifact and completed a 122.990 s lap at 199.8 km/h. |
 | [issue-555-cross-worktree-rig-ownership-2026-07-13.md](issue-555-cross-worktree-rig-ownership-2026-07-13.md) | **#555 CLOSED** by PR #563 (`a195b38`): the apparent CM crash-respawns were explicit `acmanager://race/quick` launches from a concurrent worktree. Machine-global LocalAppData OS lock + owner metadata serialize CM/AC across worktrees; stable `acs.exe` PID monitoring reports `session_replaced` distinctly from `sim_dead`, including synchronous stop/missing-telemetry/final checks. Live contention rejected without disturbing the owner; R8/Magione 3/3 pre-merge plus 1/1 merged-main PASS, refuting the content-crash hypothesis. |
 | [issue-531-phase1-tablet-dash-2026-07-13.md](issue-531-phase1-tablet-dash-2026-07-13.md) | **#531 Phase 1** (PR #547, MERGED `9265521`): the 7" PRITOM P7 renders the modal Racing-Atelier GT dashboard at `/tablet/dash` over USB `adb reverse` — 5-band RACE + COACH/MAP/STINT sweep, car-adaptive electronics from real per-car spinner ranges (911: BIAS 63.0% / TC 3/12 / ABS 7/12, no TC-CUT/MAP), browser-class `telemetry_tick` routing, producer-scoped identity-snapshot replay, `rpm_max`+`lap_time_ms` in the tick. **Verified on the real P7 in Fully Kiosk fullscreen** (screencaps on the PR); traps: P7 DPR viewport clip (`width=1024`), rAF freezes in hidden WebViews, replay-ordering vs identity-clear. Parts D–I + live in-sim pass remain on #531. |
 | [issue-537-ac1-rig-verify-2026-07-13.md](issue-537-ac1-rig-verify-2026-07-13.md) | **#537 CLOSED** (2026-07-13, session ran on the rig itself): AC #1 two-track live proof — clean consecutive hands-off pair, 911 GT3 R, magione PASS then spa PASS on merged #544; relaunch loop absorbed 2+1 pre-drive overlay stalls; `acpmf_static.track` matched per leg (#535 guard), HUD tiles MAGIONE/SPA inspected. Found en route → **#555**, now closed by #563: concurrent-worktree Quick Drive requests—not CM crash-respawn—replaced the live session; shared rig lock + PID attribution shipped and R8 content hypothesis refuted. Rig ops: reboot 00:28 mid-session; `pyserial` missing from `.venv`; orphaned auto-started sidecar adoption hazard. |

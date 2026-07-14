@@ -1,11 +1,11 @@
 ---
-
-## type: current-focus
+type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-13T18:02:56Z
+last_updated: 2026-07-14T01:28:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/03_Investigations/issue-543-uncertainty-aware-plant-id-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-555-cross-worktree-rig-ownership-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-531-phase1-tablet-dash-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-537-ac1-rig-verify-2026-07-13.md
@@ -24,10 +24,20 @@ relates_to:
   - AcCopilotTrainer/01_Decisions/screen-ui-stack-lvgl-touch.md
   - AcCopilotTrainer/01_Decisions/dashboard-visual-design-figma.md
   - AcCopilotTrainer/03_Investigations/_index.md
+---
 
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-13, latest):** [#543](https://github.com/agorokh/ac-copilot-trainer/issues/543)
+**CLOSED** by PR [#564](https://github.com/agorokh/ac-copilot-trainer/pull/564)
+([`3193e1b`](https://github.com/agorokh/ac-copilot-trainer/commit/3193e1b)). The automated harness
+now performs the complete uncertainty-aware plant-identification experiment with current-run nonce,
+thermal-cohort, combo/layout, and setup-snapshot provenance. Real AC proof: strict PASS, two laps,
+4,984 m, 431/431 attributed probes, 4,000 friction rows, 30 uncertainty bins, zero recoveries. A
+second harness run loaded the artifact and completed a 122.990 s lap at 199.8 km/h. No
+computer-control driving was used. Detail: [[issue-543-uncertainty-aware-plant-id-2026-07-13]].
 
 **Delivered (2026-07-13, latest):** [#555](https://github.com/agorokh/ac-copilot-trainer/issues/555)
 **CLOSED** by PR [#563](https://github.com/agorokh/ac-copilot-trainer/pull/563)
