@@ -2758,9 +2758,14 @@ def test_cli_laps_implies_wait_lap_and_rejects_negative():
     cfg = _config_from_args(args)
     assert cfg.wait_lap is True
     assert cfg.target_laps == 3
+    assert cfg.drive_seconds == 180.0 + 240.0 * 3
+    explicit = _build_arg_parser().parse_args(
+        ["--car", "c", "--track", "t", "--laps", "3", "--drive-seconds", "200"]
+    )
+    assert _config_from_args(explicit).drive_seconds == 200.0
     args = _build_arg_parser().parse_args(["--car", "c", "--track", "t"])
     cfg = _config_from_args(args)
-    assert cfg.wait_lap is False and cfg.target_laps == 0
+    assert cfg.wait_lap is False and cfg.target_laps == 0 and cfg.drive_seconds == 300.0
     from tools.ac_harness.auto_drive import _main
 
     assert _main(["--car", "c", "--track", "magione", "--laps", "-1"]) == 2

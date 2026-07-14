@@ -413,6 +413,7 @@ class _SelfplayHarness:
         }
         self.mutate_plant_during_refine = mutate_plant_during_refine
         self.refine_calls: list[list[dict]] = []
+        self.persist_lock_timeouts: list[float] = []
         self.plant_path = tmp_path / "plant_id" / "car_a__trk.json"
         self.plant_path.parent.mkdir(parents=True, exist_ok=True)
         self.plant_path.write_text('{"v": "original"}', encoding="utf-8")
@@ -438,7 +439,8 @@ class _SelfplayHarness:
             expected_current_bytes,
             lock_timeout=0.0,
         ):
-            del user_dir, result, lock_timeout
+            del user_dir, result
+            self.persist_lock_timeouts.append(lock_timeout)
             if Path(expected_path).read_bytes() != expected_current_bytes:
                 return None, None, "plant artifact changed between load and save (test peer)"
             self.saves += 1
@@ -530,6 +532,7 @@ def test_selfplay_ladder_progresses_and_reports_trajectory(monkeypatch, tmp_path
     # Each refine consumed the PREVIOUS drive's batch (provenance-bound self-play).
     assert len(harness.refine_calls) == 2
     assert harness.saves == 2
+    assert harness.persist_lock_timeouts == [0.0, 0.0]
     # The plant on disk is the last refined fit (no falsification -> no revert).
     assert _json.loads(harness.plant_path.read_text(encoding="utf-8")) == {"v": "iter2"}
 

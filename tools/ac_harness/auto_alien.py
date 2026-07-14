@@ -39,6 +39,7 @@ from tools.ac_harness.auto_drive import (
     ALIEN_MAX_OVERSPEED_SCALE,
     archive_matches_combo,
     resolve_ac_user_dir,
+    resolve_lap_window_drive_seconds,
     resolve_setup_ini,
     validate_ac_id,
 )
@@ -292,6 +293,7 @@ def run_selfplay(
     plant_path = plant_artifact_path(
         user_dir, args.car, args.track, setup_key, setup_ini, layout=args.track_layout
     )
+    lock_timeout = args.rig_lock_timeout if args.rig_lock_timeout is not None else 0.0
     selfplay: dict = {
         "iterations_requested": args.iterations,
         "laps_per_iteration": args.laps,
@@ -413,7 +415,7 @@ def run_selfplay(
                             result,
                             expected_path=plant_path,
                             expected_current_bytes=pre_refine_bytes,
-                            lock_timeout=args.rig_lock_timeout,
+                            lock_timeout=lock_timeout,
                         )
                         if save_skipped:
                             entry["refine"]["save_skipped"] = save_skipped
@@ -502,7 +504,7 @@ def run_selfplay(
                         expected_current_bytes=candidate_bytes,
                         car_id=args.car,
                         track_id=args.track,
-                        lock_timeout=args.rig_lock_timeout,
+                        lock_timeout=lock_timeout,
                     ):
                         entry["reverted"] = True
                         print(
@@ -591,18 +593,8 @@ def identify_argv(args: argparse.Namespace, evidence_dir: Path) -> list[str]:
 
 
 def resolve_drive_seconds(args: argparse.Namespace) -> float:
-    """The alien stage's drive budget; scales with the flying-lap window when not explicit.
-
-    ``--drive-seconds`` stays authoritative when passed. The default single-lap budget (300 s)
-    cannot fit a multi-lap window (3 Magione laps + standing start already exceed it, Spa far
-    more), so a ``--laps N`` run without an explicit budget gets ``180 + 240*N`` — generous per
-    lap (Spa ~214 s) because the budget is only a cap: the tap closes the window at the Nth lap.
-    """
-    if args.drive_seconds is not None:
-        return float(args.drive_seconds)
-    if args.laps > 0:
-        return 180.0 + 240.0 * args.laps
-    return 300.0
+    """Delegate the composed alien stage to ``auto_drive``'s budget contract."""
+    return resolve_lap_window_drive_seconds(args.drive_seconds, args.laps)
 
 
 def drive_argv(

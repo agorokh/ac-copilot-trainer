@@ -2737,7 +2737,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--pace", type=float, default=0.9, help="racing: fraction of AI-line speed")
     p.add_argument("--ggv-scale", type=float, default=0.9, help="ggv: safety margin on min-time")
     p.add_argument("--max-speed", type=float, default=240.0, help="racing/ggv: speed cap (km/h)")
-    p.add_argument("--drive-seconds", type=float, default=300.0)
+    p.add_argument(
+        "--drive-seconds",
+        type=float,
+        default=None,
+        help="drive time budget (default: 300, or 180+240*laps for a flying-lap window)",
+    )
     p.add_argument(
         "--lap-finalize-grace-s",
         type=_nonneg_float,
@@ -2845,7 +2850,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         pace=args.pace,
         ggv_scale=args.ggv_scale,
         racing_max_speed_kmh=args.max_speed,
-        drive_seconds=args.drive_seconds,
+        drive_seconds=resolve_lap_window_drive_seconds(args.drive_seconds, args.laps),
         lap_finalize_grace_s=args.lap_finalize_grace_s,
         target_speed_kmh=args.target_speed,
         min_corner_speed_kmh=args.min_corner,
@@ -2865,6 +2870,20 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
     if args.ac_root is not None:
         kwargs["ac_root"] = args.ac_root
     return AutoDriveConfig(**kwargs)
+
+
+def resolve_lap_window_drive_seconds(explicit: float | None, target_laps: int) -> float:
+    """Return the stage-owned drive budget for a direct or composed flying-lap run.
+
+    An explicit budget remains authoritative. Otherwise the legacy path keeps 300 seconds and
+    ``--laps N`` gets enough headroom for a standing start plus N Spa-length laps. Keeping this
+    rule in ``auto_drive`` ensures direct CLI users and orchestrators share one contract.
+    """
+    if explicit is not None:
+        return float(explicit)
+    if target_laps > 0:
+        return 180.0 + 240.0 * target_laps
+    return 300.0
 
 
 def _alien_prerequisites_error(config: AutoDriveConfig, user_dir: Path) -> str | None:
