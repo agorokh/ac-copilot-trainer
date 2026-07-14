@@ -526,12 +526,10 @@ def test_l3_build_refines_corners_and_records_report(stadium_lane):
     assert report["predicted_gain_ms"] == sum(c["gain_ms"] for c in refined)
     # The refined profile is never slower than QSS anywhere, and strictly faster somewhere.
     assert all(
-        v >= q - 1e-9
-        for v, q in zip(art["v_target_mps"], art["v_target_qss_mps"], strict=True)
+        v >= q - 1e-9 for v, q in zip(art["v_target_mps"], art["v_target_qss_mps"], strict=True)
     )
     assert any(
-        v > q + 1e-6
-        for v, q in zip(art["v_target_mps"], art["v_target_qss_mps"], strict=True)
+        v > q + 1e-6 for v, q in zip(art["v_target_mps"], art["v_target_qss_mps"], strict=True)
     )
 
 

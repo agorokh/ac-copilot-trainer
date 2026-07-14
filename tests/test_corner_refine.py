@@ -256,9 +256,7 @@ def test_refine_improves_conservative_corner_within_barrier():
     ay_apex = v_ref[apex] * v_ref[apex] * abs(kappa[apex])
     assert ay_apex > safe_limit  # beyond QSS-safe...
     assert ay_apex <= barrier_limit + 1e-6  # ...but never beyond the barrier
-    assert verify_refined_profile(
-        [(0.0, 0.0)] * _N, kappa, v_ref, plant, params
-    ) is None
+    assert verify_refined_profile([(0.0, 0.0)] * _N, kappa, v_ref, plant, params) is None
 
 
 def test_refine_is_deterministic():

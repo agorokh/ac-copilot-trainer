@@ -482,9 +482,7 @@ def refine_profile(
         rejected: list[str] = []
         for z in params.z_ladder:
             candidate = _solve_window(idxs, seg, kappa, v_qss, relaxed_by_z[z], v_top_ms)
-            if any(
-                candidate[j] < v_window_qss[j] - _IMPROVE_TOL_MS for j in range(len(idxs))
-            ):
+            if any(candidate[j] < v_window_qss[j] - _IMPROVE_TOL_MS for j in range(len(idxs))):
                 # The friction-ellipse coupling makes pointwise dominance an empirical check,
                 # not an algebraic guarantee: a candidate that dips below QSS anywhere is not
                 # an improvement contract we can keep — reject it honestly.
@@ -499,9 +497,8 @@ def refine_profile(
                 best_candidate = (cand_time, z, candidate)
         if best_candidate is None or best_candidate[0] >= qss_time - 1e-9:
             entry["status"] = "reverted"
-            entry["reason"] = (
-                "no ladder candidate beat the QSS interior"
-                + (f" ({'; '.join(rejected)})" if rejected else " (relaxation had no effect)")
+            entry["reason"] = "no ladder candidate beat the QSS interior" + (
+                f" ({'; '.join(rejected)})" if rejected else " (relaxation had no effect)"
             )
             report["reverted_corners"] += 1
             continue
