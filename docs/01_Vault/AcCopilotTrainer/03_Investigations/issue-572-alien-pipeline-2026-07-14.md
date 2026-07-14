@@ -62,6 +62,19 @@ that drives the car re-verifies content (corridor bounds, plant envelope) at con
 And one readiness predicate, shared by every consumer, is the only way "skip the expensive stage"
 logic stays consistent with what the consuming stage actually requires.
 
+## G1 unseen-combo sample — 3/3 PASS (same day)
+
+The identical unmodified command took three never-identified combos from nothing to an AC-valid
+autonomous lap, zero recoveries in every stage: **488@magione 1:58.751** (fit `fe07ba2e0ba7`),
+**488@spa 3:33.818** (cross-archetype, fit `c0b6bf492b93`), **huracan@magione 2:02.847**
+(different manufacturer, fit `4aa6b0a4a223`). Honest scope: this proves the **cold-start
+mechanics**, not the G1 *pace* criterion — first laps under the uncertainty-safe envelope, and
+both Magione plants' QSS collapse to the same conservative floor (91.94 s): the uncertainty bins,
+not the cars, are binding. Pace attack = P3
+([#577](https://github.com/agorokh/ac-copilot-trainer/issues/577): `--laps N` flying-lap windows
++ progressive-envelope self-play). Evidence:
+[#529 3/3 comment](https://github.com/agorokh/ac-copilot-trainer/issues/529#issuecomment-4968445167).
+
 ## G1 first unseen combo — PASS (same day)
 
 `auto_alien --car ks_ferrari_488_gt3 --track magione` from **nothing**: identification REQUIRED →
@@ -80,5 +93,8 @@ junction-staleness detection filed as
 
 ## Remaining on EPIC #529
 
-G1 on 1–2 more unseen combos (different track archetype next) + pace-vs-TT calibration, then P3
-(corner BVP + stint layer, attack the 82.7 s floor), P4 (LLM scientist), P5 (coachable frontier).
+P3 = [#577](https://github.com/agorokh/ac-copilot-trainer/issues/577) (flying-lap windows +
+progressive-envelope self-play + corridor-constrained corner refinement → attack the 82.7 s
+floor and the G1 pace criterion), then P4 (LLM scientist), P5 (coachable frontier). Rig
+invariant: keep the AC app junction's primary checkout at the merged main tip until
+[#575](https://github.com/agorokh/ac-copilot-trainer/issues/575) lands.
