@@ -2006,3 +2006,39 @@ def test_self_test_cli_refuses_to_validate_adopted_sidecar(tmp_path: Path, monke
     rc = app.main(["--self-test"])
     assert rc == 1
     assert "selftest" not in made[0].events  # refused before validating the foreign process
+
+
+def test_self_test_cli_fails_fast_on_start_failure(tmp_path: Path, monkeypatch) -> None:
+    """Bug (#568 Qodo): --self-test must fail fast if start_sidecar returned ok=False, not probe
+    the port and emit misleading endpoint errors."""
+    import tools.rig_launcher.app as app
+
+    monkeypatch.setenv("AC_COPILOT_GAME_POINT_DIR", str(tmp_path))
+    made: list[Any] = []
+
+    class _FailingStartSup:
+        config = GamePointConfig(paths=LauncherPaths(tmp_path))
+
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            self.events: list[str] = []
+            made.append(self)
+
+        def start_sidecar(self) -> ProbeResult:
+            self.events.append("start")
+            return ProbeResult("sidecar", False, "start_failed", "boom")
+
+        def self_test_endpoints(self, **_k: Any) -> tuple[ProbeResult, ...]:
+            self.events.append("selftest")  # must NOT be reached
+            return ()
+
+        def stop_sidecar(self, **_k: Any) -> ProbeResult:
+            self.events.append("stop")
+            return ProbeResult("sidecar", True, "stopped")
+
+        def close(self) -> None:
+            self.events.append("close")
+
+    monkeypatch.setattr(app, "GamePointSupervisor", _FailingStartSup)
+    rc = app.main(["--self-test"])
+    assert rc == 1
+    assert "selftest" not in made[0].events

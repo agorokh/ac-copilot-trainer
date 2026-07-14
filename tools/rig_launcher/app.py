@@ -224,12 +224,21 @@ def main(argv: list[str] | None = None) -> int:
             # (#568 review — the outer finally also closes it, but the ownership is explicit here).
             # stop_sidecar() is a no-op when start_sidecar() adopted an already-running instance.
             started = supervisor.start_sidecar()
+            # Fail fast on a real startup failure (blocked / start_failed): otherwise the checks
+            # below would probe whatever is on the port and emit confusing endpoint errors
+            # instead of the actual startup problem (#568 review).
+            if not started.ok:
+                print(
+                    f"self-test: sidecar failed to start ({started.state}): {started.detail}",
+                    file=sys.stderr,
+                )
+                return 1
             # If a sidecar was already listening on the port, start_sidecar ADOPTS it — the
             # self-test would then validate that OTHER process (e.g. a fresh source sidecar),
             # so a stale packaged EXE could pass. Refuse: the release gate must exercise the
             # build under test, not a foreign one (#568 review). stop_sidecar won't kill the
             # adopted process (we didn't spawn it).
-            if started.ok and "adopted" in (started.detail or ""):
+            if "adopted" in (started.detail or ""):
                 print(
                     "self-test: another sidecar is already running on port "
                     f"{supervisor.config.port} and was adopted — cannot validate this build. "
