@@ -62,8 +62,23 @@ that drives the car re-verifies content (corridor bounds, plant envelope) at con
 And one readiness predicate, shared by every consumer, is the only way "skip the expensive stage"
 logic stays consistent with what the consuming stage actually requires.
 
+## G1 first unseen combo — PASS (same day)
+
+`auto_alien --car ks_ferrari_488_gt3 --track magione` from **nothing**: identification REQUIRED →
+handshake session PASS (2 laps, zero recoveries, 2 archives, fit promoted `ggv ok:true`) →
+plant re-verified → sidecar port `released` → line **built** for the 488's own plant (QSS 91.94 s,
+fit `fe07ba2e0ba7`, 39 pinch points) → drive PASS, lap 1 **1:58.751 `is_valid:true` (PB)**, zero
+recoveries. Evidence: `.scratch/harness-evidence/alien-572-g1-488-r2/` +
+[#529 comment](https://github.com/agorokh/ac-copilot-trainer/issues/529#issuecomment-4968192294).
+
+**Attempt 1 failed honestly and exposed a rig-state gap:** the AC app junction served the primary
+checkout, detached at `73ebe82` (ten days stale, pre-#543 Lua) — archives carried
+`car:"function_0xff"` and the handshake archived nothing, so the fit could not promote and the
+pipeline refused to drive. Hand-fixed (primary checkout → merged main tip); deterministic
+junction-staleness detection filed as
+[#575](https://github.com/agorokh/ac-copilot-trainer/issues/575).
+
 ## Remaining on EPIC #529
 
-G1 evidence on **unseen combos** (this PR proved the button on the already-identified Magione
-combo; the epic gate wants 3 unseen), then P3 (corner BVP + stint layer, attack the 82.7 s floor),
-P4 (LLM scientist), P5 (coachable frontier).
+G1 on 1–2 more unseen combos (different track archetype next) + pace-vs-TT calibration, then P3
+(corner BVP + stint layer, attack the 82.7 s floor), P4 (LLM scientist), P5 (coachable frontier).
