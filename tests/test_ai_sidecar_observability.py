@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+import urllib.error
 import urllib.request
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -24,6 +25,7 @@ from websockets.asyncio.server import serve as ws_serve  # noqa: E402
 from tools.ai_sidecar import external_protocol as ep  # noqa: E402
 from tools.ai_sidecar import observability as obs  # noqa: E402
 from tools.ai_sidecar.server import (  # noqa: E402
+    SERVED_ENDPOINTS,
     _external_peer_classes,
     _external_peers,
     _handler,
@@ -81,6 +83,66 @@ def test_health_endpoint_on_ws_port() -> None:
     assert payload["screen_peers"] == 0
     assert payload["voice"]["state"] == "skipped"
     assert payload["voice"]["enabled"] is False
+
+
+def test_health_endpoint_advertises_build_commit_and_served_endpoints() -> None:
+    """Issue #567: /health carries build_commit + the served endpoint set + browser_peers,
+    so a stale packaged binary that omits /tablet/dash is detectable from the payload."""
+
+    async def _run() -> tuple[int, list[str], str]:
+        async with _running_sidecar() as port:
+            return await asyncio.to_thread(_http_get, port, "/health")
+
+    status, _content_types, body = asyncio.run(_run())
+    assert status == 200
+    payload = json.loads(body)
+    assert payload["browser_peers"] == 0
+    assert isinstance(payload["build_commit"], str) and payload["build_commit"]
+    assert "/tablet/dash" in payload["endpoints"]
+    assert "/tablet/voice" in payload["endpoints"]
+
+
+def test_served_endpoints_are_actually_routed() -> None:
+    """Issue #567 / #568 review: guard against SERVED_ENDPOINTS drifting from the real
+    server routes. Every advertised path must be handled by make_process_request (i.e. NOT
+    fall through to the bare WS upgrade → 426). 404 is fine — it still means the HTTP handler
+    owns the path. A bogus advertised endpoint (or one the server stopped serving) 426s here."""
+
+    async def _run() -> dict[str, int]:
+        async with _running_sidecar() as port:
+            codes: dict[str, int] = {}
+            for path in SERVED_ENDPOINTS:
+
+                def _get(p: str = path) -> int:
+                    try:
+                        return _http_get(port, p)[0]
+                    except urllib.error.HTTPError as exc:
+                        return exc.code
+
+                codes[path] = await asyncio.to_thread(_get)
+            return codes
+
+    codes = asyncio.run(_run())
+    assert codes, "no endpoints advertised"
+    assert all(code != 426 for code in codes.values()), (
+        f"advertised endpoint not routed by the server (426 = fell through to WS): {codes}"
+    )
+
+
+def test_build_health_json_reflects_browser_peers() -> None:
+    payload = json.loads(obs.build_health_json(3, screen_peers=1, browser_peers=2))
+    assert payload["connected_peers"] == 3
+    assert payload["screen_peers"] == 1
+    assert payload["browser_peers"] == 2
+
+
+def test_build_commit_prefers_baked_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(obs, "_build_commit_cache", None)
+    monkeypatch.setenv("AC_COPILOT_BUILD_COMMIT", "deadbee")
+    assert obs.build_commit() == "deadbee"
+    # cached: a later env change does not re-resolve within the process
+    monkeypatch.setenv("AC_COPILOT_BUILD_COMMIT", "feedfac")
+    assert obs.build_commit() == "deadbee"
 
 
 def test_health_endpoint_sanitizes_voice_disabled_paths() -> None:

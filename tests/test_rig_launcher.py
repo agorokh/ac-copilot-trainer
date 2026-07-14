@@ -93,6 +93,13 @@ def _refused_urlopen(_url: str, timeout: float) -> _Response:
     raise OSError("connection refused")
 
 
+def _serving_urlopen(_target: object, timeout: float) -> _Response:
+    """A sidecar that answers 200 for any GET — used by managed-tablet tests where probe_tablet
+    now ground-truth-probes /tablet/dash (returns 200 → the dash actually loads)."""
+    del timeout
+    return _Response({"status": "ok"})
+
+
 def _no_simhub_run(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
     """`tasklist` stub reporting no SimHub — keeps probe_simhub tests off the real machine.
 
@@ -1460,3 +1467,578 @@ def test_simhub_started_does_not_block_overall_status(tmp_path: Path) -> None:
     assert status.simhub.state == "started"
     assert status.simhub.ok is True
     assert status.ok is True
+
+
+# -- Tablet adb reverse tunnel keeper + endpoint self-test (issue #567) --------
+
+
+def test_probe_tablet_unmanaged_by_default(tmp_path: Path) -> None:
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=_refused_urlopen)
+    tablet = sup.probe_tablet()
+    assert tablet.state == "unmanaged"
+    assert tablet.ok is True
+
+
+def test_config_reads_manage_tablet_tunnel_from_env(tmp_path: Path) -> None:
+    cfg = GamePointConfig.from_env(
+        {"AC_COPILOT_MANAGE_TABLET_TUNNEL": "1"},
+        paths=LauncherPaths(tmp_path),
+    )
+    assert cfg.manage_tablet_tunnel is True
+
+
+def test_probe_tablet_managed_asserts_reverse_and_reports_dash(tmp_path: Path) -> None:
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        args = cmd[1:]
+        if len(args) >= 2 and args[0] == "-s":
+            args = args[2:]  # drop the transport selector
+        sub = args[0] if args else ""
+        if sub == "devices":
+            return subprocess.CompletedProcess(
+                cmd, 0, "List of devices attached\n1c00\tdevice\n", ""
+            )
+        if sub == "reverse" and len(args) >= 2 and args[1] == "--list":
+            return subprocess.CompletedProcess(cmd, 0, "UsbFfs tcp:8765 tcp:8765\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    cfg = GamePointConfig(manage_tablet_tunnel=True, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(
+        cfg,
+        environ={"AC_COPILOT_ADB": str(adb)},
+        urlopen=_serving_urlopen,  # /tablet/dash ground-truth probe returns 200
+        run=fake_run,
+    )
+    # sidecar serves /tablet/dash (200) → not stale
+    healthy = {"endpoints": ["/health", "/tablet/dash", "/tablet/voice"], "browser_peers": 0}
+    tablet = sup.probe_tablet(healthy)
+    assert tablet.state == "tunnel-up"
+    assert tablet.ok is True
+
+    tablet2 = sup.probe_tablet({**healthy, "browser_peers": 1})
+    assert tablet2.state == "dash-connected"
+    assert "browser_peers=1" in tablet2.detail
+    assert any("devices" in cmd for cmd in calls)
+
+
+def test_self_test_endpoints_flags_stale_build(tmp_path: Path) -> None:
+    import urllib.error
+
+    ok_health = {"status": "ok", "connected_peers": 0, "screen_peers": 0}
+
+    def urlopen(url: str, timeout: float) -> _Response:
+        del timeout
+        if url.endswith("/health"):
+            return _Response(ok_health)
+        raise urllib.error.HTTPError(url, 426, "Upgrade Required", {}, None)
+
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=urlopen)
+    results = sup.self_test_endpoints(wait_timeout=1.0)
+    assert results
+    assert all(row.state == "stale_build" and not row.ok for row in results)
+    assert any("/tablet/dash" in row.name for row in results)
+
+
+def test_self_test_endpoints_passes_when_routes_serve(tmp_path: Path) -> None:
+    def urlopen(_url: str, timeout: float) -> _Response:
+        del timeout
+        return _Response({"status": "ok"})  # 200 for /health and both tablet routes
+
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=urlopen)
+    results = sup.self_test_endpoints(wait_timeout=1.0)
+    assert results
+    assert all(row.state == "serving" and row.ok for row in results)
+
+
+def test_config_from_args_propagates_manage_tablet_tunnel(tmp_path: Path, monkeypatch) -> None:
+    """P1 regression (#568 review): the CLI/packaged config must carry the flag through, or
+    the keeper never runs even with AC_COPILOT_MANAGE_TABLET_TUNNEL=1."""
+    from tools.rig_launcher.app import build_arg_parser, config_from_args
+
+    monkeypatch.setenv("AC_COPILOT_MANAGE_TABLET_TUNNEL", "1")
+    monkeypatch.setenv("AC_COPILOT_GAME_POINT_DIR", str(tmp_path))
+    args = build_arg_parser().parse_args(["--log-dir", str(tmp_path)])
+    cfg = config_from_args(args)
+    assert cfg.manage_tablet_tunnel is True
+
+
+def test_config_from_args_propagates_adb_overrides(tmp_path: Path, monkeypatch) -> None:
+    """HIGH regression (#568 review): config_from_args must thread adb_path/adb_serial through,
+    or env overrides are silently dropped in the CLI/packaged path."""
+    from tools.rig_launcher.app import build_arg_parser, config_from_args
+
+    monkeypatch.setenv("AC_COPILOT_GAME_POINT_DIR", str(tmp_path))
+    monkeypatch.setenv("AC_COPILOT_ADB", "/opt/adb")
+    monkeypatch.setenv("AC_COPILOT_ADB_SERIAL", "SER9")
+    cfg = config_from_args(build_arg_parser().parse_args(["--log-dir", str(tmp_path)]))
+    assert cfg.adb_path == "/opt/adb"
+    assert cfg.adb_serial == "SER9"
+
+
+def test_self_test_sends_token_header_for_authenticated_bind(tmp_path: Path) -> None:
+    """P2 (#568 review): a concrete non-loopback bind + token gates /tablet/* — the probe must
+    carry X-AC-Copilot-Token or it 401s and misreports stale_build."""
+    import urllib.request
+
+    seen: list[tuple[str, dict[str, str]]] = []
+
+    def urlopen(target: object, timeout: float) -> _Response:
+        del timeout
+        if isinstance(target, urllib.request.Request):
+            seen.append((target.full_url, dict(target.headers)))
+        else:
+            seen.append((str(target), {}))
+        return _Response({"status": "ok"})
+
+    cfg = GamePointConfig(
+        external_bind="192.168.1.50", token="secret", paths=LauncherPaths(tmp_path)
+    )
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=urlopen)
+    results = sup.self_test_endpoints(wait_timeout=1.0)
+    assert all(row.state == "serving" for row in results)
+    dash = [headers for (url, headers) in seen if url.endswith("/tablet/dash")]
+    assert dash
+    assert any(any(key.lower() == "x-ac-copilot-token" for key in headers) for headers in dash)
+
+
+def test_summary_caption_surfaces_failing_tablet(tmp_path: Path) -> None:
+    """P2 (#568 review): a managed-tablet failure must reach the GUI summary caption, not just
+    flip overall red with a generic message."""
+    from tools.rig_launcher import theme
+
+    status = GamePointStatus(
+        generated_at=0.0,
+        sidecar=ProbeResult("sidecar", True, "healthy"),
+        screen=ProbeResult("screen", True, "connected"),
+        voice=ProbeResult("voice", True, "skipped"),
+        simhub=ProbeResult("simhub", True, "absent"),
+        tablet=ProbeResult("tablet", False, "unauthorized", "accept the prompt on the tablet"),
+        log_path="x",
+        status_path="y",
+    )
+    assert status.ok is False
+    text, _tone, caption = theme.summary_for(status)
+    assert text == "PRESS START"
+    assert "accept the prompt" in caption
+
+
+def test_probe_tablet_rejects_concrete_external_bind(tmp_path: Path) -> None:
+    """P2 (#568 review): adb reverse targets PC loopback, so a concrete non-loopback bind
+    cannot serve the tablet — fail loud instead of a false tunnel-up, and never call adb."""
+
+    def _boom_run(*_a: Any, **_k: Any) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("adb must not run when the bind is unreachable")
+
+    cfg = GamePointConfig(
+        manage_tablet_tunnel=True,
+        external_bind="192.168.1.50",
+        paths=LauncherPaths(tmp_path),
+    )
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=_refused_urlopen, run=_boom_run)
+    tablet = sup.probe_tablet()
+    assert tablet.state == "bind-unreachable"
+    assert tablet.ok is False
+
+
+def test_probe_tablet_wildcard_bind_is_allowed(tmp_path: Path) -> None:
+    """0.0.0.0 includes loopback, so the managed tunnel is fine — no bind-unreachable."""
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+
+    def fake_run(cmd: list[str], **_k: Any) -> subprocess.CompletedProcess[str]:
+        if cmd[1] == "devices":
+            return subprocess.CompletedProcess(cmd, 0, "List of devices attached\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    cfg = GamePointConfig(
+        manage_tablet_tunnel=True,
+        external_bind="0.0.0.0",
+        paths=LauncherPaths(tmp_path),
+    )
+    sup = GamePointSupervisor(
+        cfg, environ={"AC_COPILOT_ADB": str(adb)}, urlopen=_refused_urlopen, run=fake_run
+    )
+    tablet = sup.probe_tablet()
+    assert tablet.state == "no-device"  # reached the keeper; no tablet plugged in
+    assert tablet.ok is True
+
+
+def test_probe_tablet_managed_adb_missing_fails(tmp_path: Path, monkeypatch) -> None:
+    """P2 (#568 review): once management is opted in, a missing adb is a failing status."""
+    monkeypatch.setattr("tools.rig_launcher.tablet_tunnel.resolve_adb", lambda *_a, **_k: None)
+    cfg = GamePointConfig(manage_tablet_tunnel=True, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=_refused_urlopen)
+    tablet = sup.probe_tablet()
+    assert tablet.state == "adb-missing"
+    assert tablet.ok is False
+
+
+def test_self_test_cli_stops_sidecar_it_started(tmp_path: Path, monkeypatch) -> None:
+    """HIGH (#568 review): the --self-test path must tear down the sidecar it started, not
+    leave an orphan for the next launch to adopt."""
+    import tools.rig_launcher.app as app
+
+    monkeypatch.setenv("AC_COPILOT_GAME_POINT_DIR", str(tmp_path))
+    made: list[Any] = []
+
+    class _FakeSup:
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            self.events: list[str] = []
+            made.append(self)
+
+        def start_sidecar(self) -> ProbeResult:
+            self.events.append("start")
+            return ProbeResult("sidecar", True, "starting")
+
+        def self_test_endpoints(self, **_k: Any) -> tuple[ProbeResult, ...]:
+            self.events.append("selftest")
+            return (ProbeResult("endpoint /tablet/dash", True, "serving"),)
+
+        def stop_sidecar(self, **_k: Any) -> ProbeResult:
+            self.events.append("stop")
+            return ProbeResult("sidecar", True, "stopped")
+
+        def close(self) -> None:
+            self.events.append("close")
+
+    monkeypatch.setattr(app, "GamePointSupervisor", _FakeSup)
+    rc = app.main(["--self-test"])
+    assert rc == 0
+    assert made[0].events == ["start", "selftest", "stop", "close"]
+
+
+def test_probe_tablet_flags_stale_adopted_sidecar(tmp_path: Path) -> None:
+    """P2 (#568 review): an adopted stale sidecar whose /health omits /tablet/dash must not
+    read as a healthy tunnel — the dash would still 426."""
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+
+    def fake_run(cmd: list[str], **_k: Any) -> subprocess.CompletedProcess[str]:
+        sub = cmd[2] if len(cmd) > 2 and cmd[1] == "-s" else cmd[1]
+        if sub == "devices":
+            return subprocess.CompletedProcess(
+                cmd, 0, "List of devices attached\nSER\tdevice\n", ""
+            )
+        if "reverse" in cmd and "--list" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "UsbFfs tcp:8765 tcp:8765\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    cfg = GamePointConfig(manage_tablet_tunnel=True, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(
+        cfg, environ={"AC_COPILOT_ADB": str(adb)}, urlopen=_refused_urlopen, run=fake_run
+    )
+    # health from a stale build: endpoints present but missing /tablet/dash
+    stale = {"endpoints": ["/health", "/metrics"], "browser_peers": 0}
+    tablet = sup.probe_tablet(stale)
+    assert tablet.state == "stale-sidecar"
+    assert tablet.ok is False
+
+
+def test_poll_status_read_only_does_not_start_simhub(tmp_path: Path) -> None:
+    """P2 (#568 review): the continuous read-only poll must not relaunch SimHub every tick."""
+    exe = tmp_path / "SimHub" / "SimHubWPF.exe"
+    exe.parent.mkdir()
+    exe.write_text("", encoding="utf-8")
+    spawned: list[Any] = []
+
+    def fake_popen(*args: Any, **kwargs: Any) -> _Proc:
+        spawned.append(args)
+        return _Proc()
+
+    cfg = GamePointConfig(start_simhub=True, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(
+        cfg,
+        environ={"ProgramFiles": str(tmp_path)},
+        popen=fake_popen,
+        urlopen=_refused_urlopen,
+        run=_no_simhub_run,
+    )
+    status = sup.poll_status(start_simhub=False)
+    assert status.simhub.state == "available"  # discovered, NOT started
+    assert spawned == []  # SimHub was never launched by a read-only poll
+
+
+def test_supervisor_handle_access_is_thread_safe(tmp_path: Path) -> None:
+    """HIGH (#568 review): the GUI worker reads the sidecar handle while START/stop mutate it on
+    the Tk thread. The _proc_lock must serialize those so concurrent access never crashes or
+    tears state. Smoke-stress the locked read against start/stop cycles."""
+    import threading as _threading
+
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+
+    def fake_popen(*_a: Any, **_k: Any) -> _Proc:
+        return _Proc()
+
+    sup = GamePointSupervisor(
+        cfg,
+        environ={},
+        popen=fake_popen,
+        urlopen=_refused_urlopen,  # never adopts → always spawns the fake
+        run=_no_simhub_run,
+    )
+    errors: list[BaseException] = []
+
+    def reader() -> None:
+        try:
+            for _ in range(300):
+                sup._sidecar_process_status()
+        except BaseException as exc:  # noqa: BLE001 - capture any race-induced failure
+            errors.append(exc)
+
+    def cycler() -> None:
+        try:
+            for _ in range(150):
+                sup.start_sidecar()
+                sup.stop_sidecar()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [_threading.Thread(target=reader) for _ in range(3)]
+    threads += [_threading.Thread(target=cycler) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, errors
+    # Final state is coherent (stopped after the last cycle's stop).
+    assert sup._sidecar_process_status().state in {"stopped", "running", "exited"}
+    sup.close()
+
+
+def test_probe_tablet_ground_truth_probe_when_endpoints_absent(tmp_path: Path) -> None:
+    """P2 (#568 review): a sidecar predating the /health `endpoints` field but still serving
+    /tablet/dash (200) must NOT be flagged stale — confirm against reality, not the field."""
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+
+    def fake_run(cmd: list[str], **_k: Any) -> subprocess.CompletedProcess[str]:
+        args = cmd[2:] if len(cmd) > 2 and cmd[1] == "-s" else cmd[1:]
+        if args and args[0] == "devices":
+            return subprocess.CompletedProcess(
+                cmd, 0, "List of devices attached\nSER\tdevice\n", ""
+            )
+        if "reverse" in cmd and "--list" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "UsbFfs tcp:8765 tcp:8765\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def urlopen(_url: str, timeout: float) -> _Response:
+        del timeout
+        return _Response({"status": "ok"})  # 200 for the /tablet/dash ground-truth probe
+
+    cfg = GamePointConfig(manage_tablet_tunnel=True, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(
+        cfg, environ={"AC_COPILOT_ADB": str(adb)}, urlopen=urlopen, run=fake_run
+    )
+    # health payload with NO endpoints field (older sidecar), but dash actually serves 200
+    tablet = sup.probe_tablet({"browser_peers": 0})
+    assert tablet.state == "tunnel-up"
+    assert tablet.ok is True
+
+
+def test_probe_tablet_ground_truth_probe_catches_pre531_stale(tmp_path: Path) -> None:
+    """The original stale-EXE case: no endpoints field AND /tablet/dash 426s → stale-sidecar."""
+    import urllib.error
+
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+
+    def fake_run(cmd: list[str], **_k: Any) -> subprocess.CompletedProcess[str]:
+        args = cmd[2:] if len(cmd) > 2 and cmd[1] == "-s" else cmd[1:]
+        if args and args[0] == "devices":
+            return subprocess.CompletedProcess(
+                cmd, 0, "List of devices attached\nSER\tdevice\n", ""
+            )
+        if "reverse" in cmd and "--list" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "UsbFfs tcp:8765 tcp:8765\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def urlopen(url: str, timeout: float) -> _Response:
+        del timeout
+        raise urllib.error.HTTPError(url, 426, "Upgrade Required", {}, None)
+
+    cfg = GamePointConfig(manage_tablet_tunnel=True, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(
+        cfg, environ={"AC_COPILOT_ADB": str(adb)}, urlopen=urlopen, run=fake_run
+    )
+    tablet = sup.probe_tablet({"browser_peers": 0})  # no endpoints field
+    assert tablet.state == "stale-sidecar"
+    assert tablet.ok is False
+
+
+def test_config_reads_adb_overrides_from_env(tmp_path: Path) -> None:
+    cfg = GamePointConfig.from_env(
+        {"AC_COPILOT_ADB": "/opt/adb", "AC_COPILOT_ADB_SERIAL": "SER"},
+        paths=LauncherPaths(tmp_path),
+    )
+    assert cfg.adb_path == "/opt/adb"
+    assert cfg.adb_serial == "SER"
+
+
+def test_probe_tablet_routes_config_adb_serial(tmp_path: Path) -> None:
+    """#568 review: the tablet serial comes from GamePointConfig, not an ad-hoc env read."""
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+
+    def fake_run(cmd: list[str], **_k: Any) -> subprocess.CompletedProcess[str]:
+        args = cmd[2:] if len(cmd) > 2 and cmd[1] == "-s" else cmd[1:]
+        if args and args[0] == "devices":
+            return subprocess.CompletedProcess(
+                cmd, 0, "List of devices attached\nAAA\tdevice\nBBB\tdevice\n", ""
+            )
+        if "reverse" in cmd and "--list" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "UsbFfs tcp:8765 tcp:8765\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    cfg = GamePointConfig(
+        manage_tablet_tunnel=True,
+        adb_path=str(adb),
+        adb_serial="BBB",  # two devices attached; config picks BBB
+        paths=LauncherPaths(tmp_path),
+    )
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=_serving_urlopen, run=fake_run)
+    tablet = sup.probe_tablet({"endpoints": ["/tablet/dash"], "browser_peers": 0})
+    assert tablet.state == "tunnel-up"
+
+
+def test_probe_tablet_tunnel_up_when_sidecar_down_is_not_stale(tmp_path: Path) -> None:
+    """HIGH (#568 review): a stopped sidecar (health_payload=None) must read tunnel-up, not a
+    false `stale-sidecar` — the sidecar row carries the down state; the tunnel itself is up."""
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+
+    probed: list[str] = []
+
+    def fake_run(cmd: list[str], **_k: Any) -> subprocess.CompletedProcess[str]:
+        args = cmd[2:] if len(cmd) > 2 and cmd[1] == "-s" else cmd[1:]
+        if args and args[0] == "devices":
+            return subprocess.CompletedProcess(
+                cmd, 0, "List of devices attached\nSER\tdevice\n", ""
+            )
+        if "reverse" in cmd and "--list" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "UsbFfs tcp:8765 tcp:8765\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def urlopen(url: str, timeout: float) -> _Response:
+        del timeout
+        probed.append(url)
+        raise OSError("connection refused")  # sidecar is down
+
+    cfg = GamePointConfig(
+        manage_tablet_tunnel=True, adb_path=str(adb), paths=LauncherPaths(tmp_path)
+    )
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=urlopen, run=fake_run)
+    tablet = sup.probe_tablet(None)  # sidecar down → no health payload
+    assert tablet.state == "tunnel-up"
+    assert tablet.ok is True
+    # must NOT have probed /tablet/dash against the dead port
+    assert not any("/tablet/dash" in u for u in probed)
+
+
+def test_probe_tablet_flags_missing_asset_even_when_advertised(tmp_path: Path) -> None:
+    """P2 (#568 review): handler compiled in (so /health advertises /tablet/dash) but the bundled
+    HTML asset is missing → GET 404. The ground-truth probe must catch it (advertisement lies)."""
+    import urllib.error
+
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+
+    def fake_run(cmd: list[str], **_k: Any) -> subprocess.CompletedProcess[str]:
+        args = cmd[2:] if len(cmd) > 2 and cmd[1] == "-s" else cmd[1:]
+        if args and args[0] == "devices":
+            return subprocess.CompletedProcess(
+                cmd, 0, "List of devices attached\nSER\tdevice\n", ""
+            )
+        if "reverse" in cmd and "--list" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "UsbFfs tcp:8765 tcp:8765\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def urlopen(url: str, timeout: float) -> _Response:
+        del timeout
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)  # asset missing
+
+    cfg = GamePointConfig(
+        manage_tablet_tunnel=True, adb_path=str(adb), paths=LauncherPaths(tmp_path)
+    )
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=urlopen, run=fake_run)
+    # /health advertises the route, but the page 404s
+    tablet = sup.probe_tablet({"endpoints": ["/tablet/dash"], "browser_peers": 0})
+    assert tablet.state == "stale-sidecar"
+    assert tablet.ok is False
+
+
+def test_self_test_cli_refuses_to_validate_adopted_sidecar(tmp_path: Path, monkeypatch) -> None:
+    """P2 (#568 review): --self-test must not pass by validating a foreign adopted sidecar."""
+    import tools.rig_launcher.app as app
+
+    monkeypatch.setenv("AC_COPILOT_GAME_POINT_DIR", str(tmp_path))
+    made: list[Any] = []
+
+    class _AdoptingSup:
+        config = GamePointConfig(paths=LauncherPaths(tmp_path))
+
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            self.events: list[str] = []
+            made.append(self)
+
+        def start_sidecar(self) -> ProbeResult:
+            self.events.append("start")
+            return ProbeResult("sidecar", True, "running", "adopted existing sidecar on port 8765")
+
+        def self_test_endpoints(self, **_k: Any) -> tuple[ProbeResult, ...]:
+            self.events.append("selftest")  # must NOT be reached
+            return ()
+
+        def stop_sidecar(self, **_k: Any) -> ProbeResult:
+            self.events.append("stop")
+            return ProbeResult("sidecar", True, "stopped")
+
+        def close(self) -> None:
+            self.events.append("close")
+
+    monkeypatch.setattr(app, "GamePointSupervisor", _AdoptingSup)
+    rc = app.main(["--self-test"])
+    assert rc == 1
+    assert "selftest" not in made[0].events  # refused before validating the foreign process
+
+
+def test_self_test_cli_fails_fast_on_start_failure(tmp_path: Path, monkeypatch) -> None:
+    """Bug (#568 Qodo): --self-test must fail fast if start_sidecar returned ok=False, not probe
+    the port and emit misleading endpoint errors."""
+    import tools.rig_launcher.app as app
+
+    monkeypatch.setenv("AC_COPILOT_GAME_POINT_DIR", str(tmp_path))
+    made: list[Any] = []
+
+    class _FailingStartSup:
+        config = GamePointConfig(paths=LauncherPaths(tmp_path))
+
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            self.events: list[str] = []
+            made.append(self)
+
+        def start_sidecar(self) -> ProbeResult:
+            self.events.append("start")
+            return ProbeResult("sidecar", False, "start_failed", "boom")
+
+        def self_test_endpoints(self, **_k: Any) -> tuple[ProbeResult, ...]:
+            self.events.append("selftest")  # must NOT be reached
+            return ()
+
+        def stop_sidecar(self, **_k: Any) -> ProbeResult:
+            self.events.append("stop")
+            return ProbeResult("sidecar", True, "stopped")
+
+        def close(self) -> None:
+            self.events.append("close")
+
+    monkeypatch.setattr(app, "GamePointSupervisor", _FailingStartSup)
+    rc = app.main(["--self-test"])
+    assert rc == 1
+    assert "selftest" not in made[0].events

@@ -21,9 +21,11 @@ in ``agorokh/workstation-ops`` (#517).
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from tools.ai_sidecar.external_protocol import SERVER_VERSION
@@ -36,6 +38,42 @@ HEALTH_CONTENT_TYPE = "application/json"
 SCREEN_RECENCY_SECONDS = 120.0
 
 _lock = threading.Lock()
+_build_commit_cache: str | None = None
+
+
+def build_commit() -> str:
+    """Short commit hash of the running build.
+
+    Resolution order (issue #567): ``AC_COPILOT_BUILD_COMMIT`` (baked at package
+    time — a frozen PyInstaller EXE has no ``.git``), then a best-effort
+    ``git rev-parse --short HEAD`` for dev checkouts, then ``"unknown"``. The
+    result is immutable for a process, so it is cached after the first call — the
+    at-most-once ``git`` subprocess never repeats on the ``/health`` hot path.
+    """
+    global _build_commit_cache
+    if _build_commit_cache is not None:
+        return _build_commit_cache
+    baked = os.environ.get("AC_COPILOT_BUILD_COMMIT", "").strip()
+    if baked:
+        _build_commit_cache = baked
+        return baked
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+            # Anchor to THIS module's source tree so a sidecar launched from elsewhere (a desktop
+            # shortcut, or a frozen EXE that happens to sit inside an unrelated git repo) can't
+            # report a foreign commit (#568 self-hosted reviewer).
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+        )
+        commit = completed.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        commit = ""
+    _build_commit_cache = commit or "unknown"
+    return _build_commit_cache
 
 
 @dataclass
@@ -81,13 +119,27 @@ def build_health_json(
     connected_peers: int,
     *,
     screen_peers: int = 0,
+    browser_peers: int = 0,
+    endpoints: Sequence[str] = (),
     voice: Mapping[str, object] | None = None,
 ) -> str:
-    """Instant health body: the endpoint answering IS liveness."""
+    """Instant health body: the endpoint answering IS liveness.
+
+    Carries ``build_commit`` + the served ``endpoints`` set (issue #567) so a
+    stale packaged binary is identifiable from the payload, and ``browser_peers``
+    so the launcher can tell a tablet dashboard is actually connected (not just
+    that the tunnel is up). ``endpoints`` is the **caller's** canonical route
+    list — the single source of truth lives next to the handlers in
+    ``server.make_process_request`` (``server.SERVED_ENDPOINTS``), not here — so a
+    new route can't be served yet silently omitted from ``/health`` (#568 review).
+    """
     payload: dict[str, object] = {
         "status": "ok",
         "connected_peers": connected_peers,
         "screen_peers": screen_peers,
+        "browser_peers": browser_peers,
+        "build_commit": build_commit(),
+        "endpoints": list(endpoints),
     }
     if voice is not None:
         payload["voice"] = dict(voice)

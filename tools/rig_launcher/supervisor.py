@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -143,6 +144,15 @@ class GamePointConfig:
     setup_store: str | None = None
     simhub_exe: str | None = None
     start_simhub: bool = False
+    #: Manage the tablet dashboard's ``adb reverse`` USB tunnel (issue #567). Opt-in
+    #: (house pattern, cf. ``start_simhub``): off by default so CI / non-rig hosts never
+    #: shell out to adb; the rig sets ``AC_COPILOT_MANAGE_TABLET_TUNNEL=1``.
+    manage_tablet_tunnel: bool = False
+    #: Tablet-tunnel adb overrides, routed through the config SSOT rather than read ad-hoc
+    #: (#568 review): explicit ``adb`` path, and the device serial to disambiguate when more
+    #: than one authorized device is attached.
+    adb_path: str | None = None
+    adb_serial: str | None = None
     paths: LauncherPaths | None = None
 
     @classmethod
@@ -172,7 +182,13 @@ class GamePointConfig:
             env_map.get("AC_COPILOT_START_SIMHUB"),
             default=bool(settings.start_simhub),
         )
+        manage_tablet_tunnel = _env_bool_or(
+            env_map.get("AC_COPILOT_MANAGE_TABLET_TUNNEL"),
+            default=False,
+        )
         return cls(
+            adb_path=_none_if_blank(env_map.get("AC_COPILOT_ADB")),
+            adb_serial=_none_if_blank(env_map.get("AC_COPILOT_ADB_SERIAL")),
             port=port,
             external_bind=external_bind,
             token=token,
@@ -189,6 +205,7 @@ class GamePointConfig:
             ),
             simhub_exe=_configured_text(env_map.get("AC_COPILOT_SIMHUB_EXE"), settings.simhub_exe),
             start_simhub=start_simhub,
+            manage_tablet_tunnel=manage_tablet_tunnel,
             paths=resolved_paths,
         )
 
@@ -204,11 +221,14 @@ class GamePointStatus:
     simhub: ProbeResult
     log_path: str
     status_path: str
+    #: Tablet dashboard ``adb reverse`` USB tunnel keeper (issue #567). Defaulted so
+    #: direct constructions (and pre-#567 callers) stay valid; ``poll_status`` fills it.
+    tablet: ProbeResult = field(default_factory=lambda: ProbeResult("tablet", True, "unmanaged"))
     checks: tuple[ProbeResult, ...] = field(default_factory=tuple)
 
     @property
     def ok(self) -> bool:
-        rows = (self.sidecar, self.screen, self.voice, self.simhub, *self.checks)
+        rows = (self.sidecar, self.screen, self.voice, self.simhub, self.tablet, *self.checks)
         return all(row.ok for row in rows if row.state not in {"skipped", "absent"})
 
     def to_dict(self) -> dict[str, object]:
@@ -219,6 +239,7 @@ class GamePointStatus:
             "screen": self.screen.to_dict(),
             "voice": self.voice.to_dict(),
             "simhub": self.simhub.to_dict(),
+            "tablet": self.tablet.to_dict(),
             "log_path": self.log_path,
             "status_path": self.status_path,
             "checks": [check.to_dict() for check in self.checks],
@@ -249,6 +270,12 @@ class GamePointSupervisor:
         self._frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
         self._sidecar_process: Any | None = None
         self._log_handles: list[Any] = []
+        # The GUI polls on a worker thread while START / toggle run on the Tk main thread, so the
+        # sidecar process handle + log handles are touched from two threads. Serialize those
+        # mutations/reads with an RLock (re-entrant: close()→stop_sidecar() nests). The lock is
+        # held only around the quick handle bookkeeping — never around the slow adb/HTTP probes —
+        # so it cannot re-introduce the UI freeze the worker thread was added to avoid (#568).
+        self._proc_lock = threading.RLock()
 
     def sidecar_command(self) -> list[str]:
         if self._frozen:
@@ -341,20 +368,28 @@ class GamePointSupervisor:
         self._log_handles.clear()
 
     def start_sidecar(self) -> ProbeResult:
+        # start_sidecar is only ever called from the main thread (GUI button / CLI), never from
+        # the poll worker — so the lock only needs to guard the quick handle bookkeeping against
+        # the worker's concurrent _sidecar_process_status() READ. Crucially it is NOT held across
+        # the slow _read_health() adoption probe below (network I/O), so a START can't stall a
+        # concurrent status poll for the probe's timeout (#568 self-hosted reviewer).
         blocking = [check for check in self.preflight() if not check.ok]
         if blocking:
             detail = "; ".join(check.detail or check.name for check in blocking)
             return ProbeResult("sidecar", False, "blocked", detail)
-        if self._sidecar_process is not None and self._sidecar_process.poll() is None:
-            return ProbeResult("sidecar", True, "running", f"pid={self._sidecar_process.pid}")
-        if self._sidecar_process is not None and self._sidecar_process.poll() is not None:
-            self._sidecar_process = None
-        # Close handles left by a prior supervised spawn before EITHER adopting or spawning, so the
-        # adopt early-return below cannot leak a held-open sidecar.log handle (Qodo, PR #387).
-        self._close_log_handles()
+        with self._proc_lock:
+            if self._sidecar_process is not None and self._sidecar_process.poll() is None:
+                return ProbeResult("sidecar", True, "running", f"pid={self._sidecar_process.pid}")
+            if self._sidecar_process is not None and self._sidecar_process.poll() is not None:
+                self._sidecar_process = None
+            # Close handles left by a prior supervised spawn before EITHER adopting or spawning,
+            # so the adopt early-return below cannot leak a held-open sidecar.log handle (Qodo,
+            # PR #387).
+            self._close_log_handles()
         # A sidecar from a previous launcher run (or a boot autostart) may already own the port.
-        # Spawning a second one would crash the child with WinError 10048 (address already in use)
-        # and pop an unhandled-exception dialog. Adopt the healthy instance instead.
+        # Spawning a second one would crash the child with WinError 10048 (address already in
+        # use) and pop an unhandled-exception dialog. Adopt the healthy instance. Probe OUTSIDE
+        # the lock — start_sidecar is main-thread-serial, so no concurrent start races this gap.
         existing = self._read_health()
         if existing.ok:
             return ProbeResult(
@@ -363,48 +398,58 @@ class GamePointSupervisor:
                 "running",
                 f"adopted existing sidecar on port {self.config.port}",
             )
-        try:
-            self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
-            log = self.paths.sidecar_log_path.open("a", encoding="utf-8")
-            self._log_handles.append(log)
-            self._sidecar_process = self._popen(
-                self.sidecar_command(),
-                **_subprocess_kwargs(
-                    cwd=self._sidecar_working_directory(),
-                    env=self.sidecar_environment(),
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                ),
-            )
-        except (OSError, FileNotFoundError) as exc:
-            self._sidecar_process = None
-            self._close_log_handles()
-            return ProbeResult("sidecar", False, "start_failed", str(exc))
-        return ProbeResult("sidecar", True, "starting", f"pid={self._sidecar_process.pid}")
+        with self._proc_lock:
+            try:
+                self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
+                log = self.paths.sidecar_log_path.open("a", encoding="utf-8")
+                self._log_handles.append(log)
+                self._sidecar_process = self._popen(
+                    self.sidecar_command(),
+                    **_subprocess_kwargs(
+                        cwd=self._sidecar_working_directory(),
+                        env=self.sidecar_environment(),
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                    ),
+                )
+            except (OSError, FileNotFoundError) as exc:
+                self._sidecar_process = None
+                self._close_log_handles()
+                return ProbeResult("sidecar", False, "start_failed", str(exc))
+            return ProbeResult("sidecar", True, "starting", f"pid={self._sidecar_process.pid}")
 
     def stop_sidecar(self, *, timeout: float = 5.0) -> ProbeResult:
-        proc = self._sidecar_process
-        if proc is None:
-            self._close_log_handles()
-            return ProbeResult("sidecar", True, "stopped")
-        if proc.poll() is not None:
+        with self._proc_lock:
+            proc = self._sidecar_process
+            if proc is None:
+                self._close_log_handles()
+                return ProbeResult("sidecar", True, "stopped")
+            if proc.poll() is not None:
+                self._sidecar_process = None
+                self._close_log_handles()
+                return ProbeResult("sidecar", True, "stopped", f"exit={proc.poll()}")
+            try:
+                proc.terminate()
+                proc.wait(timeout=timeout)
+            except Exception:  # noqa: BLE001 - final cleanup should be best-effort
+                try:
+                    proc.kill()
+                except Exception:  # noqa: BLE001 - no further recovery available
+                    return ProbeResult("sidecar", False, "stop_failed")
             self._sidecar_process = None
             self._close_log_handles()
-            return ProbeResult("sidecar", True, "stopped", f"exit={proc.poll()}")
-        try:
-            proc.terminate()
-            proc.wait(timeout=timeout)
-        except Exception:  # noqa: BLE001 - final cleanup should be best-effort
-            try:
-                proc.kill()
-            except Exception:  # noqa: BLE001 - no further recovery available
-                return ProbeResult("sidecar", False, "stop_failed")
-        self._sidecar_process = None
-        self._close_log_handles()
-        return ProbeResult("sidecar", True, "stopped")
+            return ProbeResult("sidecar", True, "stopped")
 
-    def poll_status(self) -> GamePointStatus:
+    def poll_status(self, *, start_simhub: bool | None = None) -> GamePointStatus:
+        """Snapshot every probe and persist status.json.
+
+        ``start_simhub`` gates the SimHub *launch* side effect: ``None`` (default) honors the
+        configured auto-start (preserves the one-shot START/toggle behavior), while an explicit
+        ``False`` makes the poll **read-only** — the continuous GUI tick passes ``False`` so a
+        closed/crashed SimHub is not relaunched on every 5 s interval (#568 review).
+        """
+        start_sim = self.config.start_simhub if start_simhub is None else start_simhub
         checks = self.preflight()
         sidecar = self._sidecar_process_status()
         health, health_payload = self._read_health_payload()
@@ -416,13 +461,140 @@ class GamePointSupervisor:
             sidecar=sidecar,
             screen=screen,
             voice=self.probe_voice(health_payload),
-            simhub=self.probe_simhub(start=self.config.start_simhub),
+            simhub=self.probe_simhub(start=start_sim),
+            tablet=self.probe_tablet(health_payload),
             log_path=str(self.paths.sidecar_log_path),
             status_path=str(self.paths.status_path),
             checks=checks,
         )
         self.write_status(status)
         return status
+
+    def probe_tablet(self, health_payload: Mapping[str, object] | None = None) -> ProbeResult:
+        """Keep the tablet dashboard's ``adb reverse`` USB tunnel alive (issue #567).
+
+        Opt-in via ``manage_tablet_tunnel`` (off → ``unmanaged``, no adb calls, so CI and
+        non-rig hosts are untouched). When on, (re)asserts the tunnel idempotently and, once
+        it is up, upgrades the row to ``dash-connected`` if the sidecar's ``/health`` reports
+        a browser peer — i.e. a real dashboard, not just a live pipe.
+        """
+        if not self.config.manage_tablet_tunnel:
+            return ProbeResult(
+                "tablet",
+                True,
+                "unmanaged",
+                "adb tunnel keeper off (set AC_COPILOT_MANAGE_TABLET_TUNNEL=1)",
+            )
+        # `adb reverse` forwards the tablet's localhost:<port> to the PC's LOOPBACK:<port>
+        # (Android's documented contract). A concrete non-loopback external bind (e.g.
+        # 192.168.x.x) leaves nothing on PC loopback, so the tunnel would read `tunnel-up`
+        # yet the dashboard can't connect. Loopback and wildcard (0.0.0.0/::, which includes
+        # loopback) are fine; a concrete IP is a misconfiguration — fail loud (#568 review).
+        bind = self.config.external_bind
+        if bind and bind not in {DEFAULT_EXTERNAL_BIND, "0.0.0.0", "::"} and not _is_loopback(bind):
+            return ProbeResult(
+                "tablet",
+                False,
+                "bind-unreachable",
+                f"sidecar bound to {bind}, but adb reverse targets PC loopback — "
+                "bind to 127.0.0.1 or 0.0.0.0 for the managed tablet tunnel",
+            )
+        from tools.rig_launcher.tablet_tunnel import ensure_tablet_reverse
+
+        result = ensure_tablet_reverse(
+            self._run,
+            self.config.port,
+            env=self._environ,
+            adb=self.config.adb_path,
+            serial=self.config.adb_serial,
+        )
+        # The stale-sidecar / dash-connected refinements only apply when the sidecar actually
+        # answered /health (a Mapping). If health_payload is None the sidecar is simply DOWN —
+        # not stale — and its own row already surfaces that; the tunnel itself is up, so don't
+        # false-flag `stale-sidecar` off a probe against a dead port (#568 self-hosted reviewer).
+        if result.state == "tunnel-up" and isinstance(health_payload, Mapping):
+            # The tunnel being up doesn't prove the DASHBOARD loads: a stale sidecar 426s the
+            # route (not compiled in), and a build with the handler but a missing bundled HTML
+            # asset 404s it — the /health `endpoints` advertisement (a static list) can't
+            # distinguish either. So confirm against REALITY with a direct loopback, token-aware
+            # GET /tablet/dash == 200 before accepting the tunnel as usable (#568 review). The
+            # probe only runs when the sidecar answered /health (payload present); a stopped
+            # sidecar is handled by its own row, not flagged here.
+            if self._probe_endpoint_status("/tablet/dash") != 200:
+                return ProbeResult(
+                    "tablet",
+                    False,
+                    "stale-sidecar",
+                    "sidecar does not serve /tablet/dash (stale build or missing asset) — "
+                    "rebuild the launcher",
+                )
+            try:
+                browser_peers = int(health_payload.get("browser_peers") or 0)
+            except (TypeError, ValueError):
+                browser_peers = 0
+            if browser_peers > 0:
+                return ProbeResult(
+                    "tablet", True, "dash-connected", f"browser_peers={browser_peers}"
+                )
+        return ProbeResult("tablet", result.ok, result.state, result.detail)
+
+    def self_test_endpoints(self, *, wait_timeout: float = 10.0) -> tuple[ProbeResult, ...]:
+        """Release-gate smoke: the running build MUST serve the tablet routes with 200.
+
+        A packaged binary that predates ``/tablet/dash`` or ``/tablet/voice`` answers those
+        paths with ``426 Upgrade Required`` (the bare WS handler), so a stale ``dist/`` EXE
+        ships the dashboard broken. This probe turns that silent failure into a non-zero
+        launcher self-test (issue #567). Waits up to ``wait_timeout`` for ``/health`` first
+        so it can gate a freshly started sidecar.
+        """
+        self._wait_for_health(timeout=wait_timeout)
+        results: list[ProbeResult] = []
+        for path in ("/tablet/dash", "/tablet/voice"):
+            code = self._probe_endpoint_status(path)
+            name = f"endpoint {path}"
+            if code == 200:
+                results.append(ProbeResult(name, True, "serving"))
+            elif code is None:
+                results.append(ProbeResult(name, False, "unreachable", "sidecar did not answer"))
+            else:
+                results.append(
+                    ProbeResult(
+                        name,
+                        False,
+                        "stale_build",
+                        f"HTTP {code} — this build predates the route (expected 200)",
+                    )
+                )
+        return tuple(results)
+
+    def _wait_for_health(self, *, timeout: float) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            if self._read_health().ok:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.25)
+
+    def _probe_endpoint_status(self, path: str) -> int | None:
+        url = f"http://{_url_host(self._health_host())}:{self.config.port}{path}"
+        # server.make_process_request token-gates /tablet/* for NON-loopback peers, so on a
+        # concrete-IP external bind + token the bare probe would 401 and misreport `stale_build`.
+        # Carry the token when configured (the sidecar ignores it for loopback peers). The header
+        # name mirrors external_protocol.AUTH_HEADER; kept literal so the launcher stays decoupled.
+        target: str | urllib.request.Request = url
+        if self.config.token:
+            target = urllib.request.Request(url, headers={"X-AC-Copilot-Token": self.config.token})
+        try:
+            with self._urlopen(target, timeout=2.0) as response:
+                code = getattr(response, "status", None)
+                if code is None:
+                    code = getattr(response, "code", 200)
+                return int(code)
+        except urllib.error.HTTPError as exc:
+            return int(exc.code)
+        except (OSError, urllib.error.URLError, TimeoutError):
+            return None
 
     def write_status(self, status: GamePointStatus) -> None:
         self.paths.root.mkdir(parents=True, exist_ok=True)
@@ -510,8 +682,9 @@ class GamePointSupervisor:
         return self.config.start_simhub
 
     def close(self) -> None:
-        self.stop_sidecar()
-        self._close_log_handles()
+        with self._proc_lock:
+            self.stop_sidecar()
+            self._close_log_handles()
 
     def _read_health(self) -> ProbeResult:
         return self._read_health_payload()[0]
@@ -542,12 +715,16 @@ class GamePointSupervisor:
         return self.config.host
 
     def _sidecar_process_status(self) -> ProbeResult:
-        if self._sidecar_process is None:
-            return ProbeResult("sidecar", False, "stopped")
-        code = self._sidecar_process.poll()
-        if code is None:
-            return ProbeResult("sidecar", True, "running", f"pid={self._sidecar_process.pid}")
-        return ProbeResult("sidecar", False, "exited", f"exit={code}")
+        # Read the handle under the lock so a concurrent start/stop on the Tk thread can't
+        # swap it out between the None-check and the .poll()/.pid reads (#568 review).
+        with self._proc_lock:
+            proc = self._sidecar_process
+            if proc is None:
+                return ProbeResult("sidecar", False, "stopped")
+            code = proc.poll()
+            if code is None:
+                return ProbeResult("sidecar", True, "running", f"pid={proc.pid}")
+            return ProbeResult("sidecar", False, "exited", f"exit={code}")
 
     def _simhub_exe(self) -> Path | None:
         candidates: list[Path] = []
@@ -802,6 +979,7 @@ def render_status_lines(status: GamePointStatus) -> list[str]:
         status.screen,
         status.voice,
         status.simhub,
+        status.tablet,
         *status.checks,
     ]
     return [f"{row.name}: {row.state}{(' - ' + row.detail) if row.detail else ''}" for row in rows]

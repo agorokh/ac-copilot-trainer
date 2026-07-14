@@ -35,6 +35,7 @@ from tools.ai_sidecar import observability
 from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled
 from tools.ai_sidecar.external_protocol import (
     AUTH_HEADER,
+    CLIENT_CLASS_BROWSER,
     CLIENT_CLASS_EXTERNAL,
     CLIENT_CLASS_KEY,
     CLIENT_CLASS_SCREEN,
@@ -1055,6 +1056,21 @@ def _http_response_bytes(
     return response
 
 
+# Canonical set of HTTP routes served by ``_process_request`` below — the single source of
+# truth for the sidecar's served-endpoint surface. Passed into ``build_health_json`` so
+# ``/health`` advertises exactly what THIS build serves (issue #567/#568): a stale binary's
+# compiled-in list omits a route it can't serve, and the launcher self-test / drift guard
+# key off this. Keep it in lockstep with the ``path == …`` / ``path.startswith(…)`` handlers.
+SERVED_ENDPOINTS: tuple[str, ...] = (
+    "/health",
+    "/metrics",
+    "/tablet/dash",
+    "/tablet/voice",
+    "/dash/fonts/",
+    "/voice/manifest.json",
+)
+
+
 def make_process_request(token: str | None):
     """Build the websockets ``process_request`` hook.
 
@@ -1077,6 +1093,8 @@ def make_process_request(token: str | None):
                 observability.build_health_json(
                     connected_peers,
                     screen_peers=screen_peers,
+                    browser_peers=_browser_peer_count(),
+                    endpoints=SERVED_ENDPOINTS,
                     voice=public_voice_runtime_status(),
                 ),
                 observability.HEALTH_CONTENT_TYPE,
@@ -1262,6 +1280,11 @@ def _peer_class(peer: Any) -> str:
 def _peer_counts() -> tuple[int, int]:
     screen_peers = sum(1 for peer in _external_peers if _peer_class(peer) == CLIENT_CLASS_SCREEN)
     return len(_external_peers), screen_peers
+
+
+def _browser_peer_count() -> int:
+    """Connected browser-class peers — i.e. tablet GT dashboards (#531, #567)."""
+    return sum(1 for peer in _external_peers if _peer_class(peer) == CLIENT_CLASS_BROWSER)
 
 
 def _client_class_from_hello(data: dict[str, Any]) -> str:
@@ -3031,6 +3054,11 @@ def main() -> None:
             verbosity=args.voice_verbosity,
         )
     )
+
+    # Resolve build_commit synchronously HERE, before the event loop starts, so the first
+    # /health never shells out to `git` on the asyncio loop thread and stalls WS processing
+    # (#568 self-hosted reviewer). The result is cached for the process lifetime.
+    observability.build_commit()
 
     try:
         asyncio.run(

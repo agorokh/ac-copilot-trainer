@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,10 @@ from tools.rig_launcher.supervisor import (
     default_paths,
     render_status_lines,
 )
+
+#: GUI auto-refresh cadence (ms). Drives the periodic re-poll so the tablet tunnel keeper
+#: and every status probe self-heal while the launcher window is open (issue #567).
+_GUI_POLL_INTERVAL_MS = 5000
 
 
 def _open_path(path: Path) -> None:
@@ -46,6 +51,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Print status or setup output as JSON where supported.",
     )
     parser.add_argument("--no-gui", action="store_true", help="Do not open the Tk status window.")
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Start the sidecar, assert it serves /tablet/dash and /tablet/voice (200), "
+        "then exit non-zero if a stale build 426s them. Release gate for issue #567.",
+    )
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--external-bind", default=None)
     parser.add_argument("--log-dir", default=None)
@@ -92,6 +103,9 @@ def config_from_args(args: argparse.Namespace) -> GamePointConfig:
         setup_store=config.setup_store,
         simhub_exe=config.simhub_exe,
         start_simhub=args.start_simhub or config.start_simhub,
+        manage_tablet_tunnel=config.manage_tablet_tunnel,
+        adb_path=config.adb_path,
+        adb_serial=config.adb_serial,
         paths=paths,
     )
 
@@ -204,6 +218,46 @@ def main(argv: list[str] | None = None) -> int:
 
     supervisor = GamePointSupervisor(config_from_args(args))
     try:
+        if args.self_test:
+            # The self-test owns the sidecar it starts: stop it as soon as the checks finish so
+            # a release-gate run never leaves an orphaned sidecar for the next launch to adopt
+            # (#568 review — the outer finally also closes it, but the ownership is explicit here).
+            # stop_sidecar() is a no-op when start_sidecar() adopted an already-running instance.
+            started = supervisor.start_sidecar()
+            # Fail fast on a real startup failure (blocked / start_failed): otherwise the checks
+            # below would probe whatever is on the port and emit confusing endpoint errors
+            # instead of the actual startup problem (#568 review).
+            if not started.ok:
+                print(
+                    f"self-test: sidecar failed to start ({started.state}): {started.detail}",
+                    file=sys.stderr,
+                )
+                return 1
+            # If a sidecar was already listening on the port, start_sidecar ADOPTS it — the
+            # self-test would then validate that OTHER process (e.g. a fresh source sidecar),
+            # so a stale packaged EXE could pass. Refuse: the release gate must exercise the
+            # build under test, not a foreign one (#568 review). stop_sidecar won't kill the
+            # adopted process (we didn't spawn it).
+            if "adopted" in (started.detail or ""):
+                print(
+                    "self-test: another sidecar is already running on port "
+                    f"{supervisor.config.port} and was adopted — cannot validate this build. "
+                    "Stop the existing sidecar and retry.",
+                    file=sys.stderr,
+                )
+                return 1
+            try:
+                results = supervisor.self_test_endpoints()
+            finally:
+                supervisor.stop_sidecar()
+            ok = all(row.ok for row in results)
+            if args.json:
+                print(json.dumps([row.to_dict() for row in results], indent=2, sort_keys=True))
+            else:
+                for row in results:
+                    detail = f" - {row.detail}" if row.detail else ""
+                    print(f"{row.name}: {row.state}{detail}")
+            return 0 if ok else 1
         if args.start:
             supervisor.start_sidecar()
         if args.once or args.no_gui:
@@ -236,14 +290,53 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
     root.minsize(620, 400)
 
     last_status: dict[str, GamePointStatus | None] = {"status": None}
+    _poll_busy: dict[str, bool] = {"v": False}
+
+    def _poll_worker() -> None:
+        try:
+            # Read-only: the continuous poll must never re-launch SimHub on each tick — starting
+            # it is an explicit user action (START / toggle-on) below (#568 review).
+            status = supervisor.poll_status(start_simhub=False)
+        finally:
+            _poll_busy["v"] = False
+
+        def apply() -> None:
+            try:
+                if root.winfo_exists():
+                    last_status["status"] = status
+                    view.update(status)
+            except tk.TclError:
+                return
+
+        try:
+            root.after(0, apply)
+        except (tk.TclError, RuntimeError):
+            return
 
     def refresh() -> None:
-        status = supervisor.poll_status()
-        last_status["status"] = status
-        view.update(status)
+        # NON-BLOCKING. poll_status() can wait on adb subprocesses (managed tablet tunnel), so
+        # every refresh path — startup, START, REFRESH, the SimHub toggle, and the periodic tick
+        # — goes through the worker thread; a wedged ADB/USB stack must never freeze the Tk UI
+        # (#568 review r2+r3). A refresh while one is in flight is coalesced (busy flag).
+        if _poll_busy["v"]:
+            return
+        _poll_busy["v"] = True
+        threading.Thread(target=_poll_worker, daemon=True).start()
+
+    def _launch_simhub_and_report() -> None:
+        # Explicit one-shot SimHub launch (not on the read-only ticks). The next refresh is
+        # read-only and would only show `available`, hiding a start failure — so surface a
+        # failed explicit launch directly to the operator here (#568 review).
+        res = supervisor.probe_simhub(start=True)
+        if not res.ok:
+            from tkinter import messagebox
+
+            messagebox.showwarning("SimHub", res.detail or "SimHub failed to start", parent=root)
 
     def start() -> None:
         supervisor.start_sidecar()
+        if supervisor.config.start_simhub:
+            _launch_simhub_and_report()
         refresh()
 
     def open_logs() -> None:
@@ -278,10 +371,12 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
             messagebox.showerror("Setup Diff", str(exc), parent=root)
 
     def toggle_simhub(enabled: bool) -> None:
-        # Apply the checkbox's new state (the view passes it in, so the model follows the
-        # UI) and refresh so it takes effect immediately: poll_status starts/adopts SimHub
-        # when enabled, or just reports it absent — SimHub is never a blocking status row.
+        # Apply the checkbox's new state (the view passes it in, so the model follows the UI).
+        # Toggling ON is an explicit action → launch SimHub once here; the read-only status
+        # ticks never (re)start it. SimHub is never a blocking status row.
         supervisor.set_start_simhub(enabled)
+        if enabled:
+            _launch_simhub_and_report()
         refresh()
 
     view = build_launcher_view(
@@ -298,7 +393,28 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
         simhub_autostart=supervisor.config.start_simhub,
         on_toggle_simhub=toggle_simhub,
     )
+
+    def poll_tick() -> None:
+        # Continuous re-poll so the tablet tunnel keeper (and every other probe) self-heals
+        # while the launcher is open — an unplug / tablet sleep / `adb kill-server` after launch
+        # is otherwise only noticed on a manual REFRESH (issue #567). refresh() is already the
+        # non-blocking worker path, so the periodic tick reuses it.
+        try:
+            if not root.winfo_exists():
+                return
+            refresh()
+            root.after(_GUI_POLL_INTERVAL_MS, poll_tick)
+        except tk.TclError:
+            return
+
+    view.mark_pending()  # neutral state until the first async poll lands (#568 review)
+    # Honor the configured SimHub auto-start ONCE at launch (the periodic ticks are read-only,
+    # so without this the documented AC_COPILOT_START_SIMHUB / checkbox would be a no-op until
+    # the operator pressed START — #568 review).
+    if supervisor.config.start_simhub:
+        _launch_simhub_and_report()
     refresh()
+    root.after(_GUI_POLL_INTERVAL_MS, poll_tick)
     root.mainloop()
     status = last_status["status"]
     return 0 if status is None or status.ok else 1
