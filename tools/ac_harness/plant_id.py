@@ -1791,6 +1791,28 @@ def plant_ggv_model(artifact: dict) -> GGVModel | None:
         return None
 
 
+def plant_ready_for_full_consumption(
+    artifact: dict | None, *, require_friction_fit: bool
+) -> str | None:
+    """Single source of truth for "can this plant drive a measured-steering run" (#572 daemon).
+
+    Returns ``None`` when ready, else the human-readable reason. Used by the alien resolution,
+    the alien preflight, and ``auto_alien.needs_identification`` so the three sites can never
+    drift apart. ``require_friction_fit=True`` (the alien path) additionally demands the #543
+    uncertainty-aware friction fit; the ggv ``--use-plant full`` path only needs the measured
+    steering constants (its speed profile may legitimately use the generic plant).
+    """
+    if artifact is None:
+        return "no plant artifact for this combo"
+    if require_friction_fit and plant_ggv_model(artifact) is None:
+        return "plant artifact has no uncertainty-aware friction fit (#543)"
+    try:
+        plant_driver_kwargs(artifact, steer=True)
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
 def apply_handshake_outcome(report, sink: dict) -> None:
     """Fold the handshake outcome into an ``AutoDriveReport``-shaped object (duck-typed).
 

@@ -2753,15 +2753,17 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
 def _alien_prerequisites_error(config: AutoDriveConfig, user_dir: Path) -> str | None:
     """Read-only alien readiness check for ``--preflight-only``; message or ``None`` when ready.
 
-    Validates what the post-lock resolution will require — a loadable plant artifact with the
-    uncertainty-aware friction fit + measured steering constants, and a resolvable ``fast_lane.ai``
-    — WITHOUT building or persisting the line cache (preflight must never write state).
+    Validates what the post-lock resolution will require — a plant artifact passing the shared
+    readiness gate (:func:`~tools.ac_harness.plant_id.plant_ready_for_full_consumption`), a
+    resolvable ``fast_lane.ai``, and a sane parsed corridor — WITHOUT building or persisting the
+    line cache (preflight must never write state).
     """
+    from tools.ac_harness.alien_line import validate_corridor
+    from tools.ac_harness.ggv_profile import load_track_widths
     from tools.ac_harness.plant_id import (
         load_plant_artifact,
         plant_artifact_path,
-        plant_driver_kwargs,
-        plant_ggv_model,
+        plant_ready_for_full_consumption,
     )
 
     setup_key = Path(config.setup).stem if config.setup else None
@@ -2773,27 +2775,27 @@ def _alien_prerequisites_error(config: AutoDriveConfig, user_dir: Path) -> str |
         config.setup_ini,
         layout=config.track_layout,
     )
-    if artifact is None:
-        expected = plant_artifact_path(
-            user_dir,
-            config.car_id,
-            config.track_id,
-            setup_key,
-            config.setup_ini,
-            layout=config.track_layout,
-        )
-        return f"no plant artifact for this combo ({expected}); run --driver handshake first"
-    if plant_ggv_model(artifact) is None:
-        return (
-            "plant artifact has no uncertainty-aware friction fit; re-run --driver handshake (#543)"
-        )
+    reason = plant_ready_for_full_consumption(artifact, require_friction_fit=True)
+    if reason is not None:
+        if artifact is None:
+            expected = plant_artifact_path(
+                user_dir,
+                config.car_id,
+                config.track_id,
+                setup_key,
+                config.setup_ini,
+                layout=config.track_layout,
+            )
+            reason = f"{reason} ({expected}); run --driver handshake first"
+        return reason
     try:
-        plant_driver_kwargs(artifact, steer=True)
-    except ValueError as exc:
-        return str(exc)
-    try:
-        resolve_fast_lane(config.ac_root, config.track_id, config.track_layout)
-    except FileNotFoundError as exc:
+        from tools.ac_harness.ai_line import load_ai_line
+
+        fast_path = resolve_fast_lane(config.ac_root, config.track_id, config.track_layout)
+        line = load_ai_line(fast_path)
+        side_left, side_right = load_track_widths(fast_path)
+        validate_corridor(side_left, side_right, len(line), source=str(fast_path))
+    except (FileNotFoundError, ValueError) as exc:
         return str(exc)
     return None
 
@@ -2818,6 +2820,7 @@ def _resolve_alien_assets(
         plant_artifact_path,
         plant_driver_kwargs,
         plant_ggv_model,
+        plant_ready_for_full_consumption,
     )
 
     setup_key = Path(config.setup).stem if config.setup else None
@@ -2829,36 +2832,28 @@ def _resolve_alien_assets(
         config.setup_ini,
         layout=config.track_layout,
     )
-    if artifact is None:
-        expected = plant_artifact_path(
-            user_dir,
-            config.car_id,
-            config.track_id,
-            setup_key,
-            config.setup_ini,
-            layout=config.track_layout,
-        )
-        return (
-            f"--driver alien requires this combo's plant artifact ({expected}); "
-            "run --driver handshake first (or python -m tools.ac_harness.auto_alien for the "
-            "one-button pipeline)",
-            None,
-            None,
-        )
+    # Alien implies the full measured plant: the #543 uncertainty-aware friction fit + the
+    # measured curvature-FF steering and shift points. One shared readiness gate — the same one
+    # auto_alien.needs_identification and the alien preflight consult (#572 daemon review).
+    reason = plant_ready_for_full_consumption(artifact, require_friction_fit=True)
+    if reason is not None:
+        if artifact is None:
+            expected = plant_artifact_path(
+                user_dir,
+                config.car_id,
+                config.track_id,
+                setup_key,
+                config.setup_ini,
+                layout=config.track_layout,
+            )
+            reason = (
+                f"--driver alien requires this combo's plant artifact ({expected}); "
+                "run --driver handshake first (or python -m tools.ac_harness.auto_alien for "
+                "the one-button pipeline)"
+            )
+        return (reason, None, None)
+    config.plant_kwargs = plant_driver_kwargs(artifact, steer=True)
     plant = plant_ggv_model(artifact)
-    if plant is None:
-        return (
-            "this combo's plant artifact has no uncertainty-aware friction fit; "
-            "re-run --driver handshake (#543) before the alien drive",
-            None,
-            None,
-        )
-    # Alien implies the full measured plant: curvature-FF steering + shift points. A missing
-    # steering constant raises inside plant_driver_kwargs — surface it as a CLI error.
-    try:
-        config.plant_kwargs = plant_driver_kwargs(artifact, steer=True)
-    except ValueError as exc:
-        return (str(exc), None, None)
     config.plant_ggv = plant
     plant_artifact_used = str(
         plant_artifact_path(
@@ -3009,7 +3004,33 @@ def _main_impl(
             if alien_issue is not None:
                 print(f"auto-drive: ALIEN PREFLIGHT FAILED — {alien_issue}")
                 return 2
-            print("auto-drive: alien prerequisites ok (plant artifact + fast_lane)")
+            print("auto-drive: alien prerequisites ok (plant artifact + fast_lane corridor)")
+        elif config.driver == "ggv" and args.use_plant == "full":
+            # #572: --use-plant full is a hard plant requirement — a preflight-only readiness
+            # gate must not report green for a run that would exit at post-lock resolution.
+            from tools.ac_harness.plant_id import (
+                load_plant_artifact,
+                plant_ready_for_full_consumption,
+            )
+
+            full_artifact = load_plant_artifact(
+                user_dir,
+                config.car_id,
+                config.track_id,
+                Path(config.setup).stem if config.setup else None,
+                config.setup_ini,
+                layout=config.track_layout,
+            )
+            full_reason = plant_ready_for_full_consumption(
+                full_artifact, require_friction_fit=False
+            )
+            if full_reason is not None:
+                print(
+                    f"auto-drive: PREFLIGHT FAILED — --use-plant full: {full_reason}; "
+                    "run --driver handshake first"
+                )
+                return 2
+            print("auto-drive: --use-plant full prerequisites ok (plant artifact)")
         return 0
 
     if config.setup:

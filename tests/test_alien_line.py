@@ -363,6 +363,59 @@ def test_verify_alien_line_artifact_reasons(lane):
     assert "envelope" in verify_alien_line_artifact(hot, pts, sl, sr, plant, margin_m=1.2)
 
 
+def test_build_rejects_degenerate_params(lane):
+    path, pts = lane
+    plant = generic_gt3_ggv()
+    for bad_vtop in (0.0, -10.0, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="v_top_kmh"):
+            build_alien_line_artifact(
+                pts, path, plant, _plant_artifact(), car_id="c", track_id="t", v_top_kmh=bad_vtop
+            )
+    with pytest.raises(ValueError, match="margin_m"):
+        build_alien_line_artifact(
+            pts, path, plant, _plant_artifact(), car_id="c", track_id="t", margin_m=float("nan")
+        )
+    with pytest.raises(ValueError, match="iters"):
+        build_alien_line_artifact(
+            pts, path, plant, _plant_artifact(), car_id="c", track_id="t", iters=0
+        )
+
+
+def test_alien_prerequisites_error_paths(tmp_path, monkeypatch):
+    # Qodo testability finding (#572): the --preflight-only alien readiness check is unit-tested
+    # off-rig — no plant, corridor garbage, and the fully-ready path.
+    from tools.ac_harness import auto_drive as ad
+    from tools.ac_harness import plant_id as pid
+    from tools.ac_harness.auto_drive import AutoDriveConfig, _alien_prerequisites_error
+
+    cfg = AutoDriveConfig(track_id="trk", car_id="car_a", driver="alien")
+
+    # Empty user dir: the real load path finds no artifact.
+    msg = _alien_prerequisites_error(cfg, tmp_path)
+    assert msg is not None and "no plant artifact" in msg
+
+    # Plant ready (patched at the shared gate), corridor absurd -> loud corridor message.
+    monkeypatch.setattr(pid, "load_plant_artifact", lambda *a, **kw: {"ok": True})
+    monkeypatch.setattr(
+        pid, "plant_ready_for_full_consumption", lambda art, *, require_friction_fit: None
+    )
+    pts = _circle_line()
+    bad_lane = tmp_path / "bad" / "fast_lane.ai"
+    bad_lane.parent.mkdir()
+    _write_fast_lane(bad_lane, pts, [4242.0] * _N, [6.0] * _N)
+    monkeypatch.setattr(ad, "resolve_fast_lane", lambda *a, **kw: bad_lane)
+    msg = _alien_prerequisites_error(cfg, tmp_path)
+    assert msg is not None and "absurd corridor" in msg
+
+    # Fully ready: valid plant + valid corridor -> None, and nothing was written.
+    good_lane = tmp_path / "good" / "fast_lane.ai"
+    good_lane.parent.mkdir()
+    _write_fast_lane(good_lane, pts, [6.0] * _N, [6.0] * _N)
+    monkeypatch.setattr(ad, "resolve_fast_lane", lambda *a, **kw: good_lane)
+    assert _alien_prerequisites_error(cfg, tmp_path) is None
+    assert not (tmp_path / "alien_line").exists()  # read-only: no cache write
+
+
 def test_envelope_verification_rejects_overspeed(lane):
     from tools.ac_harness.alien_line import _verify_lateral_envelope
 

@@ -30,6 +30,7 @@ from tools.ac_harness.plant_id import (
     plant_artifact_path,
     plant_driver_kwargs,
     plant_ggv_model,
+    plant_ready_for_full_consumption,
     refine_ggv_from_lap_archives,
     save_plant_artifact,
 )
@@ -1111,6 +1112,27 @@ def test_plant_driver_kwargs_auto_vs_full(tmp_path):
     assert full["ff_sign"] == 1.0
     assert full["ff_c1"] == 6.0
     assert full["ff_c2"] == 0.015
+
+
+def test_plant_ready_for_full_consumption_shared_gate(tmp_path):
+    # The single readiness gate shared by the alien resolution, the alien preflight, and
+    # auto_alien.needs_identification (#572 daemon review) — the three sites must see the
+    # identical verdict for the identical artifact.
+    assert "no plant artifact" in plant_ready_for_full_consumption(None, require_friction_fit=True)
+    save_plant_artifact(tmp_path, _result_dict())
+    artifact = load_plant_artifact(tmp_path, "test_car", "test_oval")
+    # Complete measured constants, no friction fit: ggv `--use-plant full` semantics pass...
+    assert plant_ready_for_full_consumption(artifact, require_friction_fit=False) is None
+    # ...but the alien path additionally demands the #543 uncertainty-aware fit.
+    assert "uncertainty-aware" in plant_ready_for_full_consumption(
+        artifact, require_friction_fit=True
+    )
+    # Incomplete steering constants fail regardless of the fit requirement.
+    broken = dict(artifact)
+    broken["constants"] = {k: v for k, v in artifact["constants"].items() if k not in ("ff_c1",)}
+    assert "steering constants" in plant_ready_for_full_consumption(
+        broken, require_friction_fit=False
+    )
 
 
 def test_apply_handshake_outcome_empty_sink():

@@ -164,6 +164,14 @@ def build_alien_line_artifact(
     """
     if len(fast_line) < 3:
         raise ValueError("alien line requires at least 3 fast-line points")
+    # A zero / negative / non-finite speed cap would make the QSS profiler emit degenerate
+    # v_target values that pass the lateral-envelope check trivially (#572 Codex review).
+    if not (math.isfinite(v_top_kmh) and v_top_kmh > 0):
+        raise ValueError(f"v_top_kmh must be finite and > 0 (got {v_top_kmh})")
+    if not (math.isfinite(margin_m) and margin_m >= 0):
+        raise ValueError(f"margin_m must be finite and >= 0 (got {margin_m})")
+    if iters <= 0:
+        raise ValueError(f"iters must be > 0 (got {iters})")
     plane = [(p[0], p[2]) for p in fast_line]
     side_left, side_right = load_track_widths(width_path)
     validate_corridor(side_left, side_right, len(plane))

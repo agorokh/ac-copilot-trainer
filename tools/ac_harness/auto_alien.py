@@ -26,7 +26,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from tools.ac_harness.auto_drive import resolve_ac_user_dir, resolve_setup_ini, validate_ac_id
-from tools.ac_harness.plant_id import load_plant_artifact, plant_ggv_model
+from tools.ac_harness.plant_id import load_plant_artifact, plant_ready_for_full_consumption
 
 StageRunner = Callable[[list[str]], int]
 
@@ -100,16 +100,18 @@ def needs_identification(
 ) -> tuple[bool, str]:
     """Whether the identification stage must run, with the human-readable reason.
 
-    True when the plant artifact is absent, when it carries no uncertainty-aware friction fit
-    (#543 — a v1/v2 or degraded fit must be re-identified, not extrapolated), or when forced.
+    True when the plant artifact fails the SAME readiness gate the alien drive stage enforces
+    (:func:`~tools.ac_harness.plant_id.plant_ready_for_full_consumption` — absent artifact,
+    missing #543 uncertainty-aware friction fit, or incomplete measured steering constants), or
+    when forced. Sharing the drive stage's exact gate means this can never skip the handshake
+    for a plant the drive stage would then reject (#572 daemon HIGH).
     """
     if force:
         return True, "forced (--force-identify)"
     artifact = load_plant_artifact(user_dir, car_id, track_id, setup, setup_ini, layout=layout)
-    if artifact is None:
-        return True, "no plant artifact for this combo"
-    if plant_ggv_model(artifact) is None:
-        return True, "plant artifact has no uncertainty-aware friction fit (#543)"
+    reason = plant_ready_for_full_consumption(artifact, require_friction_fit=True)
+    if reason is not None:
+        return True, reason
     return False, "plant artifact present with uncertainty-aware friction fit"
 
 

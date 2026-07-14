@@ -45,7 +45,11 @@ def _usable_plant(monkeypatch, usable: bool | list[bool]):
         return {"fit": idx} if seq[idx] else None
 
     monkeypatch.setattr(auto_alien, "load_plant_artifact", fake_load)
-    monkeypatch.setattr(auto_alien, "plant_ggv_model", lambda art: object())
+    monkeypatch.setattr(
+        auto_alien,
+        "plant_ready_for_full_consumption",
+        lambda art, *, require_friction_fit: None if art else "no plant artifact for this combo",
+    )
 
 
 def test_needs_identification_reasons(monkeypatch, tmp_path):
@@ -58,11 +62,27 @@ def test_needs_identification_reasons(monkeypatch, tmp_path):
     assert needed and "forced" in why
 
 
-def test_needs_identification_when_fit_missing(monkeypatch, tmp_path):
+def test_needs_identification_uses_the_drive_stage_readiness_gate(monkeypatch, tmp_path):
+    # The gate is the SHARED plant_ready_for_full_consumption — any reason it returns
+    # (missing fit, incomplete steering constants) triggers the handshake stage, so the
+    # pipeline can never skip identification for a plant the drive stage would reject.
     monkeypatch.setattr(auto_alien, "load_plant_artifact", lambda *a, **kw: {"fit": 0})
-    monkeypatch.setattr(auto_alien, "plant_ggv_model", lambda art: None)
+    monkeypatch.setattr(
+        auto_alien,
+        "plant_ready_for_full_consumption",
+        lambda art, *, require_friction_fit: (
+            "plant artifact has no uncertainty-aware friction fit (#543)"
+        ),
+    )
     needed, why = needs_identification(tmp_path, "c", "t", None, None, layout=None)
     assert needed and "uncertainty-aware" in why
+    monkeypatch.setattr(
+        auto_alien,
+        "plant_ready_for_full_consumption",
+        lambda art, *, require_friction_fit: "plant artifact missing measured steering constants",
+    )
+    needed, why = needs_identification(tmp_path, "c", "t", None, None, layout=None)
+    assert needed and "steering constants" in why
 
 
 def test_pipeline_skips_identification_when_plant_usable(monkeypatch, tmp_path):
@@ -85,7 +105,11 @@ def test_pipeline_runs_identification_then_drive(monkeypatch, tmp_path):
     monkeypatch.setattr(
         auto_alien, "load_plant_artifact", lambda *a, **kw: {"x": 1} if state["usable"] else None
     )
-    monkeypatch.setattr(auto_alien, "plant_ggv_model", lambda art: object())
+    monkeypatch.setattr(
+        auto_alien,
+        "plant_ready_for_full_consumption",
+        lambda art, *, require_friction_fit: None if art else "no plant artifact for this combo",
+    )
     settled_urls: list[str] = []
     monkeypatch.setattr(
         auto_alien,
