@@ -2,9 +2,10 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-14T07:31:18Z
+last_updated: 2026-07-14T19:55:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/03_Investigations/issue-577-alien-selfplay-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-572-alien-pipeline-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-543-uncertainty-aware-plant-id-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-555-cross-worktree-rig-ownership-2026-07-13.md
@@ -30,6 +31,17 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**ACTIVE (2026-07-14 evening):** [#577](https://github.com/agorokh/ac-copilot-trainer/issues/577)
+(**EPIC #529 P3** — flying-lap windows + progressive-envelope self-play) implemented and
+**live-proven**; PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579)
+review-converged at `6907e42`, **MERGE-PENDING (operator click — agent self-merge denied by the
+session permission rail)**. Rig proof: 911 GT3 R @ Magione, flying laps
+**107.0 → 101.6 → 96.6 → 92.567 s**, strictly monotonic, all AC-valid, zero recoveries — the
+91.94 s predicted QSS floor beaten by a measured lap (82.7 s TT floor ~11.9 % away; ladder ended
+on budget with headroom). Next: merge #579 → `/post-merge 579` → longer ladder
+(`--iterations 6 --max-scale 1.15`) → L3 per-corner refinement (remaining #577 scope).
+Detail: [[issue-577-alien-selfplay-2026-07-14]].
 
 **Delivered (2026-07-14, latest):** [#572](https://github.com/agorokh/ac-copilot-trainer/issues/572)
 **CLOSED** by PR [#573](https://github.com/agorokh/ac-copilot-trainer/pull/573)
