@@ -106,6 +106,14 @@ def resolve_ac_user_dir(explicit: Path | None = None, *, home: Path | None = Non
     return candidates[0]
 
 
+# #577: hard cap on the deliberate self-play overspeed probe (ggv_scale above 1 on the alien
+# path). The uncertainty-safe QSS envelope is a lower-confidence bound, so a bounded supra-LCB
+# probe is how self-play generates the evidence that raises the measured bins — but 1.2x speed
+# is 1.44x lateral g, already an aggressive single step; anything above is a config error, not
+# a braver probe. Requires the explicit --alien-allow-overspeed opt-in (auto_alien iterate mode).
+ALIEN_MAX_OVERSPEED_SCALE = 1.2
+
+
 @dataclass
 class AutoDriveConfig:
     """Inputs for one autonomous drive+assert run, parametrized by car/track/preset/setup."""
@@ -159,6 +167,13 @@ class AutoDriveConfig:
         240.0  # racing/ggv: cap (above any GT speed; lets it use top gears)
     )
     ggv_scale: float = 0.9  # ggv: safety margin on the min-time profile (flat-out * scale)
+    # #577 progressive-envelope self-play: allow the alien path to run a deliberate, bounded
+    # overspeed probe (ggv_scale in (1, ALIEN_MAX_OVERSPEED_SCALE]) — the uncertainty-safe QSS
+    # floor is a lower-confidence bound, and driving slightly above it is how the self-play loop
+    # generates the supra-LCB lateral evidence that raises the measured bins. Guarded: opt-in
+    # flag only (the one-shot alien path keeps the hard <=1 gate from #572), hard-capped, and
+    # every step is falsifiable via the auto_alien keep-last-valid oracle.
+    alien_overspeed: bool = False
     target_speed_kmh: float = 55.0  # cruise only
     min_corner_speed_kmh: float = 30.0  # cruise only
     # Stall recovery (#459 Part D).
@@ -176,6 +191,10 @@ class AutoDriveConfig:
     # Assertion.
     tap_seconds: float = 30.0
     wait_lap: bool = False
+    # #577 flying-lap windows: keep the tap window open until this many TIMED laps complete
+    # (or the drive budget expires — whichever first). 0 = legacy single-lap --wait-lap
+    # semantics. Setting it >0 implies wait_lap (the CLI enforces this coupling).
+    target_laps: int = 0
     strict: bool = False
     # Launch / hijack robustness (the early-LIVE race plus CM's setup race.ini regeneration).
     # A setup run keeps race.ini re-baked through the CM launch window; if the session still fails
@@ -294,6 +313,11 @@ class AutoDriveReport:
     # archive). The single source of truth the evidence-bundle poll gates on, so the grace condition
     # and the poll condition can never diverge (#515/#516 review).
     lap_grace_applied: bool = False
+    # #577: per-lap times (ms, stream order) of every TIMED lap boundary the tap observed, plus
+    # the requested lap budget — the flying-lap-window evidence consumers key on (the self-play
+    # iteration verdict, the per-iteration trajectory report).
+    lap_times_ms: list[int] = field(default_factory=list)
+    laps_requested: int = 0
     # Combo identity + setup verification (#459 Parts A/C) — evidence consumers key on these.
     car_id: str | None = None
     track_id: str | None = None
@@ -333,6 +357,10 @@ class AutoDriveReport:
                 + (f" spawn_teleport={d.spawn_teleport}" if d.spawn_teleport else "")
                 + (f" reason={d.reason}" if d.reason else "")
             )
+        if self.lap_times_ms:
+            times = ", ".join(f"{ms / 1000.0:.3f}s" for ms in self.lap_times_ms)
+            requested = f" (requested {self.laps_requested})" if self.laps_requested else ""
+            lines.append(f"  laps timed: {len(self.lap_times_ms)}{requested}: {times}")
         if self.sequence_ok is not None:
             lines.append(f"  pipeline: {'ok' if self.sequence_ok else 'FAILED'}")
             if self.counts:
@@ -783,6 +811,7 @@ async def run_auto_drive(
         notes.append(f"setup baked but UNCONFIRMED: {setup_ack.get('detail', 'no fuel key')}")
     error: str | None = None
     stage = "done"
+    lap_times_ms: list[int] = []
     try:
         tap_kwargs: dict[str, Any] = dict(seconds=config.tap_seconds, wait_for_lap=config.wait_lap)
         if config.wait_lap:
@@ -791,6 +820,11 @@ async def run_auto_drive(
             # the 180 s default, Spa ~7 km); #459 F / #516.
             tap_kwargs["settle_timeout"] = tap_settle_s
             tap_kwargs["lap_timeout"] = lap_deadline
+            if config.target_laps > 1:
+                # #577 flying-lap window: hold the tap open until N timed laps (or the shared
+                # deadline). The deadline stays the drive-budget-derived one — "N laps or the
+                # time budget, whichever first" — so a shortfall ends honestly, never hangs.
+                tap_kwargs["lap_count"] = config.target_laps
         frames = await tap(config.sidecar_url, **tap_kwargs)
         result = evaluate_sequence(
             frames, strict_lifecycle=config.strict, require_lap=config.wait_lap
@@ -798,6 +832,16 @@ async def run_auto_drive(
         seq_ok = result.ok
         counts = dict(result.counts)
         notes = list(result.notes)
+        # #577: the per-lap trajectory is report evidence whenever the lap machinery ran.
+        if config.wait_lap:
+            from tools.ac_harness.sequence_probe import timed_lap_times_ms
+
+            lap_times_ms = timed_lap_times_ms(frames)
+            if config.target_laps > 1 and len(lap_times_ms) < config.target_laps:
+                notes.append(
+                    f"laps: requested {config.target_laps}, observed "
+                    f"{len(lap_times_ms)} timed within the drive budget"
+                )
         grace_applied = bool(
             config.wait_lap and _has_timed_lap(frames) and config.lap_finalize_grace_s > 0
         )
@@ -846,6 +890,8 @@ async def run_auto_drive(
         drive=stats,
         sequence_ok=seq_ok,
         lap_grace_applied=grace_applied,
+        lap_times_ms=lap_times_ms,
+        laps_requested=config.target_laps,
         counts=counts,
         notes=notes,
         error=error,
@@ -1988,10 +2034,13 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
             )
         # The stored v_target is envelope-verified at build time; scaling above 1 would push
         # corner speeds past the verified plant envelope AFTER that check (#572 Codex review).
-        if not 0.0 < config.ggv_scale <= 1.0:
+        # #577: config.alien_overspeed opts in to a bounded supra-envelope probe (self-play only;
+        # every step falsifiable via the auto_alien keep-last-valid oracle).
+        scale_cap = ALIEN_MAX_OVERSPEED_SCALE if config.alien_overspeed else 1.0
+        if not 0.0 < config.ggv_scale <= scale_cap:
             raise ValueError(
-                f"alien driver requires 0 < ggv_scale <= 1 (got {config.ggv_scale}); the scale "
-                "is a safety margin under the envelope-verified profile"
+                f"alien driver requires 0 < ggv_scale <= {scale_cap} (got {config.ggv_scale}); "
+                "the scale is a safety margin under the envelope-verified profile"
             )
         v_target = [v * config.ggv_scale for v in config.alien_v_target]
         return RacingDriver.from_ggv_profile(config.alien_line, v_target, **config.plant_kwargs)
@@ -2652,6 +2701,20 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--min-corner", type=float, default=30.0, help="cruise min corner speed (km/h)")
     p.add_argument("--tap-seconds", type=float, default=30.0)
     p.add_argument("--wait-lap", action="store_true", help="assert a completed lap (real motion)")
+    p.add_argument(
+        "--laps",
+        type=int,
+        default=0,
+        help="#577 flying-lap window: keep driving until this many TIMED laps complete (or "
+        "--drive-seconds expires, whichever first); implies --wait-lap; per-lap times land in "
+        "the report. 0 = legacy single-lap --wait-lap semantics",
+    )
+    p.add_argument(
+        "--alien-allow-overspeed",
+        action="store_true",
+        help="#577 self-play only: permit --ggv-scale in (1, 1.2] on the alien path as a "
+        "deliberate, falsifiable envelope probe (the one-shot alien path keeps the <=1 gate)",
+    )
     p.add_argument("--strict", action="store_true", help="require session+lap, enforce ordering")
     p.add_argument("--skip-launch", action="store_true", help="AC already LIVE; only hijack+drive")
     p.add_argument(
@@ -2737,7 +2800,11 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         target_speed_kmh=args.target_speed,
         min_corner_speed_kmh=args.min_corner,
         tap_seconds=args.tap_seconds,
-        wait_lap=args.wait_lap,
+        # --laps implies the lap-wait machinery: a multi-lap window without wait_lap would tap a
+        # fixed 30 s and never see lap 2 (#577).
+        wait_lap=args.wait_lap or args.laps > 0,
+        target_laps=max(0, args.laps),
+        alien_overspeed=args.alien_allow_overspeed,
         strict=args.strict,
         skip_launch=args.skip_launch,
         hijack_probe_seconds=args.hijack_probe_seconds,
@@ -2915,6 +2982,9 @@ def _main_impl(
     if args.cm_preset is None and not args.car:
         print("auto-drive: pass --car (preset is generated) or --cm-preset (hand-authored)")
         return 2
+    if args.laps < 0:
+        print(f"auto-drive: --laps must be >= 0 (got {args.laps})")
+        return 2
     config = _config_from_args(args)
     try:
         # Ids become path segments (evidence dir, preset, setups) — reject path-shaped input
@@ -2961,14 +3031,25 @@ def _main_impl(
 
     # #572: reject an overspeed scale on the alien path BEFORE any launch work. The alien QSS
     # profile is envelope-verified at build time; a scale above 1 would multiply corner speeds
-    # past the verified plant envelope after that check (Codex review).
+    # past the verified plant envelope after that check (Codex review). #577 self-play may opt
+    # in to a bounded overspeed probe (the LCB envelope is deliberately conservative; supra-LCB
+    # evidence is what raises the measured bins) — capped and falsification-gated by auto_alien.
     alien_line_used: dict | None = None
-    if config.driver == "alien" and not 0.0 < config.ggv_scale <= 1.0:
-        print(
-            f"auto-drive: --driver alien requires 0 < --ggv-scale <= 1 (got {config.ggv_scale}); "
-            "the scale is a safety margin under the envelope-verified profile, never above it"
-        )
-        return 2
+    if config.driver == "alien":
+        scale_cap = ALIEN_MAX_OVERSPEED_SCALE if config.alien_overspeed else 1.0
+        if not 0.0 < config.ggv_scale <= scale_cap:
+            print(
+                f"auto-drive: --driver alien requires 0 < --ggv-scale <= {scale_cap} "
+                f"(got {config.ggv_scale}"
+                + ("" if config.alien_overspeed else "; --alien-allow-overspeed lifts to 1.2")
+                + ")"
+            )
+            return 2
+        if config.ggv_scale > 1.0:
+            print(
+                f"auto-drive: ALIEN OVERSPEED PROBE — ggv_scale={config.ggv_scale} drives above "
+                "the uncertainty-safe QSS envelope (bounded, falsification-gated self-play step)"
+            )
 
     car_tag = config.car_id or "car"
     evidence_dir = args.evidence_dir or (
@@ -3199,6 +3280,11 @@ def _main_impl(
             if isinstance(value, int) and not isinstance(value, bool) and value > 0:
                 handshake_laps_used = value
     wait_for_archives = report.lap_grace_applied or handshake_laps_used > 0
+    # #577 flying-lap window: every timed lap the tap observed should have an archive — the
+    # trainer archives each timed boundary, and the self-play refine consumes the full batch.
+    # The poll waits for that count (bounded), not merely the first archive.
+    timed_laps_observed = len(report.lap_times_ms)
+    expected_archives = max(handshake_laps_used, timed_laps_observed)
 
     def archive_matches_combo(payload: dict) -> bool:
         return _archive_matches_combo(
@@ -3208,15 +3294,18 @@ def _main_impl(
             layout=config.track_layout,
         )
 
+    # Legacy single-lap (--wait-lap) runs keep their exact pre-#577 poll (any first archive,
+    # short constant timeout); only handshake and multi-lap batches gate on combo-matched counts.
+    multi_lap_batch = timed_laps_observed > 1 or handshake_laps_used > 0
     lap_archives = collect_lap_archives(
         None,
         run_started_epoch,
         resolve=lambda: candidate_journal_laps_dirs(user_dir),
         wait_for_first=wait_for_archives,
-        min_count=max(1, handshake_laps_used),
-        min_valid_count=handshake_laps_used if handshake_laps_used > 0 else None,
+        min_count=max(1, expected_archives),
+        min_valid_count=expected_archives if multi_lap_batch else None,
         valid_archive_predicate=archive_matches_combo,
-        timeout_s=20.0 if handshake_laps_used > 0 else 8.0,
+        timeout_s=20.0 if multi_lap_batch else 8.0,
     )
     # Report the dir the archive was actually found in (correct even for a renamed install), so the
     # metadata matches the multi-dir scan, not the canonical-preferring discover (#516 review).
