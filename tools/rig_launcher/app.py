@@ -384,6 +384,11 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
             return
 
     view.mark_pending()  # neutral state until the first async poll lands (#568 review)
+    # Honor the configured SimHub auto-start ONCE at launch (the periodic ticks are read-only,
+    # so without this the documented AC_COPILOT_START_SIMHUB / checkbox would be a no-op until
+    # the operator pressed START — #568 review).
+    if supervisor.config.start_simhub:
+        _launch_simhub_and_report()
     refresh()
     root.after(_GUI_POLL_INTERVAL_MS, poll_tick)
     root.mainloop()

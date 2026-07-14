@@ -361,6 +361,11 @@ class GamePointSupervisor:
         self._log_handles.clear()
 
     def start_sidecar(self) -> ProbeResult:
+        # start_sidecar is only ever called from the main thread (GUI button / CLI), never from
+        # the poll worker — so the lock only needs to guard the quick handle bookkeeping against
+        # the worker's concurrent _sidecar_process_status() READ. Crucially it is NOT held across
+        # the slow _read_health() adoption probe below (network I/O), so a START can't stall a
+        # concurrent status poll for the probe's timeout (#568 self-hosted reviewer).
         blocking = [check for check in self.preflight() if not check.ok]
         if blocking:
             detail = "; ".join(check.detail or check.name for check in blocking)
@@ -374,17 +379,19 @@ class GamePointSupervisor:
             # so the adopt early-return below cannot leak a held-open sidecar.log handle (Qodo,
             # PR #387).
             self._close_log_handles()
-            # A sidecar from a previous launcher run (or a boot autostart) may already own the
-            # port. Spawning a second one would crash the child with WinError 10048 (address
-            # already in use) and pop an unhandled-exception dialog. Adopt the healthy instance.
-            existing = self._read_health()
-            if existing.ok:
-                return ProbeResult(
-                    "sidecar",
-                    True,
-                    "running",
-                    f"adopted existing sidecar on port {self.config.port}",
-                )
+        # A sidecar from a previous launcher run (or a boot autostart) may already own the port.
+        # Spawning a second one would crash the child with WinError 10048 (address already in
+        # use) and pop an unhandled-exception dialog. Adopt the healthy instance. Probe OUTSIDE
+        # the lock — start_sidecar is main-thread-serial, so no concurrent start races this gap.
+        existing = self._read_health()
+        if existing.ok:
+            return ProbeResult(
+                "sidecar",
+                True,
+                "running",
+                f"adopted existing sidecar on port {self.config.port}",
+            )
+        with self._proc_lock:
             try:
                 self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
                 log = self.paths.sidecar_log_path.open("a", encoding="utf-8")

@@ -3055,6 +3055,11 @@ def main() -> None:
         )
     )
 
+    # Resolve build_commit synchronously HERE, before the event loop starts, so the first
+    # /health never shells out to `git` on the asyncio loop thread and stalls WS processing
+    # (#568 self-hosted reviewer). The result is cached for the process lifetime.
+    observability.build_commit()
+
     try:
         asyncio.run(
             _run(
