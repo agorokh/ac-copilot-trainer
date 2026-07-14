@@ -1898,3 +1898,37 @@ def test_probe_tablet_routes_config_adb_serial(tmp_path: Path) -> None:
     sup = GamePointSupervisor(cfg, environ={}, urlopen=_refused_urlopen, run=fake_run)
     tablet = sup.probe_tablet({"endpoints": ["/tablet/dash"], "browser_peers": 0})
     assert tablet.state == "tunnel-up"
+
+
+def test_probe_tablet_tunnel_up_when_sidecar_down_is_not_stale(tmp_path: Path) -> None:
+    """HIGH (#568 review): a stopped sidecar (health_payload=None) must read tunnel-up, not a
+    false `stale-sidecar` — the sidecar row carries the down state; the tunnel itself is up."""
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+
+    probed: list[str] = []
+
+    def fake_run(cmd: list[str], **_k: Any) -> subprocess.CompletedProcess[str]:
+        args = cmd[2:] if len(cmd) > 2 and cmd[1] == "-s" else cmd[1:]
+        if args and args[0] == "devices":
+            return subprocess.CompletedProcess(
+                cmd, 0, "List of devices attached\nSER\tdevice\n", ""
+            )
+        if "reverse" in cmd and "--list" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "UsbFfs tcp:8765 tcp:8765\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def urlopen(url: str, timeout: float) -> _Response:
+        del timeout
+        probed.append(url)
+        raise OSError("connection refused")  # sidecar is down
+
+    cfg = GamePointConfig(
+        manage_tablet_tunnel=True, adb_path=str(adb), paths=LauncherPaths(tmp_path)
+    )
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=urlopen, run=fake_run)
+    tablet = sup.probe_tablet(None)  # sidecar down → no health payload
+    assert tablet.state == "tunnel-up"
+    assert tablet.ok is True
+    # must NOT have probed /tablet/dash against the dead port
+    assert not any("/tablet/dash" in u for u in probed)
