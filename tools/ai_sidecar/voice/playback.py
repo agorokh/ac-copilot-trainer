@@ -217,9 +217,15 @@ def resolve_output_layout(
             "correct the Windows speaker configuration"
         )
 
-    channel_map = (
-        (3,) if bank_channels == 1 and stream_channels >= 3 else tuple(range(1, bank_channels + 1))
-    )
+    if bank_channels == 1 and stream_channels == 2:
+        # A stereo-only endpoint has no center channel. Duplicate mono into both sides rather than
+        # falling back to left-only speech; backends interpret the repeated map as two copies of
+        # the one source channel.
+        channel_map = (1, 2)
+    elif bank_channels == 1 and stream_channels >= 3:
+        channel_map = (3,)
+    else:
+        channel_map = tuple(range(1, bank_channels + 1))
     return OutputLayout(
         device_index=device_index,
         device_name=str(device.get("name", "")),
@@ -465,7 +471,15 @@ class RtMixerPlayback:
         if pcm is None:
             _log.error("voice: clip %s absent from bank — staying silent", utterance.clip_id)
             return
-        self._action = self._mixer.play_buffer(pcm, channels=list(self._layout.channel_map))
+        mapped_pcm = pcm
+        if self._layout.bank_channels == 1 and len(self._layout.channel_map) > 1:
+            import numpy as np
+
+            mapped_pcm = np.repeat(pcm[:, np.newaxis], len(self._layout.channel_map), axis=1)
+        self._action = self._mixer.play_buffer(
+            mapped_pcm,
+            channels=list(self._layout.channel_map),
+        )
         self._current = utterance
         self._current_until = self._clock() + (len(pcm) / self._bank.samplerate)
 

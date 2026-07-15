@@ -2,7 +2,7 @@
 type: investigation
 status: verified
 memory_tier: canonical
-last_updated: 2026-07-15T20:13:59Z
+last_updated: 2026-07-15T20:38:33Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Next Session Handoff.md
@@ -37,9 +37,8 @@ same fields plus remediation environment variables.
 - Focused regression suite: 153 passed.
 - Default-device latency chirps negotiate the selected PortAudio layout instead of assuming mono.
 - Sounddevice expansion preserves every source channel for multichannel banks.
-- Full parity: 2,968 passed, 113 skipped, 87.60% coverage, `ci-fast: OK`.
-- PR #606 required checks passed; GraphQL had no threads, the resolve ledger was clean, and the
-  final current-SHA cooldown completed without a daemon review (the valid absent-review path).
+- Stereo-only endpoints duplicate mono to channels 1 and 2 in both rtmixer and sounddevice.
+- Full parity: 2,970 passed, 113 skipped, 87.60% coverage, `ci-fast: OK`.
 - The verification launcher was stopped afterward; no Game Point window or port 8765 listener
   remained.
 
@@ -52,5 +51,6 @@ context supplied the session substrate.
 
 ## Resume
 
-PR #606 is ready and review-resolved. Merge through the normal maintainer workflow. No additional
+PR #606 is ready. Confirm the latest stereo-fallback correction through the current-SHA remote
+gate, resolve its review thread, then merge through the normal maintainer workflow. No additional
 rig reproduction is required unless the selected output device or host API changes.
