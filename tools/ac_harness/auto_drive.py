@@ -71,6 +71,7 @@ from datetime import UTC
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Protocol
 
+from tools.ac_content import read_car_data_member
 from tools.ac_harness.sequence_probe import (
     Check,
     evaluate_sequence,
@@ -78,7 +79,6 @@ from tools.ac_harness.sequence_probe import (
     tap_frames,
 )
 from tools.ai_sidecar.external_protocol import CLIENT_CLASS_OBSERVER
-from tools.ai_sidecar.tyre_specs import read_car_data_member
 
 if TYPE_CHECKING:
     from tools.ac_harness.ggv_profile import GGVModel

@@ -12,12 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from tools.ai_sidecar.tyre_specs import (
-    TyreSpec,
-    _acd_key,
-    read_car_data_member,
-    read_tyre_specs,
-)
+from tools.ac_content import acd_key
+from tools.ai_sidecar.tyre_specs import TyreSpec, read_tyre_specs
 
 # --------------------------------------------------------------------------------------------------
 # Synthetic ACD encoder (mirror-image of the reader's decrypt path)
@@ -43,7 +39,7 @@ def _build_acd(folder_name: str, members: dict[str, str], with_version: bool = T
     Layout: optional ``[-1111][version]`` prefix, then per member
     ``[name_len:uint32][name][content_len:uint32][content int32s]``.
     """
-    key = _acd_key(folder_name)
+    key = acd_key(folder_name)
     blob = bytearray()
     if with_version:
         blob += struct.pack("<l", -1111)
@@ -155,18 +151,6 @@ def test_acd_roundtrip_compound0(synth_car: Path) -> None:
         dy_ref=1.42,
         optimal_temp_c=85.0,  # peak of the 3-point PERFORMANCE_CURVE
         version=7,
-    )
-
-
-def test_read_car_data_member_supports_packed_and_unpacked_sources(synth_car: Path) -> None:
-    packed = read_car_data_member(synth_car, "LODS.INI")
-    assert packed is not None and b"FILE=synth_test_car.kn5" in packed
-
-    unpacked = synth_car.parent / "unpacked_car"
-    (unpacked / "data").mkdir(parents=True)
-    (unpacked / "data" / "LoDs.InI").write_bytes(b"[LOD_0]\nFILE=unpacked_car.kn5\n")
-    assert (
-        read_car_data_member(unpacked, "lods.ini") == (unpacked / "data" / "LoDs.InI").read_bytes()
     )
 
 
