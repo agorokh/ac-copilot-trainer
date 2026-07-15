@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
+import shutil
 import threading
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from tools.ac_harness.auto_drive import (
+    AppInstallProvenance,
     AutoDriveConfig,
     AutoDriveReport,
     DriveStats,
@@ -24,6 +27,8 @@ from tools.ac_harness.auto_drive import (
     _build_driver,
     _config_from_args,
     _wait_live,
+    app_install_provenance,
+    app_tree_digest,
     bake_setup_into_race_ini,
     build_practice_preset,
     candidate_journal_laps_dirs,
@@ -2108,6 +2113,11 @@ def _fake_rig(tmp_path, *, custom_ai="ENABLED=1\n"):
     return ac_root, user, cm
 
 
+def _match_provenance() -> AppInstallProvenance:
+    """A provenance verdict that raises no preflight row (the app matches the harness)."""
+    return AppInstallProvenance(status="match", detail="installed app matches this checkout")
+
+
 def test_preflight_passes_on_complete_rig(tmp_path):
     ac_root, user, cm = _fake_rig(tmp_path)
     cfg = _cfg(
@@ -2119,7 +2129,194 @@ def test_preflight_passes_on_complete_rig(tmp_path):
         setup="Realistic_BB_v3",
         cm_preset=None,
     )
-    assert preflight(cfg) == []
+    assert preflight(cfg, app_provenance=_match_provenance()) == []
+
+
+def test_preflight_app_version_drift_is_a_warning_not_an_error(tmp_path):
+    """#575: a drifted app is loud but never bricks the run — --strict-app-version is the gate."""
+    ac_root, user, cm = _fake_rig(tmp_path)
+    cfg = _cfg(
+        ac_root=ac_root,
+        ac_user_dir=user,
+        cm_exe=cm,
+        track_id="spa",
+        car_id="ks_porsche_911_gt3_r_2016",
+        setup="Realistic_BB_v3",
+        cm_preset=None,
+    )
+    drifted = AppInstallProvenance(status="drift", detail="installed app differs: abc vs def")
+    issues = preflight(cfg, app_provenance=drifted)
+    assert [(i.check, i.severity) for i in issues] == [("app_version", "warning")]
+    assert "differs" in issues[0].message
+
+
+def test_preflight_app_version_unknown_provenance_is_reported_not_fatal(tmp_path):
+    """#575 AC2: a non-junction / absent install degrades to a warning, never an error."""
+    ac_root, user, cm = _fake_rig(tmp_path)
+    cfg = _cfg(
+        ac_root=ac_root,
+        ac_user_dir=user,
+        cm_exe=cm,
+        track_id="spa",
+        car_id="ks_porsche_911_gt3_r_2016",
+        setup="Realistic_BB_v3",
+        cm_preset=None,
+    )
+    unknown = AppInstallProvenance(status="unknown", detail="app not installed at <ac_root>/apps")
+    issues = preflight(cfg, app_provenance=unknown)
+    assert [(i.check, i.severity) for i in issues] == [("app_version", "warning")]
+
+
+def _app_tree(root: Path, *, body: str = "-- v1\n") -> Path:
+    """A minimal trainer app source tree at ``<root>/src/ac_copilot_trainer``."""
+    src = root / "src" / "ac_copilot_trainer"
+    (src / "modules").mkdir(parents=True)
+    (src / "ac_copilot_trainer.lua").write_text(body, encoding="utf-8")
+    (src / "manifest.ini").write_text("[ABOUT]\nNAME=AC Copilot Trainer\n", encoding="utf-8")
+    (src / "modules" / "hud.lua").write_text("-- hud\n", encoding="utf-8")
+    return src
+
+
+def _install_app(ac_root: Path, src: Path) -> Path:
+    """Copy an app tree to the AC install path (stands in for the rig's junction)."""
+    installed = ac_root / "apps" / "lua" / "AC_Copilot_Trainer"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, installed)
+    return installed
+
+
+def test_app_install_provenance_reports_match(tmp_path):
+    """#575: identical content on both sides is a match, and names the version."""
+    harness = tmp_path / "harness"
+    src = _app_tree(harness)
+    ac_root = tmp_path / "ac"
+    _install_app(ac_root, src)
+
+    prov = app_install_provenance(ac_root, harness_root=harness)
+    assert prov.status == "match"
+    assert prov.installed_digest == prov.harness_digest
+    assert prov.installed_digest is not None
+
+
+def test_app_install_provenance_detects_drift_and_names_both_versions(tmp_path):
+    """#575 AC1: differing app content is drift, and the message names installed + harness."""
+    harness = tmp_path / "harness"
+    _app_tree(harness, body="-- current\n")
+    stale = tmp_path / "stale"
+    stale_src = _app_tree(stale, body="-- ten days old\n")
+    ac_root = tmp_path / "ac"
+    _install_app(ac_root, stale_src)
+
+    prov = app_install_provenance(ac_root, harness_root=harness)
+    assert prov.status == "drift"
+    assert prov.installed_digest != prov.harness_digest
+    # The warning must name both sides so the operator can act without spelunking.
+    assert str(ac_root / "apps" / "lua" / "AC_Copilot_Trainer") in prov.detail
+    assert str(harness / "src" / "ac_copilot_trainer") in prov.detail
+
+
+def test_app_install_provenance_detects_a_pure_rename_as_drift(tmp_path):
+    """Identical bytes under a different name is a real drift — the digest is path-sensitive."""
+    harness = tmp_path / "harness"
+    _app_tree(harness)
+    other = tmp_path / "other"
+    other_src = _app_tree(other)
+    (other_src / "modules" / "hud.lua").rename(other_src / "modules" / "hud_old.lua")
+    ac_root = tmp_path / "ac"
+    _install_app(ac_root, other_src)
+
+    assert app_install_provenance(ac_root, harness_root=harness).status == "drift"
+
+
+def test_app_install_provenance_unknown_when_app_not_installed(tmp_path):
+    """#575 AC2: no install at all → unknown provenance, actionable message, no crash."""
+    harness = tmp_path / "harness"
+    _app_tree(harness)
+    ac_root = tmp_path / "ac"
+    ac_root.mkdir()
+
+    prov = app_install_provenance(ac_root, harness_root=harness)
+    assert prov.status == "unknown"
+    assert prov.installed_digest is None
+    assert prov.harness_digest is not None  # the harness side is still established
+    assert "not installed" in prov.detail
+
+
+def test_app_install_provenance_unknown_when_harness_has_no_app_source(tmp_path):
+    """A harness checkout without src/ac_copilot_trainer cannot compare — unknown, not drift."""
+    harness = tmp_path / "harness"
+    harness.mkdir()
+    other = tmp_path / "other"
+    src = _app_tree(other)
+    ac_root = tmp_path / "ac"
+    _install_app(ac_root, src)
+
+    prov = app_install_provenance(ac_root, harness_root=harness)
+    assert prov.status == "unknown"
+    assert prov.harness_digest is None
+    assert prov.installed_digest is not None
+
+
+def test_app_install_provenance_ignores_pycache_build_noise(tmp_path):
+    """Observed on the rig: the primary checkout carries __pycache__ a worktree does not.
+
+    That is build noise the AC Lua runtime never reads — hashing it would report false drift on
+    every run and train the operator to ignore the warning.
+    """
+    harness = tmp_path / "harness"
+    src = _app_tree(harness)
+    ac_root = tmp_path / "ac"
+    installed = _install_app(ac_root, src)
+    (installed / "__pycache__").mkdir()
+    (installed / "__pycache__" / "__init__.cpython-313.pyc").write_bytes(b"\x00noise")
+
+    assert app_install_provenance(ac_root, harness_root=harness).status == "match"
+
+
+def test_app_install_provenance_ignores_line_ending_normalization(tmp_path):
+    """Observed live on the rig: `start_sidecar.bat` differed between the primary checkout and a
+    worktree AT THE SAME COMMIT, purely in EOLs (`.gitattributes` has `*.bat text eol=crlf`).
+
+    Raw-byte hashing would report drift on every run here; an always-wrong warning trains the
+    operator to ignore the one time it is real.
+    """
+    harness = tmp_path / "harness"
+    src = _app_tree(harness)
+    (src / "start_sidecar.bat").write_bytes(b"@echo off\nset X=1\n")
+    ac_root = tmp_path / "ac"
+    installed = _install_app(ac_root, src)
+    # Same content, CRLF — what a checkout under different eol settings produces.
+    (installed / "start_sidecar.bat").write_bytes(b"@echo off\r\nset X=1\r\n")
+
+    assert app_install_provenance(ac_root, harness_root=harness).status == "match"
+
+
+def test_app_install_provenance_still_catches_real_text_edits(tmp_path):
+    """EOL-insensitivity must not swallow a genuine one-character logic change."""
+    harness = tmp_path / "harness"
+    src = _app_tree(harness)
+    (src / "modules" / "hud.lua").write_bytes(b"local speed = 1\n")
+    ac_root = tmp_path / "ac"
+    installed = _install_app(ac_root, src)
+    (installed / "modules" / "hud.lua").write_bytes(b"local speed = 2\r\n")
+
+    assert app_install_provenance(ac_root, harness_root=harness).status == "drift"
+
+
+def test_app_tree_digest_hashes_binary_assets_byte_exact(tmp_path):
+    """A font/PNG that differs by one byte is drift — CRLF normalization must not touch binary."""
+    a = tmp_path / "a" / "src" / "ac_copilot_trainer"
+    b = tmp_path / "b" / "src" / "ac_copilot_trainer"
+    for root, blob in ((a, b"\x00\r\n\x01"), (b, b"\x00\n\x01")):
+        root.mkdir(parents=True)
+        (root / "content").mkdir()
+        (root / "content" / "font.ttf").write_bytes(blob)
+
+    assert app_tree_digest(a) != app_tree_digest(b)
+
+
+def test_app_tree_digest_is_none_for_a_missing_tree(tmp_path):
+    assert app_tree_digest(tmp_path / "nope") is None
 
 
 def test_preflight_reports_missing_content_and_disabled_custom_ai(tmp_path):

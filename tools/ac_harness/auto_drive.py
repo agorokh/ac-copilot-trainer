@@ -55,11 +55,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import configparser
+import hashlib
 import json
 import logging
 import math
 import os
 import re
+import subprocess
 import threading
 import time
 from collections.abc import Awaitable, Callable, Iterator
@@ -1281,10 +1283,233 @@ def build_practice_preset(
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class PreflightIssue:
-    """One failed preflight assertion, with an actionable message."""
+    """One failed preflight assertion, with an actionable message.
+
+    ``severity`` is ``"error"`` (the run cannot proceed) or ``"warning"`` (loud, but the run may
+    proceed unless the caller opts into strictness). Default ``"error"`` keeps every pre-#575
+    check fatal.
+    """
 
     check: str
     message: str
+    severity: str = "error"
+
+
+# ---------------------------------------------------------------------------
+# Installed-app provenance (#575).
+#
+# The trainer app is installed as a junction:
+#     <ac_root>/apps/lua/AC_Copilot_Trainer -> <some checkout>/src/ac_copilot_trainer
+# The harness runs from its OWN checkout (often a worktree), so the two can silently disagree —
+# the rig then executes an app version the harness never saw. Observed damage (EPIC #529 G1): the
+# junction target sat ten days stale, lap archives were written with `car: "function_0xff"`, and
+# the #543 friction fit could not promote because zero valid archives matched.
+#
+# The verdict is a CONTENT digest, not a commit compare: the two checkouts can share a HEAD and
+# still differ (dirty tree), and a junction may point at a non-git export. Commits are carried
+# alongside as human-readable provenance so the warning can name both versions.
+# ---------------------------------------------------------------------------
+APP_INSTALL_RELPATH = ("apps", "lua", "AC_Copilot_Trainer")
+APP_SOURCE_RELPATH = ("src", "ac_copilot_trainer")
+
+# Build noise that lives inside the source tree but is never app payload: the AC Lua runtime never
+# reads it, and it differs between checkouts for reasons that are not a version drift. Observed on
+# the rig: the primary checkout carries `src/ac_copilot_trainer/__pycache__/*.pyc` that a worktree
+# does not — hashing it would report false drift on every run.
+_APP_DIGEST_IGNORED_DIRS = frozenset({"__pycache__", ".git"})
+_APP_DIGEST_IGNORED_SUFFIXES = frozenset({".pyc", ".pyo"})
+_APP_DIGEST_IGNORED_NAMES = frozenset({".DS_Store", "Thumbs.db"})
+
+
+def _app_digest_bytes(data: bytes) -> bytes:
+    """Normalize a file's bytes for version comparison: CRLF -> LF in text, binary untouched.
+
+    Two checkouts of the SAME commit can legitimately hold different line endings — `.gitattributes`
+    (`*.bat text eol=crlf`) normalizes on checkout, and a tree cloned under different settings keeps
+    the other ending. Observed on the rig: `start_sidecar.bat` differed between the primary checkout
+    and a worktree at the identical commit, purely in EOLs. Hashing raw bytes would therefore report
+    drift on every run here — and a check that always cries wolf trains the operator to ignore the
+    one time it is real, which is the failure #575 exists to prevent.
+
+    Binary detection mirrors git's: a NUL byte means binary (fonts, PNGs), hashed byte-exact.
+    """
+    if b"\x00" in data:
+        return data
+    return data.replace(b"\r\n", b"\n")
+
+
+def harness_repo_root() -> Path:
+    """Repo root of the checkout this harness module was imported from."""
+    return Path(__file__).resolve().parents[2]
+
+
+def _app_digest_includes(rel: Path) -> bool:
+    """True when a tree-relative path is app payload (see the ignore sets above)."""
+    if _APP_DIGEST_IGNORED_DIRS & set(rel.parts[:-1]):
+        return False
+    return rel.suffix.lower() not in _APP_DIGEST_IGNORED_SUFFIXES and (
+        rel.name not in _APP_DIGEST_IGNORED_NAMES
+    )
+
+
+def app_tree_digest(root: Path) -> str | None:
+    """Content digest of an app tree, or ``None`` when it cannot be read.
+
+    Order-independent and path-sensitive: a rename with identical bytes is a real drift and must
+    not hash equal. Text is compared EOL-insensitively (see :func:`_app_digest_bytes`). Follows the
+    junction, so passing the install path digests the target.
+    """
+    if not root.is_dir():
+        return None
+    entries: list[tuple[str, bytes]] = []
+    try:
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root)
+            if not _app_digest_includes(rel):
+                continue
+            payload = _app_digest_bytes(path.read_bytes())
+            entries.append((rel.as_posix(), hashlib.sha256(payload).digest()))
+    except OSError:
+        return None  # unreadable tree — provenance is unknown, never a crash (#575 AC2)
+    digest = hashlib.sha256()
+    for rel_posix, file_digest in sorted(entries):
+        digest.update(rel_posix.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(file_digest)
+    return digest.hexdigest()
+
+
+def _git_head(path: Path) -> str | None:
+    """``HEAD`` of the checkout containing ``path``; ``None`` when it is not one (or git is gone).
+
+    ``git -C`` walks up to the repo root, so any path inside a checkout resolves it.
+    """
+    try:
+        proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            ["git", "-C", str(path), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
+
+
+def _short(commit: str | None, digest: str | None) -> str:
+    """Human-readable version tag: the commit when the tree is a checkout, else the digest."""
+    if commit:
+        return commit[:12]
+    if digest:
+        return f"content:{digest[:12]}"
+    return "unknown"
+
+
+@dataclass(frozen=True)
+class AppInstallProvenance:
+    """Whether the AC-installed trainer app matches the harness's own checkout.
+
+    ``status`` is ``"match"``, ``"drift"``, or ``"unknown"`` (not installed, unreadable, or a
+    harness checkout without a source tree). ``unknown`` never fails the run — it is reported so
+    the operator knows the rig's app version was not established.
+    """
+
+    status: str
+    detail: str
+    installed_path: str | None = None
+    installed_target: str | None = None
+    installed_digest: str | None = None
+    installed_commit: str | None = None
+    harness_path: str | None = None
+    harness_digest: str | None = None
+    harness_commit: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def app_install_provenance(ac_root: Path, harness_root: Path | None = None) -> AppInstallProvenance:
+    """Compare the AC-installed trainer app against the harness's own ``src/ac_copilot_trainer``.
+
+    Pure over the filesystem (plus a read-only ``git rev-parse``); safe to call from preflight.
+    """
+    root = harness_repo_root() if harness_root is None else harness_root
+    harness_src = root.joinpath(*APP_SOURCE_RELPATH)
+    installed = ac_root.joinpath(*APP_INSTALL_RELPATH)
+
+    harness_digest = app_tree_digest(harness_src)
+    harness_commit = _git_head(root) if harness_src.is_dir() else None
+    common = {
+        "installed_path": str(installed),
+        "harness_path": str(harness_src),
+        "harness_digest": harness_digest,
+        "harness_commit": harness_commit,
+    }
+
+    if not installed.is_dir():
+        return AppInstallProvenance(
+            status="unknown",
+            detail=(
+                f"trainer app is not installed at {installed} — the rig's app version cannot be "
+                "established. Install it as a junction to this checkout's "
+                f"{harness_src} (mklink /J), or ignore if this rig does not run the Lua app."
+            ),
+            **common,
+        )
+
+    # A junction is not a symlink to Python (is_symlink() is False), so compare the real path.
+    resolved = Path(os.path.realpath(installed))
+    target = str(resolved) if resolved != Path(os.path.abspath(installed)) else None
+    installed_digest = app_tree_digest(installed)
+    installed_commit = _git_head(resolved)
+    common.update(
+        installed_target=target,
+        installed_digest=installed_digest,
+        installed_commit=installed_commit,
+    )
+
+    if harness_digest is None:
+        return AppInstallProvenance(
+            status="unknown",
+            detail=(
+                f"harness checkout has no readable app source at {harness_src} — cannot compare "
+                f"against the installed app at {installed}."
+            ),
+            **common,
+        )
+    if installed_digest is None:
+        return AppInstallProvenance(
+            status="unknown",
+            detail=f"installed app at {installed} is not readable — app version not established.",
+            **common,
+        )
+    if installed_digest == harness_digest:
+        return AppInstallProvenance(
+            status="match",
+            detail=(
+                f"installed app matches this harness checkout "
+                f"({_short(harness_commit, harness_digest)})"
+            ),
+            **common,
+        )
+
+    installed_where = target or str(installed)
+    return AppInstallProvenance(
+        status="drift",
+        detail=(
+            "INSTALLED TRAINER APP DIFFERS FROM THIS HARNESS CHECKOUT — the rig would run app "
+            f"code the harness never saw. Installed: {installed_where} at "
+            f"{_short(installed_commit, installed_digest)}. Harness: {harness_src} at "
+            f"{_short(harness_commit, harness_digest)}. Point the junction at this checkout, or "
+            "sync the installed checkout, before trusting this run's lap archives."
+        ),
+        **common,
+    )
 
 
 def custom_ai_enabled(ac_root: Path, user_dir: Path) -> tuple[bool | None, str]:
@@ -1315,12 +1540,18 @@ def custom_ai_enabled(ac_root: Path, user_dir: Path) -> tuple[bool | None, str]:
     return None, "no [CUSTOM_AI] ENABLED key in " + " or ".join(str(c) for c in candidates)
 
 
-def preflight(config: AutoDriveConfig) -> list[PreflightIssue]:
-    """Assert every launch precondition with an actionable message (empty list = go).
+def preflight(
+    config: AutoDriveConfig, *, app_provenance: AppInstallProvenance | None = None
+) -> list[PreflightIssue]:
+    """Assert every launch precondition with an actionable message (no error rows = go).
 
     Covers the tribal-lore failure modes that used to surface as mid-run mysteries: missing
     content, a preset whose CarId/TrackId disagree with the CLI, CSP Custom AI disabled (the
-    hijack silently no-ops), a missing Content Manager, and an unresolvable setup.
+    hijack silently no-ops), a missing Content Manager, an unresolvable setup, and an installed
+    trainer app that disagrees with this checkout (#575).
+
+    ``app_provenance`` is injectable so the CLI can compute it once and also record it in the
+    evidence bundle; it is resolved from ``config.ac_root`` when omitted.
     """
     issues: list[PreflightIssue] = []
     user_dir = resolve_ac_user_dir(config.ac_user_dir)
@@ -1393,6 +1624,15 @@ def preflight(config: AutoDriveConfig) -> list[PreflightIssue]:
                         f"--car {config.car_id!r} but preset launches CarId {preset_car!r}",
                     )
                 )
+
+    provenance = (
+        app_install_provenance(config.ac_root) if app_provenance is None else app_provenance
+    )
+    if provenance.status != "match":
+        # Warning, not an error: a drifted app still drives, and an unknown-provenance install
+        # (non-junction export, app not installed) must never brick the rig. --strict-app-version
+        # promotes this to fatal for runs whose evidence depends on the app version (#575).
+        issues.append(PreflightIssue("app_version", provenance.detail, severity="warning"))
 
     enabled, detail = custom_ai_enabled(config.ac_root, user_dir)
     if enabled is not True:
@@ -2784,6 +3024,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "direct overspeed drive carries spin/damage risk on the operator",
     )
     p.add_argument("--strict", action="store_true", help="require session+lap, enforce ordering")
+    p.add_argument(
+        "--strict-app-version",
+        action="store_true",
+        help="fail preflight when the AC-installed trainer app does not match this checkout "
+        "(default: warn). Use for runs whose evidence depends on the rig running THIS app (#575)",
+    )
     p.add_argument("--skip-launch", action="store_true", help="AC already LIVE; only hijack+drive")
     p.add_argument(
         "--hijack-probe-seconds",
@@ -3194,10 +3440,20 @@ def _main_impl(
         )
         config.cm_preset = preset_path
 
-    issues = preflight(config)
-    if issues:
+    app_provenance = app_install_provenance(config.ac_root)
+    print(f"auto-drive: installed app provenance: {app_provenance.status}")
+    issues = preflight(config, app_provenance=app_provenance)
+    # #575: an app_version row is a warning by default; --strict-app-version makes it fatal for
+    # runs whose evidence is only meaningful if the rig ran THIS checkout's app.
+    fatal: list[PreflightIssue] = []
+    for issue in issues:
+        if issue.severity == "error" or (args.strict_app_version and issue.check == "app_version"):
+            fatal.append(issue)
+        else:
+            print(f"auto-drive: PREFLIGHT WARNING [{issue.check}] {issue.message}")
+    if fatal:
         print("auto-drive: PREFLIGHT FAILED")
-        for issue in issues:
+        for issue in fatal:
             print(f"  [{issue.check}] {issue.message}")
         return 2
     print("auto-drive: preflight ok")
@@ -3469,6 +3725,9 @@ def _main_impl(
             "plant_artifact": plant_artifact_used,
             "alien_line": alien_line_used,
             "sidecar": sidecar_detail,
+            # #575: the app version the rig actually ran. Without it, a bundle cannot be trusted
+            # retroactively — a stale junction silently invalidates every archive it produced.
+            "app_install": app_provenance.to_dict(),
         },
         "hud": hud,
         "lap_archives": lap_archives,
