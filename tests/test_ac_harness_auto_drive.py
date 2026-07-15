@@ -2375,6 +2375,45 @@ def test_cli_persists_non_drive_preflight_failure_without_launch(tmp_path, monke
     }
 
 
+def test_preset_only_preflight_failure_keeps_car_identity_in_default_evidence(
+    tmp_path, monkeypatch
+):
+    ac_root, user, cm = _fake_rig(tmp_path)
+    car_id = "ks_porsche_911_gt3_r_2016"
+    shutil.rmtree(ac_root / "content" / "cars" / car_id / "data")
+    preset = tmp_path / "damaged.cmpreset"
+    preset.write_text(json.dumps({"CarId": car_id, "TrackId": "spa"}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "tools.ac_harness.auto_drive.rig_launch",
+        lambda _config: pytest.fail("damaged preset car must fail before launch"),
+    )
+
+    rc = _main(
+        [
+            "--cm-preset",
+            str(preset),
+            "--track",
+            "spa",
+            "--ac-root",
+            str(ac_root),
+            "--ac-user-dir",
+            str(user),
+            "--cm-exe",
+            str(cm),
+            "--preflight-only",
+        ]
+    )
+
+    assert rc == 2
+    reports = list((tmp_path / ".scratch" / "harness-evidence").glob("*/report.json"))
+    assert len(reports) == 1
+    assert car_id in reports[0].parent.name
+    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    assert payload["report"]["car_id"] == car_id
+    assert payload["preflight"]["classification"] == "non_drive_preflight_failure"
+
+
 def test_preflight_app_version_drift_is_a_warning_not_an_error(tmp_path):
     """#575: a drifted app is loud but never bricks the run — --strict-app-version is the gate."""
     ac_root, user, cm = _fake_rig(tmp_path)

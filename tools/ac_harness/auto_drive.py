@@ -1964,6 +1964,35 @@ def custom_ai_enabled(ac_root: Path, user_dir: Path) -> tuple[bool | None, str]:
     return None, "no [CUSTOM_AI] ENABLED key in " + " or ".join(str(c) for c in candidates)
 
 
+def _read_cm_preset_selection(path: str | Path) -> tuple[str | None, str | None]:
+    """Return ``(car_id, track_id)`` from a readable Quick Drive preset.
+
+    Parsing remains side-effect free so callers can use the effective selection for evidence
+    metadata without mutating the explicit CLI configuration.  Read/JSON errors intentionally
+    propagate: :func:`preflight` turns them into actionable rows, while early evidence naming
+    can safely fall back to generic tags.
+    """
+    preset = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(preset, dict):
+        raise TypeError("Quick Drive preset root must be a JSON object")
+    car_id = str(preset.get("CarId") or "").strip() or None
+    track_id = str(preset.get("TrackId") or "").strip() or None
+    return car_id, track_id
+
+
+def _effective_car_id(config: AutoDriveConfig) -> str | None:
+    """Resolve the selected car for read-only evidence attribution."""
+    if config.car_id:
+        return config.car_id
+    if config.cm_preset is None or not Path(config.cm_preset).is_file():
+        return None
+    try:
+        preset_car, _preset_track = _read_cm_preset_selection(config.cm_preset)
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    return preset_car
+
+
 def preflight(
     config: AutoDriveConfig, *, app_provenance: AppInstallProvenance | None = None
 ) -> list[PreflightIssue]:
@@ -1979,7 +2008,7 @@ def preflight(
     """
     issues: list[PreflightIssue] = []
     user_dir = resolve_ac_user_dir(config.ac_user_dir)
-    selected_car_id = config.car_id
+    selected_car_id = _effective_car_id(config)
 
     if not config.ac_root.is_dir():
         issues.append(
@@ -2008,16 +2037,12 @@ def preflight(
         )
     elif config.cm_preset is not None and Path(config.cm_preset).is_file():
         try:
-            preset = json.loads(Path(config.cm_preset).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            preset_car, preset_track = _read_cm_preset_selection(config.cm_preset)
+        except (OSError, json.JSONDecodeError, TypeError) as exc:
             issues.append(
                 PreflightIssue("preset", f"unreadable Quick Drive preset {config.cm_preset}: {exc}")
             )
         else:
-            preset_track = str(preset.get("TrackId") or "")
-            preset_car = str(preset.get("CarId") or "")
-            if selected_car_id is None and preset_car:
-                selected_car_id = preset_car
             # Compare the FULL TrackId incl. layout: on a multi-layout track a preset launching a
             # different layout than --track-layout would drive the wrong fast_lane.ai (#460 review).
             want_track = config.track_id.lower()
@@ -3934,7 +3959,15 @@ def _main_impl(
                 "the uncertainty-safe QSS envelope (bounded, falsification-gated self-play step)"
             )
 
-    car_tag = config.car_id or "car"
+    effective_car_id = _effective_car_id(config)
+    car_tag = "car"
+    if effective_car_id:
+        try:
+            validate_ac_id("car", effective_car_id)
+        except ValueError:
+            pass  # preflight will report the invalid preset id; never use it as a path segment
+        else:
+            car_tag = effective_car_id
     evidence_dir = args.evidence_dir or (
         Path(".scratch") / "harness-evidence" / f"{_utc_stamp()}_{car_tag}_{config.track_id}"
     )
@@ -3988,7 +4021,7 @@ def _main_impl(
             hijacked=False,
             drive=None,
             error=error,
-            car_id=config.car_id,
+            car_id=effective_car_id,
             track_id=config.track_id,
             setup_requested=config.setup,
         )
