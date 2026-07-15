@@ -24,11 +24,14 @@ from websockets.asyncio.server import serve as ws_serve  # noqa: E402
 
 from tools.ai_sidecar import external_protocol as ep  # noqa: E402
 from tools.ai_sidecar import observability as obs  # noqa: E402
+from tools.ai_sidecar import server as srv  # noqa: E402
 from tools.ai_sidecar.server import (  # noqa: E402
+    _ROUTES,
     SERVED_ENDPOINTS,
     _external_peer_classes,
     _external_peers,
     _handler,
+    _Route,
     make_process_request,
     set_voice_runtime_status,
 )
@@ -127,6 +130,84 @@ def test_served_endpoints_are_actually_routed() -> None:
     assert all(code != 426 for code in codes.values()), (
         f"advertised endpoint not routed by the server (426 = fell through to WS): {codes}"
     )
+
+
+def test_health_advertises_every_registered_route() -> None:
+    """Issue #570: ONE registry drives dispatch AND advertisement, so /health's endpoint set
+    is exactly the registered route set — not a hand-written tuple that can omit a route.
+    Asserted against a REAL server payload (through build_health_json + JSON), so a caller
+    that stops passing the derived list, or a re-introduced advertise opt-out, fails here."""
+
+    async def _run() -> str:
+        async with _running_sidecar() as port:
+            return (await asyncio.to_thread(_http_get, port, "/health"))[2]
+
+    advertised = json.loads(asyncio.run(_run()))["endpoints"]
+    assert advertised == [route.path for route in _ROUTES]
+
+
+def test_route_aliases_are_routed_but_not_advertised() -> None:
+    """An alias resolves to an advertised route's handler, so it is not independent surface:
+    /healthz must serve health yet stay out of the advertised set (issue #570)."""
+
+    async def _run() -> tuple[int, list[str], str]:
+        async with _running_sidecar() as port:
+            return await asyncio.to_thread(_http_get, port, "/healthz")
+
+    status, _content_types, body = asyncio.run(_run())
+    assert status == 200
+    assert json.loads(body)["status"] == "ok"
+    assert "/healthz" not in SERVED_ENDPOINTS
+    assert "/healthz" not in json.loads(body)["endpoints"]
+
+
+def test_match_route_prefers_exact_over_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A prefix route must never shadow a more specific exact route — the inline if-chain
+    encoded that precedence by hand; the registry must enforce it structurally (issue #570)."""
+    exact_route = _Route("/voice/special", srv._route_voice_echoes)
+    prefix_route = _Route("/voice/", srv._route_voice_clip, prefix=True)
+    exact, prefixes = srv._index_routes((exact_route, prefix_route))
+    monkeypatch.setattr(srv, "_EXACT_ROUTES", exact)
+    monkeypatch.setattr(srv, "_PREFIX_ROUTES", prefixes)
+
+    assert srv._match_route("/voice/special") is exact_route
+    assert srv._match_route("/voice/other") is prefix_route
+    assert srv._match_route("/unrouted") is None
+
+
+@pytest.mark.parametrize(
+    ("routes", "message"),
+    [
+        pytest.param(
+            (_Route("/a", srv._route_health), _Route("/a", srv._route_metrics)),
+            "duplicate route registration",
+            id="duplicate-path",
+        ),
+        pytest.param(
+            (_Route("/a", srv._route_health, aliases=("/b",)), _Route("/b", srv._route_metrics)),
+            "duplicate route registration",
+            id="alias-collides-with-path",
+        ),
+        pytest.param(
+            (
+                _Route("/a/", srv._route_health, prefix=True),
+                _Route("/a/b/", srv._route_metrics, prefix=True),
+            ),
+            "ambiguous overlapping prefix",
+            id="overlapping-prefixes",
+        ),
+        pytest.param(
+            (_Route("/a/", srv._route_health, prefix=True, aliases=("/x",)),),
+            "cannot declare aliases",
+            id="alias-on-prefix-route",
+        ),
+    ],
+)
+def test_index_routes_rejects_ambiguous_registry(routes: tuple[_Route, ...], message: str) -> None:
+    """The registry is validated at import, so an ambiguous declaration is a startup error
+    rather than a route that silently never fires (fail loud, per the governance base)."""
+    with pytest.raises(ValueError, match=message):
+        srv._index_routes(routes)
 
 
 def test_build_health_json_reflects_browser_peers() -> None:
