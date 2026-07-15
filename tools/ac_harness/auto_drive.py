@@ -1410,13 +1410,30 @@ def _short(commit: str | None, digest: str | None) -> str:
     return "unknown"
 
 
+# Statuses that `--strict-app-version` treats as fatal. The split matters: an app that is ABSENT
+# cannot run the wrong code, but an app that is PRESENT AND UNVERIFIABLE might already be the stale
+# one — and a strictness flag that greens on "something is installed but I cannot tell what" would
+# reintroduce the exact silent-false-confidence failure #575 exists to kill. Absence of proof is not
+# proof of match, but absence of an app is not absence of proof.
+APP_PROVENANCE_STRICT_FATAL = frozenset({"drift", "unverifiable"})
+
+
 @dataclass(frozen=True)
 class AppInstallProvenance:
     """Whether the AC-installed trainer app matches the harness's own checkout.
 
-    ``status`` is ``"match"``, ``"drift"``, or ``"unknown"`` (not installed, unreadable, or a
-    harness checkout without a source tree). ``unknown`` never fails the run — it is reported so
-    the operator knows the rig's app version was not established.
+    ``status`` is one of:
+
+    - ``match`` — installed content equals the harness's own app source.
+    - ``drift`` — proven different. Warns; fatal under ``--strict-app-version``.
+    - ``absent`` — no app installed. Nothing can run the wrong code, so this warns even under
+      strict; a rig that does not run the Lua app is a legitimate configuration.
+    - ``unverifiable`` — an app IS installed but its version cannot be established (unreadable
+      tree, or a harness checkout with no app source to compare against). Warns by default; fatal
+      under strict, because the installed app may already be the stale one.
+
+    ``absent`` and ``unverifiable`` are the two halves of what a coarser design would call
+    "unknown" — they are split because strictness must treat them oppositely (PR #587 review).
     """
 
     status: str
@@ -1428,6 +1445,11 @@ class AppInstallProvenance:
     harness_path: str | None = None
     harness_digest: str | None = None
     harness_commit: str | None = None
+
+    @property
+    def blocks_strict(self) -> bool:
+        """True when ``--strict-app-version`` should fail the run on this verdict."""
+        return self.status in APP_PROVENANCE_STRICT_FATAL
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1452,12 +1474,14 @@ def app_install_provenance(ac_root: Path, harness_root: Path | None = None) -> A
     }
 
     if not installed.is_dir():
+        # ABSENT, not unverifiable: no app is installed, so none can run the wrong code. Non-fatal
+        # even under strict — a rig that does not run the Lua app is a legitimate configuration.
         return AppInstallProvenance(
-            status="unknown",
+            status="absent",
             detail=(
-                f"trainer app is not installed at {installed} — the rig's app version cannot be "
-                "established. Install it as a junction to this checkout's "
-                f"{harness_src} (mklink /J), or ignore if this rig does not run the Lua app."
+                f"trainer app is not installed at {installed} — no in-sim app will run. Install it "
+                f"as a junction to this checkout's {harness_src} (mklink /J), or ignore if this "
+                "rig does not run the Lua app."
             ),
             **common,
         )
@@ -1472,20 +1496,27 @@ def app_install_provenance(ac_root: Path, harness_root: Path | None = None) -> A
         installed_digest=installed_digest,
         installed_commit=installed_commit,
     )
+    installed_where = target or str(installed)
 
+    # Below here an app IS installed, so any failure to establish its version is UNVERIFIABLE, not
+    # absent: the rig will run that app, and it may already be the stale one.
     if harness_digest is None:
         return AppInstallProvenance(
-            status="unknown",
+            status="unverifiable",
             detail=(
-                f"harness checkout has no readable app source at {harness_src} — cannot compare "
-                f"against the installed app at {installed}."
+                f"an app is installed at {installed_where} but this harness checkout has no "
+                f"readable app source at {harness_src} to compare it against — the rig's app "
+                "version cannot be established."
             ),
             **common,
         )
     if installed_digest is None:
         return AppInstallProvenance(
-            status="unknown",
-            detail=f"installed app at {installed} is not readable — app version not established.",
+            status="unverifiable",
+            detail=(
+                f"an app is installed at {installed} but its content is not readable — the rig's "
+                "app version cannot be established."
+            ),
             **common,
         )
     if installed_digest == harness_digest:
@@ -1498,7 +1529,6 @@ def app_install_provenance(ac_root: Path, harness_root: Path | None = None) -> A
             **common,
         )
 
-    installed_where = target or str(installed)
     return AppInstallProvenance(
         status="drift",
         detail=(
@@ -3027,8 +3057,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--strict-app-version",
         action="store_true",
-        help="fail preflight when the AC-installed trainer app does not match this checkout "
-        "(default: warn). Use for runs whose evidence depends on the rig running THIS app (#575)",
+        help="fail preflight when the AC-installed trainer app is not proven to match this "
+        "checkout — drift, or installed-but-unverifiable (default: warn). An absent app still "
+        "only warns. Use for runs whose evidence depends on the rig running THIS app (#575)",
     )
     p.add_argument("--skip-launch", action="store_true", help="AC already LIVE; only hijack+drive")
     p.add_argument(
@@ -3444,10 +3475,13 @@ def _main_impl(
     print(f"auto-drive: installed app provenance: {app_provenance.status}")
     issues = preflight(config, app_provenance=app_provenance)
     # #575: an app_version row is a warning by default; --strict-app-version makes it fatal for
-    # runs whose evidence is only meaningful if the rig ran THIS checkout's app.
+    # runs whose evidence is only meaningful if the rig ran THIS checkout's app. Strictness gates
+    # on the PROVENANCE VERDICT, not merely on the row's presence: an `absent` app cannot run the
+    # wrong code, so it stays a warning even under strict (PR #587 review).
+    strict_app_fatal = args.strict_app_version and app_provenance.blocks_strict
     fatal: list[PreflightIssue] = []
     for issue in issues:
-        if issue.severity == "error" or (args.strict_app_version and issue.check == "app_version"):
+        if issue.severity == "error" or (strict_app_fatal and issue.check == "app_version"):
             fatal.append(issue)
         else:
             print(f"auto-drive: PREFLIGHT WARNING [{issue.check}] {issue.message}")

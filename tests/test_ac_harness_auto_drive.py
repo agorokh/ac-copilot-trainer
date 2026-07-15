@@ -2150,8 +2150,9 @@ def test_preflight_app_version_drift_is_a_warning_not_an_error(tmp_path):
     assert "differs" in issues[0].message
 
 
-def test_preflight_app_version_unknown_provenance_is_reported_not_fatal(tmp_path):
-    """#575 AC2: a non-junction / absent install degrades to a warning, never an error."""
+@pytest.mark.parametrize("status", ["absent", "unverifiable"])
+def test_preflight_unestablished_provenance_is_reported_not_fatal(tmp_path, status):
+    """#575 AC2: an install whose version cannot be established degrades to a warning, not error."""
     ac_root, user, cm = _fake_rig(tmp_path)
     cfg = _cfg(
         ac_root=ac_root,
@@ -2162,9 +2163,23 @@ def test_preflight_app_version_unknown_provenance_is_reported_not_fatal(tmp_path
         setup="Realistic_BB_v3",
         cm_preset=None,
     )
-    unknown = AppInstallProvenance(status="unknown", detail="app not installed at <ac_root>/apps")
-    issues = preflight(cfg, app_provenance=unknown)
+    prov = AppInstallProvenance(status=status, detail="version not established")
+    issues = preflight(cfg, app_provenance=prov)
     assert [(i.check, i.severity) for i in issues] == [("app_version", "warning")]
+
+
+def test_strict_gates_on_the_verdict_not_merely_on_the_row():
+    """PR #587 review: --strict-app-version must distinguish absent from unverifiable.
+
+    An ABSENT app cannot run the wrong code, so strict still only warns. An app that is present
+    but UNVERIFIABLE may already be the stale one — strict must fail, or a flag whose whole
+    purpose is evidence integrity would go green on "something is installed, I cannot tell what".
+    """
+    blocks = {
+        s: AppInstallProvenance(status=s, detail="x").blocks_strict
+        for s in ("match", "drift", "absent", "unverifiable")
+    }
+    assert blocks == {"match": False, "drift": True, "absent": False, "unverifiable": True}
 
 
 def _app_tree(root: Path, *, body: str = "-- v1\n") -> Path:
@@ -2228,22 +2243,23 @@ def test_app_install_provenance_detects_a_pure_rename_as_drift(tmp_path):
     assert app_install_provenance(ac_root, harness_root=harness).status == "drift"
 
 
-def test_app_install_provenance_unknown_when_app_not_installed(tmp_path):
-    """#575 AC2: no install at all → unknown provenance, actionable message, no crash."""
+def test_app_install_provenance_absent_when_app_not_installed(tmp_path):
+    """#575 AC2: no install at all → `absent`, actionable message, no crash, never strict-fatal."""
     harness = tmp_path / "harness"
     _app_tree(harness)
     ac_root = tmp_path / "ac"
     ac_root.mkdir()
 
     prov = app_install_provenance(ac_root, harness_root=harness)
-    assert prov.status == "unknown"
+    assert prov.status == "absent"
+    assert prov.blocks_strict is False  # nothing installed can run the wrong code
     assert prov.installed_digest is None
     assert prov.harness_digest is not None  # the harness side is still established
     assert "not installed" in prov.detail
 
 
-def test_app_install_provenance_unknown_when_harness_has_no_app_source(tmp_path):
-    """A harness checkout without src/ac_copilot_trainer cannot compare — unknown, not drift."""
+def test_app_install_provenance_unverifiable_when_harness_has_no_app_source(tmp_path):
+    """An app IS installed but cannot be compared — `unverifiable`, and strict must fail on it."""
     harness = tmp_path / "harness"
     harness.mkdir()
     other = tmp_path / "other"
@@ -2252,7 +2268,8 @@ def test_app_install_provenance_unknown_when_harness_has_no_app_source(tmp_path)
     _install_app(ac_root, src)
 
     prov = app_install_provenance(ac_root, harness_root=harness)
-    assert prov.status == "unknown"
+    assert prov.status == "unverifiable"
+    assert prov.blocks_strict is True  # an installed app of unknown version may be the stale one
     assert prov.harness_digest is None
     assert prov.installed_digest is not None
 
