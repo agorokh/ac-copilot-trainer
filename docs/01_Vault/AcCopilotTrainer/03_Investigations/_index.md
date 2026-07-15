@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-07-14
+updated: 2026-07-15
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -13,6 +13,7 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [issue-575-stale-app-junction-2026-07-15.md](issue-575-stale-app-junction-2026-07-15.md) | **#575 CLOSED** by PR #587 (`b51e1d5`) — harness preflight detects a stale AC app junction: the installed Lua app is compared to the harness's own `src/ac_copilot_trainer` by **content digest** (not commit — two checkouts can share a HEAD and still differ), measured **under the rig lock** (TOCTOU caught by two reviewers), recorded as `extras.run.app_install`. Four states `match`/`drift`/`absent`/`unverifiable`; `--strict-app-version` fails on drift+unverifiable, never on absent. False-drift normalizations found by running it against the real rig: `__pycache__` in the app tree, and `*.bat text eol=crlf` making `start_sidecar.bat` differ at an identical commit. **Live true positive:** the junction moved 3× in one session (a peer worktree repointed it at #531's tree with an uncommitted `telemetry_publisher.lua` edit, then restored) — same commit both sides, so a HEAD compare would have missed it. With #569 (`8a895ee`) the stale-build problem is closed on both halves (frozen EXE + Lua app). |
 | [issue-582-l3-corner-refinement-2026-07-14.md](issue-582-l3-corner-refinement-2026-07-14.md) | **#582 CLOSED** by PR #583 (`b2ef740`) — EPIC #529 Layer 3 (the #577 item-3 follow-up): `corner_refine.py` relaxes measured low-variance grip bins from the 1.96-z LCB toward the posterior mean (hard z=1.0 stability floor), boundary-pinned per-corner interior re-solve, named per-corner reverts, refined profile rides the same artifact/provenance/verify gates. Live merged-main proof: `auto-alien: OK`, 107.0→101.7→**96.621 s**, all 7 Magione corners honestly reverted (no measured corner-speed lateral bins yet), iter-2 refit → provenance-gated line rebuild fired live. Gain unlocks as self-play flips corner-speed bins to measured. |
 | [issue-577-alien-selfplay-2026-07-14.md](issue-577-alien-selfplay-2026-07-14.md) | **#577 CLOSED** by PR #579 (`5b8fe0a`) — EPIC #529 P3: `auto_drive --laps N` flying-lap windows + `auto_alien --iterations K` progressive-envelope self-play (refine from own valid batch → provenance-gated rebuild → bounded scale ladder, keep-last-valid falsification). Live rig proof 92.567 s Magione, strictly monotonic ladder, all laps AC-valid. Item 3 (L3) shipped separately as #582. |
 | [issue-572-alien-pipeline-2026-07-14.md](issue-572-alien-pipeline-2026-07-14.md) | **#572 CLOSED** by PR #573 (`dfd4b7e`) — EPIC #529 P2: one-button alien pipeline. `python -m tools.ac_harness.auto_alien` composes handshake→plant-ID→min-curvature line QP→QSS→drive; per-combo line cache keyed by plant identity + fit/fast_lane content hashes, content-revalidated (corridor + envelope) on every hit; shared `plant_ready_for_full_consumption` gate across all three consumers. Live rig PASS through the unmodified path: AC-valid lap, 200.2 km/h, zero recoveries; optimized line −1.76 s QSS vs stock on Magione. Next: G1 on unseen combos. |

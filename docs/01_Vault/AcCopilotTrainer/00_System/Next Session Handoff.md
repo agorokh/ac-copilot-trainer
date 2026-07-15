@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T03:05:00Z
+last_updated: 2026-07-15T05:10:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-575-stale-app-junction-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-531-partd-live-vitals-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-569-frozen-build-identity-bake-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-570-route-registry-2026-07-15.md
@@ -91,6 +92,39 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-15) — #575 stale AC app junction detection (PR #587 MERGED `b51e1d5`)
+
+Issue [#575](https://github.com/agorokh/ac-copilot-trainer/issues/575) **CLOSED**. `preflight()` in
+`tools/ac_harness/auto_drive.py` now compares the AC-installed trainer app against the harness's own
+`src/ac_copilot_trainer` and records `extras.run.app_install` in every evidence bundle. Detail:
+[issue-575-stale-app-junction-2026-07-15.md](../03_Investigations/issue-575-stale-app-junction-2026-07-15.md).
+
+**Four provenance states** — `match` / `drift` / `absent` / `unverifiable`. Warning by default;
+`--strict-app-version` (passed through both `auto_alien` stages) fails on `drift` + `unverifiable`
+but **not** `absent` (nothing installed can run the wrong code). Verdict is a **content digest**, not
+a commit compare, and it is measured **under the rig lock**.
+
+**With [#569](https://github.com/agorokh/ac-copilot-trainer/issues/569) (PR #586 `8a895ee`, CLOSED
+02:57Z) the stale-build problem is closed on both halves** — the frozen Game Point EXE bakes
+`build_commit`, and the Lua app junction now asserts its provenance. Both artifacts the rig executes
+can say which build they are.
+
+**Three things worth carrying forward:**
+
+1. **The rig junction is volatile shared state.** It moved **three times during that one session** —
+   primary checkout → #531's worktree (carrying an *uncommitted* `telemetry_publisher.lua` edit) →
+   restored. Both worktrees sat at the **same commit**, so a `git rev-parse HEAD` compare (the
+   issue's own suggested implementation) would have reported "up to date". Only the content digest
+   caught it. Do not repoint the junction while another session owns the rig
+   ([#555](https://github.com/agorokh/ac-copilot-trainer/issues/555)).
+2. **Any read of shared rig state that gates a decision or lands in evidence belongs under the rig
+   lock.** Provenance was first measured pre-lock; two reviewers independently caught the TOCTOU. The
+   precedent already existed one block below (plant/line resolution is post-lock for the same reason).
+3. **False-drift normalization matters more than detection.** The first draft reported drift on the
+   real rig twice for benign reasons (`__pycache__` inside the app tree; `*.bat text eol=crlf` making
+   `start_sidecar.bat` differ at an identical commit). A check that cries wolf is worse than none —
+   it trains the operator to ignore the one time it is real.
 
 ## Delivered (2026-07-15) — #531 Part D live tyre vitals + TC/ABS (PR #590 MERGED `432c8b4`)
 
