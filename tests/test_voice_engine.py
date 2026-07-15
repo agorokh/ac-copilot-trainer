@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import time
 
+import pytest
 from _voice_support import make_advisory
 
 from tools.ai_sidecar.voice.bake import ToneBackend, bake_bank
@@ -131,8 +132,8 @@ def test_build_playback_falls_back_to_sounddevice_when_rtmixer_missing(
     assert constructed == {"device_name": "Headset", "host_api": "WASAPI"}
 
 
-def test_build_playback_disables_when_no_backend_importable(monkeypatch, tmp_path) -> None:
-    """If neither rtmixer nor sounddevice imports, disable (None) rather than crash."""
+def test_build_playback_raises_when_no_backend_importable(monkeypatch, tmp_path) -> None:
+    """If neither backend imports, preserve the cause so from_bank can surface remediation."""
     import tools.ai_sidecar.voice.playback as pb_mod
 
     class _FakeBank:
@@ -152,10 +153,11 @@ def test_build_playback_disables_when_no_backend_importable(monkeypatch, tmp_pat
     monkeypatch.setattr(pb_mod, "RtMixerPlayback", _FakeRtMixer)
     monkeypatch.setattr(pb_mod, "SoundDevicePlayback", _FakeSoundDevice)
 
-    assert VoiceCoach._build_playback(object(), tmp_path, VoiceConfig(), "rtmixer") is None
+    with pytest.raises(ModuleNotFoundError, match="sounddevice"):
+        VoiceCoach._build_playback(object(), tmp_path, VoiceConfig(), "rtmixer")
 
 
-def test_build_playback_device_fault_still_disables_without_fallback(monkeypatch, tmp_path) -> None:
+def test_build_playback_device_fault_still_raises_without_fallback(monkeypatch, tmp_path) -> None:
     """A real device/driver fault (not a missing module) disables — no silent sounddevice retry.
 
     The same fault would recur on sounddevice, and staying silent beats routing onto the wrong
@@ -182,5 +184,6 @@ def test_build_playback_device_fault_still_disables_without_fallback(monkeypatch
     monkeypatch.setattr(pb_mod, "RtMixerPlayback", _FakeRtMixer)
     monkeypatch.setattr(pb_mod, "SoundDevicePlayback", _FakeSoundDevice)
 
-    assert VoiceCoach._build_playback(object(), tmp_path, VoiceConfig(), "rtmixer") is None
+    with pytest.raises(RuntimeError, match="PortAudio device error"):
+        VoiceCoach._build_playback(object(), tmp_path, VoiceConfig(), "rtmixer")
     assert sd_calls == []  # device fault must not fall through to sounddevice

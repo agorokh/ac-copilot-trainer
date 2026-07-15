@@ -20,6 +20,7 @@ from tools.ai_sidecar.voice.playback import (
     RtMixerPlayback,
     _TimedCurrent,
     resolve_output_device,
+    resolve_output_layout,
 )
 from tools.ai_sidecar.voice.resolver import Resolver
 
@@ -65,6 +66,33 @@ def test_resolve_rejects_wrong_host_api() -> None:
     # Headset exists, but not on a host-API whose name contains "ASIO".
     with pytest.raises(DeviceResolutionError):
         resolve_output_device("Headset", "ASIO", devices=_DEVICES, host_apis=_HOST_APIS)
+
+
+def test_output_layout_uses_fixed_multichannel_device_and_center_channel() -> None:
+    """Regression for #602: the rig WASAPI endpoint rejects mono but accepts its 5.1 width."""
+    devices = [{"name": "5.1 Speakers (USB Sound Device)", "max_output_channels": 6, "hostapi": 0}]
+    attempted: list[int] = []
+
+    def check_output_settings(*, device, channels, samplerate):  # noqa: ANN001
+        assert device == 0
+        assert samplerate == 48_000
+        attempted.append(channels)
+        if channels != 6:
+            raise RuntimeError("Invalid number of channels [PaErrorCode -9998]")
+
+    layout = resolve_output_layout(
+        0,
+        bank_channels=1,
+        samplerate=48_000,
+        devices=devices,
+        host_apis=[{"name": "Windows WASAPI"}],
+        check_output_settings=check_output_settings,
+    )
+
+    assert attempted == [1, 2, 3, 4, 5, 6]
+    assert layout.stream_channels == 6
+    assert layout.max_output_channels == 6
+    assert layout.channel_map == (3,)
 
 
 def test_recording_playback_tracks_current() -> None:
@@ -117,12 +145,14 @@ def test_rtmixer_playback_frees_channel_by_clip_duration(monkeypatch) -> None:
         def __init__(self, **kwargs) -> None:
             assert kwargs["device"] == 0
             assert kwargs["samplerate"] == 10
+            assert kwargs["channels"] == 1
 
         def start(self) -> None:
             return None
 
         def play_buffer(self, pcm, channels):  # noqa: ANN001
-            del pcm, channels
+            del pcm
+            assert channels == [1]
             action = object()  # no `.done` attribute on purpose
             actions.append(action)
             return action
@@ -136,6 +166,7 @@ def test_rtmixer_playback_frees_channel_by_clip_duration(monkeypatch) -> None:
     fake_sd = SimpleNamespace(
         query_devices=lambda: [{"name": "Headset", "max_output_channels": 2, "hostapi": 0}],
         query_hostapis=lambda: [{"name": "Windows WASAPI"}],
+        check_output_settings=lambda **_kwargs: None,
     )
     fake_rtmixer = SimpleNamespace(Mixer=_Mixer)
     monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)

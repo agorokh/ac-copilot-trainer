@@ -887,7 +887,26 @@ def _voice_from_health(
 
     if enabled:
         label = "tts" if state == "tts" else "enabled"
-        detail = f"backend={backend}" if backend else ""
+        parts = [f"backend={backend}"] if backend else []
+        device = str(voice.get("device_name") or "").strip()
+        host_api = str(voice.get("host_api") or "").strip()
+        bank_channels = voice.get("bank_channels")
+        max_channels = voice.get("max_output_channels")
+        stream_channels = voice.get("stream_channels")
+        channel_map = voice.get("channel_map")
+        if device:
+            device_part = f"device={device}"
+            if host_api:
+                device_part += f" ({host_api})"
+            parts.append(device_part)
+        if bank_channels is not None and stream_channels is not None:
+            layout = f"layout={bank_channels}ch bank -> {stream_channels}ch stream"
+            if max_channels is not None:
+                layout += f"/{max_channels}ch max"
+            if isinstance(channel_map, list) and channel_map:
+                layout += f" map={channel_map}"
+            parts.append(layout)
+        detail = "; ".join(parts)
         return ProbeResult("voice", True, label, detail)
     if state == "observer_only":
         if playback_requested:

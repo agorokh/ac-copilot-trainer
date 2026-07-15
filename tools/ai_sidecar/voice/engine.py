@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from tools.ai_sidecar.voice.config import VoiceConfig
@@ -74,11 +74,13 @@ class VoiceCoach:
         *,
         enabled: bool,
         disabled_reason: str = "",
+        playback_details: Mapping[str, object] | None = None,
     ) -> None:
         self._scheduler = scheduler
         self._playback = playback
         self._enabled = enabled
         self._disabled_reason = disabled_reason
+        self._playback_details = dict(playback_details or {})
         self._warned_disabled = False
 
     @property
@@ -88,6 +90,11 @@ class VoiceCoach:
     @property
     def disabled_reason(self) -> str:
         return self._disabled_reason
+
+    @property
+    def playback_details(self) -> dict[str, object]:
+        """JSON-safe selected-device/layout details for sidecar and launcher status."""
+        return dict(self._playback_details)
 
     def subscribe(self, advisory: object) -> None:
         """Enqueue one advisory to be spoken. Non-blocking; a no-op when the coach is disabled."""
@@ -169,9 +176,16 @@ class VoiceCoach:
             _log.error("voice: bank problem (will skip affected clip): %s", problem)
 
         if playback is None:
-            playback = cls._build_playback(manifest, base, config, backend)
-            if playback is None:
-                return cls.disabled(f"could not initialize audio backend {backend!r}")
+            try:
+                playback = cls._build_playback(manifest, base, config, backend)
+            except Exception as exc:  # noqa: BLE001 - disable voice, keep telemetry alive
+                _log.exception("voice: failed to initialize audio backend %r", backend)
+                detail = str(exc) or type(exc).__name__
+                return cls.disabled(f"could not initialize audio backend {backend!r}: {detail}")
+
+        playback_details = getattr(playback, "output_details", {})
+        if not isinstance(playback_details, Mapping):
+            playback_details = {}
 
         if dispatch_listener is not None:
             from tools.ai_sidecar.voice.dispatch import DispatchTapPlayback
@@ -184,7 +198,12 @@ class VoiceCoach:
 
         resolver = Resolver(manifest)
         scheduler = Scheduler(resolver, playback, config, clock=clock)
-        return cls(scheduler, playback, enabled=True)
+        return cls(
+            scheduler,
+            playback,
+            enabled=True,
+            playback_details=playback_details,
+        )
 
     @staticmethod
     def _build_playback(
@@ -201,35 +220,26 @@ class VoiceCoach:
         *driver* fault (not a missing module) still disables — that fault would recur on sounddevice
         too, and "stay silent" beats "play onto the wrong endpoint".
         """
-        try:
-            from tools.ai_sidecar.voice.playback import (
-                Bank,
-                RtMixerPlayback,
-                SoundDevicePlayback,
-            )
+        from tools.ai_sidecar.voice.playback import Bank, RtMixerPlayback, SoundDevicePlayback
 
-            bank = Bank.from_manifest(manifest, bank_dir)
-            if backend == "sounddevice":
+        bank = Bank.from_manifest(manifest, bank_dir)
+        if backend == "sounddevice":
+            return SoundDevicePlayback(
+                bank, device_name=config.device_name, host_api=config.host_api
+            )
+        if backend == "rtmixer":
+            try:
+                return RtMixerPlayback(
+                    bank, device_name=config.device_name, host_api=config.host_api
+                )
+            except ImportError:
+                # rtmixer (or its native PortAudio dep) is not installed/bundled. Degrade to
+                # the sounddevice backend so the coach still speaks (issue #340 fallback).
+                _log.warning(
+                    "voice: rtmixer backend unavailable (module not importable); "
+                    "falling back to the sounddevice backend"
+                )
                 return SoundDevicePlayback(
                     bank, device_name=config.device_name, host_api=config.host_api
                 )
-            if backend == "rtmixer":
-                try:
-                    return RtMixerPlayback(
-                        bank, device_name=config.device_name, host_api=config.host_api
-                    )
-                except ImportError:
-                    # rtmixer (or its native PortAudio dep) is not installed/bundled. Degrade to
-                    # the sounddevice backend so the coach still speaks (issue #340 fallback).
-                    _log.warning(
-                        "voice: rtmixer backend unavailable (module not importable); "
-                        "falling back to the sounddevice backend"
-                    )
-                    return SoundDevicePlayback(
-                        bank, device_name=config.device_name, host_api=config.host_api
-                    )
-            _log.error("voice: unknown backend %r", backend)
-            return None
-        except Exception:  # noqa: BLE001 - missing extra / no device / driver fault → disable, not crash
-            _log.exception("voice: failed to initialize audio backend %r", backend)
-            return None
+        raise ValueError(f"unknown audio backend {backend!r}")

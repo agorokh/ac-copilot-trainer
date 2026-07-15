@@ -161,15 +161,29 @@ def play_chirp(label: str, *, device: str | None, host_api: str | None) -> Chirp
     import sounddevice as sd
 
     device_index: int | None = None
+    stream_channels = 1
+    output_channel = 0
     if device:
-        from tools.ai_sidecar.voice.playback import resolve_output_device
+        from tools.ai_sidecar.voice.playback import resolve_output_device, resolve_output_layout
 
+        devices = list(sd.query_devices())
+        host_apis = list(sd.query_hostapis())
         device_index = resolve_output_device(
             device,
             host_api,
-            devices=list(sd.query_devices()),
-            host_apis=list(sd.query_hostapis()),
+            devices=devices,
+            host_apis=host_apis,
         )
+        layout = resolve_output_layout(
+            device_index,
+            bank_channels=1,
+            samplerate=48_000,
+            devices=devices,
+            host_apis=host_apis,
+            check_output_settings=sd.check_output_settings,
+        )
+        stream_channels = layout.stream_channels
+        output_channel = layout.channel_map[0] - 1
     samplerate = 48_000
     chirp = make_chirp(samplerate, np)
     state: dict[str, Any] = {"pos": 0, "dac_wall_ms": None, "latency_ms": None}
@@ -187,9 +201,9 @@ def play_chirp(label: str, *, device: str | None, host_api: str | None) -> Chirp
                 state["dac_wall_ms"] = None
         pos = state["pos"]
         chunk = chirp[pos : pos + frames]
-        outdata[: len(chunk), 0] = chunk
+        outdata.fill(0.0)
+        outdata[: len(chunk), output_channel] = chunk
         if len(chunk) < frames:
-            outdata[len(chunk) :, 0] = 0.0
             done.set()
             raise sd.CallbackStop
         state["pos"] = pos + frames
@@ -197,7 +211,7 @@ def play_chirp(label: str, *, device: str | None, host_api: str | None) -> Chirp
     t_wall_ms = time.time() * 1000.0
     stream = sd.OutputStream(
         samplerate=samplerate,
-        channels=1,
+        channels=stream_channels,
         dtype="float32",
         device=device_index,
         callback=_callback,
