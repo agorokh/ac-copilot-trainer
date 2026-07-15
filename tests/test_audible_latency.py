@@ -74,8 +74,79 @@ def test_chirp_negotiates_fixed_layout_for_default_output() -> None:
         device=None,
         host_api=None,
         samplerate=SR,
-    ) == (0, 6, 2)
+    ) == (0, 6, (2,))
     assert attempted == [1, 2, 3, 4, 5, 6]
+
+
+def test_chirp_uses_both_front_channels_for_compact_fixed_output() -> None:
+    attempted: list[int] = []
+
+    def check_output_settings(*, device, channels, samplerate):  # noqa: ANN001
+        assert device == 0
+        assert samplerate == SR
+        attempted.append(channels)
+        if channels != 4:
+            raise RuntimeError("Invalid number of channels [PaErrorCode -9998]")
+
+    sd = SimpleNamespace(
+        default=SimpleNamespace(device=(1, 0)),
+        query_devices=lambda: [{"name": "Fixed quad", "max_output_channels": 4, "hostapi": 0}],
+        query_hostapis=lambda: [{"name": "Windows WASAPI"}],
+        check_output_settings=check_output_settings,
+    )
+
+    assert al._resolve_chirp_output(
+        sd,
+        device=None,
+        host_api=None,
+        samplerate=SR,
+    ) == (0, 4, (0, 1))
+    assert attempted == [1, 2, 3, 4]
+
+
+def test_play_chirp_writes_every_selected_output_channel(monkeypatch) -> None:
+    import sounddevice as sd
+
+    written: dict[str, np.ndarray] = {}
+
+    class CallbackStop(Exception):
+        pass
+
+    class FakeOutputStream:
+        time = 10.0
+        latency = 0.01
+
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.callback = kwargs["callback"]
+            assert kwargs["channels"] == 4
+
+        def __enter__(self):
+            outdata = np.zeros((10_000, 4), dtype=np.float32)
+            try:
+                self.callback(
+                    outdata,
+                    len(outdata),
+                    SimpleNamespace(outputBufferDacTime=10.01),
+                    None,
+                )
+            except CallbackStop:
+                pass
+            written["outdata"] = outdata
+            return self
+
+        def __exit__(self, *args) -> None:  # noqa: ANN002
+            return None
+
+    monkeypatch.setattr(al, "_resolve_chirp_output", lambda *args, **kwargs: (0, 4, (0, 1)))
+    monkeypatch.setattr(sd, "CallbackStop", CallbackStop)
+    monkeypatch.setattr(sd, "OutputStream", FakeOutputStream)
+
+    al.play_chirp("compact", device=None, host_api=None)
+
+    outdata = written["outdata"]
+    assert np.any(outdata[:, 0])
+    np.testing.assert_array_equal(outdata[:, 0], outdata[:, 1])
+    assert not np.any(outdata[:, 2:])
 
 
 def test_find_onset_refuses_absent_template() -> None:

@@ -156,7 +156,7 @@ def _resolve_chirp_output(
     device: str | None,
     host_api: str | None,
     samplerate: int,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, tuple[int, ...]]:
     """Resolve and negotiate the chirp output, including the system-default device."""
     from tools.ai_sidecar.voice.playback import (
         DeviceResolutionError,
@@ -200,7 +200,11 @@ def _resolve_chirp_output(
         host_apis=host_apis,
         check_output_settings=sd.check_output_settings,
     )
-    return device_index, layout.stream_channels, layout.channel_map[0] - 1
+    return (
+        device_index,
+        layout.stream_channels,
+        tuple(channel - 1 for channel in layout.channel_map),
+    )
 
 
 def play_chirp(label: str, *, device: str | None, host_api: str | None) -> ChirpMark:
@@ -214,7 +218,7 @@ def play_chirp(label: str, *, device: str | None, host_api: str | None) -> Chirp
     import sounddevice as sd
 
     samplerate = 48_000
-    device_index, stream_channels, output_channel = _resolve_chirp_output(
+    device_index, stream_channels, output_channels = _resolve_chirp_output(
         sd,
         device=device,
         host_api=host_api,
@@ -237,7 +241,8 @@ def play_chirp(label: str, *, device: str | None, host_api: str | None) -> Chirp
         pos = state["pos"]
         chunk = chirp[pos : pos + frames]
         outdata.fill(0.0)
-        outdata[: len(chunk), output_channel] = chunk
+        for output_channel in output_channels:
+            outdata[: len(chunk), output_channel] = chunk
         if len(chunk) < frames:
             done.set()
             raise sd.CallbackStop

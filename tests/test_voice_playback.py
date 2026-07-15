@@ -120,6 +120,31 @@ def test_output_layout_duplicates_mono_for_stereo_only_device() -> None:
     assert layout.channel_map == (1, 2)
 
 
+def test_output_layout_duplicates_mono_for_compact_fixed_device() -> None:
+    """A four-channel layout has no standard center position; use its front pair."""
+    attempted: list[int] = []
+
+    def check_output_settings(*, device, channels, samplerate):  # noqa: ANN001
+        assert device == 0
+        assert samplerate == 48_000
+        attempted.append(channels)
+        if channels != 4:
+            raise RuntimeError("Invalid number of channels [PaErrorCode -9998]")
+
+    layout = resolve_output_layout(
+        0,
+        bank_channels=1,
+        samplerate=48_000,
+        devices=[{"name": "Fixed quad", "max_output_channels": 4, "hostapi": 0}],
+        host_apis=[{"name": "Windows WASAPI"}],
+        check_output_settings=check_output_settings,
+    )
+
+    assert attempted == [1, 2, 3, 4]
+    assert layout.stream_channels == 4
+    assert layout.channel_map == (1, 2)
+
+
 def test_recording_playback_tracks_current() -> None:
     pb = RecordingPlayback()
     assert pb.output_details == {}

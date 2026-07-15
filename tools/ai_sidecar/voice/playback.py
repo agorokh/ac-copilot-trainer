@@ -217,13 +217,15 @@ def resolve_output_layout(
             "correct the Windows speaker configuration"
         )
 
-    if bank_channels == 1 and stream_channels == 2:
-        # A stereo-only endpoint has no center channel. Duplicate mono into both sides rather than
-        # falling back to left-only speech; backends interpret the repeated map as two copies of
-        # the one source channel.
-        channel_map = (1, 2)
-    elif bank_channels == 1 and stream_channels >= 3:
+    if bank_channels == 1 and stream_channels >= 6:
+        # Standard 5.1/7.1 layouts place front-center at channel 3, which keeps coaching speech
+        # anchored to the rig's center speaker.
         channel_map = (3,)
+    elif bank_channels == 1 and stream_channels >= 2:
+        # Stereo and compact 3--5 channel layouts do not have a reliably inferable center channel
+        # without a platform channel mask. Duplicate mono into front-left/right rather than risk
+        # routing speech to an LFE or surround channel.
+        channel_map = (1, 2)
     else:
         channel_map = tuple(range(1, bank_channels + 1))
     return OutputLayout(
