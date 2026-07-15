@@ -2,8 +2,10 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T07:27:45Z
+last_updated: 2026-07-15T09:35:12Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-596-partc-actionable-reason-2026-07-15.md
+  - AcCopilotTrainer/03_Investigations/tier3-consumer-repoint-drift-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-575-stale-app-junction-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-531-partd-live-vitals-2026-07-14.md
   - AcCopilotTrainer/00_System/Next Session Handoff.md
@@ -35,6 +37,15 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Ready to merge (2026-07-15):** [PR #598](https://github.com/agorokh/ac-copilot-trainer/pull/598)
+at `4def5a2` completes [#596](https://github.com/agorokh/ac-copilot-trainer/issues/596) Part C:
+every failed `auto_drive` report has an actionable run-level reason and retains its failed pipeline
+checks. The reason is computed from live report state (correct after handshake mutation), and the
+drive veto reason is the boolean gate's one source of truth. PR is CLEAN/MERGEABLE; checks, threads,
+Qodo, resolve-gate, and current-SHA self-hosted review are clean. Final local parity: **2,952 passed,
+113 skipped, 87.56% coverage**. Parts A/B remain on #596. Detail:
+[[issue-596-partc-actionable-reason-2026-07-15]].
 
 **Review-resolved (2026-07-15, active PR):** [#595](https://github.com/agorokh/ac-copilot-trainer/pull/595)
 turns #531 Part D's TC/ABS flash criterion into in-run machine evidence. `run_auto_drive` now opts
