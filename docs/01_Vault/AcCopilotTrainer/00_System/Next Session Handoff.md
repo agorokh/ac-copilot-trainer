@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T09:35:12Z
+last_updated: 2026-07-15T17:25:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-596-pit-stall-sim-death-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-partc-actionable-reason-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/tier3-consumer-repoint-drift-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-575-stale-app-junction-2026-07-15.md
@@ -95,25 +96,30 @@ relates_to:
 
 # Next session handoff
 
-## READY TO MERGE (2026-07-15 09:35Z) — PR #598 / issue #596 Part C
+## Delivered (2026-07-15) — #596 autonomous-drive reliability CLOSED (PRs #598/#600)
 
-[PR #598](https://github.com/agorokh/ac-copilot-trainer/pull/598) is `CLEAN` + `MERGEABLE` at
-`4def5a2`. Required checks are green; GraphQL has 0 unresolved threads; Qodo reports 0 bugs; the
-resolve-gate ledger is clean; and the current-SHA self-hosted Cursor review has no medium-or-higher
-finding. Two full post-push 10-minute cooldowns completed. Local final parity: **2,952 passed, 113
-skipped, 87.56% coverage, `ci-fast: OK`**.
+PR [#600](https://github.com/agorokh/ac-copilot-trainer/pull/600) merged as
+[`613fae2`](https://github.com/agorokh/ac-copilot-trainer/commit/613fae2ef4fe7ec3489800b13751f199185de7ce),
+closing [#596](https://github.com/agorokh/ac-copilot-trainer/issues/596). The 450–580 m stall was a
+permanent high-gear feedback latch: a stopped 3rd+-gear car was required to exceed 5 km/h before it
+could downshift. Low-RPM downshifts no longer require existing movement. The harness now records a
+bounded 2 Hz control trace and retries one complete run after a pure `acs.exe` death while retaining
+every attempt in `report.json`. Part C's always-actionable failure reason shipped through PR #598.
 
-Review hardening made `AutoDriveReport.reason` a computed property, so direct reads, summary output,
-and `report.json` stay correct through PASS↔FAIL post-construction mutation. `drive_veto_reason` is
-now the one source of truth and `drive_leg_succeeded` its exact inverse. Merge #598, then run the
-normal post-merge workflow. Issue #596 remains open for Parts A/B (pit-start stall and `acs.exe`
-death-rate/retry work). Detail: [[issue-596-partc-actionable-reason-2026-07-15]].
+Live proof spans BMW M3 GT2 at Magione/Imola and Ferrari 458 GT2 at Magione: 7 new natural drive
+runs, 0 deaths, 0 recovery caps, and no stopped-high-gear trace sample. With the issue's original
+six runs, the measured history is 13 runs / 2 raw deaths. A controlled death after 284 m was detected,
+preserved, relaunched to a new PID, and recovered to a 2,295 m PASS. Local parity: **2,963 passed,
+113 skipped, 87.61% coverage**; Actions, GraphQL threads, resolve-gate, and current-SHA review were
+clean. Detail: [[issue-596-pit-stall-sim-death-2026-07-15]].
 
-**Tier-3 outage re-observed:** the mandatory task query reached the registered
-`ac_copilot_trainer` workspace but returned HTTP 502 with empty context. The local investigation
-maps this PC consumer to the retired m2pro endpoint while the canonical fleet moved to
-m4max-studio; it remains workstation-ops #1551 consumer-repoint scope. No machine-global config was
-changed. Detail: [[tier3-consumer-repoint-drift-2026-07-15]].
+**Resume here:** #596 has no remaining product scope. Before using the Porsche GT3 R as a rig gate,
+repair its local damaged content (`data.acd`/LODs missing). The realtime voice bank also needs its
+`rtmixer` channel configuration verified; the #596 runs continued with voice disabled. Phase-B
+post-merge classification reported no migration/env/dependency/workflow action.
+
+**Tier-3 state:** queries now return context from `ac_copilot_trainer`; the earlier consumer-repoint
+investigation remains historical context. Detail: [[tier3-consumer-repoint-drift-2026-07-15]].
 
 ## Review-resolved (2026-07-15) — #531 Part D intervention evidence (PR #595)
 
