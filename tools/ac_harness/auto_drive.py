@@ -1972,7 +1972,7 @@ def _read_cm_preset_selection(path: str | Path) -> tuple[str | None, str | None]
     propagate: :func:`preflight` turns them into actionable rows, while early evidence naming
     can safely fall back to generic tags.
     """
-    preset = json.loads(Path(path).read_text(encoding="utf-8"))
+    preset = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     if not isinstance(preset, dict):
         raise TypeError("Quick Drive preset root must be a JSON object")
     car_id = str(preset.get("CarId") or "").strip() or None
@@ -1988,7 +1988,7 @@ def _effective_car_id(config: AutoDriveConfig) -> str | None:
         return None
     try:
         preset_car, _preset_track = _read_cm_preset_selection(config.cm_preset)
-    except (OSError, json.JSONDecodeError, TypeError):
+    except (OSError, UnicodeError, ValueError, TypeError):
         return None
     return preset_car
 
@@ -2038,7 +2038,7 @@ def preflight(
     elif config.cm_preset is not None and Path(config.cm_preset).is_file():
         try:
             preset_car, preset_track = _read_cm_preset_selection(config.cm_preset)
-        except (OSError, json.JSONDecodeError, TypeError) as exc:
+        except (OSError, UnicodeError, ValueError, TypeError) as exc:
             issues.append(
                 PreflightIssue("preset", f"unreadable Quick Drive preset {config.cm_preset}: {exc}")
             )

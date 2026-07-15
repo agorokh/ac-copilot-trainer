@@ -105,31 +105,46 @@ def unpack_acd(data: bytes, folder_name: str) -> dict[str, bytes]:
     return files
 
 
-def read_car_data_member(car_dir: str | Path, member_name: str) -> bytes | None:
-    """Read one member from a car's effective ``data/`` or packed ``data.acd`` source.
+def read_car_data_archive(car_dir: str | Path) -> dict[str, bytes] | None:
+    """Read a car's effective flat data archive without modifying content.
 
-    The lookup is case-insensitive, read-only, and returns ``None`` for a missing or malformed
-    source/member.
+    Assetto Corsa gives ``data.acd`` precedence when both packed and unpacked sources exist; an
+    unpacked ``data/`` folder becomes effective only when the archive is absent.  Preserve that
+    launch behavior even when the packed archive is malformed rather than silently falling back
+    to content the game would not load.
     """
     try:
         path = Path(car_dir)
+        acd_path = path / "data.acd"
+        if acd_path.is_file():
+            return unpack_acd(acd_path.read_bytes(), path.name)
+
+        data_dir = path / "data"
+        if data_dir.is_dir():
+            return {
+                child.name: child.read_bytes() for child in data_dir.iterdir() if child.is_file()
+            }
+    except (OSError, TypeError, ValueError, struct.error, IndexError):
+        return None
+    return None
+
+
+def read_car_data_member(car_dir: str | Path, member_name: str) -> bytes | None:
+    """Read one flat member from the car data source Assetto Corsa will use.
+
+    The lookup is case-insensitive, read-only, and returns ``None`` for a missing or malformed
+    source/member. Nested archive paths never alias a root-level member.
+    """
+    try:
         normalized = member_name.replace("\\", "/")
         if not normalized or "/" in normalized or normalized in (".", ".."):
             return None
         wanted = normalized.lower()
-
-        data_dir = path / "data"
-        if data_dir.is_dir():
-            for child in data_dir.iterdir():
-                if child.is_file() and child.name.lower() == wanted:
-                    return child.read_bytes()
+        archive = read_car_data_archive(car_dir)
+        if archive is None:
             return None
-
-        acd_path = path / "data.acd"
-        if not acd_path.is_file():
-            return None
-        for name, content in unpack_acd(acd_path.read_bytes(), path.name).items():
-            if name.replace("\\", "/").rsplit("/", 1)[-1].lower() == wanted:
+        for name, content in archive.items():
+            if name.replace("\\", "/").lower() == wanted:
                 return content
     except (OSError, TypeError, ValueError, struct.error, IndexError):
         return None

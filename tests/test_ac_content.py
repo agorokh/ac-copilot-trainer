@@ -36,14 +36,31 @@ def test_unpack_and_member_lookup_support_packed_source(tmp_path: Path) -> None:
     assert read_car_data_member(car_dir, "LODS.INI") == lods
 
 
-def test_member_lookup_prefers_unpacked_source(tmp_path: Path) -> None:
+def test_member_lookup_reads_unpacked_source_when_archive_is_absent(tmp_path: Path) -> None:
     car_dir = tmp_path / "unpacked_car"
     (car_dir / "data").mkdir(parents=True)
     expected = b"[LOD_0]\nFILE=unpacked_car.kn5\n"
     (car_dir / "data" / "LoDs.InI").write_bytes(expected)
-    (car_dir / "data.acd").write_bytes(b"malformed")
 
     assert read_car_data_member(car_dir, "lods.ini") == expected
+
+
+def test_member_lookup_prefers_packed_source_when_both_exist(tmp_path: Path) -> None:
+    car_dir = tmp_path / "dual_source_car"
+    (car_dir / "data").mkdir(parents=True)
+    (car_dir / "data" / "lods.ini").write_bytes(b"unpacked")
+    packed = _build_acd(car_dir.name, {"lods.ini": b"packed"})
+    (car_dir / "data.acd").write_bytes(packed)
+
+    assert read_car_data_member(car_dir, "lods.ini") == b"packed"
+
+
+def test_nested_packed_member_does_not_alias_root_member(tmp_path: Path) -> None:
+    car_dir = tmp_path / "nested_car"
+    car_dir.mkdir()
+    (car_dir / "data.acd").write_bytes(_build_acd(car_dir.name, {"nested/lods.ini": b"nested"}))
+
+    assert read_car_data_member(car_dir, "lods.ini") is None
 
 
 def test_member_lookup_rejects_paths_and_malformed_archives(tmp_path: Path) -> None:

@@ -19,11 +19,10 @@ and never raises — the sidecar must not crash on one bad car.
 from __future__ import annotations
 
 import re
-import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.ac_content import unpack_acd
+from tools.ac_content import read_car_data_archive
 
 #: Compound index N maps to sections ``[FRONT_N]`` / ``[REAR_N]``; N==0 also matches bare
 #: ``[FRONT]`` / ``[REAR]`` (AC treats the unsuffixed section as compound 0). Thermal curve lives in
@@ -77,8 +76,8 @@ def _decode_text(raw: bytes) -> str:
 def _load_archive(car_dir: Path) -> dict[str, str] | None:
     """Return ``{member_name: text}`` for the car, or ``None`` if no source is readable.
 
-    Prefers an unpacked ``data/`` folder (any car that has been extracted); otherwise decrypts
-    ``data.acd`` using the car FOLDER NAME as the key. Result cached per ``car_dir``.
+    Uses the same effective-source precedence as Assetto Corsa: packed ``data.acd`` when present,
+    otherwise a flat unpacked ``data/`` folder. Result cached per ``car_dir``.
     """
     cache_key = str(car_dir)
     if cache_key in _ARCHIVE_CACHE:
@@ -86,30 +85,18 @@ def _load_archive(car_dir: Path) -> dict[str, str] | None:
 
     archive: dict[str, str] | None = None
     try:
-        # Prefer an unpacked data/ folder. Read the small data files (tyres.ini + any .lut) up
-        # front, lowercasing member names so every downstream lookup is case-insensitive — AC mods
-        # ship TYRES.INI / Tyres.ini too, and a case-exact check misses them on a case-sensitive FS.
-        data_dir = car_dir / "data"
-        members: dict[str, str] = {}
-        if data_dir.is_dir():
-            for child in data_dir.iterdir():
-                if child.is_file() and child.suffix.lower() in (".ini", ".lut"):
-                    try:
-                        members[child.name.lower()] = _decode_text(child.read_bytes())
-                    except OSError:
-                        continue
-        if "tyres.ini" in members:
-            archive = members
-        else:
-            acd_path = car_dir / "data.acd"
-            if acd_path.is_file():
-                raw = acd_path.read_bytes()
-                unpacked = unpack_acd(raw, car_dir.name)  # key derived from THIS folder's name
-                # Lowercase member names for the same case-insensitive lookups downstream.
-                lowered = {name.lower(): blob for name, blob in unpacked.items()}
-                if "tyres.ini" in lowered:
-                    archive = {name: _decode_text(blob) for name, blob in lowered.items()}
-    except (OSError, ValueError, struct.error, IndexError):
+        members = read_car_data_archive(car_dir)
+        if members is not None:
+            # Only root-level INI/LUT members participate, matching the unpacked flat directory.
+            lowered = {
+                normalized.lower(): blob
+                for name, blob in members.items()
+                if "/" not in (normalized := name.replace("\\", "/"))
+                and Path(normalized).suffix.lower() in (".ini", ".lut")
+            }
+            if "tyres.ini" in lowered:
+                archive = {name: _decode_text(blob) for name, blob in lowered.items()}
+    except (OSError, ValueError, IndexError):
         archive = None
 
     # Bounded insert: evict the oldest entry (dict preserves insertion order) when at capacity.
