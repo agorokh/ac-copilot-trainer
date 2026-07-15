@@ -121,7 +121,9 @@ def test_play_chirp_writes_every_selected_output_channel(monkeypatch) -> None:
             assert kwargs["channels"] == 4
 
         def __enter__(self):
-            outdata = np.zeros((10_000, 4), dtype=np.float32)
+            # Exceed the 0.3 s chirp at 48 kHz so the callback reaches its final partial chunk,
+            # signals completion, and never falls through to play_chirp's timeout wait.
+            outdata = np.zeros((20_000, 4), dtype=np.float32)
             try:
                 self.callback(
                     outdata,
