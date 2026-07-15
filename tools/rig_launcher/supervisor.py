@@ -785,7 +785,14 @@ def build_pyinstaller_args(
     """
     entry = project_root / "tools" / "rig_launcher" / "__main__.py"
     info = resolve_build_info(project_root) if build_info is None else build_info
-    # Default under project_root/build/ — PyInstaller's own scratch dir, already gitignored.
+    # Default under project_root/build/ — already gitignored, and NOT inside the directory
+    # `--clean` wipes, despite `build/` also being the --workpath we pass. PyInstaller appends
+    # the spec name to workpath (`build_main.build`: `workpath = os.path.join(workpath,
+    # CONF['specnm'])`) BEFORE the `--clean` pass deletes it, so `--clean` empties
+    # `build/AC-Copilot-Game-Point/`, not `build/`. The hook is a sibling of that dir and
+    # survives — verified against a real frozen EXE reporting its baked commit on /health.
+    # (Were this ever to change, Analysis would fail loudly on a missing runtime hook rather
+    # than silently ship an unbaked EXE.)
     runtime_hook = write_runtime_hook(hook_dir or (project_root / "build"), info)
     args = [
         "--name",
