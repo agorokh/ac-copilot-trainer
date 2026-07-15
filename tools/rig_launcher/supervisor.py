@@ -21,6 +21,8 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
+from tools.rig_launcher.build_info import BuildInfo, resolve_build_info, write_runtime_hook
+
 DEFAULT_PORT = 8765
 DEFAULT_EXTERNAL_BIND = "0.0.0.0"
 APP_FOLDER_NAME = "AC Copilot Trainer"
@@ -770,8 +772,28 @@ def build_pyinstaller_args(
     *,
     onefile: bool = True,
     windowed: bool = True,
+    build_info: BuildInfo | None = None,
+    hook_dir: Path | None = None,
 ) -> list[str]:
+    """PyInstaller argv for the Game Point EXE.
+
+    Bakes the build identity in via a generated ``--runtime-hook`` (issue #569) so the
+    frozen sidecar reports a real ``build_commit`` / ``build_time`` on ``/health`` instead
+    of ``"unknown"``. Doing it here rather than in the callers keeps the two entrypoints
+    (``build.py`` and ``app.main --build-exe``) from drifting. ``build_info`` / ``hook_dir``
+    are injected by tests so this stays free of git and of the real ``build/`` tree.
+    """
     entry = project_root / "tools" / "rig_launcher" / "__main__.py"
+    info = resolve_build_info(project_root) if build_info is None else build_info
+    # Default under project_root/build/ — already gitignored, and NOT inside the directory
+    # `--clean` wipes, despite `build/` also being the --workpath we pass. PyInstaller appends
+    # the spec name to workpath (`build_main.build`: `workpath = os.path.join(workpath,
+    # CONF['specnm'])`) BEFORE the `--clean` pass deletes it, so `--clean` empties
+    # `build/AC-Copilot-Game-Point/`, not `build/`. The hook is a sibling of that dir and
+    # survives — verified against a real frozen EXE reporting its baked commit on /health.
+    # (Were this ever to change, Analysis would fail loudly on a missing runtime hook rather
+    # than silently ship an unbaked EXE.)
+    runtime_hook = write_runtime_hook(hook_dir or (project_root / "build"), info)
     args = [
         "--name",
         "AC-Copilot-Game-Point",
@@ -810,6 +832,8 @@ def build_pyinstaller_args(
         "serial",
         "--hidden-import",
         "serial.tools.list_ports",
+        "--runtime-hook",
+        str(runtime_hook),
     ]
     fonts_dir = project_root / "src" / "ac_copilot_trainer" / "content" / "fonts"
     if fonts_dir.is_dir():

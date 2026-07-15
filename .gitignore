@@ -5,6 +5,11 @@ __pycache__/
 .eggs/
 dist/
 build/
+# PyInstaller writes this to the repo root on every --build-exe / build.py run. It is
+# generated and machine-specific (absolute local paths for datas, binaries, and the baked
+# runtime hook), and it is rebuilt from build_pyinstaller_args() each run — so a committed
+# copy is pure drift: stale local paths that no longer match whoever reads them. (#569)
+*.spec
 .venv/
 venv/
 .python-version
