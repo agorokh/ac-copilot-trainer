@@ -17,6 +17,8 @@
 -- (current-frame WS state), alongside the lifecycle block. Topic strings are `local` consts so
 -- the `test_ws_topic_allowlist` drift-guard can resolve them against KNOWN_TOPICS.
 
+local wheelRead = require("wheel_read")
+
 local M = {}
 
 local DELTA_INTERVAL_SEC = 0.1  -- ~10 Hz, matches the HUD delta refresh
@@ -184,6 +186,65 @@ local function _cornerMap(values)
   return nil
 end
 
+
+-- #531 Part D: CSP `ac.StateWheel.tyreWear` is 0..1 wear CONSUMED — 0.0 is a NEW tyre and the
+-- value grows with use. Matches the wire field `tyre_wear_pct` (0 = new, 100 = gone), which the
+-- sidecar's `race_management._tyre_advisory` reads to fire "tyre wear is high" (and its voice
+-- cue) at `>= 70`, so this is a plain x100 with no inversion.
+--
+-- Rig-verified 2026-07-14 against 321 checked-in lap archives (4 cars) rather than assumed: the
+-- SDK's "from 0 to 1" is direction-ambiguous, and reading it as CONDITION-remaining (1.0 = new)
+-- inverts to 100 on a fresh set — a permanent false wear alarm on lap one. Observed range across
+-- every nonzero corner was 0.000268..0.0720 (i.e. 0.03%..7.2%), growing from an exact 0.0 on new
+-- tyres, which also matches reference_mock.html's illustrative "4% / 7% / 9% wear".
+local function _wearPct(raw)
+  raw = _finite(raw)
+  if raw == nil then
+    return nil
+  end
+  return _clamp(raw, 0, 1) * 100
+end
+
+
+--- Read the live per-wheel dashboard vitals (#531 Part D) into {fl,fr,rl,rr} maps, via the shared
+--- `wheel_read` accessors so the finicky parts (CSP field names — `tyrePressure`/`discTemperature`/
+--- `tyreWear`, NOT the SimHub/ACC spellings — and the 0-based wheel order) have one source of
+--- truth. Each read is pcall-guarded there and degrades to nil, so a CSP build or car that lacks a
+--- channel omits that corner rather than throwing out of the 20 Hz publish path.
+---@param car any
+---@return table pressures, table brakeTemps, table wearPct  (values number|nil per corner)
+local function _readWheelVitals(car)
+  local pressures, brakeTemps, wearPct = {}, {}, {}
+  local wheels = _field(car, "wheels")
+  if wheels == nil then
+    return pressures, brakeTemps, wearPct
+  end
+  for i = 0, 3 do
+    local key = wheelRead.WHEEL_KEYS[i]
+    local one = _field(wheels, i)
+    if one ~= nil then
+      pressures[key] = wheelRead.pressure(one)
+      brakeTemps[key] = wheelRead.brakeTemp(one)
+      wearPct[key] = _wearPct(wheelRead.wear(one))
+    end
+  end
+  return pressures, brakeTemps, wearPct
+end
+
+
+--- Read a CSP boolean that only exists when the car's physics expose it (`tractionControlInAction`
+--- / `absInAction` are "Physics-only" per the lua-sdk `ac.StateCar` stubs). Returns nil — so the
+--- publisher OMITS the key — for anything that is not a real boolean, keeping the tick's sentinel
+--- discipline: missing = unknown, `false` = the system is present and idle.
+local function _physicsFlag(car, key)
+  local v = _field(car, key)
+  if type(v) ~= "boolean" then
+    return nil
+  end
+  return v
+end
+
+
 --- Publish client→server ``telemetry_tick`` at ~20 Hz (M0 #341). Requires ``wsBridge.sendJson``.
 ---@param opts table  {dt:number, car:any, wsBridge, lat_g?:number, long_g?:number, temps?:table}
 ---@return boolean
@@ -249,6 +310,35 @@ function M.publishTelemetryTickIfDue(opts)
   local tyreTemps = _cornerMap(opts.temps)
   if tyreTemps ~= nil then
     payload.tyre_temps_c = tyreTemps
+  end
+  -- #531 Part D: the live vitals the tablet dashboard's tyre board and STINT page read. They were
+  -- captured to the lap trace but never streamed, so the board printed a temp with an empty
+  -- pressure slot its own header advertised. Each map is omitted entirely when no corner resolved
+  -- (`_cornerMap` returns nil) — an absent vital must render as an explicit unknown on the dash,
+  -- never as a frozen last value.
+  local pressures, brakeTemps, wearPct = _readWheelVitals(opts.car)
+  local pressureMap = _cornerMap(pressures)
+  if pressureMap ~= nil then
+    payload.tyre_pressures_psi = pressureMap
+  end
+  local brakeTempMap = _cornerMap(brakeTemps)
+  if brakeTempMap ~= nil then
+    payload.brake_temps_c = brakeTempMap
+  end
+  local wearMap = _cornerMap(wearPct)
+  if wearMap ~= nil then
+    payload.tyre_wear_pct = wearMap
+  end
+  -- #531 Part D: the electronics intervention flash — brass segments are "what I dialled", the
+  -- transient signal colour is "what the car is doing". The dashboard already read `abs_active`
+  -- but NO producer ever sent it, so the flash could never fire; `tc_active` had no slot at all.
+  local tcActive = _physicsFlag(car, "tractionControlInAction")
+  if tcActive ~= nil then
+    payload.tc_active = tcActive
+  end
+  local absActive = _physicsFlag(car, "absInAction")
+  if absActive ~= nil then
+    payload.abs_active = absActive
   end
   return wsBridge.sendJson({
     v = 1,

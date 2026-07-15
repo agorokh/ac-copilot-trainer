@@ -432,6 +432,117 @@ def test_telemetry_tick_omits_rpm_max_when_missing_or_zero():
     assert out["has_lap_time"] is False
 
 
+def test_telemetry_tick_carries_wheel_vitals_and_intervention_flags():
+    """#531 Part D: the live vitals the tablet tyre board reads (pressure/brake-temp/wear) plus
+    the TC/ABS intervention flags. CSP field names are the finicky part — `tyrePressure`,
+    `discTemperature`, `tyreWear` (NOT the SimHub/ACC `brakeTemperature` spelling) — and wheels
+    are 0-BASED (FL=0..RR=3); a 1-based read silently shifts every corner (the #180 regression)."""
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local function wheel(psi, disc, wear)
+            return { tyrePressure = psi, discTemperature = disc, tyreWear = wear }
+          end
+          local car = {
+            speedKmh = 120, rpm = 6000, gas = 0.5, brake = 1.0, steer = 0.1,
+            gear = 3, splinePosition = 0.42, lapCount = 2,
+            tractionControlInAction = true, absInAction = false,
+            wheels = {
+              [0] = wheel(27.4, 310, 0.98), [1] = wheel(27.6, 312, 0.97),
+              [2] = wheel(26.1, 280, 0.99), [3] = wheel(26.3, 282, 0.96),
+            },
+          }
+          M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws })
+          local p = ws._calls[1] and ws._calls[1].send.payload
+          return {
+            psi_fl = p.tyre_pressures_psi and p.tyre_pressures_psi.fl,
+            psi_rr = p.tyre_pressures_psi and p.tyre_pressures_psi.rr,
+            disc_fl = p.brake_temps_c and p.brake_temps_c.fl,
+            disc_rr = p.brake_temps_c and p.brake_temps_c.rr,
+            tc = p.tc_active, abs = p.abs_active,
+          }
+        end)()
+        """
+    )
+    assert (out["psi_fl"], out["psi_rr"]) == (27.4, 26.3)
+    # RR is read from wheels[3]: a 1-based loop would read nil here and drop the corner.
+    assert (out["disc_fl"], out["disc_rr"]) == (310, 282)
+    assert out["tc"] is True
+    assert out["abs"] is False
+
+
+def test_telemetry_tick_wear_pct_is_consumed_not_condition():
+    """CSP `tyreWear` is 0..1 wear CONSUMED (0.0 = new, growing with use), matching the wire's
+    `tyre_wear_pct` (0 = new, 100 = gone) — a plain x100, NO inversion.
+
+    Direction rig-verified 2026-07-14 across 321 lap archives (4 cars): every nonzero corner fell
+    in 0.000268..0.0720, growing from an exact 0.0 on a new set. The SDK's "from 0 to 1" is
+    direction-ambiguous, and reading it as condition-remaining inverts a NEW tyre to 100 —
+    which `race_management._tyre_advisory` turns into a "tyre wear is high" voice cue on lap one.
+    This test pins the measured direction so that inversion cannot be reintroduced.
+    """
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local car = {
+            speedKmh = 120, rpm = 6000, gas = 0.5, brake = 0.0, steer = 0.0,
+            gear = 3, splinePosition = 0.42, lapCount = 2,
+            wheels = {
+              [0] = { tyreWear = 0.0 },     -- brand new (the observed value on a fresh set)
+              [1] = { tyreWear = 0.072 },   -- the worst corner seen across 321 rig archives
+              [2] = { tyreWear = 0.75 },    -- a heavily used set
+              [3] = { tyreWear = 1.0 },     -- fully consumed
+            },
+          }
+          M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws })
+          local w = ws._calls[1].send.payload.tyre_wear_pct
+          return { fl = w.fl, fr = w.fr, rl = w.rl, rr = w.rr }
+        end)()
+        """
+    )
+    assert out["fl"] == 0.0  # a NEW tyre must report 0% consumed -> never trips the >=70 cue
+    assert abs(out["fr"] - 7.2) < 1e-9  # matches reference_mock.html's illustrative "7% wear"
+    assert out["rl"] == 75.0
+    assert out["rr"] == 100.0
+
+
+def test_telemetry_tick_omits_vitals_and_flags_when_car_lacks_them():
+    """Sentinel discipline: a CSP build/car with no wheel struct or no TC/ABS physics flags must
+    OMIT the keys so the dashboard renders an explicit unknown — never an empty map (which Lua
+    would serialize as `{}` and the board would read as live-but-blank) and never a defaulted
+    `false` (which would claim "present and idle" for a system the car does not have)."""
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local car = {
+            speedKmh = 10, rpm = 900, gas = 0, brake = 0, steer = 0,
+            gear = 1, splinePosition = 0.1, lapCount = 0,
+          }
+          M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws })
+          local p = ws._calls[1].send.payload
+          return {
+            psi = p.tyre_pressures_psi ~= nil, disc = p.brake_temps_c ~= nil,
+            wear = p.tyre_wear_pct ~= nil, tc = p.tc_active ~= nil, abs = p.abs_active ~= nil,
+          }
+        end)()
+        """
+    )
+    assert out["psi"] is False
+    assert out["disc"] is False
+    assert out["wear"] is False
+    assert out["tc"] is False
+    assert out["abs"] is False
+
+
 def test_telemetry_tick_seq_resets_on_module_reset():
     rt = _runtime()
     out = rt.eval(

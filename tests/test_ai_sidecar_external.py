@@ -277,6 +277,18 @@ def test_validate_inbound_accepts_known_types() -> None:
     assert ep.validate_inbound(_telemetry_tick()) is None
     assert ep.validate_inbound(_telemetry_tick(slip=-0.35)) is None
     assert ep.validate_inbound(_telemetry_tick(tyre_temps_c={"fl": 74.1})) is None
+    # #531 Part D live vitals + the TC/ABS intervention flags the dashboard flashes on.
+    assert ep.validate_inbound(_telemetry_tick(tc_active=True, abs_active=False)) is None
+    assert (
+        ep.validate_inbound(
+            _telemetry_tick(
+                tyre_pressures_psi={"fl": 27.4, "fr": 27.6, "rl": 26.1, "rr": 26.3},
+                brake_temps_c={"fl": 310.0, "fr": 312.0, "rl": 280.0, "rr": 282.0},
+                tyre_wear_pct={"fl": 0.0, "fr": 25.0, "rl": 75.0, "rr": 100.0},
+            )
+        )
+        is None
+    )
     assert ep.validate_inbound(_haptic_event()) is None
 
 
@@ -430,6 +442,12 @@ def test_validate_inbound_rejects_invalid() -> None:
     )
     assert "tyre_temps_c.fl requires a finite number" in (
         ep.validate_inbound(_telemetry_tick(tyre_temps_c={"fl": "hot"})) or ""
+    )
+    assert "tc_active must be a boolean" in (
+        ep.validate_inbound(_telemetry_tick(tc_active="on")) or ""
+    )
+    assert "tyre_pressures_psi.rr requires a finite number" in (
+        ep.validate_inbound(_telemetry_tick(tyre_pressures_psi={"rr": None})) or ""
     )
     assert "intensity must be <= 1" in (ep.validate_inbound(_haptic_event(intensity=1.4)) or "")
     assert "unknown type" in (ep.validate_inbound({"v": 1, "type": "explode"}) or "")
