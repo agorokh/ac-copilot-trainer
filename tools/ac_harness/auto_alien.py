@@ -613,6 +613,10 @@ def _passthrough_args(args: argparse.Namespace) -> list[str]:
         out += ["--sidecar-url", args.sidecar_url]
     if args.rig_lock_timeout is not None:
         out += ["--rig-lock-timeout", str(args.rig_lock_timeout)]
+    if args.strict_app_version:
+        # #575: both stages must agree on the app version — an identification session run against
+        # a stale app produces the plant artifact the drive stage then trusts.
+        out.append("--strict-app-version")
     return out
 
 
@@ -689,6 +693,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--track", required=True, help="AC track id (e.g. magione)")
     p.add_argument("--track-layout", default=None, help="layout subdir for multi-layout tracks")
     p.add_argument("--setup", default=None, help="car setup name (plant identity includes it)")
+    p.add_argument(
+        "--strict-app-version",
+        action="store_true",
+        help="fail preflight on every stage when the AC-installed trainer app does not match "
+        "this checkout (default: warn) (#575)",
+    )
     p.add_argument("--ac-root", type=Path, default=None, help="AC content root (Steam install)")
     p.add_argument("--ac-user-dir", type=Path, default=None, help="AC user data root")
     p.add_argument("--cm-exe", type=Path, default=None, help="Content Manager.exe path")

@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
+import shutil
 import threading
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from tools.ac_harness.auto_drive import (
+    AppInstallProvenance,
     AutoDriveConfig,
     AutoDriveReport,
     DriveStats,
@@ -24,6 +27,10 @@ from tools.ac_harness.auto_drive import (
     _build_driver,
     _config_from_args,
     _wait_live,
+    app_install_provenance,
+    app_provenance_recheck,
+    app_tree_digest,
+    app_version_preflight_fatal,
     bake_setup_into_race_ini,
     build_practice_preset,
     candidate_journal_laps_dirs,
@@ -2108,6 +2115,11 @@ def _fake_rig(tmp_path, *, custom_ai="ENABLED=1\n"):
     return ac_root, user, cm
 
 
+def _match_provenance() -> AppInstallProvenance:
+    """A provenance verdict that raises no preflight row (the app matches the harness)."""
+    return AppInstallProvenance(status="match", detail="installed app matches this checkout")
+
+
 def test_preflight_passes_on_complete_rig(tmp_path):
     ac_root, user, cm = _fake_rig(tmp_path)
     cfg = _cfg(
@@ -2119,7 +2131,273 @@ def test_preflight_passes_on_complete_rig(tmp_path):
         setup="Realistic_BB_v3",
         cm_preset=None,
     )
-    assert preflight(cfg) == []
+    assert preflight(cfg, app_provenance=_match_provenance()) == []
+
+
+def test_preflight_app_version_drift_is_a_warning_not_an_error(tmp_path):
+    """#575: a drifted app is loud but never bricks the run — --strict-app-version is the gate."""
+    ac_root, user, cm = _fake_rig(tmp_path)
+    cfg = _cfg(
+        ac_root=ac_root,
+        ac_user_dir=user,
+        cm_exe=cm,
+        track_id="spa",
+        car_id="ks_porsche_911_gt3_r_2016",
+        setup="Realistic_BB_v3",
+        cm_preset=None,
+    )
+    drifted = AppInstallProvenance(status="drift", detail="installed app differs: abc vs def")
+    issues = preflight(cfg, app_provenance=drifted)
+    assert [(i.check, i.severity) for i in issues] == [("app_version", "warning")]
+    assert "differs" in issues[0].message
+
+
+@pytest.mark.parametrize("status", ["absent", "unverifiable"])
+def test_preflight_unestablished_provenance_is_reported_not_fatal(tmp_path, status):
+    """#575 AC2: an install whose version cannot be established degrades to a warning, not error."""
+    ac_root, user, cm = _fake_rig(tmp_path)
+    cfg = _cfg(
+        ac_root=ac_root,
+        ac_user_dir=user,
+        cm_exe=cm,
+        track_id="spa",
+        car_id="ks_porsche_911_gt3_r_2016",
+        setup="Realistic_BB_v3",
+        cm_preset=None,
+    )
+    prov = AppInstallProvenance(status=status, detail="version not established")
+    issues = preflight(cfg, app_provenance=prov)
+    assert [(i.check, i.severity) for i in issues] == [("app_version", "warning")]
+
+
+def test_strict_gates_on_the_verdict_not_merely_on_the_row():
+    """PR #587 review: --strict-app-version must distinguish absent from unverifiable.
+
+    An ABSENT app cannot run the wrong code, so strict still only warns. An app that is present
+    but UNVERIFIABLE may already be the stale one — strict must fail, or a flag whose whole
+    purpose is evidence integrity would go green on "something is installed, I cannot tell what".
+    """
+    blocks = {
+        s: AppInstallProvenance(status=s, detail="x").blocks_strict
+        for s in ("match", "drift", "absent", "unverifiable")
+    }
+    assert blocks == {"match": False, "drift": True, "absent": False, "unverifiable": True}
+
+
+def _prov(status: str) -> AppInstallProvenance:
+    return AppInstallProvenance(status=status, detail=f"detail for {status}")
+
+
+def test_preflight_only_may_abort_strict_on_the_pre_lock_verdict():
+    """--preflight-only takes no rig lock, so the pre-lock verdict is all it will ever have."""
+    assert app_version_preflight_fatal(_prov("drift"), strict=True, preflight_only=True) is True
+    assert (
+        app_version_preflight_fatal(_prov("unverifiable"), strict=True, preflight_only=True) is True
+    )
+    assert app_version_preflight_fatal(_prov("absent"), strict=True, preflight_only=True) is False
+    assert app_version_preflight_fatal(_prov("drift"), strict=False, preflight_only=True) is False
+
+
+def test_a_real_strict_drive_never_aborts_on_the_pre_lock_verdict():
+    """PR #587 review: a peer holding the rig lock may fix the install before we acquire it.
+
+    Aborting pre-lock would false-fail on a drift that is already gone by drive time — and it
+    would make the post-lock recheck unreachable, which is what made the drift->match recovery
+    below dead code in the first draft.
+    """
+    for status in ("drift", "unverifiable"):
+        assert (
+            app_version_preflight_fatal(_prov(status), strict=True, preflight_only=False) is False
+        )
+
+
+def test_post_lock_recheck_closes_the_strict_bypass():
+    """PR #587 review: a pre-lock `match` must not bypass strict on an app that drifted since.
+
+    The install is shared rig state — a peer worktree can repoint the junction while we block on
+    the machine-global lock. Observed live during this PR's own verification.
+    """
+    note, fatal = app_provenance_recheck(_prov("match"), _prov("drift"), strict=True)
+    assert fatal is True
+    assert note is not None and "match -> drift" in note
+
+
+def test_post_lock_recheck_clears_a_stale_pre_lock_drift():
+    """The inverse race: a peer FIXED the install while we waited — do not false-fail on it."""
+    note, fatal = app_provenance_recheck(_prov("drift"), _prov("match"), strict=True)
+    assert fatal is False
+    assert note is not None and "drift -> match" in note
+
+
+def test_post_lock_recheck_is_quiet_and_non_fatal_when_nothing_changed():
+    assert app_provenance_recheck(_prov("match"), _prov("match"), strict=True) == (None, False)
+
+
+def test_post_lock_recheck_never_fails_without_the_strict_flag():
+    """Default stays warn-only: the race is reported, but a drift alone never aborts the drive."""
+    note, fatal = app_provenance_recheck(_prov("match"), _prov("drift"), strict=False)
+    assert fatal is False
+    assert note is not None  # still surfaced
+
+
+def test_post_lock_recheck_absent_still_never_blocks_strict():
+    """`absent` keeps its non-fatal semantics on the post-lock path too."""
+    _note, fatal = app_provenance_recheck(_prov("match"), _prov("absent"), strict=True)
+    assert fatal is False
+
+
+def _app_tree(root: Path, *, body: str = "-- v1\n") -> Path:
+    """A minimal trainer app source tree at ``<root>/src/ac_copilot_trainer``."""
+    src = root / "src" / "ac_copilot_trainer"
+    (src / "modules").mkdir(parents=True)
+    (src / "ac_copilot_trainer.lua").write_text(body, encoding="utf-8")
+    (src / "manifest.ini").write_text("[ABOUT]\nNAME=AC Copilot Trainer\n", encoding="utf-8")
+    (src / "modules" / "hud.lua").write_text("-- hud\n", encoding="utf-8")
+    return src
+
+
+def _install_app(ac_root: Path, src: Path) -> Path:
+    """Copy an app tree to the AC install path (stands in for the rig's junction)."""
+    installed = ac_root / "apps" / "lua" / "AC_Copilot_Trainer"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, installed)
+    return installed
+
+
+def test_app_install_provenance_reports_match(tmp_path):
+    """#575: identical content on both sides is a match, and names the version."""
+    harness = tmp_path / "harness"
+    src = _app_tree(harness)
+    ac_root = tmp_path / "ac"
+    _install_app(ac_root, src)
+
+    prov = app_install_provenance(ac_root, harness_root=harness)
+    assert prov.status == "match"
+    assert prov.installed_digest == prov.harness_digest
+    assert prov.installed_digest is not None
+
+
+def test_app_install_provenance_detects_drift_and_names_both_versions(tmp_path):
+    """#575 AC1: differing app content is drift, and the message names installed + harness."""
+    harness = tmp_path / "harness"
+    _app_tree(harness, body="-- current\n")
+    stale = tmp_path / "stale"
+    stale_src = _app_tree(stale, body="-- ten days old\n")
+    ac_root = tmp_path / "ac"
+    _install_app(ac_root, stale_src)
+
+    prov = app_install_provenance(ac_root, harness_root=harness)
+    assert prov.status == "drift"
+    assert prov.installed_digest != prov.harness_digest
+    # The warning must name both sides so the operator can act without spelunking.
+    assert str(ac_root / "apps" / "lua" / "AC_Copilot_Trainer") in prov.detail
+    assert str(harness / "src" / "ac_copilot_trainer") in prov.detail
+
+
+def test_app_install_provenance_detects_a_pure_rename_as_drift(tmp_path):
+    """Identical bytes under a different name is a real drift — the digest is path-sensitive."""
+    harness = tmp_path / "harness"
+    _app_tree(harness)
+    other = tmp_path / "other"
+    other_src = _app_tree(other)
+    (other_src / "modules" / "hud.lua").rename(other_src / "modules" / "hud_old.lua")
+    ac_root = tmp_path / "ac"
+    _install_app(ac_root, other_src)
+
+    assert app_install_provenance(ac_root, harness_root=harness).status == "drift"
+
+
+def test_app_install_provenance_absent_when_app_not_installed(tmp_path):
+    """#575 AC2: no install at all → `absent`, actionable message, no crash, never strict-fatal."""
+    harness = tmp_path / "harness"
+    _app_tree(harness)
+    ac_root = tmp_path / "ac"
+    ac_root.mkdir()
+
+    prov = app_install_provenance(ac_root, harness_root=harness)
+    assert prov.status == "absent"
+    assert prov.blocks_strict is False  # nothing installed can run the wrong code
+    assert prov.installed_digest is None
+    assert prov.harness_digest is not None  # the harness side is still established
+    assert "not installed" in prov.detail
+
+
+def test_app_install_provenance_unverifiable_when_harness_has_no_app_source(tmp_path):
+    """An app IS installed but cannot be compared — `unverifiable`, and strict must fail on it."""
+    harness = tmp_path / "harness"
+    harness.mkdir()
+    other = tmp_path / "other"
+    src = _app_tree(other)
+    ac_root = tmp_path / "ac"
+    _install_app(ac_root, src)
+
+    prov = app_install_provenance(ac_root, harness_root=harness)
+    assert prov.status == "unverifiable"
+    assert prov.blocks_strict is True  # an installed app of unknown version may be the stale one
+    assert prov.harness_digest is None
+    assert prov.installed_digest is not None
+
+
+def test_app_install_provenance_ignores_pycache_build_noise(tmp_path):
+    """Observed on the rig: the primary checkout carries __pycache__ a worktree does not.
+
+    That is build noise the AC Lua runtime never reads — hashing it would report false drift on
+    every run and train the operator to ignore the warning.
+    """
+    harness = tmp_path / "harness"
+    src = _app_tree(harness)
+    ac_root = tmp_path / "ac"
+    installed = _install_app(ac_root, src)
+    (installed / "__pycache__").mkdir()
+    (installed / "__pycache__" / "__init__.cpython-313.pyc").write_bytes(b"\x00noise")
+
+    assert app_install_provenance(ac_root, harness_root=harness).status == "match"
+
+
+def test_app_install_provenance_ignores_line_ending_normalization(tmp_path):
+    """Observed live on the rig: `start_sidecar.bat` differed between the primary checkout and a
+    worktree AT THE SAME COMMIT, purely in EOLs (`.gitattributes` has `*.bat text eol=crlf`).
+
+    Raw-byte hashing would report drift on every run here; an always-wrong warning trains the
+    operator to ignore the one time it is real.
+    """
+    harness = tmp_path / "harness"
+    src = _app_tree(harness)
+    (src / "start_sidecar.bat").write_bytes(b"@echo off\nset X=1\n")
+    ac_root = tmp_path / "ac"
+    installed = _install_app(ac_root, src)
+    # Same content, CRLF — what a checkout under different eol settings produces.
+    (installed / "start_sidecar.bat").write_bytes(b"@echo off\r\nset X=1\r\n")
+
+    assert app_install_provenance(ac_root, harness_root=harness).status == "match"
+
+
+def test_app_install_provenance_still_catches_real_text_edits(tmp_path):
+    """EOL-insensitivity must not swallow a genuine one-character logic change."""
+    harness = tmp_path / "harness"
+    src = _app_tree(harness)
+    (src / "modules" / "hud.lua").write_bytes(b"local speed = 1\n")
+    ac_root = tmp_path / "ac"
+    installed = _install_app(ac_root, src)
+    (installed / "modules" / "hud.lua").write_bytes(b"local speed = 2\r\n")
+
+    assert app_install_provenance(ac_root, harness_root=harness).status == "drift"
+
+
+def test_app_tree_digest_hashes_binary_assets_byte_exact(tmp_path):
+    """A font/PNG that differs by one byte is drift — CRLF normalization must not touch binary."""
+    a = tmp_path / "a" / "src" / "ac_copilot_trainer"
+    b = tmp_path / "b" / "src" / "ac_copilot_trainer"
+    for root, blob in ((a, b"\x00\r\n\x01"), (b, b"\x00\n\x01")):
+        root.mkdir(parents=True)
+        (root / "content").mkdir()
+        (root / "content" / "font.ttf").write_bytes(blob)
+
+    assert app_tree_digest(a) != app_tree_digest(b)
+
+
+def test_app_tree_digest_is_none_for_a_missing_tree(tmp_path):
+    assert app_tree_digest(tmp_path / "nope") is None
 
 
 def test_preflight_reports_missing_content_and_disabled_custom_ai(tmp_path):
