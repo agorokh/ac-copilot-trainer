@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-07-15T02:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-531-partd-live-vitals-2026-07-14.md
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/issue-570-route-registry-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-582-l3-corner-refinement-2026-07-14.md
