@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T20:38:33Z
+last_updated: 2026-07-15T20:55:51Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-602-portaudio-fixed-layout-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-pit-stall-sim-death-2026-07-15.md
@@ -105,8 +105,10 @@ speaker layout and maps speech to front-center channel 3. Game Point exposed the
 layout as enabled, and a live `Brake!` dispatch matched its source waveform at score 1.0 on the
 speaker's WASAPI loopback channel 3; all other channels were silent. Review follow-ups also made
 the default-device chirp negotiate fixed layouts, preserved multichannel banks across expanded
-streams, and duplicate mono to both channels on stereo-only endpoints. Full parity is **2,970
-passed, 113 skipped, 87.60% coverage, `ci-fast: OK`**. The test launcher was shut down cleanly.
+streams, duplicate mono to both channels on stereo-only endpoints, and preserve the non-crashing
+legacy Playback injection seam when optional output metadata is missing or raises. Full parity is
+**2,972 passed, 113 skipped, 87.60% coverage, `ci-fast: OK`**. The test launcher was shut down
+cleanly.
 
 **Resume here:** PR #606 is ready. Confirm the latest stereo-fallback correction through the
 current-SHA remote gate, resolve its review thread, then merge through the normal maintainer

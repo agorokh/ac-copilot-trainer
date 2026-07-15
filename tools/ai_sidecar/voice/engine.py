@@ -183,7 +183,15 @@ class VoiceCoach:
                 detail = str(exc) or type(exc).__name__
                 return cls.disabled(f"could not initialize audio backend {backend!r}: {detail}")
 
-        playback_details = playback.output_details
+        try:
+            playback_details = getattr(playback, "output_details", {})
+        except Exception:  # noqa: BLE001 - metadata must never break an injected audio seam
+            _log.exception("voice: playback output metadata unavailable; continuing without it")
+            playback_details = {}
+        if not isinstance(playback_details, Mapping):
+            _log.warning("voice: ignoring non-mapping playback output metadata")
+            playback_details = {}
+        playback_details = dict(playback_details)
 
         if dispatch_listener is not None:
             from tools.ai_sidecar.voice.dispatch import DispatchTapPlayback

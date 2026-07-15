@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T20:38:33Z
+last_updated: 2026-07-15T20:55:51Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-602-portaudio-fixed-layout-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-pit-stall-sim-death-2026-07-15.md
@@ -46,9 +46,10 @@ phrase bank now negotiates the rig's fixed six-channel WASAPI layout and maps vo
 channel 3. Game Point showed `VOICE ENABLED` with `1ch bank -> 6ch stream/6ch max map=[3]`; a real
 `Brake!` dispatch matched the source waveform at score 1.0 on WASAPI loopback channel 3 with the
 other five channels silent. Default-device chirps now negotiate the same layout, multichannel
-banks preserve every mapped source channel, and stereo-only fallbacks duplicate mono to both
-channels instead of playing left-only. Full parity: **2,970 passed, 113 skipped, 87.60% coverage**.
-The latest review correction requires its current-SHA remote gate before merge. Detail:
+banks preserve every mapped source channel, stereo-only fallbacks duplicate mono to both channels
+instead of playing left-only, and legacy injected Playback objects cannot crash on optional output
+metadata. Full parity: **2,972 passed, 113 skipped, 87.60% coverage**. The latest review correction
+requires its current-SHA remote gate before merge. Detail:
 [[issue-602-portaudio-fixed-layout-2026-07-15]].
 
 **Delivered and live-proven (2026-07-15):** [#596](https://github.com/agorokh/ac-copilot-trainer/issues/596)

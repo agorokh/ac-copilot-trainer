@@ -2,7 +2,7 @@
 type: investigation
 status: verified
 memory_tier: canonical
-last_updated: 2026-07-15T20:38:33Z
+last_updated: 2026-07-15T20:55:51Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Next Session Handoff.md
@@ -38,7 +38,9 @@ same fields plus remediation environment variables.
 - Default-device latency chirps negotiate the selected PortAudio layout instead of assuming mono.
 - Sounddevice expansion preserves every source channel for multichannel banks.
 - Stereo-only endpoints duplicate mono to channels 1 and 2 in both rtmixer and sounddevice.
-- Full parity: 2,970 passed, 113 skipped, 87.60% coverage, `ci-fast: OK`.
+- Legacy injected Playback objects degrade to empty output metadata when the optional property is
+  missing, invalid, or raises; voice initialization stays enabled.
+- Full parity: 2,972 passed, 113 skipped, 87.60% coverage, `ci-fast: OK`.
 - The verification launcher was stopped afterward; no Game Point window or port 8765 listener
   remained.
 

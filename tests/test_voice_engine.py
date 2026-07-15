@@ -94,6 +94,41 @@ def test_disabled_coach_factory() -> None:
     coach.subscribe(make_advisory())  # no-op, no crash
 
 
+def test_injected_legacy_playback_without_output_details_stays_enabled(tmp_path) -> None:
+    class _LegacyPlayback:
+        current = None
+
+        def play(self, _utterance) -> None:  # noqa: ANN001
+            return None
+
+        def cancel(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    coach = VoiceCoach.from_bank(_baked(tmp_path), VoiceConfig(), playback=_LegacyPlayback())
+
+    assert coach.enabled
+    assert coach.playback_details == {}
+
+
+def test_injected_playback_metadata_failure_stays_enabled(tmp_path) -> None:
+    class _BrokenMetadataPlayback(RecordingPlayback):
+        @property
+        def output_details(self):  # noqa: ANN201
+            raise RuntimeError("metadata unavailable")
+
+    coach = VoiceCoach.from_bank(
+        _baked(tmp_path),
+        VoiceConfig(),
+        playback=_BrokenMetadataPlayback(),
+    )
+
+    assert coach.enabled
+    assert coach.playback_details == {}
+
+
 def test_build_playback_falls_back_to_sounddevice_when_rtmixer_missing(
     monkeypatch, tmp_path
 ) -> None:
