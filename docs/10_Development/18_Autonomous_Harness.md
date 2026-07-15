@@ -154,6 +154,20 @@ python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track ma
 - `--force-identify` re-runs identification; `--rebuild-line` (or `--alien-rebuild-line` on
   `auto_drive`) rebuilds the line cache from the current plant.
 
+### Beyond-QSS per-corner refinement (#529 L3 / #582)
+
+The QSS profile consumes the uncertainty-safe LCB grip (`mean − 1.96·std` per 10 km/h bin), which
+the #577 runs proved binds the lap-time floor. `auto_alien` therefore enables **L3** on every
+alien stage by default (`--no-l3` disables; on `auto_drive` it is the opt-in `--l3` flag): corners
+of the optimized line whose speed range crosses **measured, low-variance** lateral bins get their
+interior re-solved between QSS-pinned entry/exit speeds against grip relaxed toward the posterior
+mean — never above the stability barrier `mean − 1.0·std`, never in prior-dominated bins, and
+never silently: the artifact's `l3` report names every corner as `refined` (chosen z, relaxed
+bins, predicted gain) or `reverted` (reason). The refined profile rides the same artifact,
+provenance gates, and cache revalidation (a tampered refined profile fails the barrier re-check
+and rebuilds); `--no-l3` artifacts are byte-identical to pre-#582 builds. Reality remains the
+judge: the #577 keep-last-valid oracle falsifies a refined profile the car cannot hold.
+
 ## Composing downstream tasks (don't reinvent)
 
 - **Setup A/B**: run twice with different `--setup` names; compare the runs' lap archives with

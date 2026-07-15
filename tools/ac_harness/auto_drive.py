@@ -174,6 +174,10 @@ class AutoDriveConfig:
     # flag only (the one-shot alien path keeps the hard <=1 gate from #572), hard-capped, and
     # every step is falsifiable via the auto_alien keep-last-valid oracle.
     alien_overspeed: bool = False
+    # #582 L3: opt-in beyond-QSS per-corner refinement of the alien-line profile. The refined
+    # v_target rides the same artifact/provenance gates; per-corner revert reasons land in the
+    # artifact's ``l3`` report. Off (default) builds/serves the pre-#582 QSS-only artifact.
+    alien_l3: bool = False
     target_speed_kmh: float = 55.0  # cruise only
     min_corner_speed_kmh: float = 30.0  # cruise only
     # Stall recovery (#459 Part D).
@@ -2727,6 +2731,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="alien: ignore the cached line artifact and rebuild it from the current plant",
     )
     p.add_argument(
+        "--l3",
+        action="store_true",
+        help="alien: #582 beyond-QSS per-corner refinement — relax measured, low-variance grip "
+        "bins from the 1.96-z safe LCB toward the posterior mean (stability floor z=1.0), "
+        "re-solve each corner's interior between QSS-pinned entry/exit speeds, revert to "
+        "safe-QSS per corner when evidence is thin (named in the artifact's l3 report). Off = "
+        "byte-identical pre-#582 QSS artifact",
+    )
+    p.add_argument(
         "--use-plant",
         choices=("off", "auto", "full"),
         default="auto",
@@ -2860,6 +2873,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         wait_lap=args.wait_lap or args.laps > 0,
         target_laps=max(0, args.laps),
         alien_overspeed=args.alien_allow_overspeed,
+        alien_l3=args.l3,
         strict=args.strict,
         skip_launch=args.skip_launch,
         hijack_probe_seconds=args.hijack_probe_seconds,
@@ -2954,6 +2968,7 @@ def _resolve_alien_assets(
     bypassing the cache/provenance gates.
     """
     from tools.ac_harness.alien_line import alien_line_path, ensure_alien_line_artifact
+    from tools.ac_harness.corner_refine import L3Params
     from tools.ac_harness.plant_id import (
         load_plant_artifact,
         plant_artifact_path,
@@ -3017,6 +3032,7 @@ def _resolve_alien_assets(
             setup=setup_key,
             setup_ini=config.setup_ini,
             v_top_kmh=config.racing_max_speed_kmh,
+            l3_params=L3Params() if config.alien_l3 else None,
             rebuild=rebuild,
         )
     except (OSError, ValueError) as exc:
@@ -3038,12 +3054,49 @@ def _resolve_alien_assets(
         "qss": line_artifact.get("qss"),
         "corridor": line_artifact.get("corridor"),
     }
+    l3_report = line_artifact.get("l3")
+    if isinstance(l3_report, dict):
+        # The driver multiplies the artifact's v_target by config.ggv_scale AFTER this report
+        # snapshot, so the artifact's own (unscaled) utilisation metrics would under-report an
+        # overspeed probe as within-barrier. Recompute the DRIVEN target's utilisation exactly
+        # against the same barrier; a failure is disclosed in the report, never swallowed
+        # (#583 Codex P2).
+        from tools.ac_harness.corner_refine import barrier_ggv, profile_utilisation
+        from tools.ac_harness.ggv_profile import curvature_profile
+
+        l3_report = dict(l3_report)
+        scale = float(config.ggv_scale)
+        l3_report["ggv_scale"] = scale
+        try:
+            l3p = L3Params.from_dict((line_artifact.get("params") or {}).get("l3"))
+            plane = [(p[0], p[2]) for p in line_artifact["line"]]
+            driven = [float(v) * scale for v in line_artifact["v_target_mps"]]
+            l3_report["driven_max_ay_utilisation_vs_barrier"] = round(
+                profile_utilisation(
+                    curvature_profile(plane), driven, barrier_ggv(plant, l3p.max_rel_std)
+                ),
+                4,
+            )
+        except (TypeError, ValueError, KeyError) as exc:
+            l3_report["driven_utilisation_error"] = f"{type(exc).__name__}: {exc}"
+        alien_line_used["l3"] = l3_report
     qss = line_artifact.get("qss") or {}
     print(
         f"auto-drive: alien line {line_source} "
         f"(QSS {qss.get('qss_laptime_s')}s, vmax {qss.get('vmax_kmh')} km/h, "
         f"plant fit {line_artifact.get('plant_provenance', {}).get('sha12')}) <- {alien_path}"
     )
+    if isinstance(l3_report, dict):
+        reverted_all = l3_report.get("reverted_all")
+        if reverted_all:
+            print(f"auto-drive: alien L3 refinement reverted entirely — {reverted_all}")
+        else:
+            print(
+                "auto-drive: alien L3 refined "
+                f"{l3_report.get('refined_corners')} corner(s) "
+                f"({l3_report.get('reverted_corners')} reverted to safe-QSS, "
+                f"predicted gain {l3_report.get('predicted_gain_ms')} ms)"
+            )
     return (None, plant_artifact_used, alien_line_used)
 
 

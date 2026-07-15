@@ -27,6 +27,13 @@ import math
 from datetime import UTC, datetime
 from pathlib import Path
 
+from tools.ac_harness.corner_refine import (
+    L3Params,
+    barrier_ggv,
+    profile_utilisation,
+    refine_profile,
+    verify_refined_profile,
+)
 from tools.ac_harness.ggv_profile import (
     GGVModel,
     _unit_normals,
@@ -34,6 +41,7 @@ from tools.ac_harness.ggv_profile import (
     ggv_speed_profile_from_model,
     load_track_widths,
     min_curvature_line,
+    seg_lengths,
 )
 from tools.ac_harness.plant_id import combo_artifact_stem
 
@@ -154,6 +162,7 @@ def build_alien_line_artifact(
     margin_m: float = 1.2,
     iters: int = 1200,
     v_top_kmh: float = 240.0,
+    l3_params: L3Params | None = None,
 ) -> dict:
     """Build the combo's optimized line + QSS profile artifact from its identified plant.
 
@@ -161,6 +170,12 @@ def build_alien_line_artifact(
     ``fast_lane.ai`` carrying the corridor extras, ``plant`` the identified (uncertainty-aware)
     friction model and ``plant_artifact`` the full loaded plant payload (for provenance). Raises
     on an invalid corridor or an envelope violation — never returns a degraded artifact.
+
+    ``l3_params`` opts in to the #582 beyond-QSS per-corner refinement: the artifact then carries
+    the refined profile in ``v_target_mps``, the untouched QSS profile in ``v_target_qss_mps``,
+    the per-corner report under ``l3``, and the refinement parameters inside ``params`` (so the
+    cache identity distinguishes refined from plain artifacts). ``None`` (the default) keeps the
+    artifact byte-compatible with pre-#582 builds.
     """
     if len(fast_line) < 3:
         raise ValueError("alien line requires at least 3 fast-line points")
@@ -199,7 +214,36 @@ def build_alien_line_artifact(
     optimized = [(opt_plane[i][0], fast_line[i][1], opt_plane[i][1]) for i in range(len(fast_line))]
     v_target, summ = ggv_speed_profile_from_model(optimized, plant, v_top_kmh=v_top_kmh)
     worst_ay = _verify_lateral_envelope(opt_plane, v_target, plant)
-    return {
+    params: dict = {"margin_m": margin_m, "iters": iters, "v_top_kmh": v_top_kmh}
+    l3_block: dict | None = None
+    v_qss = list(v_target)
+    if l3_params is not None:
+        # #582 L3: refine the QSS interior per corner against the evidence-backed relaxed grip,
+        # then re-verify the refined profile against the stability barrier the same way the
+        # cache-revalidation path will — a build that cannot pass its own verifier must fail
+        # here, never persist (fail loud, never degrade).
+        kappa = curvature_profile(opt_plane)
+        seg = seg_lengths(opt_plane)
+        v_target, l3_block = refine_profile(
+            seg, kappa, v_qss, plant, l3_params, v_top_ms=v_top_kmh / 3.6
+        )
+        reason = verify_refined_profile(opt_plane, kappa, v_target, plant, l3_params)
+        if reason is not None:
+            raise ValueError(f"L3-refined profile failed its own barrier verification: {reason}")
+        # corridor.max_ay_utilisation stays the QSS-vs-safe-envelope metric (pinned at <= 1 by
+        # construction). The DRIVEN profile is the refined one, so the l3 report carries its own
+        # utilisation honestly: vs the stability barrier (the refined profile's actual contract,
+        # <= 1) and vs the safe envelope (deliberately > 1 inside refined corners — the whole
+        # point of L3, and the number the run evidence must not under-report; #583 Codex P2).
+        barrier = barrier_ggv(plant, l3_params.max_rel_std)
+        l3_block["max_ay_utilisation_vs_barrier"] = round(
+            profile_utilisation(kappa, v_target, barrier), 4
+        )
+        l3_block["max_ay_utilisation_vs_safe"] = round(
+            profile_utilisation(kappa, v_target, plant), 4
+        )
+        params["l3"] = l3_params.to_dict()
+    artifact = {
         "schema_version": ALIEN_LINE_SCHEMA_VERSION,
         "created_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "car_id": car_id,
@@ -208,7 +252,7 @@ def build_alien_line_artifact(
         "setup": setup,
         "plant_provenance": plant_provenance(plant_artifact),
         "fast_lane_sha12": fast_lane_sha12(width_path),
-        "params": {"margin_m": margin_m, "iters": iters, "v_top_kmh": v_top_kmh},
+        "params": params,
         "line": [[p[0], p[1], p[2]] for p in optimized],
         "v_target_mps": list(v_target),
         "qss": summ,
@@ -225,6 +269,10 @@ def build_alien_line_artifact(
             "pinch_points": pinch_points,
         },
     }
+    if l3_block is not None:
+        artifact["v_target_qss_mps"] = v_qss
+        artifact["l3"] = l3_block
+    return artifact
 
 
 def save_alien_line_artifact(
@@ -310,6 +358,28 @@ def load_alien_line_artifact(
         math.isfinite(v) and v > 0 for v in vt
     ):
         return None
+    # A refined (#582) artifact must carry a sane QSS fallback profile alongside the refined one.
+    # L3-typing is decided by the IDENTITY block (params.l3), not by the presence of the payload
+    # "l3" report: an artifact whose params say L3 but whose l3 report / QSS fallback is missing
+    # is malformed (it would silently drop the fallback + reporting for an L3-identified cache),
+    # and an "l3" report without the params identity is equally inconsistent (#583 Qodo).
+    params_block = payload.get("params")
+    is_l3 = isinstance(params_block, dict) and params_block.get("l3") is not None
+    if is_l3 != ("l3" in payload):
+        return None
+    if is_l3:
+        if not isinstance(payload.get("l3"), dict):
+            return None
+        v_qss = payload.get("v_target_qss_mps")
+        if not isinstance(v_qss, list) or len(v_qss) != len(vt):
+            return None
+        try:
+            vq = [float(v) for v in v_qss]
+        except (TypeError, ValueError):
+            return None
+        if not all(math.isfinite(v) and v > 0 for v in vq):
+            return None
+        payload["v_target_qss_mps"] = vq
     payload["line"] = pts
     payload["v_target_mps"] = vt
     return payload
@@ -355,6 +425,45 @@ def verify_alien_line_artifact(
                 f"cached point {i} outside the corridor bounds: alpha={alpha:.3f} "
                 f"not in [{lo:.3f}, {hi:.3f}]"
             )
+    # L3-typing keys on the identity block (params.l3), consistent with the loader (#583 Qodo).
+    verify_params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    if (verify_params.get("l3") is not None) != ("l3" in payload):
+        return "l3 identity/params mismatch: params.l3 and the l3 report must be present together"
+    if "l3" in payload:
+        # #582: a refined profile deliberately exceeds the safe LCB envelope inside refined
+        # corners — its contract is the stability barrier instead, re-derived from the CURRENT
+        # plant and the artifact's validated refinement params (tampered/laxer params fail
+        # ``L3Params.from_dict`` and reject the cache). The persisted QSS fallback must still
+        # honor the plain safe envelope.
+        try:
+            l3_params = L3Params.from_dict(verify_params.get("l3"))
+        except ValueError as exc:
+            return f"cached l3 params invalid: {exc}"
+        v_qss = payload.get("v_target_qss_mps") or []
+        if len(v_qss) != len(v_target):
+            return (
+                f"cached QSS fallback has {len(v_qss)} points but the refined profile "
+                f"has {len(v_target)}"
+            )
+        try:
+            _verify_lateral_envelope(cached_plane, v_qss, plant)
+        except ValueError as exc:
+            return f"cached QSS fallback fails the current plant envelope: {exc}"
+        # The build contract is refined >= QSS pointwise (a reverted corner keeps QSS exactly).
+        # An edited durable JSON that inflates the fallback above the refined profile (or slows
+        # refined points below it) breaks that invariant even when both profiles individually
+        # respect their envelopes — reject it like any other tamper (#583 Codex P2).
+        for i, (v_ref, v_fallback) in enumerate(zip(v_target, v_qss, strict=True)):
+            if v_ref < v_fallback - 1e-6:
+                return (
+                    f"cached refined profile falls below its QSS fallback at point {i}: "
+                    f"{v_ref:.3f} < {v_fallback:.3f} m/s"
+                )
+        kappa = curvature_profile(cached_plane)
+        reason = verify_refined_profile(cached_plane, kappa, v_target, plant, l3_params)
+        if reason is not None:
+            return f"cached refined profile fails the current stability barrier: {reason}"
+        return None
     try:
         _verify_lateral_envelope(cached_plane, v_target, plant)
     except ValueError as exc:
@@ -376,17 +485,22 @@ def ensure_alien_line_artifact(
     margin_m: float = 1.2,
     iters: int = 1200,
     v_top_kmh: float = 240.0,
+    l3_params: L3Params | None = None,
     rebuild: bool = False,
 ) -> tuple[dict, str]:
     """Load the fresh cached alien line or build + persist it. Returns ``(artifact, source)``.
 
     ``source`` is ``"cache"`` or ``"built"`` so callers can log the provenance of what they drive.
+    ``l3_params`` rides the cache identity: enabling (or re-tuning) the #582 refinement changes
+    the expected ``params`` block, so a plain-QSS cache never serves an L3 request and vice versa.
     """
     from tools.ac_harness.ai_line import load_ai_line
 
     prov = plant_provenance(plant_artifact)
     lane_sha = fast_lane_sha12(fast_lane_path)
     params = {"margin_m": margin_m, "iters": iters, "v_top_kmh": v_top_kmh}
+    if l3_params is not None:
+        params["l3"] = l3_params.to_dict()
     fast_line = load_ai_line(fast_lane_path)
     if not rebuild:
         cached = load_alien_line_artifact(
@@ -424,6 +538,7 @@ def ensure_alien_line_artifact(
         margin_m=margin_m,
         iters=iters,
         v_top_kmh=v_top_kmh,
+        l3_params=l3_params,
     )
     save_alien_line_artifact(user_dir, artifact, setup_ini=setup_ini)
     artifact = dict(artifact)

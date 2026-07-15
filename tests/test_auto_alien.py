@@ -285,6 +285,50 @@ def test_iteration_scale_ladder_caps():
     assert iteration_scale(0.9, 0.05, 40, 1.1) == 1.1
 
 
+# --------------------------------------------------------------------------- #582 L3
+def test_drive_argv_enables_l3_by_default_and_no_l3_disables(tmp_path):
+    drive = drive_argv(_args(tmp_path), tmp_path / "d")
+    assert "--l3" in drive
+    drive = drive_argv(_args(tmp_path, "--no-l3"), tmp_path / "d")
+    assert "--l3" not in drive
+
+
+def test_stage_l3_summary_extraction():
+    from tools.ac_harness.auto_alien import stage_l3_summary
+
+    assert stage_l3_summary(None) is None
+    assert stage_l3_summary({"run": {}}) is None
+    assert stage_l3_summary({"run": {"alien_line": {"qss": {}}}}) is None
+    # write_evidence stores alien-line detail under the TOP-LEVEL run extras, not report
+    # (#583 Codex P2) — a report-nested payload must not match.
+    assert stage_l3_summary({"report": {"alien_line": {"l3": {"refined_corners": 1}}}}) is None
+    outcome = {
+        "run": {
+            "alien_line": {
+                "l3": {
+                    "refined_corners": 3,
+                    "reverted_corners": 1,
+                    "predicted_gain_ms": 412,
+                    "corners": [{"corner": 0}],
+                }
+            }
+        }
+    }
+    assert stage_l3_summary(outcome) == {
+        "refined_corners": 3,
+        "reverted_corners": 1,
+        "predicted_gain_ms": 412,
+    }
+    outcome["run"]["alien_line"]["l3"] = {
+        "refined_corners": 0,
+        "reverted_corners": 0,
+        "predicted_gain_ms": 0,
+        "reverted_all": "plant is not uncertainty-aware",
+    }
+    summary = stage_l3_summary(outcome)
+    assert summary["reverted_all"] == "plant is not uncertainty-aware"
+
+
 def _stage_outcome(lap_times, *, recoveries=0, archives=(), stage="done", error=None):
     return {
         "report": {
