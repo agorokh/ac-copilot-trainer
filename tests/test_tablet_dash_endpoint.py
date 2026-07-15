@@ -207,6 +207,36 @@ def test_telemetry_tick_classes_include_browser_but_haptics_unchanged() -> None:
     assert ep.CLIENT_CLASS_VOICE not in ep.TELEMETRY_TICK_CLIENT_CLASSES
 
 
+def test_observer_class_receives_ticks_but_drives_no_actuators() -> None:
+    """#531 Part D: the drive harness's in-run tap taps ticks as `observer`.
+
+    Ticks are routed by client class, so without membership here the harness could not observe
+    `telemetry_tick` at ANY topic subscription — which is why Part D's TC/ABS intervention
+    criterion went unevidenced. `observer` must stay out of the haptic fan-out: a recorder has
+    no actuators.
+    """
+    assert ep.CLIENT_CLASS_OBSERVER in ep.KNOWN_CLIENT_CLASSES
+    assert ep.CLIENT_CLASS_OBSERVER in ep.TELEMETRY_TICK_CLIENT_CLASSES
+    assert ep.CLIENT_CLASS_OBSERVER not in ep.HAPTIC_CLIENT_CLASSES
+    # Joining the tick fan-out must stay OPT-IN: widening the generic `external` class instead
+    # would silently start pushing 20 Hz at every pre-existing external peer.
+    assert ep.CLIENT_CLASS_EXTERNAL not in ep.TELEMETRY_TICK_CLIENT_CLASSES
+
+
+def test_harness_tap_declares_the_observer_class() -> None:
+    """Pins the wiring itself, not just the routing table.
+
+    The routing set and the tap's declared class are two halves of one contract; a test on the
+    set alone would still pass with the tap connecting classless (the exact prior bug).
+    """
+    import inspect
+
+    from tools.ac_harness import sequence_probe
+
+    src = inspect.getsource(sequence_probe.tap_frames)
+    assert "CLIENT_CLASS_OBSERVER" in src
+
+
 def _tick_frame(**payload_overrides) -> dict:
     payload = {
         "speed_kmh": 187.0,
@@ -268,10 +298,13 @@ async def _running_sidecar() -> AsyncIterator[int]:
         _reset_external_state()
 
 
-async def _hello(ws, client: str, client_class: str) -> None:
-    await ws.send(
-        json.dumps({"v": 1, "type": "hello", "client": client, "client_class": client_class})
-    )
+async def _hello(ws, client: str, client_class: str | None) -> None:
+    frame: dict = {"v": 1, "type": "hello", "client": client}
+    # `client_class=None` OMITS the key rather than sending an explicit null, so a classless leg
+    # reproduces the exact wire shape of a pre-#531-Part-D peer (e.g. the old harness tap).
+    if client_class is not None:
+        frame["client_class"] = client_class
+    await ws.send(json.dumps(frame))
     ack = json.loads(await ws.recv())
     assert ack["type"] == "hello_ack"
 
@@ -301,6 +334,46 @@ def test_ws_telemetry_tick_routed_to_browser_not_voice() -> None:
     assert got["type"] == ep.TYPE_TELEMETRY_TICK
     assert got["payload"]["rpm_max"] == 8500.0
     assert not voice_got_frame
+
+
+def test_ws_telemetry_tick_routed_to_observer_but_not_to_a_classless_peer() -> None:
+    """#531 Part D: end-to-end proof of the harness-tap blindness AND its fix.
+
+    The drive harness's in-run tap used to connect with NO `client_class`, so the sidecar never
+    fanned `telemetry_tick` to it — the TC/ABS intervention criterion was unevidencable from the
+    prescribed capture path no matter how the driver behaved. The classless leg below is that
+    old peer: it must still receive nothing (joining the fan-out stays opt-in), while the
+    `observer` leg receives the tick carrying the Part D flags.
+    """
+
+    async def _t() -> tuple[dict, bool]:
+        async with _running_sidecar() as port:
+            url = f"ws://127.0.0.1:{port}"
+            async with (
+                ws_connect(url) as lua,
+                ws_connect(url) as observer,
+                ws_connect(url) as classless,
+            ):
+                await _hello(lua, "trainer-lua", "lua")
+                await _hello(observer, "ac-harness", ep.CLIENT_CLASS_OBSERVER)
+                # No class at all — exactly how HarnessClient connected before this change.
+                await _hello(classless, "ac-harness-legacy", None)
+                await lua.send(json.dumps(_tick_frame(tc_active=True, abs_active=False)))
+                got = json.loads(await asyncio.wait_for(observer.recv(), timeout=3.0))
+                classless_got_frame = True
+                try:
+                    await asyncio.wait_for(classless.recv(), timeout=0.5)
+                except TimeoutError:
+                    classless_got_frame = False
+                return got, classless_got_frame
+
+    got, classless_got_frame = asyncio.run(_t())
+    assert got["type"] == ep.TYPE_TELEMETRY_TICK
+    # The three-way contract on the wire: fired=True and idle=False are BOTH present as real
+    # booleans, which is what proves the CSP field names resolve rather than dropping to nil.
+    assert got["payload"]["tc_active"] is True
+    assert got["payload"]["abs_active"] is False
+    assert not classless_got_frame
 
 
 def test_ws_identity_snapshot_replayed_to_late_subscriber() -> None:

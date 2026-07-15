@@ -223,6 +223,62 @@ def _is_snapshot(frame: dict, topic: str) -> bool:
     )
 
 
+#: Frame type of the high-rate Lua->sidecar telemetry stream. NOT a `state.snapshot` topic — it is
+#: a peripheral frame routed by client class, so it is matched on `type`, not `topic`.
+TELEMETRY_TICK_TYPE = "telemetry_tick"
+
+#: Electronics-intervention flags carried on `telemetry_tick` (#531 Part D).
+INTERVENTION_FLAGS: tuple[str, ...] = ("tc_active", "abs_active")
+
+
+def intervention_summary(frames: list[dict]) -> dict:
+    """Summarize electronics-intervention evidence from the ``telemetry_tick`` stream (#531 Part D).
+
+    Pure over a captured frame list, so it is unit-tested off-sim like ``evaluate_sequence``.
+
+    The three-way split per flag is the whole point and must NOT be collapsed to a boolean.
+    Part D's payload contract makes these flags OPTIONAL and never defaulted:
+
+    * ``absent``  — the producer omitted the key: the car does not expose that system (the M3 GT2
+      has no ABS), or the CSP physics field name did not resolve to a boolean.
+    * ``false``   — present and idle: the system is fitted and reporting, simply not intervening.
+    * ``true``    — intervening: the tile should flash.
+
+    So ``false`` is the load-bearing observation that a field name RESOLVES — a wrong CSP name
+    degrades to ``nil`` and the key is dropped entirely, which reads as ``absent``. Reporting only
+    "did it ever fire" would make a typo'd field name indistinguishable from a clean lap.
+    """
+    ticks = [
+        f
+        for f in frames
+        if isinstance(f, dict)
+        and f.get("type") == TELEMETRY_TICK_TYPE
+        and isinstance(f.get("payload"), dict)
+    ]
+    summary: dict = {"telemetry_ticks": len(ticks), "flags": {}}
+    for flag in INTERVENTION_FLAGS:
+        true_n = false_n = absent_n = 0
+        for f in ticks:
+            value = f["payload"].get(flag)
+            if value is True:
+                true_n += 1
+            elif value is False:
+                false_n += 1
+            else:
+                absent_n += 1
+        summary["flags"][flag] = {
+            "true": true_n,
+            "false": false_n,
+            "absent": absent_n,
+            # `observed` answers "did the producer ever emit this key as a real boolean?" —
+            # i.e. does the CSP field name resolve on this car. Independent of ever firing.
+            "observed": (true_n + false_n) > 0,
+            # `fired` answers the #531 acceptance criterion: was an intervention ever seen?
+            "fired": true_n > 0,
+        }
+    return summary
+
+
 def is_timed_lap_frame(frame: dict) -> bool:
     """Whether a frame is a ``lap`` snapshot carrying a positive time (``payload.last_lap_ms``).
 
@@ -287,11 +343,15 @@ async def tap_frames(
     Always closes the client (try/finally) and fails fast on a missing hello handshake. Imported
     lazily so the pure evaluator has no hard dependency on the sidecar client.
     """
+    from tools.ai_sidecar.external_protocol import CLIENT_CLASS_OBSERVER
     from tools.ai_sidecar.harness_client import HarnessClient
 
     if lap_count is not None and lap_count < 1:
         raise ValueError(f"lap_count must be >= 1 (got {lap_count})")
-    hc = HarnessClient(url)
+    # #531 Part D: tap as `observer` so the sidecar fans `telemetry_tick` to us. Ticks are routed
+    # by CLIENT CLASS, not by `state.subscribe` — before this the in-run tap could not see them at
+    # any topic list, so Part D's channels were unevidencable from inside the harness run.
+    hc = HarnessClient(url, client_class=CLIENT_CLASS_OBSERVER)
     try:
         await hc.connect(retries=40, retry_delay=0.25)
         if await hc.hello(timeout=10) is None:

@@ -28,9 +28,11 @@ from typing import Any
 
 from tools.ai_sidecar.external_protocol import (
     AUTH_HEADER,
+    CLIENT_CLASS_KEY,
     CLIENT_HEADER,
     ENVELOPE_KEY,
     ENVELOPE_VERSION,
+    KNOWN_CLIENT_CLASSES,
     TYPE_HELLO,
     TYPE_HELLO_ACK,
     TYPE_KEY,
@@ -88,10 +90,22 @@ class HarnessClient:
     """
 
     def __init__(
-        self, url: str, *, token: str | None = None, client_id: str = "ac-harness"
+        self,
+        url: str,
+        *,
+        token: str | None = None,
+        client_id: str = "ac-harness",
+        client_class: str | None = None,
     ) -> None:
         self.url = url
         self.client_id = client_id
+        # Issue #531 Part D: an optional `hello.client_class`. Omitted by default, which keeps
+        # every existing caller a generic external peer (unchanged behaviour). Pass
+        # CLIENT_CLASS_OBSERVER to join the `telemetry_tick` fan-out — ticks are routed by
+        # client class, NOT by `state.subscribe`, so no topic list can substitute for this.
+        if client_class is not None and client_class not in KNOWN_CLIENT_CLASSES:
+            raise ValueError(f"unknown client_class: {client_class!r}")
+        self.client_class = client_class
         self._headers: dict[str, str] = {CLIENT_HEADER: client_id}
         if token:
             self._headers[AUTH_HEADER] = token
@@ -172,9 +186,14 @@ class HarnessClient:
 
     async def hello(self, *, timeout: float = 5.0) -> dict[str, Any] | None:
         """Send the v1 hello and wait for the sidecar's hello_ack."""
-        await self.send(
-            {ENVELOPE_KEY: ENVELOPE_VERSION, TYPE_KEY: TYPE_HELLO, "client": self.client_id}
-        )
+        frame: dict[str, Any] = {
+            ENVELOPE_KEY: ENVELOPE_VERSION,
+            TYPE_KEY: TYPE_HELLO,
+            "client": self.client_id,
+        }
+        if self.client_class is not None:
+            frame[CLIENT_CLASS_KEY] = self.client_class
+        await self.send(frame)
         return await self.wait_for(lambda f: f.get(TYPE_KEY) == TYPE_HELLO_ACK, timeout=timeout)
 
     async def subscribe(self, topics: list[str], *, timeout: float = 2.0) -> None:

@@ -20,6 +20,7 @@ from tools.ac_harness.sequence_probe import (
     STRICT_LIFECYCLE_TOPICS,
     evaluate_sequence,
     frames_from_jsonl,
+    intervention_summary,
 )
 
 
@@ -223,3 +224,71 @@ def test_timed_lap_times_ms_orders_and_skips_untimed_boundaries():
     ]
     assert timed_lap_times_ms(frames) == [95000, 92500, 91800]
     assert timed_lap_times_ms([]) == []
+
+
+# --- #531 Part D: electronics-intervention evidence -------------------------------------------
+#
+# The harness's in-run tap was structurally BLIND to `telemetry_tick`: ticks are routed by CLIENT
+# CLASS, not by `state.subscribe`, and the tap connected with no class. So Part D's TC/ABS
+# intervention criterion could never be evidenced from the prescribed capture path — a prior
+# session attributed the never-observed flash to the driver being too clean, but the recorder
+# could not have seen it either way. These pin the evidence semantics.
+
+
+def _tick(**payload: object) -> dict:
+    """A `telemetry_tick` as an observer-class peer receives it (peripheral frame, not a topic)."""
+    return {"v": 1, "type": "telemetry_tick", "payload": dict(payload)}
+
+
+def test_intervention_summary_counts_fired_idle_and_absent_separately() -> None:
+    frames = [
+        _tick(tc_active=True, abs_active=False),
+        _tick(tc_active=False, abs_active=False),
+        _tick(tc_active=False),  # abs omitted entirely -> absent, NOT idle
+    ]
+    summary = intervention_summary(frames)
+    assert summary["telemetry_ticks"] == 3
+    tc = summary["flags"]["tc_active"]
+    assert (tc["true"], tc["false"], tc["absent"]) == (1, 2, 0)
+    assert tc["fired"] is True and tc["observed"] is True
+    abs_ = summary["flags"]["abs_active"]
+    assert (abs_["true"], abs_["false"], abs_["absent"]) == (0, 2, 1)
+    # Never fired, but the producer DID emit it as a real boolean -> the CSP name resolves.
+    assert abs_["fired"] is False and abs_["observed"] is True
+
+
+def test_intervention_summary_absent_is_not_idle() -> None:
+    """A car without the system (M3 GT2 has no ABS) reads `absent`, never `false`.
+
+    This is the distinction that makes a typo'd CSP field name detectable: a wrong name degrades
+    to nil and the key is dropped, so it would read `absent` — identical to a car that lacks the
+    hardware. Collapsing absent into false would report a broken producer as a clean idle lap.
+    """
+    summary = intervention_summary([_tick(tc_active=False), _tick(tc_active=False)])
+    abs_ = summary["flags"]["abs_active"]
+    assert abs_["absent"] == 2
+    assert abs_["false"] == 0
+    assert abs_["observed"] is False  # never emitted as a boolean at all
+
+
+def test_intervention_summary_ignores_non_tick_frames() -> None:
+    """State snapshots share the stream; only `telemetry_tick` frames carry the flags."""
+    summary = intervention_summary([_f("tire_temps"), _f("lap"), _tick(tc_active=True)])
+    assert summary["telemetry_ticks"] == 1
+    assert summary["flags"]["tc_active"]["true"] == 1
+
+
+def test_intervention_summary_empty_stream_is_zero_not_crash() -> None:
+    summary = intervention_summary([])
+    assert summary["telemetry_ticks"] == 0
+    for flag in ("tc_active", "abs_active"):
+        assert summary["flags"][flag]["fired"] is False
+        assert summary["flags"][flag]["observed"] is False
+
+
+def test_intervention_summary_tolerates_malformed_tick_payload() -> None:
+    """A tick with a non-dict payload must not crash the evidence pass mid-drive."""
+    summary = intervention_summary(
+        [{"v": 1, "type": "telemetry_tick", "payload": None}, _tick(tc_active=True)]
+    )
+    assert summary["telemetry_ticks"] == 1

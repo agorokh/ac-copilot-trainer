@@ -252,3 +252,44 @@ def test_connect_retries_then_raises_on_dead_port() -> None:
             await hc.connect(retries=2, retry_delay=0.01)
 
     asyncio.run(_run())
+
+
+# --- #531 Part D: observer class on the hello frame -------------------------------------------
+
+
+def test_hello_omits_client_class_by_default() -> None:
+    """Unchanged behaviour for every pre-existing caller: no class = generic external peer."""
+    hc = HarnessClient("ws://127.0.0.1:1")
+    assert hc.client_class is None
+
+
+def test_hello_declares_observer_class_when_asked() -> None:
+    """The class must reach the WIRE — `telemetry_tick` fan-out keys on it, not on subscriptions."""
+    from tools.ai_sidecar.external_protocol import CLIENT_CLASS_OBSERVER
+
+    sent: list[dict[str, Any]] = []
+
+    async def _run() -> None:
+        async with _running_sidecar() as port:
+            async with HarnessClient(_ws_url(port), client_class=CLIENT_CLASS_OBSERVER) as hc:
+                original = hc.send
+
+                async def _spy(frame: dict[str, Any]) -> None:
+                    sent.append(frame)
+                    await original(frame)
+
+                hc.send = _spy  # type: ignore[method-assign]
+                ack = await hc.hello(timeout=2.0)
+                # The sidecar validates `client_class` against KNOWN_CLIENT_CLASSES and errors on
+                # an unknown one, so a real ack proves the server accepts `observer`.
+                assert ack is not None and ack["type"] == "hello_ack"
+
+    asyncio.run(_run())
+    hello = next(f for f in sent if f.get("type") == "hello")
+    assert hello["client_class"] == CLIENT_CLASS_OBSERVER
+
+
+def test_unknown_client_class_rejected_at_construction() -> None:
+    """Fail loud at the call site rather than sending a frame the sidecar will reject."""
+    with pytest.raises(ValueError, match="unknown client_class"):
+        HarnessClient("ws://127.0.0.1:1", client_class="not-a-real-class")
