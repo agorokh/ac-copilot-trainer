@@ -306,6 +306,11 @@ def test_wait_lap_requires_a_lap_frame():
         )
     )
     assert no_lap.ok is False
+    # The composed drive explicitly opts into the high-rate tick stream for Part-D evidence;
+    # generic tap_frames callers stay classless unless they make the same explicit choice.
+    from tools.ai_sidecar.external_protocol import CLIENT_CLASS_OBSERVER
+
+    assert tap_record["client_class"] == CLIENT_CLASS_OBSERVER
     # The lap wait scales with the drive budget (a Spa lap outlives the 180 s tap default).
     assert tap_record["lap_timeout"] == 420.0
     # lap frame present -> passes.

@@ -156,17 +156,24 @@ CSP `car.rpmLimiter`).
 The remaining capture gap was structural, not a clean-driver coincidence: `telemetry_tick` is
 routed by **client class**, while `HarnessClient.hello()` was classless. No subscription could make
 the in-run tap receive ticks. PR [#595](https://github.com/agorokh/ac-copilot-trainer/pull/595)
-adds an opt-in `observer` class (tick consumer, never a haptic actuator), makes `tap_frames()` use
-it, and persists a three-way `true` / `false` / `absent` summary for `tc_active` and `abs_active`
-in every `AutoDriveReport`. Classless peers remain unchanged and receive no 20 Hz stream.
+adds an opt-in `observer` class (tick consumer, never a haptic actuator), makes `run_auto_drive`
+pass it explicitly to its tap, and persists a three-way `true` / `false` / `absent` summary for
+`tc_active` and `abs_active` in every `AutoDriveReport`. Generic `tap_frames()` callers stay
+classless by default and receive no unsolicited 20 Hz stream.
 
 Resolution evidence on the functional head `93685d4`: required CI green, 0 GraphQL review threads,
 clean resolve-gate ledger, and the current-SHA self-hosted reviewer reported no medium-or-higher
 findings. The resolution branch also merged current `main`; focused harness/protocol/endpoint tests
-passed **211/211**, and full parity passed **2,961 tests, 77 skipped, 86.80% coverage,
+passed **211/211**, and full parity passed **2,961 tests, 77 skipped, 86.85% coverage,
 `ci-fast: OK`**. The actual `true` intervention observation remains a rig-driving criterion, but it
 is now machine-capturable inside the prescribed run instead of requiring a side-channel tap or
 human tablet observation.
+
+Final review hardening caught an important API boundary: making generic `tap_frames()` always use
+`observer` would silently attach an unsolicited 20 Hz stream to every topic-tap caller. The final
+contract keeps `client_class=None` as the generic default and makes `run_auto_drive` pass
+`observer` explicitly. A fake-client test pins both the classless default and explicit opt-in; the
+drive orchestration test separately pins that the composed evidence path opts in.
 
 ## Still not verified (stated so the next session doesn't assume it)
 

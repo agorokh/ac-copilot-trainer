@@ -223,20 +223,6 @@ def test_observer_class_receives_ticks_but_drives_no_actuators() -> None:
     assert ep.CLIENT_CLASS_EXTERNAL not in ep.TELEMETRY_TICK_CLIENT_CLASSES
 
 
-def test_harness_tap_declares_the_observer_class() -> None:
-    """Pins the wiring itself, not just the routing table.
-
-    The routing set and the tap's declared class are two halves of one contract; a test on the
-    set alone would still pass with the tap connecting classless (the exact prior bug).
-    """
-    import inspect
-
-    from tools.ac_harness import sequence_probe
-
-    src = inspect.getsource(sequence_probe.tap_frames)
-    assert "CLIENT_CLASS_OBSERVER" in src
-
-
 def _tick_frame(**payload_overrides) -> dict:
     payload = {
         "speed_kmh": 187.0,

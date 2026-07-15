@@ -324,6 +324,7 @@ async def tap_frames(
     settle_timeout: float = 120.0,
     lap_timeout: float = 180.0,
     lap_count: int | None = None,
+    client_class: str | None = None,
 ) -> list[dict]:
     """Tap the sidecar and return the frames received (live; needs AC driving).
 
@@ -340,18 +341,20 @@ async def tap_frames(
     ``lap_count=None`` keeps the exact legacy ``--wait-lap`` wait (any ``lap`` frame, timed or
     not — the #516 grace/archive logic gates on timed separately).
 
+    ``client_class`` is an explicit peripheral-stream opt-in. The generic tap stays classless by
+    default and therefore receives only its subscribed state topics; ``run_auto_drive`` passes
+    ``observer`` because its Part-D evidence contract also needs the 20 Hz ``telemetry_tick``.
+
     Always closes the client (try/finally) and fails fast on a missing hello handshake. Imported
     lazily so the pure evaluator has no hard dependency on the sidecar client.
     """
-    from tools.ai_sidecar.external_protocol import CLIENT_CLASS_OBSERVER
     from tools.ai_sidecar.harness_client import HarnessClient
 
     if lap_count is not None and lap_count < 1:
         raise ValueError(f"lap_count must be >= 1 (got {lap_count})")
-    # #531 Part D: tap as `observer` so the sidecar fans `telemetry_tick` to us. Ticks are routed
-    # by CLIENT CLASS, not by `state.subscribe` — before this the in-run tap could not see them at
-    # any topic list, so Part D's channels were unevidencable from inside the harness run.
-    hc = HarnessClient(url, client_class=CLIENT_CLASS_OBSERVER)
+    # Ticks are routed by CLIENT CLASS, not by `state.subscribe`. The caller must opt in rather
+    # than having this generic topic tap silently widen itself to the high-rate peripheral stream.
+    hc = HarnessClient(url, client_class=client_class)
     try:
         await hc.connect(retries=40, retry_delay=0.25)
         if await hc.hello(timeout=10) is None:

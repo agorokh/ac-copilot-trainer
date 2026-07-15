@@ -104,9 +104,11 @@ haptic fan-out.
 Resolution evidence on functional head `93685d4`: required CI green, 0 GraphQL threads,
 resolve-gate clean, and the current-SHA self-hosted reviewer reported no medium-or-higher finding.
 Current `main` was merged into the resolution branch and the focused harness/protocol/endpoint
-suite passed **211/211**; full parity passed **2,961 tests, 77 skipped, 86.80% coverage,
-`ci-fast: OK`**. The remaining rig criterion is behavioral, not observability: provoke a real TC or
-ABS event and confirm `report.json` records a positive `true` count. Detail:
+suite passed **211/211**; full parity passed **2,961 tests, 77 skipped, 86.85% coverage,
+`ci-fast: OK`**. Review hardening preserved the generic tap contract: `tap_frames()` is classless
+unless its caller opts in, while `run_auto_drive` explicitly passes `observer`. The remaining rig
+criterion is behavioral, not observability: provoke a real TC or ABS event and confirm
+`report.json` records a positive `true` count. Detail:
 [[issue-531-partd-live-vitals-2026-07-14]].
 
 ## ACTION BEFORE THE NEXT RIG DRIVE (2026-07-15 05:15Z) — the installed app is STALE

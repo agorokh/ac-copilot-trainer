@@ -72,6 +72,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from tools.ac_harness.sequence_probe import evaluate_sequence, intervention_summary, tap_frames
+from tools.ai_sidecar.external_protocol import CLIENT_CLASS_OBSERVER
 
 if TYPE_CHECKING:
     from tools.ac_harness.ggv_profile import GGVModel
@@ -839,7 +840,14 @@ async def run_auto_drive(
     stage = "done"
     lap_times_ms: list[int] = []
     try:
-        tap_kwargs: dict[str, Any] = dict(seconds=config.tap_seconds, wait_for_lap=config.wait_lap)
+        # #531 Part D: the composed drive is the caller that needs intervention evidence, so it
+        # explicitly opts into the 20 Hz tick fan-out. Keep generic ``tap_frames`` classless by
+        # default: its topic subscription must not silently imply a high-rate peripheral stream.
+        tap_kwargs: dict[str, Any] = dict(
+            seconds=config.tap_seconds,
+            wait_for_lap=config.wait_lap,
+            client_class=CLIENT_CLASS_OBSERVER,
+        )
         if config.wait_lap:
             # The SAME settle + lap deadline the drive budget is sized to (above), so the tap never
             # waits past what the drive thread can still drive (a full lap at pace can exceed

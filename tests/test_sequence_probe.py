@@ -13,6 +13,7 @@ required (it depends on a reference lap), only ever a note.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from tools.ac_harness.sequence_probe import (
@@ -21,6 +22,7 @@ from tools.ac_harness.sequence_probe import (
     evaluate_sequence,
     frames_from_jsonl,
     intervention_summary,
+    tap_frames,
 )
 
 
@@ -292,3 +294,35 @@ def test_intervention_summary_tolerates_malformed_tick_payload() -> None:
         [{"v": 1, "type": "telemetry_tick", "payload": None}, _tick(tc_active=True)]
     )
     assert summary["telemetry_ticks"] == 1
+
+
+def test_tap_frames_is_classless_by_default_and_allows_explicit_opt_in(monkeypatch) -> None:
+    """A generic topic tap must not silently join the high-rate peripheral stream."""
+    seen: list[str | None] = []
+
+    class _FakeHarnessClient:
+        def __init__(self, url: str, *, client_class: str | None = None) -> None:
+            del url
+            seen.append(client_class)
+            self.frames: list[dict] = []
+
+        async def connect(self, **kwargs) -> None:  # noqa: ANN003
+            del kwargs
+
+        async def hello(self, **kwargs) -> dict:  # noqa: ANN003
+            del kwargs
+            return {"type": "hello_ack"}
+
+        async def subscribe(self, topics: list[str]) -> None:
+            del topics
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "tools.ai_sidecar.harness_client.HarnessClient",
+        _FakeHarnessClient,
+    )
+    asyncio.run(tap_frames(seconds=0))
+    asyncio.run(tap_frames(seconds=0, client_class="observer"))
+    assert seen == [None, "observer"]

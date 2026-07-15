@@ -37,12 +37,12 @@ relates_to:
 **Repo:** ac-copilot-trainer.
 
 **Review-resolved (2026-07-15, active PR):** [#595](https://github.com/agorokh/ac-copilot-trainer/pull/595)
-turns #531 Part D's TC/ABS flash criterion into in-run machine evidence. `tap_frames()` now declares
-the opt-in `observer` client class required for `telemetry_tick` fan-out; reports preserve
+turns #531 Part D's TC/ABS flash criterion into in-run machine evidence. `run_auto_drive` now opts
+its tap into the `observer` client class required for `telemetry_tick` fan-out; reports preserve
 `true` / `false` / `absent` per flag so a missing CSP field cannot masquerade as an idle system.
 Functional-head CI, resolve-gate, GraphQL threads, and the self-hosted review were clean; the
 resolution branch merged current `main`, passed **211 focused tests**, and finished full parity at
-**2,961 passed, 77 skipped, 86.80% coverage, `ci-fast: OK`**. Remaining real-world proof:
+**2,961 passed, 77 skipped, 86.85% coverage, `ci-fast: OK`**. Remaining real-world proof:
 deliberately provoke TC or ABS and observe a positive `true` count in `report.json`. Detail:
 [[issue-531-partd-live-vitals-2026-07-14]].
 
