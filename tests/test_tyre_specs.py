@@ -12,11 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from tools.ai_sidecar.tyre_specs import (
-    TyreSpec,
-    _acd_key,
-    read_tyre_specs,
-)
+from tools.ac_content import acd_key
+from tools.ai_sidecar.tyre_specs import TyreSpec, read_tyre_specs
 
 # --------------------------------------------------------------------------------------------------
 # Synthetic ACD encoder (mirror-image of the reader's decrypt path)
@@ -42,7 +39,7 @@ def _build_acd(folder_name: str, members: dict[str, str], with_version: bool = T
     Layout: optional ``[-1111][version]`` prefix, then per member
     ``[name_len:uint32][name][content_len:uint32][content int32s]``.
     """
-    key = _acd_key(folder_name)
+    key = acd_key(folder_name)
     blob = bytearray()
     if with_version:
         blob += struct.pack("<l", -1111)
@@ -122,6 +119,7 @@ def synth_car(tmp_path: Path) -> Path:
     acd = _build_acd(
         folder,
         {
+            "lods.ini": "[LOD_0]\nFILE=synth_test_car.kn5\nIN=0\nOUT=2000\n",
             "tyres.ini": _SYNTH_TYRES_INI,
             "tcurve_r888.lut": _SYNTH_R888_LUT,
             "tcurve_slick.lut": _SYNTH_SLICK_LUT,
