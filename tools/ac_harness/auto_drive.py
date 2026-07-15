@@ -424,6 +424,20 @@ class AutoDriveReport:
         future failure path cannot reintroduce an empty reason by forgetting — it has to actively
         pass a wrong one.
         """
+        self._ensure_reason()
+
+    def _ensure_reason(self) -> None:
+        """Re-derive `reason` whenever the invariant would otherwise be violated.
+
+        Construction is NOT the only way a report comes to fail. `apply_handshake_outcome` (#532)
+        flips `ok` to False and sets `error` on an ALREADY-BUILT report, long after __post_init__
+        ran — so a handshake failure would still ship `ok=false, reason=""`, the exact #596 bug
+        through a different door (codex on PR #598). Guarding construction alone is not enough.
+
+        So the invariant is re-checked at every CONSUMPTION surface (`to_dict`, `summary`): any
+        mutation must eventually be serialized or printed to matter, and both go through here.
+        Idempotent, and it never overwrites a reason that is already set.
+        """
         if not self.ok and not self.reason:
             self.reason = compose_failure_reason(
                 error=self.error,
@@ -433,6 +447,7 @@ class AutoDriveReport:
             )
 
     def summary(self) -> str:
+        self._ensure_reason()
         lines = [f"auto-drive: {'PASS' if self.ok else 'FAIL'} (stage={self.stage})"]
         # #596 Part C: lead a FAIL with its root cause — the operator reads this line, not the JSON.
         if self.reason:
@@ -485,6 +500,9 @@ class AutoDriveReport:
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable form for the evidence bundle (``report.json``)."""
+        # The bundle is what an autonomous agent triages on, so the #596 Part C invariant is
+        # enforced HERE — after any post-construction mutation (e.g. apply_handshake_outcome).
+        self._ensure_reason()
         return asdict(self)
 
 
@@ -956,6 +974,19 @@ async def run_auto_drive(
                 # untimed out-lap/teleport boundary, which would exit 0 with an empty
                 # trajectory — a false green for the requested window (#579 Codex P2).
                 seq_ok = False
+                # #596 Part C: record the caller-side assert as a real Check, not only a note.
+                # It is the one pipeline failure `evaluate_sequence` cannot see (it owns the topic
+                # contract, not the lap-window contract), and a reason that said "see notes" would
+                # make the harness's own `--laps N` guard the single least-triageable failure mode
+                # (codex on PR #598). As a Check it names itself through the normal reason path.
+                checks.append(
+                    Check(
+                        "laps:timed-window",
+                        False,
+                        f"requested {config.target_laps} timed, observed ZERO "
+                        "(untimed out-lap/teleport boundaries do not count)",
+                    )
+                )
                 notes.append(
                     f"laps: requested {config.target_laps} timed, observed ZERO — "
                     "the window produced no timed lap (untimed boundaries do not count)"

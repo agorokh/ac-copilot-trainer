@@ -3344,3 +3344,73 @@ def test_report_json_carries_reason_and_checks(tmp_path):
     assert payload["checks"] == [
         {"name": "present:tire_temps", "ok": False, "detail": "never seen"}
     ]
+
+
+# ---------------------------------------------------------------------------
+# #596 Part C — codex review on PR #598: the invariant must survive POST-CONSTRUCTION mutation.
+# ---------------------------------------------------------------------------
+
+
+def test_handshake_outcome_failure_still_carries_a_reason():
+    """`apply_handshake_outcome` flips ok->False on an already-built report (#532).
+
+    __post_init__ has long since run with ok=True, so guarding construction alone would ship
+    `ok=false, reason=""` — the #596 bug through a different door (codex on PR #598).
+    """
+    from tools.ac_harness.plant_id import apply_handshake_outcome
+
+    report = AutoDriveReport(ok=True, stage="done", drive=DriveStats(drove=True), sequence_ok=True)
+    assert report.reason == ""
+
+    apply_handshake_outcome(report, {})  # empty sink -> handshake produced no result
+
+    assert report.ok is False
+    assert report.stage == "handshake"
+    # The consumption surfaces re-derive it; neither may emit an empty reason.
+    assert report.to_dict()["reason"] != ""
+    assert "handshake produced no result" in report.to_dict()["reason"]
+    assert "handshake produced no result" in report.summary()
+
+
+def test_handshake_probe_failure_reason_names_the_failed_probes():
+    from tools.ac_harness.plant_id import apply_handshake_outcome
+
+    report = AutoDriveReport(ok=True, stage="done", drive=DriveStats(drove=True), sequence_ok=True)
+    apply_handshake_outcome(
+        report,
+        {
+            "ok": False,
+            "result": {
+                "measurements": [{"name": "brake_probe", "passed": False, "detail": "no decel"}]
+            },
+        },
+    )
+    assert report.ok is False
+    assert "brake_probe" in report.to_dict()["reason"]
+
+
+def test_zero_timed_laps_reason_names_the_lap_window_assert_not_see_notes():
+    """`--laps N` with only untimed boundaries: all Checks pass, so the caller-side assert is the
+    ONLY failing one. It must name itself in `reason` (codex on PR #598)."""
+    record: dict = {}
+    # A full CONTINUOUS + session + lap stream: every evaluate_sequence Check passes, but the lap
+    # frame carries no timed lap, so the --laps 1 window assert fires.
+    frames = [*CONTINUOUS, _snap("session"), _snap("lap")]
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, target_laps=1),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, laps=1), record),
+            tap=_tap_returning(frames),
+        )
+    )
+
+    assert report.ok is False
+    assert report.sequence_ok is False
+    assert "laps:timed-window" in report.reason
+    assert "observed ZERO" in report.reason
+    assert "see notes" not in report.reason
+    # It rides the normal failed-check path, so the bundle carries it like any other assert.
+    assert [c.name for c in report.checks if not c.ok] == ["laps:timed-window"]
