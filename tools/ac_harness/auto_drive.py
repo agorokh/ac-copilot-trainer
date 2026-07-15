@@ -1542,6 +1542,32 @@ def app_install_provenance(ac_root: Path, harness_root: Path | None = None) -> A
     )
 
 
+def app_provenance_recheck(
+    before: AppInstallProvenance,
+    after: AppInstallProvenance,
+    *,
+    strict: bool,
+) -> tuple[str | None, bool]:
+    """Decide a post-rig-lock provenance re-measurement: ``(race_note, fatal)``.
+
+    The installed app is shared rig state. A peer worktree can repoint the junction while we block
+    on the machine-global lock, so the verdict that gates ``--strict-app-version`` and lands in the
+    evidence bundle must be the one measured **under** the lock — otherwise a pre-lock ``match``
+    bypasses strict on an app that has since drifted, and the bundle records a version the rig
+    never ran (PR #587 review; same reasoning as the plant/line post-lock resolution).
+
+    ``race_note`` is non-None when the verdict changed across the lock wait — worth surfacing on
+    its own, since it is the #575 failure mode caught in the act.
+    """
+    note: str | None = None
+    if after.status != before.status:
+        note = (
+            f"app provenance CHANGED while waiting for the rig lock: {before.status} -> "
+            f"{after.status} (a peer worktree touched the install). {after.detail}"
+        )
+    return note, bool(strict and after.blocks_strict)
+
+
 def custom_ai_enabled(ac_root: Path, user_dir: Path) -> tuple[bool | None, str]:
     """Report whether CSP's Custom AI subsystem is enabled (``[CUSTOM_AI] ENABLED=1``).
 
@@ -3568,6 +3594,24 @@ def _main_impl(
         return 3
     cleanup.callback(rig_lock.release)
     print(f"auto-drive: rig lock acquired -> {rig_lock.path}")
+
+    # #575 (PR #587 review): the installed app is shared rig state, so its provenance must be
+    # measured UNDER the lock — same reasoning as the plant/line resolution below. The pre-lock
+    # verdict above is fast feedback only: a peer worktree can repoint the junction while we block
+    # here, which would both record a false verdict in the evidence bundle and let a pre-lock
+    # `match` bypass --strict-app-version on an app that drifted since. (Observed live: a peer
+    # worktree repointed the junction mid-session during this PR's own verification.)
+    pre_lock_provenance = app_provenance
+    app_provenance = app_install_provenance(config.ac_root)  # the verdict the drive actually runs
+    race_note, app_version_fatal = app_provenance_recheck(
+        pre_lock_provenance, app_provenance, strict=args.strict_app_version
+    )
+    if race_note:
+        print(f"auto-drive: {race_note}")
+    if app_version_fatal:
+        print("auto-drive: PREFLIGHT FAILED (post-lock re-check)")
+        print(f"  [app_version] {app_provenance.detail}")
+        return 2
 
     # Plant/line artifact resolution happens AFTER preflight (actionable content errors, and
     # --preflight-only never writes state) and AFTER the machine-global rig lock, for EVERY

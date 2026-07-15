@@ -28,6 +28,7 @@ from tools.ac_harness.auto_drive import (
     _config_from_args,
     _wait_live,
     app_install_provenance,
+    app_provenance_recheck,
     app_tree_digest,
     bake_setup_into_race_ini,
     build_practice_preset,
@@ -2180,6 +2181,45 @@ def test_strict_gates_on_the_verdict_not_merely_on_the_row():
         for s in ("match", "drift", "absent", "unverifiable")
     }
     assert blocks == {"match": False, "drift": True, "absent": False, "unverifiable": True}
+
+
+def _prov(status: str) -> AppInstallProvenance:
+    return AppInstallProvenance(status=status, detail=f"detail for {status}")
+
+
+def test_post_lock_recheck_closes_the_strict_bypass():
+    """PR #587 review: a pre-lock `match` must not bypass strict on an app that drifted since.
+
+    The install is shared rig state — a peer worktree can repoint the junction while we block on
+    the machine-global lock. Observed live during this PR's own verification.
+    """
+    note, fatal = app_provenance_recheck(_prov("match"), _prov("drift"), strict=True)
+    assert fatal is True
+    assert note is not None and "match -> drift" in note
+
+
+def test_post_lock_recheck_clears_a_stale_pre_lock_drift():
+    """The inverse race: a peer FIXED the install while we waited — do not false-fail on it."""
+    note, fatal = app_provenance_recheck(_prov("drift"), _prov("match"), strict=True)
+    assert fatal is False
+    assert note is not None and "drift -> match" in note
+
+
+def test_post_lock_recheck_is_quiet_and_non_fatal_when_nothing_changed():
+    assert app_provenance_recheck(_prov("match"), _prov("match"), strict=True) == (None, False)
+
+
+def test_post_lock_recheck_never_fails_without_the_strict_flag():
+    """Default stays warn-only: the race is reported, but a drift alone never aborts the drive."""
+    note, fatal = app_provenance_recheck(_prov("match"), _prov("drift"), strict=False)
+    assert fatal is False
+    assert note is not None  # still surfaced
+
+
+def test_post_lock_recheck_absent_still_never_blocks_strict():
+    """`absent` keeps its non-fatal semantics on the post-lock path too."""
+    _note, fatal = app_provenance_recheck(_prov("match"), _prov("absent"), strict=True)
+    assert fatal is False
 
 
 def _app_tree(root: Path, *, body: str = "-- v1\n") -> Path:
