@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T05:10:00Z
+last_updated: 2026-07-15T05:15:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-575-stale-app-junction-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-531-partd-live-vitals-2026-07-14.md
@@ -92,6 +92,31 @@ relates_to:
 ---
 
 # Next session handoff
+
+## ACTION BEFORE THE NEXT RIG DRIVE (2026-07-15 05:15Z) — the installed app is STALE
+
+Found by the freshly merged #575 check itself, run from merged main on the real rig:
+
+```
+auto-drive: installed app provenance: drift
+  Installed: C:\Users\arsen\Projects\ac-copilot-trainer\src\ac_copilot_trainer at 9f1e80f47798
+  Harness:   ...\.claude\worktrees\...\src\ac_copilot_trainer at b5b55dde0a8c
+```
+
+The rig junction points at the **primary checkout**, which sits at `9f1e80f` — *behind* merged main
+and **missing 100 lines of `modules/telemetry_publisher.lua`** delivered by #531 Part D
+(`432c8b4`, PR #590). Verified: `git diff --stat 9f1e80f 0fcf80f -- src/ac_copilot_trainer/` →
+`telemetry_publisher.lua | 100 +++`.
+
+**Consequence:** any drive right now runs an in-sim app **without** #531 Part D's live tyre vitals /
+TC-ABS intervention telemetry — the tablet dash would silently lack those channels.
+
+**Not auto-fixed on purpose:** the primary checkout is on another session's branch
+(`feat/issue-569-bake-build-commit-frozen-exe`), and syncing another worktree is an operator action
+(#575 out-of-scope; [#555](https://github.com/agorokh/ac-copilot-trainer/issues/555) cross-worktree
+rig ownership). **Sync the primary checkout to merged main (or repoint the junction) before trusting
+any lap archive.** `auto_drive --preflight-only` now reports this in one command; add
+`--strict-app-version` to make it fail rather than warn.
 
 ## Delivered (2026-07-15) — #575 stale AC app junction detection (PR #587 MERGED `b51e1d5`)
 
