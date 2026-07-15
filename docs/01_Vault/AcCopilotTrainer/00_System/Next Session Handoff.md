@@ -2225,10 +2225,14 @@ the `_ROUTES` source (`match: True`); real font `/dash/fonts/Saira-Bold.ttf` →
 **No follow-ups filed** — reviewer findings were fixed under the parent PR (they bore on this
 outcome); no separable scope surfaced.
 
-**Note for the next session:** local `main` in the primary checkout is pinned by another worktree
-(`~/.codex/worktrees/81f5/ac-copilot-trainer`), so `git pull --ff-only` on `main` aborts there —
-this is the known cross-worktree ownership friction ([[issue-555-cross-worktree-rig-ownership-2026-07-13]]).
-`origin/main` is correct at `2dbf7d8`; verification was done against `origin/main` directly.
+**Note for the next session:** local `main` in the primary checkout is checked out by another
+worktree (`~/.codex/worktrees/81f5/ac-copilot-trainer`), so `git checkout main` / `git pull
+--ff-only` abort there with `'main' is already used by worktree at ...`. This is **ordinary git
+worktree semantics, not a defect** — one branch, one worktree. It is **unrelated to
+[[issue-555-cross-worktree-rig-ownership-2026-07-13]]** (that issue is CLOSED and concerns
+concurrent worktree *CM/AC launches* replacing a live autonomous drive — a rig-concurrency bug,
+not a git checkout constraint). Nothing to fix: verify against `origin/main` directly
+(`git grep <symbol> $(git rev-parse origin/main)`), which is the stronger check anyway.
 
 ---
 
