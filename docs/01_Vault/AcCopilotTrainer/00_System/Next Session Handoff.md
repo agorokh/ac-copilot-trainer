@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T02:40:00Z
+last_updated: 2026-07-15T03:05:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-569-frozen-build-identity-bake-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-570-route-registry-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-582-l3-corner-refinement-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-577-alien-selfplay-2026-07-14.md
@@ -89,6 +90,48 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-15) — #569 frozen-EXE build identity CLOSED (PR #586 MERGED `8a895ee`)
+
+Completes **H1** of [[tablet-dash-connection-hardening-2026-07-14]]. A packaged Game Point EXE
+now reports a real `build_commit` **and** `build_time` on `/health`; before, it said
+`"unknown"` (no `.git` next to the frozen binary). Detail + rig facts:
+[[issue-569-frozen-build-identity-bake-2026-07-14]].
+
+**Approach:** generated PyInstaller `--runtime-hook` (not a `sys.frozen` `_build_info` read).
+Hooks run *before* the entry script, and the launcher re-spawns *itself* for the sidecar
+child, so the frozen build resolves identity through the same env-first path a dev checkout
+uses, with no branch in the reader and no propagation logic. Council + Qodo independently
+endorsed the same choice.
+
+**Live-proven on merged main** (not on the PR branch — #585/#570 landed 24 min before this,
+so the shipping combination was re-verified). Frozen EXE built via
+`python -m tools.rig_launcher.build`, `/health` read off it:
+
+- `build_commit: "8a895ee-dirty"`, `build_time: "2026-07-15T03:00:59Z"`
+- `endpoints` = **9** routes (#570's registry; the old hand-written tuple advertised 6) —
+  the two changes compose correctly.
+- `GET /tablet/dash` → **200** (the #567 primary stale gate still passes).
+- Counterfactual proven, not assumed: a frozen EXE calling the same `build_commit()` with
+  **no** hook prints `unknown`.
+
+**Two defects the live build caught** (both fixed in the PR, neither visible from the diff):
+
+1. `os.environ.setdefault` is the **wrong primitive** — it will not replace a *set-but-empty*
+   var, while the reader strips and treats empty as unset, so `AC_COPILOT_BUILD_COMMIT=`
+   would strand a packaged build on `"unknown"`. The hook now emits a guard mirroring the
+   reader's check.
+2. My `git add -A` swept the generated `AC-Copilot-Game-Point.spec` (absolute `C:\Users\...`
+   paths) into git — Codex P2, correct. Untracked; `*.spec` now in `.gitignore`.
+
+Codex also raised a **P1** claiming `--clean` deletes the hook from `build/`. It does not:
+PyInstaller appends the spec name to workpath *before* the clean pass, so `--clean` empties
+`build/AC-Copilot-Game-Point/`, not `build/`. Disproven by source **and** two real builds;
+mechanism recorded at the call site in `3846cd5`.
+
+**Rig state:** `dist/AC-Copilot-Game-Point.exe` was replaced by a fresh merged-main build
+(gitignored; the prior file was the stale Jul-2 binary #567 diagnosed). No Game Point EXE is
+running — restart the launcher if you want it up.
 
 ## Delivered (2026-07-15) — #582 L3 per-corner refinement (PR #583 MERGED `b2ef740`)
 
