@@ -35,9 +35,11 @@ from tools.ac_harness.auto_drive import (
     build_practice_preset,
     candidate_journal_laps_dirs,
     collect_lap_archives,
+    compose_failure_reason,
     custom_ai_enabled,
     default_ac_root,
     drive_leg_succeeded,
+    drive_veto_reason,
     fuel_matches,
     generic_gt3_ggv,
     known_journal_laps_dir,
@@ -55,6 +57,7 @@ from tools.ac_harness.auto_drive import (
     write_evidence,
     write_setup_baked_race_ini,
 )
+from tools.ac_harness.sequence_probe import Check
 from tools.ac_harness.shared_memory import AcGameStatus, GraphicsSnapshot, PhysicsSnapshot
 
 # A tiny closed square line + a per-point speed profile, for driver-construction tests.
@@ -3177,3 +3180,263 @@ def test_collect_lap_archives_matching_count_is_validity_agnostic(tmp_path):
         _sleep=clock.sleep,
     )
     assert len(found) == 2 and clock.now >= 5.0  # waited the bounded budget, then honest return
+
+
+# ---------------------------------------------------------------------------
+# #596 Part C — `ok=False` ALWAYS carries a non-empty, actionable reason.
+#
+# The rig repro (issue #596, run 4 of 6): the car drove 2 laps / 6138 m at 199.8 km/h and wrote a
+# valid 112.275 s lap archive, yet the run reported `ok=False` with an EMPTY `reason` and
+# `sim_dead=False`. The drive leg had not failed — the pipeline had — but the only `reason` field
+# lived on DriveStats, and `evaluate_sequence`'s per-check verdicts were dropped before reaching the
+# report. The bundle was therefore indistinguishable from a real fault and could not be triaged.
+# ---------------------------------------------------------------------------
+
+
+def _seq_frames_missing(topic: str) -> list[dict]:
+    """A CONTINUOUS stream with `topic` absent — fails `present:<topic>` and nothing else."""
+    return [f for f in CONTINUOUS if f["topic"] != topic] + [_snap("session"), _snap("lap")]
+
+
+def test_run4_repro_pipeline_failure_names_the_failing_check_not_an_empty_reason():
+    """The exact #596 run-4 shape: a clean drive, a failed pipeline, previously an empty reason."""
+    record: dict = {}
+    drove_two_laps = DriveStats(drove=True, laps=2, total_distance_m=6138.0, max_speed_kmh=199.8)
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(drove_two_laps, record),
+            # tire_temps never arrives -> the pipeline fails while the drive is plainly fine.
+            tap=_tap_returning(_seq_frames_missing("tire_temps")),
+        )
+    )
+
+    assert report.ok is False
+    assert report.sequence_ok is False
+    # The drive leg itself is clean — this is what made run 4 unattributable.
+    assert report.drive is not None and report.drive.drove is True
+    assert report.drive.sim_dead is False
+    assert report.drive.reason == ""
+
+    # The acceptance criterion: the report says exactly which assert failed.
+    assert report.reason != "", "ok=False must never carry an empty reason (#596 Part C)"
+    assert "pipeline" in report.reason
+    assert "present:tire_temps" in report.reason
+    assert "never seen" in report.reason
+
+    # The per-check verdicts reach the bundle instead of being dropped on the floor.
+    failed = [c for c in report.checks if not c.ok]
+    assert [c.name for c in failed] == ["present:tire_temps"]
+
+
+def test_reason_is_empty_on_a_clean_run():
+    record: dict = {}
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, laps=1), record),
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+    assert report.ok is True
+    assert report.reason == ""
+
+
+@pytest.mark.parametrize(
+    "stats",
+    [
+        pytest.param(None, id="no-drive-leg"),
+        pytest.param(DriveStats(drove=False), id="never-drove"),
+        pytest.param(DriveStats(drove=True, sim_dead=True), id="sim-dead"),
+        pytest.param(DriveStats(drove=True, session_replaced=True), id="session-replaced"),
+        pytest.param(
+            DriveStats(drove=True, recovery_capped=True, recoveries=7, total_distance_m=456.0),
+            id="recovery-capped",
+        ),
+    ],
+)
+def test_every_drive_leg_veto_reports_a_non_empty_reason(stats):
+    """The boolean gate and actionable veto reason are exact inverses."""
+    assert drive_leg_succeeded(stats) is False, "test fixture must actually be a veto"
+    assert drive_veto_reason(stats) != ""
+    report = AutoDriveReport(ok=False, stage="drive", drive=stats, sequence_ok=True)
+    assert report.reason != ""
+
+
+def test_clean_drive_leg_has_no_veto_even_when_it_records_an_informational_reason():
+    stats = DriveStats(drove=True, laps=1, reason="driver finished")
+    assert drive_veto_reason(stats) == ""
+    assert drive_leg_succeeded(stats) is True
+
+
+def test_recovery_cap_reason_survives_into_the_report_with_the_stall_location():
+    """#596 Part A's honest failure must stay readable — the cap reports WHERE it stalled."""
+    stats = DriveStats(
+        drove=True,
+        recovery_capped=True,
+        recoveries=7,
+        total_distance_m=456.0,
+        reason="recovery cap (6) exceeded at 456m",
+    )
+    report = AutoDriveReport(ok=False, stage="drive", drive=stats, sequence_ok=True)
+    assert report.reason == "recovery cap (6) exceeded at 456m"
+    assert "456m" in report.summary()
+
+
+def test_drive_veto_outranks_a_pipeline_failure_it_caused():
+    """A dead sim makes the pipeline fail as a CONSEQUENCE — name the cause, not the symptom."""
+    stats = DriveStats(drove=True, sim_dead=True, reason="acpmf_physics packet_id stagnant")
+    reason = compose_failure_reason(
+        error=None,
+        seq_ok=False,
+        checks=[Check("present:tire_temps", False, "never seen")],
+        stats=stats,
+    )
+    assert reason == "acpmf_physics packet_id stagnant"
+    assert "tire_temps" not in reason
+
+
+def test_stage_error_outranks_every_other_cause():
+    """A raised stage failure is the root cause; the later legs never honestly ran."""
+    reason = compose_failure_reason(
+        error="setup verify failed: fuel 30.0 != 45.0",
+        seq_ok=False,
+        checks=[Check("present:lap", False, "never seen")],
+        stats=DriveStats(drove=False),
+    )
+    assert reason == "setup verify failed: fuel 30.0 != 45.0"
+
+
+def test_early_exit_failure_paths_derive_a_reason_from_their_error():
+    """Every early-exit return (preflight/launch/hijack/setup) sets `error` but no `reason`.
+
+    __post_init__ is the single choke point that keeps them honest, so a failure path cannot
+    reintroduce the run-4 bug by forgetting to set one.
+    """
+    for stage, err in (
+        ("launch", "sim never reached LIVE"),
+        ("hijack", "no Car0 in 5.0s"),
+        ("setup", "setup requested but no applier wired"),
+    ):
+        report = AutoDriveReport(ok=False, stage=stage, error=err)
+        assert report.reason == err, f"{stage} must carry its error as the reason"
+
+
+def test_reason_never_empty_even_if_a_future_veto_is_added_to_the_ok_gate():
+    """The composer's last resort: a wrong reason is triageable, an empty one is not."""
+    reason = compose_failure_reason(
+        error=None, seq_ok=True, checks=[], stats=DriveStats(drove=True)
+    )
+    assert reason != ""
+
+
+def test_report_json_carries_reason_and_checks(tmp_path):
+    """The evidence bundle is what an autonomous agent triages — the fields must serialize."""
+    import json
+
+    stats = DriveStats(drove=True, laps=2, total_distance_m=6138.0)
+    report = AutoDriveReport(
+        ok=False,
+        stage="done",
+        drive=stats,
+        sequence_ok=False,
+        checks=[Check("present:tire_temps", False, "never seen")],
+    )
+    out = write_evidence(tmp_path, report)
+    payload = json.loads(out.read_text(encoding="utf-8"))["report"]
+
+    assert payload["reason"] != ""
+    assert "present:tire_temps" in payload["reason"]
+    assert payload["checks"] == [
+        {"name": "present:tire_temps", "ok": False, "detail": "never seen"}
+    ]
+
+
+# ---------------------------------------------------------------------------
+# #596 Part C — codex review on PR #598: the invariant must survive POST-CONSTRUCTION mutation.
+# ---------------------------------------------------------------------------
+
+
+def test_handshake_outcome_failure_still_carries_a_reason():
+    """`apply_handshake_outcome` flips ok->False on an already-built report (#532).
+
+    A stored construction-time reason would remain empty after this mutation — the #596 bug through
+    a different door (codex on PR #598). Direct reads must be correct before serialization.
+    """
+    from tools.ac_harness.plant_id import apply_handshake_outcome
+
+    report = AutoDriveReport(ok=True, stage="done", drive=DriveStats(drove=True), sequence_ok=True)
+    assert report.reason == ""
+
+    apply_handshake_outcome(report, {})  # empty sink -> handshake produced no result
+
+    assert report.ok is False
+    assert report.stage == "handshake"
+    assert "handshake produced no result" in report.reason
+    # Serialization and presentation expose the same current property.
+    assert report.to_dict()["reason"] != ""
+    assert "handshake produced no result" in report.to_dict()["reason"]
+    assert "handshake produced no result" in report.summary()
+
+
+def test_reason_property_tracks_failure_to_success_mutation_without_stale_state():
+    """The documented invariant is bidirectional even when a report is mutated after creation."""
+    report = AutoDriveReport(ok=False, stage="pipeline", error="tap failed")
+    assert report.reason == "tap failed"
+
+    report.ok = True
+    report.stage = "done"
+    report.error = None
+
+    assert report.reason == ""
+    assert report.to_dict()["reason"] == ""
+    assert "reason:" not in report.summary()
+
+
+def test_handshake_probe_failure_reason_names_the_failed_probes():
+    from tools.ac_harness.plant_id import apply_handshake_outcome
+
+    report = AutoDriveReport(ok=True, stage="done", drive=DriveStats(drove=True), sequence_ok=True)
+    apply_handshake_outcome(
+        report,
+        {
+            "ok": False,
+            "result": {
+                "measurements": [{"name": "brake_probe", "passed": False, "detail": "no decel"}]
+            },
+        },
+    )
+    assert report.ok is False
+    assert "brake_probe" in report.to_dict()["reason"]
+
+
+def test_zero_timed_laps_reason_names_the_lap_window_assert_not_see_notes():
+    """`--laps N` with only untimed boundaries: all Checks pass, so the caller-side assert is the
+    ONLY failing one. It must name itself in `reason` (codex on PR #598)."""
+    record: dict = {}
+    # A full CONTINUOUS + session + lap stream: every evaluate_sequence Check passes, but the lap
+    # frame carries no timed lap, so the --laps 1 window assert fires.
+    frames = [*CONTINUOUS, _snap("session"), _snap("lap")]
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, target_laps=1),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, laps=1), record),
+            tap=_tap_returning(frames),
+        )
+    )
+
+    assert report.ok is False
+    assert report.sequence_ok is False
+    assert "laps:timed-window" in report.reason
+    assert "observed ZERO" in report.reason
+    assert "see notes" not in report.reason
+    # It rides the normal failed-check path, so the bundle carries it like any other assert.
+    assert [c.name for c in report.checks if not c.ok] == ["laps:timed-window"]
