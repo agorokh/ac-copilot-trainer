@@ -19,6 +19,8 @@
   Data plane (all real, never placeholdered — absent data renders an explicit unknown):
     hello {client:"tablet-dash", client_class:"browser"} -> state.subscribe
     telemetry_tick  rpm/rpm_max/gear/speed/fuel/lap_time_ms (browser-class routing, Part B)
+                    + Part D vitals: tyre_pressures_psi / tyre_wear_pct per corner,
+                      tc_active / abs_active (electronics intervention flash)
     delta           {delta_s, spline} 10 Hz            tire_temps {fl,fr,rl,rr} core degC
     lap             {lap,last_lap_ms,best_lap_ms}      session    {car_id,track_id}
     coaching.snapshot  corner/kind/target/dist/progress (coach lane, kind=="brake" takeover)
@@ -150,7 +152,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
 .tc{border:1px solid var(--edge);display:flex;align-items:baseline;gap:8px;padding:0 12px}
 .tc .tid{font-family:var(--fd);font-weight:600;font-size:10px;letter-spacing:.06em;color:var(--dim)}
 .tc .tt{font-family:var(--fr);font-weight:700;font-size:22px;font-variant-numeric:tabular-nums;color:var(--dim)}
-.tc .tp{font-family:var(--fm);font-size:13px;color:var(--dim);margin-left:auto}
+.tc .tp{font-family:var(--fm);font-size:13px;color:var(--chalk);margin-left:auto}
 /* other pages */
 .sketch{flex:1;display:flex;gap:14px;min-height:0}
 .mapmain{flex:1;position:relative;padding:8px;display:flex;align-items:center;justify-content:center}
@@ -275,10 +277,10 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       <div class="panel pad" style="flex:1"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
         <div class="mh">Tyres &middot; core temp (inner/mid/outer &mdash; Phase 2)</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:6px">
-          <div class="tcell"><div class="lbl" style="font-size:10px">FL</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px" id="st-fl">&mdash;</div><div class="mono" style="font-size:12px;color:var(--dim)">pressure &mdash; &middot; wear &mdash;</div></div>
-          <div class="tcell"><div class="lbl" style="font-size:10px">FR</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px" id="st-fr">&mdash;</div><div class="mono" style="font-size:12px;color:var(--dim)">pressure &mdash; &middot; wear &mdash;</div></div>
-          <div class="tcell"><div class="lbl" style="font-size:10px">RL</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px" id="st-rl">&mdash;</div><div class="mono" style="font-size:12px;color:var(--dim)">pressure &mdash; &middot; wear &mdash;</div></div>
-          <div class="tcell"><div class="lbl" style="font-size:10px">RR</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px" id="st-rr">&mdash;</div><div class="mono" style="font-size:12px;color:var(--dim)">pressure &mdash; &middot; wear &mdash;</div></div>
+          <div class="tcell"><div class="lbl" style="font-size:10px">FL</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px" id="st-fl">&mdash;</div><div class="mono" style="font-size:12px;color:var(--dim)" id="stp-fl">&mdash; psi &middot; &mdash; wear</div></div>
+          <div class="tcell"><div class="lbl" style="font-size:10px">FR</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px" id="st-fr">&mdash;</div><div class="mono" style="font-size:12px;color:var(--dim)" id="stp-fr">&mdash; psi &middot; &mdash; wear</div></div>
+          <div class="tcell"><div class="lbl" style="font-size:10px">RL</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px" id="st-rl">&mdash;</div><div class="mono" style="font-size:12px;color:var(--dim)" id="stp-rl">&mdash; psi &middot; &mdash; wear</div></div>
+          <div class="tcell"><div class="lbl" style="font-size:10px">RR</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px" id="st-rr">&mdash;</div><div class="mono" style="font-size:12px;color:var(--dim)" id="stp-rr">&mdash; psi &middot; &mdash; wear</div></div>
         </div>
       </div>
       <div class="panel pad" style="width:320px;display:flex;flex-direction:column"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
@@ -329,6 +331,11 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
   }
   function setText(id, txt) {
     var el = $(id);
+    if (el && el.textContent !== txt) el.textContent = txt;
+  }
+  // Same change-gated write for an element we already hold (no id lookup) — the tyre cells
+  // resolve their spans once per corner and would otherwise need an id per span.
+  function setEl(el, txt) {
     if (el && el.textContent !== txt) el.textContent = txt;
   }
 
@@ -453,11 +460,12 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       + '</div><span class="fr">R</span></div></div>';
     return d;
   }
-  var absTileRef = null;
+  var absTileRef = null, tcTileRef = null;
   function renderElectronics() {
     var host = $("etiles");
     host.innerHTML = "";
     absTileRef = null;
+    tcTileRef = null;
     // null = never answered (WAITING). An EMPTY list is real setup data — a car/setup with
     // no exposed spinner controls — and renders the greyed NOT FITTED core tiles instead
     // (Codex P2 on PR #547).
@@ -476,7 +484,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     var map = findSpinner(sp, ["ENGINE_MAP", "ECU_MAP", "ENGINE_MODE", "MAP"]);
     var boost = findSpinner(sp, ["TURBO", "BOOST", "TURBO_ADJUSTMENT"]);
     host.appendChild(biasTile(bias));               // greyed when absent (core electronics)
-    host.appendChild(discreteTile("TC", tc, {}));   // greyed when absent
+    tcTileRef = discreteTile("TC", tc, {});         // greyed when absent
+    host.appendChild(tcTileRef);
     if (tcCut) host.appendChild(discreteTile("TC CUT", tcCut, {})); // omitted when absent
     absTileRef = discreteTile("ABS", abs, {});      // greyed when absent (GT2/GTE case)
     host.appendChild(absTileRef);
@@ -499,13 +508,15 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
   function carHasAbs() {
     return !!(S.spinners && findSpinner(S.spinners, ["ABS"]));
   }
-  function flashAbs(active) {
-    // Live-intervention flash (degrades to steady brass when the producer doesn't send
-    // abs_active yet): repaint the LIT segments signal-red while ABS modulates.
-    if (!absTileRef || !absTileRef._lseg) return;
-    var cells = absTileRef._lseg.children;
-    for (var i = 0; i < absTileRef._filled; i++) {
-      var want = active ? "sig" : "f";
+  function flashTile(ref, active) {
+    // Live-intervention flash: repaint the LIT segments signal-red while the electronic
+    // modulates. Brass steady = "what I dialled"; signal transient = "what the car is doing".
+    // `active` is null when the producer sends no flag for this system (a CSP build or car that
+    // doesn't expose it) — hold steady brass rather than implying a confident "not intervening".
+    if (!ref || !ref._lseg) return;
+    var cells = ref._lseg.children;
+    for (var i = 0; i < ref._filled; i++) {
+      var want = active === true ? "sig" : "f";
       if (cells[i].className !== want) cells[i].className = want;
     }
   }
@@ -520,14 +531,26 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     if (t < 108) return { bg: "rgba(244,165,44,.16)", fg: "var(--lift)" };
     return { bg: "rgba(242,59,44,.16)", fg: "var(--brake)" };
   }
+  // Corner map off the latest tick (#531 Part D). Core temps ride their own 5 Hz `tire_temps`
+  // topic while pressure/wear ride the 20 Hz tick, so the two have INDEPENDENT freshness — a
+  // dropped tick must blank pressure without blanking a still-live temp (and vice versa).
+  function tickCorners(key) {
+    if (S.tick === null || (Date.now() - S.tickAt) >= STALE_MS) return null;
+    var m = S.tick[key];
+    return (m && typeof m === "object") ? m : null;
+  }
   function renderTyres() {
     // Same freshness contract as delta/coach: a stopped stream must not keep painting the
     // last temps as if live (Codex on PR #547).
     var fresh = S.tires !== null && (Date.now() - S.tiresAt) < STALE_MS;
+    var press = tickCorners("tyre_pressures_psi");
+    var wear = tickCorners("tyre_wear_pct");
     var corners = ["fl", "fr", "rl", "rr"];
     for (var i = 0; i < corners.length; i++) {
       var c = corners[i];
       var t = fresh ? fin(S.tires[c]) : null;
+      var p = press ? fin(press[c]) : null;
+      var w = wear ? fin(wear[c]) : null;
       var cell = $("ty-" + c);
       var col = tyreColor(t);
       if (cell._bg !== col.bg) { cell.style.background = col.bg; cell._bg = col.bg; }
@@ -535,7 +558,17 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       var txt = t !== null ? Math.round(t) + "°" : "—";
       if (tt.textContent !== txt) tt.textContent = txt;
       if (tt._fg !== col.fg) { tt.style.color = col.fg; tt._fg = col.fg; }
+      // The board's own header advertises "core temp / pressure"; until Part D the psi slot was
+      // permanently blank. Absent pressure stays an explicit em-dash, never a stale last value.
+      // Bare number + dim-when-unknown mirrors reference_mock.html's cell (the frozen ground
+      // truth): the panel header carries the unit, the 386px cell has no room to repeat it.
+      var pe = cell.children[2];
+      setEl(pe, p !== null ? p.toFixed(1) : "—");
+      var pfg = p !== null ? "" : "var(--dim)";
+      if (pe._fg !== pfg) { pe.style.color = pfg; pe._fg = pfg; }
       setText("st-" + c, t !== null ? Math.round(t) + "° core" : "—");
+      setText("stp-" + c, (p !== null ? p.toFixed(1) + " psi" : "— psi")
+        + " · " + (w !== null ? Math.round(w) + "% wear" : "— wear"));
     }
   }
 
@@ -714,7 +747,10 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
 
     renderTyres();
     renderCoach();
-    flashAbs(live && t.abs_active === true);
+    // A stale tick must not leave a system latched "intervening" (same freshness contract as the
+    // delta/coach lanes) — a dead producer reverts both boards to steady brass.
+    flashTile(tcTileRef, live ? t.tc_active === true : false);
+    flashTile(absTileRef, live ? t.abs_active === true : false);
 
     // secondary pages (cheap text writes; hidden pages cost nothing to lay out)
     setText("mapCur", live ? fmtLap(fin(t.lap_time_ms)) : "—");

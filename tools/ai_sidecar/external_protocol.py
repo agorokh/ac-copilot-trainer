@@ -547,7 +547,10 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
     for key in ("weather_type", "tyre_compound"):
         if key in payload and not isinstance(payload[key], str):
             return f"{key} must be a string"
-    for key in ("abs_active", "brake_lock", "wheel_lock"):
+    # #531 Part D: `tc_active` joins the `abs_active` slot so the dashboard can flash BOTH
+    # electronics tiles on intervention. Absent = the car does not expose the system (or physics
+    # is unavailable); `false` = present and idle — so these stay optional, never defaulted.
+    for key in ("tc_active", "abs_active", "brake_lock", "wheel_lock"):
         if key in payload and not isinstance(payload[key], bool):
             return f"{key} must be a boolean"
     return None

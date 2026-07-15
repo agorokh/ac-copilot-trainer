@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import pathlib
 import re
 import socket
 from collections.abc import AsyncIterator
@@ -116,6 +117,45 @@ def test_dash_page_is_offline_kiosk_and_a133_safe() -> None:
     assert "/dash/fonts/" in body
     for name in _TABLET_DASH_FONT_FILES:
         assert (_TABLET_DASH_FONTS_DIR / name).is_file(), f"vendored font missing: {name}"
+
+
+def test_dash_part_d_vitals_are_bound_end_to_end() -> None:
+    """#531 Part D anti-dead-wiring guard.
+
+    Phase 1 shipped a dash that READ `abs_active` while no producer ever SENT it, so the
+    intervention flash could never fire, and a tyre board whose own header advertised
+    "core temp / pressure" over a permanently empty psi slot. Nothing failed — the page just
+    quietly under-reported forever. This pins both ends together: every live vital the page
+    consumes must also be emitted by the Lua producer that feeds it.
+
+    NOTE the direction: page-consumed => producer-emitted. The converse does NOT hold, and
+    asserting it would be wrong — the tick also feeds the sidecar's coaching brain (e.g.
+    `race_management._brake_advisory` consumes `brake_temps_c`, which has no dash slot). Reading
+    this guard as "the dash is the tick's only consumer" is what briefly deleted that field.
+    """
+    page = _TABLET_DASH_PAGE_PATH.read_text(encoding="utf-8")
+    producer = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "src"
+        / "ac_copilot_trainer"
+        / "modules"
+        / "telemetry_publisher.lua"
+    ).read_text(encoding="utf-8")
+    samples: dict[str, object] = {
+        "tyre_pressures_psi": {"fl": 27.4, "fr": 27.6, "rl": 26.1, "rr": 26.3},
+        "tyre_wear_pct": {"fl": 0.0, "fr": 25.0, "rl": 75.0, "rr": 100.0},
+        "tc_active": True,
+        "abs_active": False,
+    }
+    for field, sample in samples.items():
+        assert field in page, f"dash page does not consume {field!r}"
+        assert f"payload.{field}" in producer, f"telemetry_publisher.lua never emits {field!r}"
+        # ...and the sidecar between them must not reject the frame carrying it: an unlisted
+        # field/type silently fails validation and never reaches the browser (the #547 lesson —
+        # a new wire contract needs the producer, the validator AND the consumer updated).
+        assert ep.validate_inbound(_tick_frame(**{field: sample})) is None, (
+            f"validator rejects {field!r}"
+        )
 
 
 def test_dash_vendored_fonts_match_canonical_copies() -> None:
