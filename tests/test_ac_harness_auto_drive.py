@@ -30,6 +30,7 @@ from tools.ac_harness.auto_drive import (
     app_install_provenance,
     app_provenance_recheck,
     app_tree_digest,
+    app_version_preflight_fatal,
     bake_setup_into_race_ini,
     build_practice_preset,
     candidate_journal_laps_dirs,
@@ -2185,6 +2186,29 @@ def test_strict_gates_on_the_verdict_not_merely_on_the_row():
 
 def _prov(status: str) -> AppInstallProvenance:
     return AppInstallProvenance(status=status, detail=f"detail for {status}")
+
+
+def test_preflight_only_may_abort_strict_on_the_pre_lock_verdict():
+    """--preflight-only takes no rig lock, so the pre-lock verdict is all it will ever have."""
+    assert app_version_preflight_fatal(_prov("drift"), strict=True, preflight_only=True) is True
+    assert (
+        app_version_preflight_fatal(_prov("unverifiable"), strict=True, preflight_only=True) is True
+    )
+    assert app_version_preflight_fatal(_prov("absent"), strict=True, preflight_only=True) is False
+    assert app_version_preflight_fatal(_prov("drift"), strict=False, preflight_only=True) is False
+
+
+def test_a_real_strict_drive_never_aborts_on_the_pre_lock_verdict():
+    """PR #587 review: a peer holding the rig lock may fix the install before we acquire it.
+
+    Aborting pre-lock would false-fail on a drift that is already gone by drive time — and it
+    would make the post-lock recheck unreachable, which is what made the drift->match recovery
+    below dead code in the first draft.
+    """
+    for status in ("drift", "unverifiable"):
+        assert (
+            app_version_preflight_fatal(_prov(status), strict=True, preflight_only=False) is False
+        )
 
 
 def test_post_lock_recheck_closes_the_strict_bypass():

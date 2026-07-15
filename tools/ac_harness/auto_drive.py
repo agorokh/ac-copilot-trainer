@@ -1542,6 +1542,22 @@ def app_install_provenance(ac_root: Path, harness_root: Path | None = None) -> A
     )
 
 
+def app_version_preflight_fatal(
+    provenance: AppInstallProvenance, *, strict: bool, preflight_only: bool
+) -> bool:
+    """Whether the PRE-rig-lock ``app_version`` row should abort the run.
+
+    Only ``--preflight-only`` may abort here: it takes no rig lock, so the pre-lock verdict is the
+    only measurement it will ever have, and a readiness probe that cannot fail is useless.
+
+    A real drive must NOT abort pre-lock. A peer worktree holding the lock may fix or repoint the
+    install before we acquire it, so a pre-lock drift can be stale by the time the drive would
+    start — aborting on it is a false-fail, and it would also make the post-lock recheck
+    unreachable. Real drives gate on :func:`app_provenance_recheck` instead (PR #587 review).
+    """
+    return bool(strict and preflight_only and provenance.blocks_strict)
+
+
 def app_provenance_recheck(
     before: AppInstallProvenance,
     after: AppInstallProvenance,
@@ -3503,8 +3519,12 @@ def _main_impl(
     # #575: an app_version row is a warning by default; --strict-app-version makes it fatal for
     # runs whose evidence is only meaningful if the rig ran THIS checkout's app. Strictness gates
     # on the PROVENANCE VERDICT, not merely on the row's presence: an `absent` app cannot run the
-    # wrong code, so it stays a warning even under strict (PR #587 review).
-    strict_app_fatal = args.strict_app_version and app_provenance.blocks_strict
+    # wrong code, so it stays a warning even under strict (PR #587 review). A real drive defers
+    # the strict abort to the post-lock recheck; only --preflight-only (which takes no lock, so
+    # gets no later measurement) may abort on the pre-lock verdict.
+    strict_app_fatal = app_version_preflight_fatal(
+        app_provenance, strict=args.strict_app_version, preflight_only=args.preflight_only
+    )
     fatal: list[PreflightIssue] = []
     for issue in issues:
         if issue.severity == "error" or (strict_app_fatal and issue.check == "app_version"):
