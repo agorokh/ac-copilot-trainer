@@ -1,11 +1,12 @@
 ---
 type: investigation
-status: active
+status: resolved
 memory_tier: canonical
 created: 2026-07-15
 updated: 2026-07-15
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/596
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-596-pit-stall-sim-death-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-531-partd-live-vitals-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/tier3-consumer-repoint-drift-2026-07-15.md
   - AcCopilotTrainer/00_System/Next Session Handoff.md
@@ -42,13 +43,14 @@ cannot make the run fail silently.
 
 ## Resolution state
 
-PR [#598](https://github.com/agorokh/ac-copilot-trainer/pull/598) is ready to merge at `4def5a2`:
+PR [#598](https://github.com/agorokh/ac-copilot-trainer/pull/598) merged as `9f1b9ca`:
 
-- GitHub state `CLEAN` + `MERGEABLE`; all required checks green.
+- GitHub state `MERGED`; all required checks were green.
 - 0 unresolved GraphQL threads; resolve-gate clean; Qodo 0 bugs.
 - Current-SHA self-hosted Cursor review: no medium-or-higher findings.
 - Two complete post-push 10-minute cooldowns.
 - Local `make ci-fast`: 2,952 passed, 113 skipped, 87.56% coverage.
 
-Issue #596 remains open for Parts A/B: the practice-start stall and `acs.exe` death-rate/bounded
-retry work require further live-drive investigation.
+Issue #596's remaining Parts A/B shipped through PR #600 (`613fae2`) and the issue is closed. See
+[[issue-596-pit-stall-sim-death-2026-07-15]] for the stationary-high-gear root cause, bounded
+sim-death retry, and live-drive proof.

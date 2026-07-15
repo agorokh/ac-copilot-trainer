@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T09:35:12Z
+last_updated: 2026-07-15T17:25:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-596-pit-stall-sim-death-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-partc-actionable-reason-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/tier3-consumer-repoint-drift-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-575-stale-app-junction-2026-07-15.md
@@ -38,14 +39,16 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Ready to merge (2026-07-15):** [PR #598](https://github.com/agorokh/ac-copilot-trainer/pull/598)
-at `4def5a2` completes [#596](https://github.com/agorokh/ac-copilot-trainer/issues/596) Part C:
-every failed `auto_drive` report has an actionable run-level reason and retains its failed pipeline
-checks. The reason is computed from live report state (correct after handshake mutation), and the
-drive veto reason is the boolean gate's one source of truth. PR is CLEAN/MERGEABLE; checks, threads,
-Qodo, resolve-gate, and current-SHA self-hosted review are clean. Final local parity: **2,952 passed,
-113 skipped, 87.56% coverage**. Parts A/B remain on #596. Detail:
-[[issue-596-partc-actionable-reason-2026-07-15]].
+**Delivered and live-proven (2026-07-15):** [#596](https://github.com/agorokh/ac-copilot-trainer/issues/596)
+is **CLOSED** by PRs [#598](https://github.com/agorokh/ac-copilot-trainer/pull/598) and
+[#600](https://github.com/agorokh/ac-copilot-trainer/pull/600) (merge
+[`613fae2`](https://github.com/agorokh/ac-copilot-trainer/commit/613fae2ef4fe7ec3489800b13751f199185de7ce)).
+The 450–580 m practice stall was a stationary-high-gear downshift latch; the driver can now select a
+usable gear without already moving. Pure `acs.exe` deaths get one full, lock-held retry with every
+attempt preserved. Seven new natural drives across two cars/two tracks had 0 deaths, 0 recovery
+caps, and no stopped-high-gear samples; controlled PID death recovered to a 2,295 m PASS. Part C
+keeps every failed report actionable. Full parity: **2,963 passed, 113 skipped, 87.61% coverage**.
+No #596 product work remains. Detail: [[issue-596-pit-stall-sim-death-2026-07-15]].
 
 **Review-resolved (2026-07-15, active PR):** [#595](https://github.com/agorokh/ac-copilot-trainer/pull/595)
 turns #531 Part D's TC/ABS flash criterion into in-run machine evidence. `run_auto_drive` now opts
