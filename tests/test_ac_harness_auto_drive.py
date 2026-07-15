@@ -3261,11 +3261,17 @@ def test_reason_is_empty_on_a_clean_run():
     ],
 )
 def test_every_drive_leg_veto_reports_a_non_empty_reason(stats):
-    """Mirrors drive_leg_succeeded veto-for-veto: a veto can never fire with nothing to say."""
+    """The boolean gate and actionable veto reason are exact inverses."""
     assert drive_leg_succeeded(stats) is False, "test fixture must actually be a veto"
     assert drive_veto_reason(stats) != ""
     report = AutoDriveReport(ok=False, stage="drive", drive=stats, sequence_ok=True)
     assert report.reason != ""
+
+
+def test_clean_drive_leg_has_no_veto_even_when_it_records_an_informational_reason():
+    stats = DriveStats(drove=True, laps=1, reason="driver finished")
+    assert drive_veto_reason(stats) == ""
+    assert drive_leg_succeeded(stats) is True
 
 
 def test_recovery_cap_reason_survives_into_the_report_with_the_stall_location():

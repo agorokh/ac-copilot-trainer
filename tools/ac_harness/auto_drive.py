@@ -269,26 +269,21 @@ def drive_leg_succeeded(stats: DriveStats | None) -> bool:
     * ``stats.recovery_capped`` — the car kept stalling until the recovery cap; it never sustained
       progress whatever the totals say (the pit-start recovery-cap stall, #528).
 
-    :func:`run_auto_drive` composes this with the pipeline verdict and error state; the false-green
-    KPI corpus (`false_green_kpi.py`) exercises it directly, so dropping a veto here surfaces as a
-    leaked broken scenario rather than a silent false green.
+    :func:`drive_veto_reason` is the single source of truth for these vetoes; this boolean gate is
+    its exact inverse. :func:`run_auto_drive` composes it with the pipeline verdict and error state,
+    while the false-green KPI corpus (`false_green_kpi.py`) exercises it directly.
     """
-    return (
-        bool(stats)
-        and stats.drove
-        and not stats.sim_dead
-        and not stats.session_replaced
-        and not stats.recovery_capped
-    )
+    return drive_veto_reason(stats) == ""
 
 
 def drive_veto_reason(stats: DriveStats | None) -> str:
     """The drive-leg half of :func:`compose_failure_reason` — "" when the drive leg is clean.
 
-    Mirrors :func:`drive_leg_succeeded` veto-for-veto, in the same order, so a veto can never fire
-    with nothing to say. Each branch prefers the reason the drive loop already recorded (it carries
-    the live detail — the stall distance, the stagnant packet) and falls back to a description of
-    the veto itself, because an empty ``reason`` is exactly the #596 Part C failure.
+    This is the single source of truth consumed by :func:`drive_leg_succeeded`, so a new veto cannot
+    make the run fail without also supplying a reason. Each branch prefers the reason the drive loop
+    already recorded (it carries the live detail — the stall distance, the stagnant packet) and
+    falls back to a description of the veto itself, because an empty ``reason`` is exactly the #596
+    Part C failure.
     """
     if stats is None:
         return "drive: no drive leg ran (the hijack never landed)"
