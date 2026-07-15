@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T02:40:00Z
+last_updated: 2026-07-15T05:10:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-575-stale-app-junction-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-531-partd-live-vitals-2026-07-14.md
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/issue-570-route-registry-2026-07-15.md
@@ -35,7 +36,23 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Delivered (2026-07-15, latest):** [#570](https://github.com/agorokh/ac-copilot-trainer/issues/570)
+**Delivered (2026-07-15, latest):** [#575](https://github.com/agorokh/ac-copilot-trainer/issues/575)
+**CLOSED** by PR [#587](https://github.com/agorokh/ac-copilot-trainer/pull/587)
+([`b51e1d5`](https://github.com/agorokh/ac-copilot-trainer/commit/b51e1d5)) — harness preflight now
+detects a **stale AC app junction**: it compares the installed trainer app against the harness's own
+`src/ac_copilot_trainer` by **content digest** (not commit — two checkouts can share a HEAD and still
+differ), measured **under the rig lock**, and records `extras.run.app_install` in every evidence
+bundle. Four states (`match`/`drift`/`absent`/`unverifiable`); `--strict-app-version` fails on drift +
+unverifiable, never on absent. With [#569](https://github.com/agorokh/ac-copilot-trainer/issues/569)
+(`8a895ee`) the stale-build problem is now closed on **both** halves — frozen EXE and Lua app.
+
+**Live-proven, and still true:** the rig junction moved **three times during that session** (primary →
+#531's worktree carrying an uncommitted `telemetry_publisher.lua` edit → restored), with both
+worktrees at the **same commit**. The junction is volatile shared state; do not repoint it while
+another session owns the rig ([#555](https://github.com/agorokh/ac-copilot-trainer/issues/555)).
+Detail: [issue-575-stale-app-junction-2026-07-15.md](../03_Investigations/issue-575-stale-app-junction-2026-07-15.md).
+
+**Previously delivered (2026-07-15):** [#570](https://github.com/agorokh/ac-copilot-trainer/issues/570)
 **CLOSED** by PR [#585](https://github.com/agorokh/ac-copilot-trainer/pull/585)
 ([`2dbf7d8`](https://github.com/agorokh/ac-copilot-trainer/commit/2dbf7d8)) — the sidecar's
 `/health` endpoint advertisement is now **derived** from the `server._ROUTES` registry that also
