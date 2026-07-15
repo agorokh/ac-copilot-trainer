@@ -2,9 +2,10 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T00:45:00Z
+last_updated: 2026-07-15T02:40:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/03_Investigations/issue-570-route-registry-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-582-l3-corner-refinement-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-577-alien-selfplay-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-572-alien-pipeline-2026-07-14.md
@@ -33,7 +34,19 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Delivered (2026-07-15, latest):** [#582](https://github.com/agorokh/ac-copilot-trainer/issues/582)
+**Delivered (2026-07-15, latest):** [#570](https://github.com/agorokh/ac-copilot-trainer/issues/570)
+**CLOSED** by PR [#585](https://github.com/agorokh/ac-copilot-trainer/pull/585)
+([`2dbf7d8`](https://github.com/agorokh/ac-copilot-trainer/commit/2dbf7d8)) — the sidecar's
+`/health` endpoint advertisement is now **derived** from the `server._ROUTES` registry that also
+drives dispatch, so a route can no longer be served without appearing in `/health` (no
+`advertise=False` opt-out exists). Exact-before-prefix dispatch; import-time registry validation.
+Found en route: the parallel structure had **already drifted** — 4 paths were routed but
+unadvertised (`/healthz`, `/voice/clips/`, `/voice/dispatches`, `/voice/echoes`); advertised set
+6 → 9. Live-proven on merged main (`build_commit: 2dbf7d8`): all 9 routes serve, `/health`
+reconciles against source, real font 200/82956 B, unrouted → 426. Detail:
+[[issue-570-route-registry-2026-07-15]].
+
+**Prior (2026-07-15):** [#582](https://github.com/agorokh/ac-copilot-trainer/issues/582)
 **CLOSED** by PR [#583](https://github.com/agorokh/ac-copilot-trainer/pull/583)
 ([`b2ef740`](https://github.com/agorokh/ac-copilot-trainer/commit/b2ef740)) — **EPIC #529 Layer 3**
 corridor-constrained per-corner refinement (the #577 item-3 follow-up). Evidence-gated relaxation
