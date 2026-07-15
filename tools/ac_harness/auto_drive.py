@@ -121,6 +121,15 @@ def resolve_ac_user_dir(explicit: Path | None = None, *, home: Path | None = Non
 # a braver probe. Requires the explicit --alien-allow-overspeed opt-in (auto_alien iterate mode).
 ALIEN_MAX_OVERSPEED_SCALE = 1.2
 
+# #596 Part A: retain a bounded, low-rate controller trace in every evidence bundle.  The drive
+# loop runs at ~80 Hz, so dumping every frame would turn a five-minute report into tens of
+# thousands of rows.  Two samples/second plus forced recovery events is enough to reconstruct the
+# 450-580 m stall while keeping the JSON comfortably reviewable.  When an unusually long drive
+# exceeds the cap, keep the most recent samples: the state immediately before a failure is the
+# diagnostically valuable window.
+CONTROL_TRACE_INTERVAL_S = 0.5
+CONTROL_TRACE_MAX_SAMPLES = 2048
+
 
 @dataclass
 class AutoDriveConfig:
@@ -250,6 +259,11 @@ class DriveStats:
     recovery_capped: bool = False  # True when max_recoveries was exhausted (vetoes success)
     spawn_teleport: str = ""  # "" (not attempted) | "ok" | "failed" | "skipped (on line)"
     reason: str = ""
+    # #596 Part A: bounded 2 Hz state+command trace, with every recovery forced into the stream.
+    # This makes a capped stall diagnosable from report.json (gear/RPM/controls/position/action)
+    # instead of leaving only the final distance and a screenshot.
+    control_trace: list[dict[str, Any]] = field(default_factory=list)
+    control_trace_truncated: bool = False
     # Driver-specific result payload flowing OUT through the normal return value (not a config
     # side-channel): the #532 handshake result (ok/result/constants/diagnostics) lands here.
     payload: dict = field(default_factory=dict)
@@ -2754,6 +2768,7 @@ def rig_drive(  # pragma: no cover - rig-only
     driver = _build_driver(config, line, speed_profile)
     stats = DriveStats()
     watchdog = ProgressWatchdog(stall_seconds=config.progress_stall_seconds)
+    last_control_trace_s = -math.inf
     line_teleport_works: bool | None = None
     # Whether the car is currently OFF the racing line — set at an off-line spawn (pit box / offset
     # grid slot) AND whenever a recovery teleports it back to the pits (itself off-line). Recovery
@@ -2779,8 +2794,48 @@ def rig_drive(  # pragma: no cover - rig-only
             else:
                 stats.spawn_teleport = "skipped (on line)"
 
-    def _recover(now: float) -> bool:
-        """Shared recovery for driver-flagged stuck AND watchdog stalls. False = cap exceeded."""
+    def _record_control_trace(
+        now: float,
+        cd: dict[str, Any],
+        frame: Any,
+        *,
+        event: str = "control",
+        force: bool = False,
+    ) -> None:
+        """Append one bounded state+command sample; recovery events bypass the 2 Hz throttle."""
+
+        nonlocal last_control_trace_s
+        if not force and now - last_control_trace_s < CONTROL_TRACE_INTERVAL_S:
+            return
+        if len(stats.control_trace) >= CONTROL_TRACE_MAX_SAMPLES:
+            # Keep the failure-adjacent tail for very long runs.  The truncation bit prevents a
+            # consumer from mistaking the retained window for a complete drive trace.
+            stats.control_trace.pop(0)
+            stats.control_trace_truncated = True
+        position = cd.get("position")
+        stats.control_trace.append(
+            {
+                "t_s": round(float(now), 3),
+                "distance_m": round(float(stats.total_distance_m), 3),
+                "position": (
+                    [round(float(value), 4) for value in position]
+                    if isinstance(position, (list, tuple)) and len(position) == 3
+                    else None
+                ),
+                "speed_kmh": round(float(cd.get("speed_kmh", 0.0)), 3),
+                "rpm": round(float(cd.get("rpm", 0.0)), 1),
+                "gear": int(cd.get("gear", 0)),
+                "gas": round(float(frame.gas), 4),
+                "brake": round(float(frame.brake), 4),
+                "steer": round(float(frame.steer), 4),
+                "phase": str(frame.phase),
+                "event": event,
+            }
+        )
+        last_control_trace_s = now
+
+    def _recover(now: float) -> tuple[bool, str]:
+        """Shared recovery for driver/watchdog stalls; return ``(within_cap, action)``."""
         nonlocal line_teleport_works, off_line
         stats.recoveries += 1
         if stats.recoveries > config.max_recoveries:
@@ -2788,7 +2843,7 @@ def rig_drive(  # pragma: no cover - rig-only
             stats.reason = (
                 f"recovery cap ({config.max_recoveries}) exceeded at {stats.total_distance_m:.0f}m"
             )
-            return False
+            return False, "cap_exceeded"
         recovered_to_line = False
         # Retry the racing-line teleport whenever the car is off the line — an off-line spawn OR a
         # prior recovery that teleported it into the pits — or a prior line teleport is known good.
@@ -2812,7 +2867,7 @@ def rig_drive(  # pragma: no cover - rig-only
             off_line = True  # teleport_to_pits leaves the car off-line (in the pits)
         driver.on_recovery()
         watchdog.reset(time.monotonic() - t0, stats.total_distance_m)
-        return True
+        return True, "line_teleport" if recovered_to_line else "teleport_to_pits"
 
     # Sim-death keys on the MAIN acpmf_physics packet_id, NOT the Car0 (Custom-AI) one: live-found
     # (Spa 2026-07-02) that CSP does NOT bump Car0.packet_id every frame — it stays constant while a
@@ -2968,7 +3023,16 @@ def rig_drive(  # pragma: no cover - rig-only
                 break
             stalled = watchdog.update(stats.total_distance_m, now)
             if frame.needs_recovery or stalled:
-                if not _recover(now):
+                trigger = "driver_stuck" if frame.needs_recovery else "progress_watchdog"
+                recovered, action = _recover(now)
+                _record_control_trace(
+                    now,
+                    cd,
+                    frame,
+                    event=f"recovery:{trigger}:{action}",
+                    force=True,
+                )
+                if not recovered:
                     break
                 prev_plane = None  # do not count the teleport as travelled distance
                 continue
@@ -2992,6 +3056,7 @@ def rig_drive(  # pragma: no cover - rig-only
             prev_plane = plane
             if frame.lap_completed:
                 stats.laps += 1
+            _record_control_trace(now, cd, frame)
             time.sleep(0.012)
     finally:
         # Close the final sub-second race at timeout/driver completion too; rig teardown has not

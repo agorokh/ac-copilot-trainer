@@ -2560,13 +2560,33 @@ def test_write_evidence_bundles_report_and_extras(tmp_path):
         track_id="spa",
         setup_requested="Realistic_BB_v3",
         setup_applied=True,
-        drive=DriveStats(drove=True, total_distance_m=7004.0, recoveries=1),
+        drive=DriveStats(
+            drove=True,
+            total_distance_m=7004.0,
+            recoveries=1,
+            control_trace=[
+                {
+                    "t_s": 12.5,
+                    "distance_m": 456.0,
+                    "speed_kmh": 0.0,
+                    "rpm": 900.0,
+                    "gear": 5,
+                    "gas": 0.6,
+                    "brake": 0.0,
+                    "steer": 0.1,
+                    "phase": "OUT",
+                    "event": "recovery:progress_watchdog:line_teleport",
+                }
+            ],
+        ),
     )
     out = write_evidence(tmp_path / "ev", report, extras={"hud": {"rendering": True}})
     payload = _json.loads(out.read_text(encoding="utf-8"))
     assert payload["report"]["ok"] is True
     assert payload["report"]["setup_applied"] is True
     assert payload["report"]["drive"]["recoveries"] == 1
+    assert payload["report"]["drive"]["control_trace"][0]["gear"] == 5
+    assert payload["report"]["drive"]["control_trace"][0]["event"].startswith("recovery:")
     assert payload["hud"]["rendering"] is True
 
 
