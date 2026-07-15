@@ -621,7 +621,13 @@ class RacingDriver:
         if rpm > self.rpm_up and gear < self.max_gear and speed_kmh > 20.0:
             self._last_shift_s = now
             return (True, False)
-        if rpm < self.rpm_dn and gear > 2 and speed_kmh > 5.0:
+        # #596 Part A: never couple the ability to select a usable gear to already moving.  The
+        # practice-start flake can over-slow the car at the first braking complex and leave it at
+        # 0 km/h in 4th/5th.  The old ``speed_kmh > 5`` guard then made recovery impossible: a car
+        # cannot pull past 5 km/h in that gear, so it can never qualify for the downshift that
+        # would let it move.  Low RPM + the existing pulse cooldown are the safe downshift gates;
+        # ``gear > 2`` stops at AC gear 2 (1st), never neutral/reverse.
+        if rpm < self.rpm_dn and gear > 2:
             self._last_shift_s = now
             return (False, True)
         return (False, False)

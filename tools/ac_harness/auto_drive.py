@@ -121,6 +121,15 @@ def resolve_ac_user_dir(explicit: Path | None = None, *, home: Path | None = Non
 # a braver probe. Requires the explicit --alien-allow-overspeed opt-in (auto_alien iterate mode).
 ALIEN_MAX_OVERSPEED_SCALE = 1.2
 
+# #596 Part A: retain a bounded, low-rate controller trace in every evidence bundle.  The drive
+# loop runs at ~80 Hz, so dumping every frame would turn a five-minute report into tens of
+# thousands of rows.  Two samples/second plus forced recovery events is enough to reconstruct the
+# 450-580 m stall while keeping the JSON comfortably reviewable.  When an unusually long drive
+# exceeds the cap, keep the most recent samples: the state immediately before a failure is the
+# diagnostically valuable window.
+CONTROL_TRACE_INTERVAL_S = 0.5
+CONTROL_TRACE_MAX_SAMPLES = 2048
+
 
 @dataclass
 class AutoDriveConfig:
@@ -227,6 +236,10 @@ class AutoDriveConfig:
     hijack_attempts: int = 3  # recreate CarControls0 N times — beats the early-LIVE hijack race
     # Sim-death guard.
     sim_dead_seconds: float = 4.0
+    # #596 Part B: acs.exe death is an intermittent rig failure, not a controller verdict.  Retry
+    # the entire launch->hijack->drive attempt once by default; the wrapper retains every attempt
+    # in report.json so a recovered crash is measured rather than hidden.
+    sim_death_retries: int = 1
     skip_launch: bool = False
 
 
@@ -250,6 +263,11 @@ class DriveStats:
     recovery_capped: bool = False  # True when max_recoveries was exhausted (vetoes success)
     spawn_teleport: str = ""  # "" (not attempted) | "ok" | "failed" | "skipped (on line)"
     reason: str = ""
+    # #596 Part A: bounded 2 Hz state+command trace, with every recovery forced into the stream.
+    # This makes a capped stall diagnosable from report.json (gear/RPM/controls/position/action)
+    # instead of leaving only the final distance and a screenshot.
+    control_trace: list[dict[str, Any]] = field(default_factory=list)
+    control_trace_truncated: bool = False
     # Driver-specific result payload flowing OUT through the normal return value (not a config
     # side-channel): the #532 handshake result (ok/result/constants/diagnostics) lands here.
     payload: dict = field(default_factory=dict)
@@ -416,6 +434,10 @@ class AutoDriveReport:
     setup_requested: str | None = None
     setup_applied: bool | None = None  # None = no setup requested
     setup_ack: dict | None = None  # the in-sim `setup.load.ack` (name/path/error)
+    # #596 Part B: complete per-attempt reports from the bounded sim-death retry wrapper.  The
+    # final report stays at the top level for backward compatibility; this list makes a recovered
+    # crash visible and preserves its control trace/checks instead of laundering it into PASS.
+    attempts: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def reason(self) -> str:
@@ -470,6 +492,17 @@ class AutoDriveReport:
                 + (f" unexpected_sim_pids={d.unexpected_sim_pids}" if d.unexpected_sim_pids else "")
                 + (f" spawn_teleport={d.spawn_teleport}" if d.spawn_teleport else "")
                 + (f" reason={d.reason}" if d.reason else "")
+            )
+        if self.attempts:
+            sim_deaths = sum(
+                1
+                for attempt in self.attempts
+                if isinstance(attempt.get("drive"), dict)
+                and attempt["drive"].get("sim_dead") is True
+            )
+            lines.append(
+                f"  attempts: {len(self.attempts)} (detected sim deaths={sim_deaths}, "
+                f"retry budget={max(len(self.attempts) - 1, 0)} used)"
             )
         if self.lap_times_ms:
             times = ", ".join(f"{ms / 1000.0:.3f}s" for ms in self.lap_times_ms)
@@ -1073,6 +1106,76 @@ async def run_auto_drive(
         setup_ack=setup_ack,
         **identity,
     )
+
+
+async def run_auto_drive_with_sim_retries(
+    config: AutoDriveConfig,
+    *,
+    launch: LaunchFn,
+    hijack: HijackFn,
+    drive: DriveFn,
+    tap: TapFn = tap_frames,
+    apply_setup: ApplySetupFn | None = None,
+    verify_track: VerifyTrackFn | None = None,
+    restart_launcher: RestartLauncherFn | None = None,
+) -> AutoDriveReport:
+    """Run the full attempt again after a detected ``acs.exe`` death, bounded and evidenced.
+
+    A frozen main-physics packet is already the harness's authoritative death oracle.  Retrying
+    inside the drive loop would reuse a dead controller/shared-memory session and blur two runs;
+    instead, this coordinator lets :func:`run_auto_drive` finish its normal controller teardown and
+    starts the complete launch->hijack->drive->tap path again.  The caller holds the machine-global
+    rig lock across this wrapper, so no peer worktree can claim the rig between attempts.
+
+    Only a pure sim death is retryable.  A session replacement means another launch took ownership;
+    a recovery cap is a controller/track failure; a pipeline failure is an assertion failure; and
+    ``--skip-launch`` has no launch leg to repeat.  Those remain honest terminal failures.
+    """
+
+    retry_budget = int(config.sim_death_retries)
+    if retry_budget < 0:
+        raise ValueError("sim_death_retries must be >= 0")
+    attempt_reports: list[dict[str, Any]] = []
+    for attempt_idx in range(retry_budget + 1):
+        report = await run_auto_drive(
+            config,
+            launch=launch,
+            hijack=hijack,
+            drive=drive,
+            tap=tap,
+            apply_setup=apply_setup,
+            verify_track=verify_track,
+            restart_launcher=restart_launcher,
+        )
+        # Snapshot BEFORE assigning the aggregate list, so nested attempts do not recursively
+        # contain themselves.  This is the full attempt (checks, trace, cause), not a lossy summary.
+        attempt_reports.append(_attempt_snapshot(report))
+        sim_death = bool(
+            report.drive is not None
+            and report.drive.sim_dead
+            and not report.drive.session_replaced
+            and not report.drive.recovery_capped
+            and report.error is None
+        )
+        can_retry = sim_death and not config.skip_launch and attempt_idx < retry_budget
+        if can_retry:
+            _log(
+                "sim death: retrying a fresh full launch "
+                f"(attempt {attempt_idx + 2}/{retry_budget + 1})"
+            )
+            continue
+        report.attempts = attempt_reports
+        return report
+
+    raise AssertionError("sim-death retry loop exhausted without returning a report")
+
+
+def _attempt_snapshot(report: AutoDriveReport) -> dict[str, Any]:
+    """Serialize one attempt without recursively embedding the aggregate attempt history."""
+
+    payload = report.to_dict()
+    payload["attempts"] = []
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -2754,6 +2857,7 @@ def rig_drive(  # pragma: no cover - rig-only
     driver = _build_driver(config, line, speed_profile)
     stats = DriveStats()
     watchdog = ProgressWatchdog(stall_seconds=config.progress_stall_seconds)
+    last_control_trace_s = -math.inf
     line_teleport_works: bool | None = None
     # Whether the car is currently OFF the racing line — set at an off-line spawn (pit box / offset
     # grid slot) AND whenever a recovery teleports it back to the pits (itself off-line). Recovery
@@ -2779,8 +2883,48 @@ def rig_drive(  # pragma: no cover - rig-only
             else:
                 stats.spawn_teleport = "skipped (on line)"
 
-    def _recover(now: float) -> bool:
-        """Shared recovery for driver-flagged stuck AND watchdog stalls. False = cap exceeded."""
+    def _record_control_trace(
+        now: float,
+        cd: dict[str, Any],
+        frame: Any,
+        *,
+        event: str = "control",
+        force: bool = False,
+    ) -> None:
+        """Append one bounded state+command sample; recovery events bypass the 2 Hz throttle."""
+
+        nonlocal last_control_trace_s
+        if not force and now - last_control_trace_s < CONTROL_TRACE_INTERVAL_S:
+            return
+        if len(stats.control_trace) >= CONTROL_TRACE_MAX_SAMPLES:
+            # Keep the failure-adjacent tail for very long runs.  The truncation bit prevents a
+            # consumer from mistaking the retained window for a complete drive trace.
+            stats.control_trace.pop(0)
+            stats.control_trace_truncated = True
+        position = cd.get("position")
+        stats.control_trace.append(
+            {
+                "t_s": round(float(now), 3),
+                "distance_m": round(float(stats.total_distance_m), 3),
+                "position": (
+                    [round(float(value), 4) for value in position]
+                    if isinstance(position, (list, tuple)) and len(position) == 3
+                    else None
+                ),
+                "speed_kmh": round(float(cd.get("speed_kmh", 0.0)), 3),
+                "rpm": round(float(cd.get("rpm", 0.0)), 1),
+                "gear": int(cd.get("gear", 0)),
+                "gas": round(float(frame.gas), 4),
+                "brake": round(float(frame.brake), 4),
+                "steer": round(float(frame.steer), 4),
+                "phase": str(frame.phase),
+                "event": event,
+            }
+        )
+        last_control_trace_s = now
+
+    def _recover(now: float) -> tuple[bool, str]:
+        """Shared recovery for driver/watchdog stalls; return ``(within_cap, action)``."""
         nonlocal line_teleport_works, off_line
         stats.recoveries += 1
         if stats.recoveries > config.max_recoveries:
@@ -2788,7 +2932,7 @@ def rig_drive(  # pragma: no cover - rig-only
             stats.reason = (
                 f"recovery cap ({config.max_recoveries}) exceeded at {stats.total_distance_m:.0f}m"
             )
-            return False
+            return False, "cap_exceeded"
         recovered_to_line = False
         # Retry the racing-line teleport whenever the car is off the line — an off-line spawn OR a
         # prior recovery that teleported it into the pits — or a prior line teleport is known good.
@@ -2812,7 +2956,7 @@ def rig_drive(  # pragma: no cover - rig-only
             off_line = True  # teleport_to_pits leaves the car off-line (in the pits)
         driver.on_recovery()
         watchdog.reset(time.monotonic() - t0, stats.total_distance_m)
-        return True
+        return True, "line_teleport" if recovered_to_line else "teleport_to_pits"
 
     # Sim-death keys on the MAIN acpmf_physics packet_id, NOT the Car0 (Custom-AI) one: live-found
     # (Spa 2026-07-02) that CSP does NOT bump Car0.packet_id every frame — it stays constant while a
@@ -2968,7 +3112,16 @@ def rig_drive(  # pragma: no cover - rig-only
                 break
             stalled = watchdog.update(stats.total_distance_m, now)
             if frame.needs_recovery or stalled:
-                if not _recover(now):
+                trigger = "driver_stuck" if frame.needs_recovery else "progress_watchdog"
+                recovered, action = _recover(now)
+                _record_control_trace(
+                    now,
+                    cd,
+                    frame,
+                    event=f"recovery:{trigger}:{action}",
+                    force=True,
+                )
+                if not recovered:
                     break
                 prev_plane = None  # do not count the teleport as travelled distance
                 continue
@@ -2992,6 +3145,7 @@ def rig_drive(  # pragma: no cover - rig-only
             prev_plane = plane
             if frame.lap_completed:
                 stats.laps += 1
+            _record_control_trace(now, cd, frame)
             time.sleep(0.012)
     finally:
         # Close the final sub-second race at timeout/driver completion too; rig teardown has not
@@ -3129,6 +3283,18 @@ def _nonneg_float(value: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed) or parsed < 0:
         raise argparse.ArgumentTypeError(f"must be a finite number >= 0, got {value!r}")
+    return parsed
+
+
+def _nonneg_int(value: str) -> int:
+    """argparse type: a non-negative integer (``0`` disables a bounded retry feature)."""
+
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"must be an integer >= 0, got {value!r}") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"must be an integer >= 0, got {value!r}")
     return parsed
 
 
@@ -3293,6 +3459,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="no forward progress for this long triggers a recovery (any throttle)",
     )
     p.add_argument(
+        "--sim-death-retries",
+        type=_nonneg_int,
+        default=AutoDriveConfig.sim_death_retries,
+        help="fresh full-launch retries after acs.exe death (default: 1; 0 disables)",
+    )
+    p.add_argument(
         "--no-spawn-line",
         action="store_true",
         help="do not teleport a pit-box spawn onto the racing line (use the OUT-phase pit exit)",
@@ -3354,6 +3526,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         hijack_probe_seconds=args.hijack_probe_seconds,
         max_recoveries=args.max_recoveries,
         progress_stall_seconds=args.progress_stall_seconds,
+        sim_death_retries=args.sim_death_retries,
         spawn_to_line=not args.no_spawn_line,
     )
     if args.ac_root is not None:
@@ -3872,7 +4045,7 @@ def _main_impl(
 
         run_started_epoch = time.time()
         report = asyncio.run(
-            run_auto_drive(
+            run_auto_drive_with_sim_retries(
                 config,
                 launch=rig_launch,
                 hijack=rig_hijack,
@@ -4053,6 +4226,11 @@ def _main_impl(
             note = "handshake probes passed but the drive was vetoed — plant NOT persisted"
             report.notes.append(note)
             print(f"auto-drive: {note}")
+    # Handshake post-processing above can change the final verdict after the retry wrapper took
+    # its attempt snapshot. Refresh only the final attempt so the aggregate and top-level report
+    # have the same final truth; earlier failed attempts remain immutable evidence.
+    if report.attempts:
+        report.attempts[-1] = _attempt_snapshot(report)
     report_path = write_evidence(evidence_dir, report, extras=extras)
 
     print(report.summary())

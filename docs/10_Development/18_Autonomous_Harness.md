@@ -48,9 +48,11 @@ The full loop each command owns:
    setup with no `[FUEL]` section is reported baked-but-unconfirmed. The re-bake loop writes only
    under `Documents/Assetto Corsa/cfg`; it does not mutate the AC/CSP install tree.
 5. **Drive** — `--driver ggv` (flat-out friction-circle min-time), `racing` (AI-line pace,
-   default), or `cruise` (slow lane-keeper). Guards: sim-death detection, a **no-progress
+   default), or `cruise` (slow lane-keeper). Guards: sim-death detection plus one bounded fresh
+   full-launch retry by default (`--sim-death-retries 0` disables), a **no-progress
    watchdog** (recovers stalls regardless of throttle), a **recovery cap** (default 6) that fails
-   honestly with the stall location, and spawn-to-line teleport for pit-box starts
+   honestly with the stall location, a bounded 2 Hz **control trace** (gear/RPM/controls/position +
+   forced recovery events), and spawn-to-line teleport for pit-box starts
    (`--no-spawn-line` to disable).
 6. **Assert** — taps the sidecar WS and asserts the live producer contract
    (`connection`/`tire_temps`/`coaching.snapshot`; `--wait-lap` additionally requires a completed
@@ -63,7 +65,7 @@ Default bundle: `.scratch/harness-evidence/<utc>_<car>_<track>/` (override `--ev
 
 | Artifact | Content |
 |---|---|
-| `report.json` | Full `AutoDriveReport` (pass/fail + stage, combo, `setup_requested/applied` + in-sim ack, drive stats incl. `recoveries`/`spawn_teleport`, WS frame counts) plus run extras: preset used, sidecar provenance, HUD verdict, lap-archive paths |
+| `report.json` | Final `AutoDriveReport` plus full `attempts` history (a recovered sim death remains measurable), combo/setup ack, drive stats incl. `recoveries`/`spawn_teleport` and bounded `control_trace`, WS frame counts, preset/sidecar provenance, HUD verdict, and lap-archive paths |
 | `generated.cmpreset` | The exact preset launched (when generated) |
 | `hud.png` | Post-run HUD capture (`--hud-region full|left|coaching`) with liveness verdict |
 | `lap_archives` (in report.json) | Paths of `journal/laps/lap_*.json` written during the run — full telemetry traces for session review / setup comparison |
@@ -229,7 +231,8 @@ launch, probe outcome, and re-bake stats so a recycle's timing is visible.
 | CM clicks/launch do nothing | **Foreground steal**: minimize the agent/terminal window; AC's fullscreen menu covers CM — the harness kills stale `acs.exe` before each launch |
 | "Steam API failed to initialize" | Steam elevation mismatch — restart Steam **non-elevated** (`steam -shutdown`, relaunch via `explorer.exe`) |
 | `setup.load` error "no loopback Lua peer connected" | The trainer app isn't (yet) connected to the sidecar — the harness retries for `setup_timeout`; persistent = app not installed/enabled in CSP |
-| Run FAILS with `recovery cap exceeded at <N>m` | Real stall: the car repeatedly stopped at the same spot. Inspect `hud.png` + the stall distance; do **not** raise the cap to make it "pass" |
+| Run FAILS with `recovery cap exceeded at <N>m` | Real stall: the car repeatedly stopped at the same spot. Inspect `hud.png` plus `report.drive.control_trace` (especially the forced `recovery:*` rows); do **not** raise the cap to make it "pass" |
+| `acs.exe` dies mid-drive | The main physics packet watchdog fails that attempt and the CLI automatically runs one fresh full launch (bounded by `--sim-death-retries`). Inspect `report.attempts`: every failed attempt, reason, and control trace is retained even when the final attempt passes. |
 | Two agents, one rig | **Yield**: a single AC instance cannot serve two autonomous sessions (see the issue-277 investigation). Check for a running `acs.exe`/peer sidecar before launching |
 | Sidecar port already in use | That's usually the Game Point launcher's supervised sidecar — the harness reuses it; don't spawn a second |
 
