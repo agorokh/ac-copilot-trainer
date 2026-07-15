@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T17:25:00Z
+last_updated: 2026-07-15T19:01:23Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-602-portaudio-fixed-layout-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-pit-stall-sim-death-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-partc-actionable-reason-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/tier3-consumer-repoint-drift-2026-07-15.md
@@ -38,6 +39,14 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Live-proven (2026-07-15, active PR):** [#606](https://github.com/agorokh/ac-copilot-trainer/pull/606)
+fixes [#602](https://github.com/agorokh/ac-copilot-trainer/issues/602). The selected mono/48 kHz
+phrase bank now negotiates the rig's fixed six-channel WASAPI layout and maps voice to front-center
+channel 3. Game Point showed `VOICE ENABLED` with `1ch bank -> 6ch stream/6ch max map=[3]`; a real
+`Brake!` dispatch matched the source waveform at score 1.0 on WASAPI loopback channel 3 with the
+other five channels silent. Full parity: **2,966 passed, 113 skipped, 87.60% coverage**. Detail:
+[[issue-602-portaudio-fixed-layout-2026-07-15]].
 
 **Delivered and live-proven (2026-07-15):** [#596](https://github.com/agorokh/ac-copilot-trainer/issues/596)
 is **CLOSED** by PRs [#598](https://github.com/agorokh/ac-copilot-trainer/pull/598) and
