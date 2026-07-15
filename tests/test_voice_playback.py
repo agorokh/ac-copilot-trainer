@@ -18,6 +18,7 @@ from tools.ai_sidecar.voice.playback import (
     DeviceResolutionError,
     RecordingPlayback,
     RtMixerPlayback,
+    SoundDevicePlayback,
     _TimedCurrent,
     resolve_output_device,
     resolve_output_layout,
@@ -179,6 +180,50 @@ def test_rtmixer_playback_frees_channel_by_clip_duration(monkeypatch) -> None:
     assert playback.current is utt
     clock.advance(0.02)
     assert playback.current is None
+
+
+def test_sounddevice_expands_mono_for_fixed_multichannel_device(monkeypatch) -> None:
+    """The interim backend must recover from the same fixed-width endpoint as rtmixer."""
+    np = pytest.importorskip("numpy")
+    resolver = Resolver(build_manifest())
+    utterance = resolver.resolve(make_advisory(kind="late_brake", urgency="act", corner=2))
+    assert utterance is not None
+    pcm = np.arange(5, dtype=np.float32)
+    bank = Bank(samplerate=48_000, clips={utterance.clip_id: pcm})
+    played: dict[str, object] = {}
+
+    def check_output_settings(*, device, channels, samplerate):  # noqa: ANN001
+        assert device == 0
+        assert samplerate == 48_000
+        if channels != 6:
+            raise RuntimeError("Invalid number of channels [PaErrorCode -9998]")
+
+    def play(output, *, samplerate, device):  # noqa: ANN001
+        played.update(output=output, samplerate=samplerate, device=device)
+
+    fake_sd = SimpleNamespace(
+        query_devices=lambda: [
+            {"name": "5.1 Speakers (USB Sound Device)", "max_output_channels": 6, "hostapi": 0}
+        ],
+        query_hostapis=lambda: [{"name": "Windows WASAPI"}],
+        check_output_settings=check_output_settings,
+        play=play,
+        stop=lambda: None,
+    )
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
+
+    playback = SoundDevicePlayback(
+        bank,
+        device_name="USB Sound Device",
+        host_api="WASAPI",
+    )
+    playback.play(utterance)
+
+    output = played["output"]
+    assert output.shape == (5, 6)
+    assert np.array_equal(output[:, 2], pcm)
+    assert np.count_nonzero(output[:, [0, 1, 3, 4, 5]]) == 0
+    assert playback.output_details["channel_map"] == [3]
 
 
 def test_bank_skips_clips_with_sha256_mismatch(tmp_path) -> None:

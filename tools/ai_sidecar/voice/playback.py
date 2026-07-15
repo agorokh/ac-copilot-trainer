@@ -187,9 +187,7 @@ def resolve_output_layout(
         )
 
     api_index = int(device.get("hostapi", -1))
-    api_name = (
-        str(host_apis[api_index].get("name", "")) if 0 <= api_index < len(host_apis) else ""
-    )
+    api_name = str(host_apis[api_index].get("name", "")) if 0 <= api_index < len(host_apis) else ""
     failures: list[str] = []
     stream_channels = 0
     for candidate in range(bank_channels, max_channels + 1):
@@ -215,9 +213,7 @@ def resolve_output_layout(
         )
 
     channel_map = (
-        (3,)
-        if bank_channels == 1 and stream_channels >= 3
-        else tuple(range(1, bank_channels + 1))
+        (3,) if bank_channels == 1 and stream_channels >= 3 else tuple(range(1, bank_channels + 1))
     )
     return OutputLayout(
         device_index=device_index,

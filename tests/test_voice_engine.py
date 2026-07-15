@@ -16,7 +16,7 @@ from tools.ai_sidecar.voice.bake import ToneBackend, bake_bank
 from tools.ai_sidecar.voice.config import VoiceConfig
 from tools.ai_sidecar.voice.engine import VoiceCoach
 from tools.ai_sidecar.voice.manifest import MANIFEST_FILENAME
-from tools.ai_sidecar.voice.playback import RecordingPlayback
+from tools.ai_sidecar.voice.playback import OutputLayoutError, RecordingPlayback
 
 
 def _baked(tmp_path):
@@ -187,3 +187,20 @@ def test_build_playback_device_fault_still_raises_without_fallback(monkeypatch, 
     with pytest.raises(RuntimeError, match="PortAudio device error"):
         VoiceCoach._build_playback(object(), tmp_path, VoiceConfig(), "rtmixer")
     assert sd_calls == []  # device fault must not fall through to sounddevice
+
+
+def test_from_bank_preserves_actionable_output_layout_failure(monkeypatch, tmp_path) -> None:
+    _baked(tmp_path)
+
+    def fail_layout(*_args, **_kwargs):
+        raise OutputLayoutError(
+            "voice device 'Rig Speakers' rejected every 1..6-channel layout; "
+            "set AC_COPILOT_VOICE_DEVICE/AC_COPILOT_VOICE_HOST_API to a compatible output"
+        )
+
+    monkeypatch.setattr(VoiceCoach, "_build_playback", fail_layout)
+    coach = VoiceCoach.from_bank(tmp_path, VoiceConfig(device_name="Rig Speakers"))
+
+    assert coach.enabled is False
+    assert "rejected every 1..6-channel layout" in coach.disabled_reason
+    assert "AC_COPILOT_VOICE_DEVICE" in coach.disabled_reason
