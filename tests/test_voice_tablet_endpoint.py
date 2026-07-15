@@ -375,6 +375,25 @@ def test_http_voice_routes_token_gated_for_non_loopback(tmp_path: Path) -> None:
     assert _get("/tablet/voice").status == HTTPStatus.OK
 
 
+def test_unregistered_path_under_gated_prefix_still_refused(tmp_path: Path) -> None:
+    """Issue #570: the blanket ``path.startswith("/voice/") or path.startswith("/dash/")``
+    gate became per-route ``token_gated``, so an UNREGISTERED path under those prefixes no
+    longer hits the route gate — it falls through to the WS upgrade, whose ``token_check``
+    applies the same rule. Pin that the fall-through is equivalent: a non-loopback client
+    with no/bad token is still refused rather than silently upgraded."""
+    bake_bank(tmp_path, ToneBackend())
+    server._set_voice_web_bank(tmp_path)
+    assert _get("/voice/typo", token="sekret").status == HTTPStatus.UNAUTHORIZED
+    assert _get("/dash/typo", token="sekret").status == HTTPStatus.UNAUTHORIZED
+    assert (
+        _get("/voice/typo", token="sekret", headers={"X-AC-Copilot-Token": "wrong"})
+    ).status == HTTPStatus.UNAUTHORIZED
+    # A valid token proceeds to the real upgrade (None = continue the handshake), as before.
+    assert _get("/voice/typo", token="sekret", headers={"X-AC-Copilot-Token": "sekret"}) is None
+    # No token configured (loopback-only bind enforced at startup) -> straight to the upgrade.
+    assert _get("/voice/typo") is None
+
+
 def test_http_dispatch_and_echo_logs() -> None:
     server._voice_dispatch_log.append({"seq": 9, "clip_id": "x"})
     server._voice_echo_log.append({"seq": 9, "clip_id": "x", "t_server_ms": 1.0})

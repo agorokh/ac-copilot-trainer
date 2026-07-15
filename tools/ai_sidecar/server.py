@@ -1056,69 +1056,230 @@ def _http_response_bytes(
     return response
 
 
-# Canonical set of HTTP routes served by ``_process_request`` below — the single source of
-# truth for the sidecar's served-endpoint surface. Passed into ``build_health_json`` so
-# ``/health`` advertises exactly what THIS build serves (issue #567/#568): a stale binary's
-# compiled-in list omits a route it can't serve, and the launcher self-test / drift guard
-# key off this. Keep it in lockstep with the ``path == …`` / ``path.startswith(…)`` handlers.
-SERVED_ENDPOINTS: tuple[str, ...] = (
-    "/health",
-    "/metrics",
-    "/tablet/dash",
-    "/tablet/voice",
-    "/dash/fonts/",
-    "/voice/manifest.json",
+# --- HTTP route registry -----------------------------------------------------------------
+#
+# ONE structure drives BOTH handler dispatch AND the ``/health`` endpoint advertisement
+# (issue #570). Previously the dispatch was a chain of inline ``path == …`` /
+# ``path.startswith(…)`` checks running parallel to a hand-written ``SERVED_ENDPOINTS``
+# tuple, with only a drift-guard test holding the two in lockstep. ``SERVED_ENDPOINTS`` is
+# now DERIVED from ``_ROUTES``, so a route cannot be served without appearing in ``/health``
+# — the stale-build detection of #567/#568 (an old binary's compiled-in list omits the routes
+# it can't serve) cannot silently rot as routes are added.
+#
+# There is deliberately NO ``advertise=False`` escape hatch: an opt-out is the exact hole
+# this closes. An ALIAS (``/healthz``) is routed but not advertised — it resolves to an
+# advertised route's handler, so it is not independent surface.
+
+
+@dataclass(frozen=True)
+class _Route:
+    """One HTTP route served ahead of the WebSocket upgrade.
+
+    ``prefix`` routes match on ``path.startswith(self.path)``; exact routes match verbatim.
+    Every handler takes ``(connection, request, tail)`` and returns a websockets response.
+    ``tail`` is the request path with this route's own ``path`` already stripped by the
+    router (so a prefix handler never restates its route string — that would be the same
+    parallel-structure drift #570 removes); it is ``""`` for an exact route, which no
+    handler needs. Dispatch is exact-first, so a prefix route can never shadow a more
+    specific exact route.
+
+    ``token_gated`` routes carry product content (bank audio, the tablet pages, dispatch/echo
+    logs), so on an authenticated external bind they honor the same ``X-AC-Copilot-Token`` as
+    the WS upgrade: loopback (the USB ``adb reverse`` deployment) passes untokened; a LAN
+    client needs the header (PR #519 review). ``/health`` and ``/metrics`` are read-only and
+    secret-free, so they stay open — the launcher probes them untokened.
+    """
+
+    path: str
+    handler: Callable[[Any, Any, str], Any]
+    prefix: bool = False
+    token_gated: bool = False
+    aliases: tuple[str, ...] = ()
+
+
+def _route_health(connection: Any, request: Any, tail: str) -> Any:
+    connected_peers, screen_peers = _peer_counts()
+    return _http_response(
+        connection,
+        HTTPStatus.OK,
+        observability.build_health_json(
+            connected_peers,
+            screen_peers=screen_peers,
+            browser_peers=_browser_peer_count(),
+            endpoints=SERVED_ENDPOINTS,
+            voice=public_voice_runtime_status(),
+        ),
+        observability.HEALTH_CONTENT_TYPE,
+    )
+
+
+def _route_metrics(connection: Any, request: Any, tail: str) -> Any:
+    connected_peers, screen_peers = _peer_counts()
+    return _http_response(
+        connection,
+        HTTPStatus.OK,
+        observability.build_metrics_text(connected_peers, screen_peers=screen_peers),
+        observability.PROM_CONTENT_TYPE,
+    )
+
+
+def _route_tablet_voice(connection: Any, request: Any, tail: str) -> Any:
+    page = _tablet_voice_page()
+    if page is None:
+        return _http_response(
+            connection, HTTPStatus.NOT_FOUND, "tablet page unavailable\n", "text/plain"
+        )
+    return _http_response(connection, HTTPStatus.OK, page, "text/html; charset=utf-8")
+
+
+def _route_tablet_dash(connection: Any, request: Any, tail: str) -> Any:
+    page = _tablet_dash_page()
+    if page is None:
+        return _http_response(
+            connection, HTTPStatus.NOT_FOUND, "dash page unavailable\n", "text/plain"
+        )
+    return _http_response(connection, HTTPStatus.OK, page, "text/html; charset=utf-8")
+
+
+def _route_dash_font(connection: Any, request: Any, tail: str) -> Any:
+    # Exact-match against the vendored-font allow-list (names never contain
+    # separators), so a decoded "../x" simply isn't in the set — no traversal.
+    name = urllib.parse.unquote(tail)
+    if name not in _TABLET_DASH_FONT_FILES:
+        return _http_response(connection, HTTPStatus.NOT_FOUND, "unknown font\n", "text/plain")
+    try:
+        data = (_TABLET_DASH_FONTS_DIR / name).read_bytes()
+    except OSError:
+        return _http_response(connection, HTTPStatus.NOT_FOUND, "font unavailable\n", "text/plain")
+    return _http_response_bytes(connection, HTTPStatus.OK, data, "font/ttf")
+
+
+def _route_voice_manifest(connection: Any, request: Any, tail: str) -> Any:
+    bank_dir = _voice_bank_dir
+    if bank_dir is None:
+        return _http_response(
+            connection, HTTPStatus.NOT_FOUND, "no voice bank configured\n", "text/plain"
+        )
+    try:
+        body = (bank_dir / "manifest.json").read_text(encoding="utf-8")
+    except OSError:
+        return _http_response(
+            connection, HTTPStatus.NOT_FOUND, "manifest unavailable\n", "text/plain"
+        )
+    return _http_response(connection, HTTPStatus.OK, body, "application/json")
+
+
+def _route_voice_clip(connection: Any, request: Any, tail: str) -> Any:
+    bank_dir = _voice_bank_dir
+    # The page requests encodeURIComponent(file); decode before the allow-list so
+    # the cross-boundary contract holds for any manifest filename. Exact-match
+    # against manifest entries (which never contain separators) still forbids
+    # traversal — a decoded "../x" simply isn't in the set (PR #519 review).
+    name = urllib.parse.unquote(tail)
+    if bank_dir is None or name not in _voice_clip_files:
+        return _http_response(connection, HTTPStatus.NOT_FOUND, "unknown clip\n", "text/plain")
+    try:
+        data = (bank_dir / name).read_bytes()
+    except OSError:
+        return _http_response(connection, HTTPStatus.NOT_FOUND, "clip unavailable\n", "text/plain")
+    return _http_response_bytes(connection, HTTPStatus.OK, data, "audio/wav")
+
+
+def _route_voice_dispatches(connection: Any, request: Any, tail: str) -> Any:
+    return _http_response(
+        connection,
+        HTTPStatus.OK,
+        json.dumps({"dispatches": list(_voice_dispatch_log)}),
+        "application/json",
+    )
+
+
+def _route_voice_echoes(connection: Any, request: Any, tail: str) -> Any:
+    return _http_response(
+        connection,
+        HTTPStatus.OK,
+        json.dumps({"echoes": list(_voice_echo_log)}),
+        "application/json",
+    )
+
+
+# Declaration order is the ``/health`` advertisement order. Issue #511 Part D added the tablet
+# voice endpoint; issue #531 Part A the tablet GT dashboard page + its vendored fonts.
+_ROUTES: tuple[_Route, ...] = (
+    _Route("/health", _route_health, aliases=("/healthz",)),
+    _Route("/metrics", _route_metrics),
+    _Route("/tablet/dash", _route_tablet_dash, token_gated=True),
+    _Route("/tablet/voice", _route_tablet_voice, token_gated=True),
+    _Route("/dash/fonts/", _route_dash_font, prefix=True, token_gated=True),
+    _Route("/voice/manifest.json", _route_voice_manifest, token_gated=True),
+    _Route("/voice/clips/", _route_voice_clip, prefix=True, token_gated=True),
+    _Route("/voice/dispatches", _route_voice_dispatches, token_gated=True),
+    _Route("/voice/echoes", _route_voice_echoes, token_gated=True),
 )
+
+
+def _index_routes(routes: tuple[_Route, ...]) -> tuple[dict[str, _Route], tuple[_Route, ...]]:
+    """Split the registry into an exact-match table and an ordered prefix list.
+
+    Runs at import so an ambiguous registry is a startup error rather than a route that
+    silently never fires: duplicate paths/aliases and overlapping prefixes both raise.
+    Aliases on a prefix route are meaningless (the prefix already spans them) and raise too.
+    """
+    exact: dict[str, _Route] = {}
+    prefixes: list[_Route] = []
+    for route in routes:
+        if route.prefix:
+            if route.aliases:
+                raise ValueError(f"prefix route {route.path!r} cannot declare aliases")
+            for other in prefixes:
+                if route.path.startswith(other.path) or other.path.startswith(route.path):
+                    raise ValueError(
+                        f"ambiguous overlapping prefix routes: {other.path!r} vs {route.path!r}"
+                    )
+            prefixes.append(route)
+            continue
+        for key in (route.path, *route.aliases):
+            if key in exact:
+                raise ValueError(f"duplicate route registration: {key!r}")
+            exact[key] = route
+    return exact, tuple(prefixes)
+
+
+_EXACT_ROUTES, _PREFIX_ROUTES = _index_routes(_ROUTES)
+
+# DERIVED from the registry — dispatch and advertisement are now the same structure and
+# cannot drift (issue #570). Consumed by ``build_health_json(endpoints=…)``; the launcher
+# self-test and the drift guard key off it.
+SERVED_ENDPOINTS: tuple[str, ...] = tuple(route.path for route in _ROUTES)
+
+
+def _match_route(path: str) -> _Route | None:
+    """Resolve a request path to its route — exact match first, then prefixes."""
+    route = _EXACT_ROUTES.get(path)
+    if route is not None:
+        return route
+    for candidate in _PREFIX_ROUTES:
+        if path.startswith(candidate.path):
+            return candidate
+    return None
 
 
 def make_process_request(token: str | None):
     """Build the websockets ``process_request`` hook.
 
-    Serves ``GET /health`` and ``GET /metrics`` as plain HTTP on the SAME port as
-    the WebSocket (short-circuiting the upgrade so they never enter ``_handler``),
-    then falls through to the optional token gate (``make_token_check``) for a real
-    WS upgrade. Installed UNCONDITIONALLY so the endpoints work even in the default
-    no-token loopback deployment. Read-only ``/health`` and ``/metrics`` carry no
-    secrets and are intentionally not token-gated; the WS upgrade keeps the gate.
+    Serves the ``_ROUTES`` registry as plain HTTP on the SAME port as the WebSocket
+    (short-circuiting the upgrade so those paths never enter ``_handler``), then falls
+    through to the optional token gate (``make_token_check``) for a real WS upgrade.
+    Installed UNCONDITIONALLY so the endpoints work even in the default no-token loopback
+    deployment.
     """
     token_check = make_token_check(token)
 
     def _process_request(connection: Any, request: Any) -> Any:
         path = (getattr(request, "path", "") or "").split("?", 1)[0]
-        if path in ("/health", "/healthz"):
-            connected_peers, screen_peers = _peer_counts()
-            return _http_response(
-                connection,
-                HTTPStatus.OK,
-                observability.build_health_json(
-                    connected_peers,
-                    screen_peers=screen_peers,
-                    browser_peers=_browser_peer_count(),
-                    endpoints=SERVED_ENDPOINTS,
-                    voice=public_voice_runtime_status(),
-                ),
-                observability.HEALTH_CONTENT_TYPE,
-            )
-        if path == "/metrics":
-            connected_peers, screen_peers = _peer_counts()
-            return _http_response(
-                connection,
-                HTTPStatus.OK,
-                observability.build_metrics_text(connected_peers, screen_peers=screen_peers),
-                observability.PROM_CONTENT_TYPE,
-            )
-        # Issue #511 Part D — tablet voice endpoint. Read-only and secret-free, but unlike
-        # /health it carries product content (bank audio, dispatch/echo logs), so on an
-        # authenticated external bind these routes honor the same token as the WS upgrade:
-        # loopback (the USB `adb reverse` deployment) passes untokened; a LAN client needs
-        # the X-AC-Copilot-Token header (PR #519 review). Clip serving stays exact-match
-        # against the manifest allow-list — no traversal surface.
-        if (
-            path in ("/tablet/voice", "/tablet/dash")
-            or path.startswith("/voice/")
-            or path.startswith("/dash/")
-        ):
-            if token and not _is_loopback_peer(connection):
+        route = _match_route(path)
+        if route is not None:
+            if route.token_gated and token and not _is_loopback_peer(connection):
                 supplied = request.headers.get(AUTH_HEADER)
                 if supplied is None or not secrets.compare_digest(supplied, token):
                     return _http_response(
@@ -1127,81 +1288,8 @@ def make_process_request(token: str | None):
                         "missing or invalid X-AC-Copilot-Token\n",
                         "text/plain",
                     )
-        if path == "/tablet/voice":
-            page = _tablet_voice_page()
-            if page is None:
-                return _http_response(
-                    connection, HTTPStatus.NOT_FOUND, "tablet page unavailable\n", "text/plain"
-                )
-            return _http_response(connection, HTTPStatus.OK, page, "text/html; charset=utf-8")
-        # Issue #531 Part A — the tablet GT dashboard page + its vendored fonts.
-        if path == "/tablet/dash":
-            page = _tablet_dash_page()
-            if page is None:
-                return _http_response(
-                    connection, HTTPStatus.NOT_FOUND, "dash page unavailable\n", "text/plain"
-                )
-            return _http_response(connection, HTTPStatus.OK, page, "text/html; charset=utf-8")
-        if path.startswith("/dash/fonts/"):
-            # Exact-match against the vendored-font allow-list (names never contain
-            # separators), so a decoded "../x" simply isn't in the set — no traversal.
-            name = urllib.parse.unquote(path[len("/dash/fonts/") :])
-            if name not in _TABLET_DASH_FONT_FILES:
-                return _http_response(
-                    connection, HTTPStatus.NOT_FOUND, "unknown font\n", "text/plain"
-                )
-            try:
-                data = (_TABLET_DASH_FONTS_DIR / name).read_bytes()
-            except OSError:
-                return _http_response(
-                    connection, HTTPStatus.NOT_FOUND, "font unavailable\n", "text/plain"
-                )
-            return _http_response_bytes(connection, HTTPStatus.OK, data, "font/ttf")
-        if path == "/voice/manifest.json":
-            bank_dir = _voice_bank_dir
-            if bank_dir is None:
-                return _http_response(
-                    connection, HTTPStatus.NOT_FOUND, "no voice bank configured\n", "text/plain"
-                )
-            try:
-                body = (bank_dir / "manifest.json").read_text(encoding="utf-8")
-            except OSError:
-                return _http_response(
-                    connection, HTTPStatus.NOT_FOUND, "manifest unavailable\n", "text/plain"
-                )
-            return _http_response(connection, HTTPStatus.OK, body, "application/json")
-        if path.startswith("/voice/clips/"):
-            bank_dir = _voice_bank_dir
-            # The page requests encodeURIComponent(file); decode before the allow-list so
-            # the cross-boundary contract holds for any manifest filename. Exact-match
-            # against manifest entries (which never contain separators) still forbids
-            # traversal — a decoded "../x" simply isn't in the set (PR #519 review).
-            name = urllib.parse.unquote(path[len("/voice/clips/") :])
-            if bank_dir is None or name not in _voice_clip_files:
-                return _http_response(
-                    connection, HTTPStatus.NOT_FOUND, "unknown clip\n", "text/plain"
-                )
-            try:
-                data = (bank_dir / name).read_bytes()
-            except OSError:
-                return _http_response(
-                    connection, HTTPStatus.NOT_FOUND, "clip unavailable\n", "text/plain"
-                )
-            return _http_response_bytes(connection, HTTPStatus.OK, data, "audio/wav")
-        if path == "/voice/dispatches":
-            return _http_response(
-                connection,
-                HTTPStatus.OK,
-                json.dumps({"dispatches": list(_voice_dispatch_log)}),
-                "application/json",
-            )
-        if path == "/voice/echoes":
-            return _http_response(
-                connection,
-                HTTPStatus.OK,
-                json.dumps({"echoes": list(_voice_echo_log)}),
-                "application/json",
-            )
+            tail = path[len(route.path) :] if route.prefix else ""
+            return route.handler(connection, request, tail)
         # A rig-screen sighting rides on the WS upgrade (the client header is on
         # the upgrade request), then the token gate applies if one is configured.
         if request.headers.get(CLIENT_HEADER):

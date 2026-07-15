@@ -130,8 +130,9 @@ def build_health_json(
     so the launcher can tell a tablet dashboard is actually connected (not just
     that the tunnel is up). ``endpoints`` is the **caller's** canonical route
     list — the single source of truth lives next to the handlers in
-    ``server.make_process_request`` (``server.SERVED_ENDPOINTS``), not here — so a
-    new route can't be served yet silently omitted from ``/health`` (#568 review).
+    ``server.SERVED_ENDPOINTS``, which is derived from the ``server._ROUTES``
+    registry that also drives dispatch (#570), not here — so a new route can't be
+    served yet silently omitted from ``/health`` (#568 review).
     """
     payload: dict[str, object] = {
         "status": "ok",

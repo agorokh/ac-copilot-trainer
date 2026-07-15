@@ -25,6 +25,7 @@ from websockets.asyncio.server import serve as ws_serve  # noqa: E402
 from tools.ai_sidecar import external_protocol as ep  # noqa: E402
 from tools.ai_sidecar import observability as obs  # noqa: E402
 from tools.ai_sidecar.server import (  # noqa: E402
+    _ROUTES,
     SERVED_ENDPOINTS,
     _external_peer_classes,
     _external_peers,
@@ -127,6 +128,35 @@ def test_served_endpoints_are_actually_routed() -> None:
     assert all(code != 426 for code in codes.values()), (
         f"advertised endpoint not routed by the server (426 = fell through to WS): {codes}"
     )
+
+
+def test_health_advertises_every_registered_route() -> None:
+    """Issue #570: ONE registry drives dispatch AND advertisement, so /health's endpoint set
+    is exactly the registered route set — not a hand-written tuple that can omit a route.
+    Asserted against a REAL server payload (through build_health_json + JSON), so a caller
+    that stops passing the derived list, or a re-introduced advertise opt-out, fails here."""
+
+    async def _run() -> str:
+        async with _running_sidecar() as port:
+            return (await asyncio.to_thread(_http_get, port, "/health"))[2]
+
+    advertised = json.loads(asyncio.run(_run()))["endpoints"]
+    assert advertised == [route.path for route in _ROUTES]
+
+
+def test_route_aliases_are_routed_but_not_advertised() -> None:
+    """An alias resolves to an advertised route's handler, so it is not independent surface:
+    /healthz must serve health yet stay out of the advertised set (issue #570)."""
+
+    async def _run() -> tuple[int, list[str], str]:
+        async with _running_sidecar() as port:
+            return await asyncio.to_thread(_http_get, port, "/healthz")
+
+    status, _content_types, body = asyncio.run(_run())
+    assert status == 200
+    assert json.loads(body)["status"] == "ok"
+    assert "/healthz" not in SERVED_ENDPOINTS
+    assert "/healthz" not in json.loads(body)["endpoints"]
 
 
 def test_build_health_json_reflects_browser_peers() -> None:
