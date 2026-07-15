@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T19:01:23Z
+last_updated: 2026-07-15T20:13:59Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-602-portaudio-fixed-layout-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-pit-stall-sim-death-2026-07-15.md
@@ -103,11 +103,14 @@ PR [#606](https://github.com/agorokh/ac-copilot-trainer/pull/606) fixes the `Por
 voice-disable failure. The mono/48 kHz bank now negotiates the pinned six-channel Windows WASAPI
 speaker layout and maps speech to front-center channel 3. Game Point exposed the full negotiated
 layout as enabled, and a live `Brake!` dispatch matched its source waveform at score 1.0 on the
-speaker's WASAPI loopback channel 3; all other channels were silent. Full parity is **2,966 passed,
-113 skipped, 87.60% coverage, `ci-fast: OK`**. The test launcher was shut down cleanly.
+speaker's WASAPI loopback channel 3; all other channels were silent. Review follow-ups also made
+the default-device chirp negotiate fixed layouts and preserved multichannel banks across expanded
+streams. Full parity is **2,968 passed, 113 skipped, 87.60% coverage, `ci-fast: OK`**. Actions,
+GraphQL threads, resolve ledger, and the final current-SHA cooldown are clean. The test launcher
+was shut down cleanly.
 
-**Resume here:** resolve PR #606 through current-SHA CI/review, then merge through the normal
-maintainer workflow. Detail: [[issue-602-portaudio-fixed-layout-2026-07-15]].
+**Resume here:** PR #606 is ready and review-resolved; merge through the normal maintainer
+workflow. Detail: [[issue-602-portaudio-fixed-layout-2026-07-15]].
 
 ## Delivered (2026-07-15) — #596 autonomous-drive reliability CLOSED (PRs #598/#600)
 

@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T19:01:23Z
+last_updated: 2026-07-15T20:13:59Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-602-portaudio-fixed-layout-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-pit-stall-sim-death-2026-07-15.md
@@ -45,7 +45,9 @@ fixes [#602](https://github.com/agorokh/ac-copilot-trainer/issues/602). The sele
 phrase bank now negotiates the rig's fixed six-channel WASAPI layout and maps voice to front-center
 channel 3. Game Point showed `VOICE ENABLED` with `1ch bank -> 6ch stream/6ch max map=[3]`; a real
 `Brake!` dispatch matched the source waveform at score 1.0 on WASAPI loopback channel 3 with the
-other five channels silent. Full parity: **2,966 passed, 113 skipped, 87.60% coverage**. Detail:
+other five channels silent. Default-device chirps now negotiate the same layout, and multichannel
+banks preserve every mapped source channel. Full parity: **2,968 passed, 113 skipped, 87.60%
+coverage**; PR checks, GraphQL threads, resolve ledger, and the final cooldown are clean. Detail:
 [[issue-602-portaudio-fixed-layout-2026-07-15]].
 
 **Delivered and live-proven (2026-07-15):** [#596](https://github.com/agorokh/ac-copilot-trainer/issues/596)
