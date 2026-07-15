@@ -127,6 +127,11 @@ def test_dash_part_d_vitals_are_bound_end_to_end() -> None:
     "core temp / pressure" over a permanently empty psi slot. Nothing failed — the page just
     quietly under-reported forever. This pins both ends together: every live vital the page
     consumes must also be emitted by the Lua producer that feeds it.
+
+    NOTE the direction: page-consumed => producer-emitted. The converse does NOT hold, and
+    asserting it would be wrong — the tick also feeds the sidecar's coaching brain (e.g.
+    `race_management._brake_advisory` consumes `brake_temps_c`, which has no dash slot). Reading
+    this guard as "the dash is the tick's only consumer" is what briefly deleted that field.
     """
     page = _TABLET_DASH_PAGE_PATH.read_text(encoding="utf-8")
     producer = (

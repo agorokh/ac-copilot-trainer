@@ -438,9 +438,10 @@ def test_telemetry_tick_carries_wheel_vitals_and_intervention_flags():
     the SimHub/ACC spellings) — and wheels are 0-BASED (FL=0..RR=3); a 1-based read silently
     shifts every corner and reads nil for RR (the #180 `rr=0` regression).
 
-    `brake_temps_c` is deliberately NOT emitted: the frozen design gives it no dashboard slot, so
-    streaming it would be a producer with no consumer — the mirror of the `abs_active`-with-no-
-    producer bug this Part fixes. Pinned here so a future edit re-adds it only with a slot.
+    `brake_temps_c` has no DASHBOARD slot but is still emitted: `race_management._brake_advisory`
+    consumes it for brake-management cues (>=650 C hot / >=850 C critical). The dash is not the
+    tick's only consumer — pinned here because it was briefly removed as "dead wiring" on exactly
+    that mistaken premise (Codex caught it on #590).
     """
     rt = _runtime()
     out = rt.eval(
@@ -465,7 +466,8 @@ def test_telemetry_tick_carries_wheel_vitals_and_intervention_flags():
           return {
             psi_fl = p.tyre_pressures_psi and p.tyre_pressures_psi.fl,
             psi_rr = p.tyre_pressures_psi and p.tyre_pressures_psi.rr,
-            has_brake_temps = p.brake_temps_c ~= nil,
+            disc_fl = p.brake_temps_c and p.brake_temps_c.fl,
+            disc_rr = p.brake_temps_c and p.brake_temps_c.rr,
             tc = p.tc_active, abs = p.abs_active,
           }
         end)()
@@ -473,9 +475,32 @@ def test_telemetry_tick_carries_wheel_vitals_and_intervention_flags():
     )
     # RR is read from wheels[3]: a 1-based loop would read nil here and drop the corner.
     assert (out["psi_fl"], out["psi_rr"]) == (27.4, 26.3)
-    assert out["has_brake_temps"] is False  # no dashboard slot -> not streamed (no dead wire)
+    assert (out["disc_fl"], out["disc_rr"]) == (310, 282)
     assert out["tc"] is True
     assert out["abs"] is False
+
+
+def test_brake_temps_have_a_real_consumer_even_though_the_dash_has_no_slot():
+    """Regression guard for a mistake made ON THIS PR.
+
+    `brake_temps_c` has no slot in `tablet_dash.html`, so a dash-only reading of the codebase
+    concludes it is dead wiring and deletes it — which silently disables
+    `race_management._brake_advisory`'s brake-management coaching cues. It happened here: a
+    reviewer flagged it, the field was removed, and Codex caught the removal.
+
+    The tick is a wire, not a dashboard feed. This pins the real consumer so "cleaning up" the
+    field requires confronting it.
+    """
+    from tools.ai_sidecar import race_management as rm
+
+    src = pathlib.Path(rm.__file__).read_text(encoding="utf-8")
+    assert '_frame_corner_map(frame, "brake_temps_c"' in src, (
+        "race_management no longer consumes brake_temps_c — re-check before changing the producer"
+    )
+    # A car with an inactive brake-thermal model reads a flat ambient ~26 C (#488). That must stay
+    # far below the cue thresholds, so streaming it can never raise a false brake cue (the mirror
+    # of the tyre_wear_pct inversion this PR fixes).
+    assert rm._BRAKE_HOT_C >= 100.0 and rm._BRAKE_CRITICAL_C > rm._BRAKE_HOT_C
 
 
 def test_telemetry_tick_wear_pct_is_consumed_not_condition():
@@ -534,13 +559,14 @@ def test_telemetry_tick_omits_vitals_and_flags_when_car_lacks_them():
           M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws })
           local p = ws._calls[1].send.payload
           return {
-            psi = p.tyre_pressures_psi ~= nil,
+            psi = p.tyre_pressures_psi ~= nil, disc = p.brake_temps_c ~= nil,
             wear = p.tyre_wear_pct ~= nil, tc = p.tc_active ~= nil, abs = p.abs_active ~= nil,
           }
         end)()
         """
     )
     assert out["psi"] is False
+    assert out["disc"] is False
     assert out["wear"] is False
     assert out["tc"] is False
     assert out["abs"] is False
