@@ -226,6 +226,48 @@ def test_sounddevice_expands_mono_for_fixed_multichannel_device(monkeypatch) -> 
     assert playback.output_details["channel_map"] == [3]
 
 
+def test_sounddevice_expands_multichannel_bank_through_negotiated_map(monkeypatch) -> None:
+    """Every source channel must survive expansion when a device requires a wider stream."""
+    np = pytest.importorskip("numpy")
+    resolver = Resolver(build_manifest())
+    utterance = resolver.resolve(make_advisory(kind="late_brake", urgency="act", corner=2))
+    assert utterance is not None
+    pcm = np.column_stack(
+        (
+            np.arange(5, dtype=np.float32),
+            np.arange(5, dtype=np.float32) + 10,
+        )
+    )
+    bank = Bank(samplerate=48_000, clips={utterance.clip_id: pcm}, channels=2)
+    played: dict[str, object] = {}
+
+    def check_output_settings(*, device, channels, samplerate):  # noqa: ANN001
+        assert device == 0
+        assert samplerate == 48_000
+        if channels != 6:
+            raise RuntimeError("Invalid number of channels [PaErrorCode -9998]")
+
+    fake_sd = SimpleNamespace(
+        query_devices=lambda: [{"name": "Fixed 5.1", "max_output_channels": 6, "hostapi": 0}],
+        query_hostapis=lambda: [{"name": "Windows WASAPI"}],
+        check_output_settings=check_output_settings,
+        play=lambda output, *, samplerate, device: played.update(
+            output=output, samplerate=samplerate, device=device
+        ),
+        stop=lambda: None,
+    )
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
+
+    playback = SoundDevicePlayback(bank, device_name="Fixed 5.1", host_api="WASAPI")
+    playback.play(utterance)
+
+    output = played["output"]
+    assert output.shape == (5, 6)
+    assert np.array_equal(output[:, :2], pcm)
+    assert np.count_nonzero(output[:, 2:]) == 0
+    assert playback.output_details["channel_map"] == [1, 2]
+
+
 def test_bank_skips_clips_with_sha256_mismatch(tmp_path) -> None:
     # Qodo finding #1: a corrupted-but-decodable clip must be skipped at load, never played.
     pytest.importorskip("numpy")  # Bank decode needs numpy (the real-backend path)

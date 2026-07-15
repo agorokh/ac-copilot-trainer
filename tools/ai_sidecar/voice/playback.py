@@ -560,7 +560,9 @@ class SoundDevicePlayback:
             import numpy as np
 
             output = np.zeros((len(pcm), self._layout.stream_channels), dtype=pcm.dtype)
-            output[:, self._layout.channel_map[0] - 1] = pcm
+            for source_index, output_channel in enumerate(self._layout.channel_map):
+                source = pcm if self._layout.bank_channels == 1 else pcm[:, source_index]
+                output[:, output_channel - 1] = source
         self._sd.play(output, samplerate=self._bank.samplerate, device=self._device)
         self._timed.set(utterance, len(pcm) / self._bank.samplerate)
 
