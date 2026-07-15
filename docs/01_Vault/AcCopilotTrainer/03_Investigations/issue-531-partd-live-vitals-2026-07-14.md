@@ -3,14 +3,14 @@ type: investigation
 status: active
 memory_tier: canonical
 created: 2026-07-14
-updated: 2026-07-14
+updated: 2026-07-15
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/531
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-531-phase1-tablet-dash-2026-07-13.md
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
 
-# #531 Part D — live tyre vitals + TC/ABS intervention (PR #590)
+# #531 Part D — live tyre vitals + TC/ABS intervention (PRs #590 and #595)
 
 ## The gap Phase 1 left (silent, not failing)
 
@@ -151,7 +151,24 @@ Open since Phase 1. Both cars driven at Magione, tablet on `adb reverse`, electr
 Also closes: **RACE hero shift LEDs rpm-banded from real `rpm_max`** (9000 vs 8750, both from
 CSP `car.rpmLimiter`).
 
-## NOT verified (stated so the next session doesn't assume it)
+## PR #595 — make intervention evidence part of the harness run
+
+The remaining capture gap was structural, not a clean-driver coincidence: `telemetry_tick` is
+routed by **client class**, while `HarnessClient.hello()` was classless. No subscription could make
+the in-run tap receive ticks. PR [#595](https://github.com/agorokh/ac-copilot-trainer/pull/595)
+adds an opt-in `observer` class (tick consumer, never a haptic actuator), makes `tap_frames()` use
+it, and persists a three-way `true` / `false` / `absent` summary for `tc_active` and `abs_active`
+in every `AutoDriveReport`. Classless peers remain unchanged and receive no 20 Hz stream.
+
+Resolution evidence on the functional head `93685d4`: required CI green, 0 GraphQL review threads,
+clean resolve-gate ledger, and the current-SHA self-hosted reviewer reported no medium-or-higher
+findings. The resolution branch also merged current `main`; focused harness/protocol/endpoint tests
+passed **211/211**, and full parity passed **2,961 tests, 77 skipped, 86.80% coverage,
+`ci-fast: OK`**. The actual `true` intervention observation remains a rig-driving criterion, but it
+is now machine-capturable inside the prescribed run instead of requiring a side-channel tap or
+human tablet observation.
+
+## Still not verified (stated so the next session doesn't assume it)
 
 **`tc_active` / `abs_active` were never observed `true`** — only `false`. That still proves the
 CSP field names resolve (a wrong name degrades to nil and the key would be **omitted**; the keys
@@ -160,14 +177,12 @@ reasons it stayed out of reach this session:
 
 1. `--driver ggv` is a **flat-out friction-circle optimal** driver — it may legitimately never
    lock a wheel or spin one, so ABS/TC may simply never engage.
-2. Every attempt to tap the WS **during** a drive returned ~0 ticks (`maxspd=0.0`) while the same
-   peer got 347 ticks with AC idle — consistent with the focus/pause effect above. A future
-   attempt should drive the capture from **inside** the harness run rather than a side-channel WS
-   peer, or use a driver that deliberately provokes lock-up.
+2. The old side-channel attempts returned ~0 ticks during a drive. PR #595 removes that blindness
+   by making the harness's own tap an `observer`; a future rig run should use that path plus a
+   driver that deliberately provokes lock-up or wheelspin.
 
-Also unverified: the **car-swap acceptance criterion** (`bmw_m3_gt2` IS installed — the exact
-no-ABS car the mock uses for `ABS — NOT FITTED`), and `acs.exe` died in 2 of 5 runs (flake; an
-immediate retry drove clean both times).
+The **car-swap acceptance criterion is verified** in the table above. Separately, `acs.exe` died
+in 2 of 5 historical runs; an immediate retry drove clean both times.
 
 ## Remaining on #531
 
