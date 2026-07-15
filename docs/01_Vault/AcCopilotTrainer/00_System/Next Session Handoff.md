@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-07-15T03:05:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-531-partd-live-vitals-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-569-frozen-build-identity-bake-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-570-route-registry-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-582-l3-corner-refinement-2026-07-14.md
@@ -90,6 +91,70 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-15) — #531 Part D live tyre vitals + TC/ABS (PR #590 MERGED `432c8b4`)
+
+Detail + all rig facts: [[issue-531-partd-live-vitals-2026-07-14]].
+
+Phase 1 shipped a dash that **read `abs_active` while no producer ever sent it** (the intervention
+flash could never fire) and a tyre board whose own header advertised *"core temp / pressure"* over a
+**permanently empty psi slot**. Part D wires the vitals end-to-end: `tyre_pressures_psi`,
+`brake_temps_c`, `tyre_wear_pct` + `tc_active`/`abs_active` on `telemetry_tick`; psi rendered on the
+RACE board; STINT's hardcoded `pressure — · wear —` bound to real values; `flashAbs` generalised to
+`flashTile` for both tiles.
+
+**The bug this caught (measured, not reasoned).** CSP documents `tyreWear` only as *"from 0 to 1"* —
+direction-ambiguous. Read as condition-remaining (1.0 = new) it inverts a fresh set to `100`, and
+`race_management._tyre_advisory` fires **"tyre wear is high"** — with a **voice cue** — at `>= 70`.
+Settled against **321 checked-in lap archives, 4 cars**: every nonzero corner ∈ `0.000268..0.0720`,
+growing from an exact `0.0` ⇒ **wear CONSUMED**, plain ×100, no inversion. The inverted build was
+**reproduced live** emitting `tyre_wear_pct = 100`; post-fix the same peer/car reads `{fl:0,...}`.
+
+**A mistake worth remembering.** I removed `brake_temps_c` as "dead wiring" on a reviewer's MEDIUM —
+both of us reasoned only from the dashboard having no slot. **Codex caught the regression:**
+`race_management._brake_advisory` (`race_management.py:344`) consumes it for brake cues at 650/850 °C.
+Restored in `def338e`. **Durable rule: `telemetry_tick` is a WIRE, not a dashboard feed** — grep
+`tools/ai_sidecar/` before deleting any tick field. Two guards now pin the consumer + the threshold
+headroom. Second-order: a bot finding is a *claim to check*, not a fact — the two reviewers
+contradicted each other and the live code decided it.
+
+**Acceptance criteria CLOSED this session** (live on the P7, both cars driven at Magione):
+
+| Tile | 911 GT3 R | **bmw_m3_gt2** |
+|---|---|---|
+| ABS | `8/12` | **greyed → `NOT FITTED`** (never `0/0`) |
+| TC | `3/12` | **`3/13`** — real range `0..12` ⇒ denominator **13** |
+| BIAS | `68.0%` | `66.0%` |
+| `rpm_max` | `9000` | **`8750`** |
+
+⇒ **car-adaptive electronics (MUST)** and **rpm-banded shift LEDs** are now verified. The denominator
+genuinely differs per car — a hardcoded `/12` would have been silently wrong on the M3 GT2.
+
+**Still open on #531:** the **intervention flash was never seen firing** — `tc_active`/`abs_active`
+emit real booleans live (`false`, not omitted, which proves the CSP field names resolve) but never
+`true`; `--driver ggv` is a flat-out *optimal* driver that may never lock/spin. Then Part D's
+**fuel-per-lap / laps-remaining / predicted-lap** half (deliberately not in #590 — the dash already
+computes burn client-side), and Parts E–I.
+
+**Rig lore (cost real time this session):**
+- **AC pauses when it loses focus** → `dt≈0` → the publisher's accumulator stalls and ticks collapse
+  (**1 tick / 18 s** observed); the dash then correctly shows WAITING. Live tablet captures must be
+  taken **during** a drive — and a side-channel WS peer saw ~0 ticks mid-drive while getting 347 with
+  AC idle, so drive the capture from **inside** the harness run.
+- **The AC user dir is OneDrive-redirected** (`C:\Users\arsen\OneDrive\Documents\Assetto Corsa`).
+  The **321 lap archives** there are a cheap, decisive ground-truth source needing **no AC launch** —
+  they settled the wear scale. Use `auto_drive.resolve_ac_user_dir()`; guessing `Documents/…` finds
+  nothing.
+- **`acs.exe` died in 2 of 5 runs** at ~20 m with identical code; immediate retries drove clean. Sim
+  death is a **flake** — retry before suspecting the diff.
+- Phase 1's `.scratch/dash_feeder.py` (Phase-1 node called it *"reusable for Part F"*) **is gone** —
+  gitignored `.scratch/`. Part F must rebuild it; promote it out of `.scratch/` next time.
+- **`post_merge_sync.sh` requires HEAD=main** and `main` was checked out in another session's
+  worktree (`.codex/worktrees/81f5`) → `sync` and `vault` both failed (exit 20). Vault shipped by
+  branching `vault/post-merge-pr590` from `origin/main` instead — same end-state, no gate bypassed.
+  It also **stashed the untracked vault node** as `post-merge-pr590-wip`; recovered via
+  `git stash apply`. Stash residue from older sessions (`post-merge-pr441-wip`,
+  `post-merge-pr417-detached-residue`) is still sitting in the list.
 
 ## Delivered (2026-07-15) — #569 frozen-EXE build identity CLOSED (PR #586 MERGED `8a895ee`)
 
