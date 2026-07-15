@@ -59,14 +59,27 @@ Focused harness/driver suite: **211 passed**. Full `make ci-fast`: **2,963 passe
 GraphQL had zero review threads; the resolve-gate ledger was clean; the current-SHA self-hosted
 review reported no medium-or-higher findings after the required 10-minute cooldown.
 
+## Merged-main rig reconciliation
+
+After PR #600 and the vault SAVE merged, `main` at `acefe87f299ce5ac0902a5bac632499487605e7e`
+was exercised again on the real rig. BMW M3 GT2 / Magione / GGV passed a 120-second drive window
+at 2,875.7 m and 210.7 km/h with one completed lap, zero recoveries, no recovery cap, no sim death,
+one attempt, 217 bounded control-trace samples, a rendering HUD, and a healthy telemetry/coaching
+pipeline.
+
+A preceding 70-second probe crossed the original 450 m band, then entered pit-box geometry near
+513 m and invoked three recoveries before its timer expired. That short-run PASS was treated as a
+warning rather than proof; the extended fresh launch above completed the lap without a recovery.
+The final evidence was also attached to issue #596.
+
 ## Separable rig findings
 
 - Porsche `ks_porsche_911_gt3_r_2016` launch trials were excluded before the drive denominator.
   CSP crash reports state the local car is damaged and its LODs list is missing; the install also
-  lacks `data.acd`. Repair/validate the local AC content before using that car for future rig gates.
+  lacks `data.acd`. Follow-up: [#603](https://github.com/agorokh/ac-copilot-trainer/issues/603).
 - The configured realtime voice bank could not initialize `rtmixer` (`Invalid number of channels`),
   so those harness sidecars continued with voice disabled. This did not affect drive/pipeline
-  verdicts, but the audio device/bank configuration still needs an operator-grade verification.
+  verdicts. Follow-up: [#602](https://github.com/agorokh/ac-copilot-trainer/issues/602).
 - Post-merge worktree cleanup remains blocked by a Windows bug in the hub remover: it rejects
   `C:/Users/...` as "not absolute". The merged worktree was clean; it was deliberately preserved.
-
+  Follow-up: [template-repo#515](https://github.com/agorokh/template-repo/issues/515).
