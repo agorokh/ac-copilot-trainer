@@ -71,7 +71,7 @@ from datetime import UTC
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
-from tools.ac_harness.sequence_probe import evaluate_sequence, tap_frames
+from tools.ac_harness.sequence_probe import Check, evaluate_sequence, tap_frames
 
 if TYPE_CHECKING:
     from tools.ac_harness.ggv_profile import GGVModel
@@ -276,6 +276,82 @@ def drive_leg_succeeded(stats: DriveStats | None) -> bool:
     )
 
 
+def drive_veto_reason(stats: DriveStats | None) -> str:
+    """The drive-leg half of :func:`compose_failure_reason` — "" when the drive leg is clean.
+
+    Mirrors :func:`drive_leg_succeeded` veto-for-veto, in the same order, so a veto can never fire
+    with nothing to say. Each branch prefers the reason the drive loop already recorded (it carries
+    the live detail — the stall distance, the stagnant packet) and falls back to a description of
+    the veto itself, because an empty ``reason`` is exactly the #596 Part C failure.
+    """
+    if stats is None:
+        return "drive: no drive leg ran (the hijack never landed)"
+    if stats.sim_dead:
+        return stats.reason or "drive: acs.exe died mid-run (acpmf_physics packet_id stagnant)"
+    if stats.session_replaced:
+        return stats.reason or (
+            f"drive: another launch replaced this session (sim_pid={stats.sim_pid}, "
+            f"unexpected={stats.unexpected_sim_pids})"
+        )
+    if stats.recovery_capped:
+        return stats.reason or (
+            f"drive: recovery cap exceeded after {stats.recoveries} recoveries "
+            f"at {stats.total_distance_m:.0f}m"
+        )
+    if not stats.drove:
+        return stats.reason or (
+            f"drive: car never cleared the distance/speed floor "
+            f"(dist={stats.total_distance_m:.0f}m max_speed={stats.max_speed_kmh:.1f}km/h)"
+        )
+    return ""
+
+
+def compose_failure_reason(
+    *,
+    error: str | None,
+    seq_ok: bool | None,
+    checks: list[Check],
+    stats: DriveStats | None,
+) -> str:
+    """The single actionable root cause of a failed run — "" only when nothing failed (#596 Part C).
+
+    The #596 repro: a run drove 2 laps / 6138 m and wrote a valid lap archive, yet reported
+    ``ok=False`` with an **empty** reason, because the only ``reason`` field lived on
+    :class:`DriveStats` and the drive leg had not failed — the *pipeline* had. The failing
+    :class:`Check` was computed by :func:`evaluate_sequence` and then dropped on the floor, so the
+    bundle could not be triaged at all: indistinguishable from a real fault.
+
+    Precedence is "most authoritative cause first", matching the gate in :func:`run_auto_drive`
+    (``bool(seq_ok) and drive_leg_succeeded(stats) and error is None``):
+
+    1. ``error`` — a raised stage failure is the root cause; the later legs never honestly ran.
+    2. a **drive-leg veto** — a dead/stalled sim makes the pipeline fail *as a consequence*, so
+       reporting "tire_temps never seen" over "acs.exe died" would name the symptom, not the cause.
+    3. the **pipeline** verdict — name the exact failing checks (the #596 Part C acceptance
+       criterion: "says exactly which assert failed").
+
+    The final fallback can only be reached if a future caller adds a veto to the ``ok`` gate without
+    adding it here; it stays non-empty on purpose — a wrong reason is triageable, an empty one is
+    not.
+    """
+    if error:
+        return error
+    veto = drive_veto_reason(stats)
+    if veto:
+        return veto
+    if seq_ok is False:
+        failed = [c for c in checks if not c.ok]
+        if failed:
+            detail = "; ".join(f"{c.name} ({c.detail})" for c in failed)
+            return f"pipeline: failed {len(failed)}/{len(checks)} checks: {detail}"
+        # seq_ok was forced False by a caller-side assert (e.g. the #579 timed-lap window) that
+        # records its finding in notes rather than as a Check.
+        return "pipeline: sequence verdict FAILED (see notes for the failing assert)"
+    if seq_ok is None:
+        return "pipeline: no sequence verdict — the tap/eval never completed"
+    return "run failed with no identified cause (report this — the reason composer has a gap)"
+
+
 def should_try_line_teleport_on_recovery(
     *, spawn_to_line_enabled: bool, car_off_line: bool, line_teleport_known_good: bool
 ) -> bool:
@@ -315,6 +391,14 @@ class AutoDriveReport:
     counts: dict[str, int] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     error: str | None = None
+    # #596 Part C: the run-level root cause. INVARIANT — non-empty whenever `ok` is False, empty
+    # whenever it is True (pinned by `test_reason_is_non_empty_for_every_failure_mode`). This is the
+    # field an autonomous agent triages on: `drive.reason` only ever spoke for the drive leg, so a
+    # pipeline-vetoed run that drove fine reported FAIL with nothing to act on.
+    reason: str = ""
+    # #596 Part C: the per-check verdicts from `evaluate_sequence` — previously computed and
+    # dropped, which is why a failed pipeline could not name its own failing assert in report.json.
+    checks: list[Check] = field(default_factory=list)
     # Whether the post-lap grace-drive ran (drove past S/F so the async writer finalizes the lap
     # archive). The single source of truth the evidence-bundle poll gates on, so the grace condition
     # and the poll condition can never diverge (#515/#516 review).
@@ -331,8 +415,28 @@ class AutoDriveReport:
     setup_applied: bool | None = None  # None = no setup requested
     setup_ack: dict | None = None  # the in-sim `setup.load.ack` (name/path/error)
 
+    def __post_init__(self) -> None:
+        """Enforce the #596 Part C invariant at the ONE choke point every construction passes.
+
+        The early-exit returns (preflight / launch / hijack / setup) build their own report and
+        would each have to remember to set a reason; the run 4 bug was precisely a failure path that
+        set `ok=False` and left the explanation somewhere nobody read. Deriving it here means a
+        future failure path cannot reintroduce an empty reason by forgetting — it has to actively
+        pass a wrong one.
+        """
+        if not self.ok and not self.reason:
+            self.reason = compose_failure_reason(
+                error=self.error,
+                seq_ok=self.sequence_ok,
+                checks=self.checks,
+                stats=self.drive,
+            )
+
     def summary(self) -> str:
         lines = [f"auto-drive: {'PASS' if self.ok else 'FAIL'} (stage={self.stage})"]
+        # #596 Part C: lead a FAIL with its root cause — the operator reads this line, not the JSON.
+        if self.reason:
+            lines.append(f"  reason: {self.reason}")
         combo = " ".join(
             part
             for part in (
@@ -809,6 +913,7 @@ async def run_auto_drive(
     stats = DriveStats(reason="drive did not run")
     seq_ok: bool | None = None
     counts: dict[str, int] = {}
+    checks: list[Check] = []
     notes: list[str] = []
     grace_applied = False
     # A fuel-less setup is baked but not fuel-confirmed — surface that in the report so a setup
@@ -839,6 +944,7 @@ async def run_auto_drive(
         )
         seq_ok = result.ok
         counts = dict(result.counts)
+        checks = list(result.checks)
         notes = list(result.notes)
         # #577: the per-lap trajectory is report evidence whenever the lap machinery ran.
         if config.wait_lap:
@@ -899,6 +1005,8 @@ async def run_auto_drive(
     # drive-leg vetoes (drove / sim_dead / recovery_capped) live in drive_leg_succeeded so this gate
     # and the false-green KPI corpus that exercises them cannot drift apart (#528).
     ok = bool(seq_ok) and drive_leg_succeeded(stats) and error is None
+    # #596 Part C: `reason` is derived in __post_init__ from these same inputs — the one choke point
+    # every construction site shares — so it cannot drift from the `ok` gate computed just above.
     return AutoDriveReport(
         ok=ok,
         stage=stage,
@@ -906,6 +1014,7 @@ async def run_auto_drive(
         hijacked=True,
         drive=stats,
         sequence_ok=seq_ok,
+        checks=checks,
         lap_grace_applied=grace_applied,
         lap_times_ms=lap_times_ms,
         laps_requested=config.target_laps,
