@@ -1076,9 +1076,12 @@ class _Route:
     """One HTTP route served ahead of the WebSocket upgrade.
 
     ``prefix`` routes match on ``path.startswith(self.path)``; exact routes match verbatim.
-    Every handler takes ``(connection, request, path)`` and returns a websockets response —
-    prefix handlers use ``path`` to strip their own prefix. Dispatch is exact-first, so a
-    prefix route can never shadow a more specific exact route.
+    Every handler takes ``(connection, request, tail)`` and returns a websockets response.
+    ``tail`` is the request path with this route's own ``path`` already stripped by the
+    router (so a prefix handler never restates its route string — that would be the same
+    parallel-structure drift #570 removes); it is ``""`` for an exact route, which no
+    handler needs. Dispatch is exact-first, so a prefix route can never shadow a more
+    specific exact route.
 
     ``token_gated`` routes carry product content (bank audio, the tablet pages, dispatch/echo
     logs), so on an authenticated external bind they honor the same ``X-AC-Copilot-Token`` as
@@ -1094,7 +1097,7 @@ class _Route:
     aliases: tuple[str, ...] = ()
 
 
-def _route_health(connection: Any, request: Any, path: str) -> Any:
+def _route_health(connection: Any, request: Any, tail: str) -> Any:
     connected_peers, screen_peers = _peer_counts()
     return _http_response(
         connection,
@@ -1110,7 +1113,7 @@ def _route_health(connection: Any, request: Any, path: str) -> Any:
     )
 
 
-def _route_metrics(connection: Any, request: Any, path: str) -> Any:
+def _route_metrics(connection: Any, request: Any, tail: str) -> Any:
     connected_peers, screen_peers = _peer_counts()
     return _http_response(
         connection,
@@ -1120,7 +1123,7 @@ def _route_metrics(connection: Any, request: Any, path: str) -> Any:
     )
 
 
-def _route_tablet_voice(connection: Any, request: Any, path: str) -> Any:
+def _route_tablet_voice(connection: Any, request: Any, tail: str) -> Any:
     page = _tablet_voice_page()
     if page is None:
         return _http_response(
@@ -1129,7 +1132,7 @@ def _route_tablet_voice(connection: Any, request: Any, path: str) -> Any:
     return _http_response(connection, HTTPStatus.OK, page, "text/html; charset=utf-8")
 
 
-def _route_tablet_dash(connection: Any, request: Any, path: str) -> Any:
+def _route_tablet_dash(connection: Any, request: Any, tail: str) -> Any:
     page = _tablet_dash_page()
     if page is None:
         return _http_response(
@@ -1138,10 +1141,10 @@ def _route_tablet_dash(connection: Any, request: Any, path: str) -> Any:
     return _http_response(connection, HTTPStatus.OK, page, "text/html; charset=utf-8")
 
 
-def _route_dash_font(connection: Any, request: Any, path: str) -> Any:
+def _route_dash_font(connection: Any, request: Any, tail: str) -> Any:
     # Exact-match against the vendored-font allow-list (names never contain
     # separators), so a decoded "../x" simply isn't in the set — no traversal.
-    name = urllib.parse.unquote(path[len("/dash/fonts/") :])
+    name = urllib.parse.unquote(tail)
     if name not in _TABLET_DASH_FONT_FILES:
         return _http_response(connection, HTTPStatus.NOT_FOUND, "unknown font\n", "text/plain")
     try:
@@ -1151,7 +1154,7 @@ def _route_dash_font(connection: Any, request: Any, path: str) -> Any:
     return _http_response_bytes(connection, HTTPStatus.OK, data, "font/ttf")
 
 
-def _route_voice_manifest(connection: Any, request: Any, path: str) -> Any:
+def _route_voice_manifest(connection: Any, request: Any, tail: str) -> Any:
     bank_dir = _voice_bank_dir
     if bank_dir is None:
         return _http_response(
@@ -1166,13 +1169,13 @@ def _route_voice_manifest(connection: Any, request: Any, path: str) -> Any:
     return _http_response(connection, HTTPStatus.OK, body, "application/json")
 
 
-def _route_voice_clip(connection: Any, request: Any, path: str) -> Any:
+def _route_voice_clip(connection: Any, request: Any, tail: str) -> Any:
     bank_dir = _voice_bank_dir
     # The page requests encodeURIComponent(file); decode before the allow-list so
     # the cross-boundary contract holds for any manifest filename. Exact-match
     # against manifest entries (which never contain separators) still forbids
     # traversal — a decoded "../x" simply isn't in the set (PR #519 review).
-    name = urllib.parse.unquote(path[len("/voice/clips/") :])
+    name = urllib.parse.unquote(tail)
     if bank_dir is None or name not in _voice_clip_files:
         return _http_response(connection, HTTPStatus.NOT_FOUND, "unknown clip\n", "text/plain")
     try:
@@ -1182,7 +1185,7 @@ def _route_voice_clip(connection: Any, request: Any, path: str) -> Any:
     return _http_response_bytes(connection, HTTPStatus.OK, data, "audio/wav")
 
 
-def _route_voice_dispatches(connection: Any, request: Any, path: str) -> Any:
+def _route_voice_dispatches(connection: Any, request: Any, tail: str) -> Any:
     return _http_response(
         connection,
         HTTPStatus.OK,
@@ -1191,7 +1194,7 @@ def _route_voice_dispatches(connection: Any, request: Any, path: str) -> Any:
     )
 
 
-def _route_voice_echoes(connection: Any, request: Any, path: str) -> Any:
+def _route_voice_echoes(connection: Any, request: Any, tail: str) -> Any:
     return _http_response(
         connection,
         HTTPStatus.OK,
@@ -1285,7 +1288,8 @@ def make_process_request(token: str | None):
                         "missing or invalid X-AC-Copilot-Token\n",
                         "text/plain",
                     )
-            return route.handler(connection, request, path)
+            tail = path[len(route.path) :] if route.prefix else ""
+            return route.handler(connection, request, tail)
         # A rig-screen sighting rides on the WS upgrade (the client header is on
         # the upgrade request), then the token gate applies if one is configured.
         if request.headers.get(CLIENT_HEADER):
