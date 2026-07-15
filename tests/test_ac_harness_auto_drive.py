@@ -309,6 +309,11 @@ def test_wait_lap_requires_a_lap_frame():
         )
     )
     assert no_lap.ok is False
+    # The composed drive explicitly opts into the high-rate tick stream for Part-D evidence;
+    # generic tap_frames callers stay classless unless they make the same explicit choice.
+    from tools.ai_sidecar.external_protocol import CLIENT_CLASS_OBSERVER
+
+    assert tap_record["client_class"] == CLIENT_CLASS_OBSERVER
     # The lap wait scales with the drive budget (a Spa lap outlives the 180 s tap default).
     assert tap_record["lap_timeout"] == 420.0
     # lap frame present -> passes.
@@ -3354,8 +3359,8 @@ def test_report_json_carries_reason_and_checks(tmp_path):
 def test_handshake_outcome_failure_still_carries_a_reason():
     """`apply_handshake_outcome` flips ok->False on an already-built report (#532).
 
-    __post_init__ has long since run with ok=True, so guarding construction alone would ship
-    `ok=false, reason=""` — the #596 bug through a different door (codex on PR #598).
+    A stored construction-time reason would remain empty after this mutation — the #596 bug through
+    a different door (codex on PR #598). Direct reads must be correct before serialization.
     """
     from tools.ac_harness.plant_id import apply_handshake_outcome
 
@@ -3366,10 +3371,25 @@ def test_handshake_outcome_failure_still_carries_a_reason():
 
     assert report.ok is False
     assert report.stage == "handshake"
-    # The consumption surfaces re-derive it; neither may emit an empty reason.
+    assert "handshake produced no result" in report.reason
+    # Serialization and presentation expose the same current property.
     assert report.to_dict()["reason"] != ""
     assert "handshake produced no result" in report.to_dict()["reason"]
     assert "handshake produced no result" in report.summary()
+
+
+def test_reason_property_tracks_failure_to_success_mutation_without_stale_state():
+    """The documented invariant is bidirectional even when a report is mutated after creation."""
+    report = AutoDriveReport(ok=False, stage="pipeline", error="tap failed")
+    assert report.reason == "tap failed"
+
+    report.ok = True
+    report.stage = "done"
+    report.error = None
+
+    assert report.reason == ""
+    assert report.to_dict()["reason"] == ""
+    assert "reason:" not in report.summary()
 
 
 def test_handshake_probe_failure_reason_names_the_failed_probes():

@@ -71,7 +71,13 @@ from datetime import UTC
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
-from tools.ac_harness.sequence_probe import Check, evaluate_sequence, tap_frames
+from tools.ac_harness.sequence_probe import (
+    Check,
+    evaluate_sequence,
+    intervention_summary,
+    tap_frames,
+)
+from tools.ai_sidecar.external_protocol import CLIENT_CLASS_OBSERVER
 
 if TYPE_CHECKING:
     from tools.ac_harness.ggv_profile import GGVModel
@@ -391,11 +397,6 @@ class AutoDriveReport:
     counts: dict[str, int] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     error: str | None = None
-    # #596 Part C: the run-level root cause. INVARIANT — non-empty whenever `ok` is False, empty
-    # whenever it is True (pinned by `test_reason_is_non_empty_for_every_failure_mode`). This is the
-    # field an autonomous agent triages on: `drive.reason` only ever spoke for the drive leg, so a
-    # pipeline-vetoed run that drove fine reported FAIL with nothing to act on.
-    reason: str = ""
     # #596 Part C: the per-check verdicts from `evaluate_sequence` — previously computed and
     # dropped, which is why a failed pipeline could not name its own failing assert in report.json.
     checks: list[Check] = field(default_factory=list)
@@ -408,6 +409,12 @@ class AutoDriveReport:
     # iteration verdict, the per-iteration trajectory report).
     lap_times_ms: list[int] = field(default_factory=list)
     laps_requested: int = 0
+    # #531 Part D: electronics-intervention evidence from the `telemetry_tick` stream — per-flag
+    # true/false/absent counts (see sequence_probe.intervention_summary). This is the acceptance
+    # criterion's proof surface: before it, "did the TC/ABS flash fire?" could only be answered by
+    # a human watching the tablet, and the in-run tap could not see the channel at all.
+    # None = the tap did not run (a failure before the pipeline stage), which is NOT "no ticks".
+    intervention: dict | None = None
     # Combo identity + setup verification (#459 Parts A/C) — evidence consumers key on these.
     car_id: str | None = None
     track_id: str | None = None
@@ -415,39 +422,26 @@ class AutoDriveReport:
     setup_applied: bool | None = None  # None = no setup requested
     setup_ack: dict | None = None  # the in-sim `setup.load.ack` (name/path/error)
 
-    def __post_init__(self) -> None:
-        """Enforce the #596 Part C invariant at the ONE choke point every construction passes.
+    @property
+    def reason(self) -> str:
+        """Current run-level root cause: non-empty exactly when this report fails (#596 Part C).
 
-        The early-exit returns (preflight / launch / hijack / setup) build their own report and
-        would each have to remember to set a reason; the run 4 bug was precisely a failure path that
-        set `ok=False` and left the explanation somewhere nobody read. Deriving it here means a
-        future failure path cannot reintroduce an empty reason by forgetting — it has to actively
-        pass a wrong one.
+        This is computed rather than stored because ``apply_handshake_outcome`` mutates ``ok`` and
+        ``error`` after construction. A stored value would be stale until some serializer repaired
+        it, leaving direct ``report.reason`` consumers with an invalid public state (Cursor review
+        on PR #598). Computing from the same live inputs as the success gate keeps direct reads,
+        summaries, and evidence JSON consistent without mutation side effects.
         """
-        self._ensure_reason()
-
-    def _ensure_reason(self) -> None:
-        """Re-derive `reason` whenever the invariant would otherwise be violated.
-
-        Construction is NOT the only way a report comes to fail. `apply_handshake_outcome` (#532)
-        flips `ok` to False and sets `error` on an ALREADY-BUILT report, long after __post_init__
-        ran — so a handshake failure would still ship `ok=false, reason=""`, the exact #596 bug
-        through a different door (codex on PR #598). Guarding construction alone is not enough.
-
-        So the invariant is re-checked at every CONSUMPTION surface (`to_dict`, `summary`): any
-        mutation must eventually be serialized or printed to matter, and both go through here.
-        Idempotent, and it never overwrites a reason that is already set.
-        """
-        if not self.ok and not self.reason:
-            self.reason = compose_failure_reason(
-                error=self.error,
-                seq_ok=self.sequence_ok,
-                checks=self.checks,
-                stats=self.drive,
-            )
+        if self.ok:
+            return ""
+        return compose_failure_reason(
+            error=self.error,
+            seq_ok=self.sequence_ok,
+            checks=self.checks,
+            stats=self.drive,
+        )
 
     def summary(self) -> str:
-        self._ensure_reason()
         lines = [f"auto-drive: {'PASS' if self.ok else 'FAIL'} (stage={self.stage})"]
         # #596 Part C: lead a FAIL with its root cause — the operator reads this line, not the JSON.
         if self.reason:
@@ -494,16 +488,28 @@ class AutoDriveReport:
                 )
             for note in self.notes:
                 lines.append(f"  note: {note}")
+        if self.intervention is not None:
+            ticks = self.intervention.get("telemetry_ticks", 0)
+            flags = self.intervention.get("flags", {})
+            detail = "  ".join(
+                # `absent` is reported explicitly: it is the honest reading for a car that does not
+                # fit the system (the M3 GT2 has no ABS) AND for a CSP field name that failed to
+                # resolve. Collapsing it into `false` would hide a producer bug as a quiet lap.
+                f"{name}: fired={f['true']} idle={f['false']} absent={f['absent']}"
+                for name, f in sorted(flags.items())
+            )
+            lines.append(f"  intervention: telemetry_ticks={ticks}  {detail}")
         if self.error:
             lines.append(f"  error: {self.error}")
         return "\n".join(lines)
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable form for the evidence bundle (``report.json``)."""
-        # The bundle is what an autonomous agent triages on, so the #596 Part C invariant is
-        # enforced HERE — after any post-construction mutation (e.g. apply_handshake_outcome).
-        self._ensure_reason()
-        return asdict(self)
+        payload = asdict(self)
+        # Dataclasses serialize fields, not computed properties. Keep the stable report.json key
+        # while sourcing it from the same always-current property direct callers read.
+        payload["reason"] = self.reason
+        return payload
 
 
 class Controller(Protocol):
@@ -934,6 +940,9 @@ async def run_auto_drive(
     checks: list[Check] = []
     notes: list[str] = []
     grace_applied = False
+    # None until the tap actually returns frames — a tap that raised must not report "0 ticks"
+    # (indistinguishable from a healthy tap on a silent producer). See AutoDriveReport.intervention.
+    intervention: dict | None = None
     # A fuel-less setup is baked but not fuel-confirmed — surface that in the report so a setup
     # A/B run does not read `setup_applied=True` as "independently verified" (#460 review).
     if setup_ack is not None and setup_applied and setup_ack.get("expected_fuel") is None:
@@ -942,7 +951,14 @@ async def run_auto_drive(
     stage = "done"
     lap_times_ms: list[int] = []
     try:
-        tap_kwargs: dict[str, Any] = dict(seconds=config.tap_seconds, wait_for_lap=config.wait_lap)
+        # #531 Part D: the composed drive is the caller that needs intervention evidence, so it
+        # explicitly opts into the 20 Hz tick fan-out. Keep generic ``tap_frames`` classless by
+        # default: its topic subscription must not silently imply a high-rate peripheral stream.
+        tap_kwargs: dict[str, Any] = dict(
+            seconds=config.tap_seconds,
+            wait_for_lap=config.wait_lap,
+            client_class=CLIENT_CLASS_OBSERVER,
+        )
         if config.wait_lap:
             # The SAME settle + lap deadline the drive budget is sized to (above), so the tap never
             # waits past what the drive thread can still drive (a full lap at pace can exceed
@@ -957,6 +973,10 @@ async def run_auto_drive(
                 # budget, whichever first" — so a shortfall ends honestly, never hangs.
                 tap_kwargs["lap_count"] = config.target_laps
         frames = await tap(config.sidecar_url, **tap_kwargs)
+        # #531 Part D: derive the electronics-intervention evidence from the SAME captured stream
+        # the pipeline checks read, so the tick evidence and the sequence verdict can never come
+        # from two different windows.
+        intervention = intervention_summary(frames)
         result = evaluate_sequence(
             frames, strict_lifecycle=config.strict, require_lap=config.wait_lap
         )
@@ -1036,8 +1056,8 @@ async def run_auto_drive(
     # drive-leg vetoes (drove / sim_dead / recovery_capped) live in drive_leg_succeeded so this gate
     # and the false-green KPI corpus that exercises them cannot drift apart (#528).
     ok = bool(seq_ok) and drive_leg_succeeded(stats) and error is None
-    # #596 Part C: `reason` is derived in __post_init__ from these same inputs — the one choke point
-    # every construction site shares — so it cannot drift from the `ok` gate computed just above.
+    # #596 Part C: `reason` is computed from these same live inputs, so it cannot drift from the
+    # `ok` gate computed just above — including after the handshake mutates the report.
     return AutoDriveReport(
         ok=ok,
         stage=stage,
@@ -1049,6 +1069,7 @@ async def run_auto_drive(
         lap_grace_applied=grace_applied,
         lap_times_ms=lap_times_ms,
         laps_requested=config.target_laps,
+        intervention=intervention,
         counts=counts,
         notes=notes,
         error=error,

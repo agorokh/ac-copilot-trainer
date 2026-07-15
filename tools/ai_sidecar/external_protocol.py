@@ -35,6 +35,13 @@ CLIENT_CLASS_BROWSER = "browser"
 # stream (the #340 phrase-bank engine). On the rig the sidecar also drives a VoiceCoach in-process,
 # but a separate `voice`-class WS client is a first-class consumer (e.g. a remote speaker / a tap).
 CLIENT_CLASS_VOICE = "voice"
+# Issue #531 Part D: a headless RECORDER of the live stream — the autonomous drive harness's
+# in-run tap (`tools/ac_harness/sequence_probe.tap_frames`). It needs the same `telemetry_tick`
+# fan-out a dashboard gets, but it has no actuators and no display. Kept distinct from `browser`
+# so server-side peer accounting never conflates the harness with the real tablet, and distinct
+# from `external` so joining the tick fan-out stays OPT-IN: widening `external` would silently
+# start pushing 20 Hz at every existing generic peer.
+CLIENT_CLASS_OBSERVER = "observer"
 KNOWN_CLIENT_CLASSES: frozenset[str] = frozenset(
     {
         CLIENT_CLASS_EXTERNAL,
@@ -44,6 +51,7 @@ KNOWN_CLIENT_CLASSES: frozenset[str] = frozenset(
         CLIENT_CLASS_PHYSICAL,
         CLIENT_CLASS_BROWSER,
         CLIENT_CLASS_VOICE,
+        CLIENT_CLASS_OBSERVER,
     }
 )
 PHYSICAL_CLIENT_CLASSES: frozenset[str] = frozenset(
@@ -55,7 +63,15 @@ HAPTIC_CLIENT_CLASSES: frozenset[str] = frozenset({CLIENT_CLASS_HAPTICS, CLIENT_
 # not by `state.subscribe` — `telemetry_tick` is a peripheral frame type, not a state topic —
 # so browser peers join the physical classes for tick fan-out only. `haptic_event` routing is
 # deliberately unchanged (HAPTIC_CLIENT_CLASSES): a browser has no actuators.
-TELEMETRY_TICK_CLIENT_CLASSES: frozenset[str] = PHYSICAL_CLIENT_CLASSES | {CLIENT_CLASS_BROWSER}
+# Issue #531 Part D: `observer` joins the tick fan-out for the same reason `browser` did — it
+# renders/records the live stream. It is deliberately ABSENT from HAPTIC_CLIENT_CLASSES above:
+# a recorder has no actuators. Without this the drive harness's own in-run tap is structurally
+# blind to `telemetry_tick`, so Part D's channels (tyre psi/wear, brake temps, tc_active,
+# abs_active) could never be evidenced from the prescribed capture path — only eyeballed on glass.
+TELEMETRY_TICK_CLIENT_CLASSES: frozenset[str] = PHYSICAL_CLIENT_CLASSES | {
+    CLIENT_CLASS_BROWSER,
+    CLIENT_CLASS_OBSERVER,
+}
 MAX_SETUP_SNAPSHOT_KEYS = 512
 MAX_SETUP_SNAPSHOT_BYTES = 64_000
 MAX_SETUP_ADVICE_COMPLAINT_LEN = 240

@@ -2,9 +2,10 @@
 type: decision
 status: active
 created: 2026-04-21
-updated: 2026-06-16
+updated: 2026-07-15
 relates_to:
   - AcCopilotTrainer/03_Investigations/csp-web-socket-api.md
+  - AcCopilotTrainer/03_Investigations/issue-531-partd-live-vitals-2026-07-14.md
   - AcCopilotTrainer/10_Rig/esp32-jc3248w535-screen-v1.md
   - AcCopilotTrainer/01_Decisions/_index.md
 ---
@@ -39,12 +40,18 @@ We want a **second** WS client — the rig-mounted ESP32 touchscreen — to read
    | Lua/sidecar → haptics | `haptic_event` | `{ event, channel, intensity, duration_ms, ts_sim? }` |
 
    `client_class` is optional for backward compatibility. Known classes:
-   `external`, `lua`, `screen`, `haptics`, `physical`, `browser`. Legacy
-   firmware clients whose `client` starts with `ac-copilot-screen` are treated
-   as `screen` even when they omit `client_class`. The sidecar uses classes only
-   for high-rate physical-peripheral routing: `telemetry_tick` goes to `screen`,
-   `haptics`, and `physical`; `haptic_event` goes to `haptics` and `physical`.
-   Neither message is echoed back to the Lua peer.
+   `external`, `lua`, `screen`, `haptics`, `physical`, `browser`, `voice`, and
+   `observer`. Legacy firmware clients whose `client` starts with
+   `ac-copilot-screen` are treated as `screen` even when they omit
+   `client_class`.
+
+   High-rate fan-out is opt-in by class. `telemetry_tick` goes to `screen`,
+   `haptics`, `physical`, `browser`, and `observer`; `haptic_event` goes only to
+   actuator classes `haptics` and `physical`. `observer` is the headless harness
+   recorder: it receives ticks but never haptic commands. Keeping it distinct
+   from `external` avoids silently sending 20 Hz telemetry to generic peers,
+   while keeping it distinct from `browser` preserves truthful tablet peer
+   accounting. Neither peripheral message is echoed back to the Lua producer.
 
 3. **Physical peripheral payloads.**
 
@@ -52,9 +59,12 @@ We want a **second** WS client — the rig-mounted ESP32 touchscreen — to read
    cadence: 10-20 Hz, capped by the sidecar at 20 Hz. Required payload fields:
    `speed_kmh`, `rpm`, `gear`, `throttle` (0-1), `brake` (0-1), `steer`
    (-1..1), `lat_g`, and `long_g`. Optional fields include `lap_time_ms`,
-   `slip`, `abs_active`, `brake_lock`, `wheel_lock`, `tyre_temps_c`, and
-   `tyre_pressures_psi`; tyre maps may include any non-empty subset of `fl`,
-   `fr`, `rl`, `rr`.
+   `slip`, `tc_active`, `abs_active`, `brake_lock`, `wheel_lock`,
+   `tyre_temps_c`, `tyre_pressures_psi`, `tyre_wear_pct`, and
+   `brake_temps_c`; corner maps may include any non-empty subset of `fl`, `fr`,
+   `rl`, `rr`. Intervention flags are optional but, when present, must be real
+   booleans: absent means unavailable/not fitted, while `false` means fitted and
+   idle.
 
    `haptic_event` is a bounded actuator command for a haptic peripheral.
    Expected cadence: event-driven, capped by the sidecar at 25 Hz per

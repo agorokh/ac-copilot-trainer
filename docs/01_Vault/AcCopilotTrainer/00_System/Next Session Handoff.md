@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T05:15:00Z
+last_updated: 2026-07-15T07:27:45Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-575-stale-app-junction-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-531-partd-live-vitals-2026-07-14.md
@@ -92,6 +92,24 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Review-resolved (2026-07-15) — #531 Part D intervention evidence (PR #595)
+
+PR [#595](https://github.com/agorokh/ac-copilot-trainer/pull/595) fixes the final intervention-
+capture blind spot: the harness tap now connects as a dedicated `observer`, receives the class-
+routed `telemetry_tick` stream, and writes three-way TC/ABS evidence (`true` / `false` / `absent`)
+into every drive report. Generic classless clients remain unchanged; observers never join the
+haptic fan-out.
+
+Resolution evidence on functional head `93685d4`: required CI green, 0 GraphQL threads,
+resolve-gate clean, and the current-SHA self-hosted reviewer reported no medium-or-higher finding.
+Current `main` was merged into the resolution branch and the focused harness/protocol/endpoint
+suite passed **211/211**; full parity passed **2,961 tests, 77 skipped, 86.85% coverage,
+`ci-fast: OK`**. Review hardening preserved the generic tap contract: `tap_frames()` is classless
+unless its caller opts in, while `run_auto_drive` explicitly passes `observer`. The remaining rig
+criterion is behavioral, not observability: provoke a real TC or ABS event and confirm
+`report.json` records a positive `true` count. Detail:
+[[issue-531-partd-live-vitals-2026-07-14]].
 
 ## ACTION BEFORE THE NEXT RIG DRIVE (2026-07-15 05:15Z) — the installed app is STALE
 

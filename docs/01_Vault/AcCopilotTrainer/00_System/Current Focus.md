@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T05:10:00Z
+last_updated: 2026-07-15T07:27:45Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-575-stale-app-junction-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-531-partd-live-vitals-2026-07-14.md
@@ -35,6 +35,16 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Review-resolved (2026-07-15, active PR):** [#595](https://github.com/agorokh/ac-copilot-trainer/pull/595)
+turns #531 Part D's TC/ABS flash criterion into in-run machine evidence. `run_auto_drive` now opts
+its tap into the `observer` client class required for `telemetry_tick` fan-out; reports preserve
+`true` / `false` / `absent` per flag so a missing CSP field cannot masquerade as an idle system.
+Functional-head CI, resolve-gate, GraphQL threads, and the self-hosted review were clean; the
+resolution branch merged current `main`, passed **211 focused tests**, and finished full parity at
+**2,961 passed, 77 skipped, 86.85% coverage, `ci-fast: OK`**. Remaining real-world proof:
+deliberately provoke TC or ABS and observe a positive `true` count in `report.json`. Detail:
+[[issue-531-partd-live-vitals-2026-07-14]].
 
 **Delivered (2026-07-15, latest):** [#575](https://github.com/agorokh/ac-copilot-trainer/issues/575)
 **CLOSED** by PR [#587](https://github.com/agorokh/ac-copilot-trainer/pull/587)
