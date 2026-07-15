@@ -176,7 +176,12 @@ def _resolve_chirp_output(
     else:
         try:
             default_output = sd.default.device[1]
-            if isinstance(default_output, str):
+            if default_output is None:
+                # Factory-default sounddevice settings delegate device selection to PortAudio.
+                # query_devices(kind="output") exposes that selected device's concrete index.
+                default_device = sd.query_devices(kind="output")
+                device_index = int(default_device["index"])
+            elif isinstance(default_output, str):
                 device_index = resolve_output_device(
                     default_output,
                     host_api,
@@ -185,7 +190,7 @@ def _resolve_chirp_output(
                 )
             else:
                 device_index = int(default_output)
-        except (AttributeError, IndexError, TypeError, ValueError) as exc:
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
             raise DeviceResolutionError("no default PortAudio output device is configured") from exc
         if device_index < 0 or device_index >= len(devices):
             raise DeviceResolutionError(

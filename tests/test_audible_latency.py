@@ -78,6 +78,37 @@ def test_chirp_negotiates_fixed_layout_for_default_output() -> None:
     assert attempted == [1, 2, 3, 4, 5, 6]
 
 
+def test_chirp_resolves_portaudio_factory_default_output() -> None:
+    devices = [
+        {
+            "index": 0,
+            "name": "System default speakers",
+            "max_output_channels": 2,
+            "hostapi": 0,
+        }
+    ]
+
+    def query_devices(*, kind=None):  # noqa: ANN001
+        if kind == "output":
+            return devices[0]
+        assert kind is None
+        return devices
+
+    sd = SimpleNamespace(
+        default=SimpleNamespace(device=(None, None)),
+        query_devices=query_devices,
+        query_hostapis=lambda: [{"name": "Windows WASAPI"}],
+        check_output_settings=lambda **kwargs: None,
+    )
+
+    assert al._resolve_chirp_output(
+        sd,
+        device=None,
+        host_api=None,
+        samplerate=SR,
+    ) == (0, 1, (0,))
+
+
 def test_chirp_uses_both_front_channels_for_compact_fixed_output() -> None:
     attempted: list[int] = []
 
