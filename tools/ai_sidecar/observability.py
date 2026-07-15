@@ -39,6 +39,31 @@ SCREEN_RECENCY_SECONDS = 120.0
 
 _lock = threading.Lock()
 _build_commit_cache: str | None = None
+_build_time_cache: str | None = None
+
+# Baked into the frozen EXE at package time by the PyInstaller runtime hook that
+# ``tools.rig_launcher.build_info`` generates (issue #569). Keep the names in lockstep.
+BUILD_COMMIT_ENV = "AC_COPILOT_BUILD_COMMIT"
+BUILD_TIME_ENV = "AC_COPILOT_BUILD_TIME"
+
+
+def _git_output(args: list[str]) -> str:
+    """Best-effort ``git`` stdout for the dev/source path. ``""`` on any failure."""
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+            # Anchor to THIS module's source tree so a sidecar launched from elsewhere (a desktop
+            # shortcut, or a frozen EXE that happens to sit inside an unrelated git repo) can't
+            # report a foreign commit (#568 self-hosted reviewer).
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+        )
+        return completed.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 def build_commit() -> str:
@@ -53,27 +78,31 @@ def build_commit() -> str:
     global _build_commit_cache
     if _build_commit_cache is not None:
         return _build_commit_cache
-    baked = os.environ.get("AC_COPILOT_BUILD_COMMIT", "").strip()
+    baked = os.environ.get(BUILD_COMMIT_ENV, "").strip()
     if baked:
         _build_commit_cache = baked
         return baked
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-            check=False,
-            # Anchor to THIS module's source tree so a sidecar launched from elsewhere (a desktop
-            # shortcut, or a frozen EXE that happens to sit inside an unrelated git repo) can't
-            # report a foreign commit (#568 self-hosted reviewer).
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-        )
-        commit = completed.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        commit = ""
-    _build_commit_cache = commit or "unknown"
+    _build_commit_cache = _git_output(["rev-parse", "--short", "HEAD"]) or "unknown"
     return _build_commit_cache
+
+
+def build_time() -> str:
+    """ISO-8601 UTC timestamp of the running build.
+
+    Resolution order (issue #569): ``AC_COPILOT_BUILD_TIME`` (baked at package time,
+    where it is when the EXE was *packaged*), then the ``HEAD`` commit date for dev
+    checkouts — a source run has no packaging event, so the commit date is the closest
+    honest answer — then ``"unknown"``. Cached like ``build_commit``.
+    """
+    global _build_time_cache
+    if _build_time_cache is not None:
+        return _build_time_cache
+    baked = os.environ.get(BUILD_TIME_ENV, "").strip()
+    if baked:
+        _build_time_cache = baked
+        return baked
+    _build_time_cache = _git_output(["log", "-1", "--format=%cI"]) or "unknown"
+    return _build_time_cache
 
 
 @dataclass
@@ -125,8 +154,9 @@ def build_health_json(
 ) -> str:
     """Instant health body: the endpoint answering IS liveness.
 
-    Carries ``build_commit`` + the served ``endpoints`` set (issue #567) so a
-    stale packaged binary is identifiable from the payload, and ``browser_peers``
+    Carries ``build_commit`` + ``build_time`` + the served ``endpoints`` set
+    (issues #567/#569) so a stale packaged binary is identifiable from the
+    payload — and, for a frozen EXE, says *which* build it is — and ``browser_peers``
     so the launcher can tell a tablet dashboard is actually connected (not just
     that the tunnel is up). ``endpoints`` is the **caller's** canonical route
     list — the single source of truth lives next to the handlers in
@@ -139,6 +169,7 @@ def build_health_json(
         "screen_peers": screen_peers,
         "browser_peers": browser_peers,
         "build_commit": build_commit(),
+        "build_time": build_time(),
         "endpoints": list(endpoints),
     }
     if voice is not None:

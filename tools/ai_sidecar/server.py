@@ -3055,10 +3055,12 @@ def main() -> None:
         )
     )
 
-    # Resolve build_commit synchronously HERE, before the event loop starts, so the first
+    # Resolve build identity synchronously HERE, before the event loop starts, so the first
     # /health never shells out to `git` on the asyncio loop thread and stalls WS processing
-    # (#568 self-hosted reviewer). The result is cached for the process lifetime.
+    # (#568 self-hosted reviewer). Both results are cached for the process lifetime. In a
+    # frozen EXE the runtime hook has already put them in the env, so neither shells out.
     observability.build_commit()
+    observability.build_time()
 
     try:
         asyncio.run(

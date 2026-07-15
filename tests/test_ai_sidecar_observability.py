@@ -98,6 +98,8 @@ def test_health_endpoint_advertises_build_commit_and_served_endpoints() -> None:
     payload = json.loads(body)
     assert payload["browser_peers"] == 0
     assert isinstance(payload["build_commit"], str) and payload["build_commit"]
+    # #569: build_time rides alongside the commit so /health says WHICH build is running.
+    assert isinstance(payload["build_time"], str) and payload["build_time"]
     assert "/tablet/dash" in payload["endpoints"]
     assert "/tablet/voice" in payload["endpoints"]
 
@@ -143,6 +145,23 @@ def test_build_commit_prefers_baked_env(monkeypatch: pytest.MonkeyPatch) -> None
     # cached: a later env change does not re-resolve within the process
     monkeypatch.setenv("AC_COPILOT_BUILD_COMMIT", "feedfac")
     assert obs.build_commit() == "deadbee"
+
+
+def test_build_time_prefers_baked_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #569: the frozen EXE has no .git, so the packaging bake is the only source."""
+    monkeypatch.setattr(obs, "_build_time_cache", None)
+    monkeypatch.setenv("AC_COPILOT_BUILD_TIME", "2026-07-14T08:30:45Z")
+    assert obs.build_time() == "2026-07-14T08:30:45Z"
+    # cached: a later env change does not re-resolve within the process
+    monkeypatch.setenv("AC_COPILOT_BUILD_TIME", "1999-01-01T00:00:00Z")
+    assert obs.build_time() == "2026-07-14T08:30:45Z"
+
+
+def test_build_time_falls_back_to_unknown_without_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(obs, "_build_time_cache", None)
+    monkeypatch.delenv("AC_COPILOT_BUILD_TIME", raising=False)
+    monkeypatch.setattr(obs, "_git_output", lambda _args: "")
+    assert obs.build_time() == "unknown"
 
 
 def test_health_endpoint_sanitizes_voice_disabled_paths() -> None:
