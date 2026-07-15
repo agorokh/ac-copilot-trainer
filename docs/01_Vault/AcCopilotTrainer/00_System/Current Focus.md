@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T17:25:00Z
+last_updated: 2026-07-15T20:55:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-603-car-content-preflight-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-pit-stall-sim-death-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-partc-actionable-reason-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/tier3-consumer-repoint-drift-2026-07-15.md
@@ -38,6 +39,18 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered and merged-main-proven (2026-07-15):**
+[#603](https://github.com/agorokh/ac-copilot-trainer/issues/603) is **CLOSED** by PR
+[#607](https://github.com/agorokh/ac-copilot-trainer/pull/607), merge
+[`123a577`](https://github.com/agorokh/ac-copilot-trainer/commit/123a5774f1657ab5426ae4f90f759e844c7af800).
+The harness now rejects damaged car data/LOD/KN5 chains before AC launch and records them as
+explicit non-drive evidence excluded from drive and sim-death denominators. Shared car-data access
+is packed-first, lazy for unpacked files, flat-member consistent, and reused by tyre specs. On
+merged main, **222 focused tests passed**; real BMW packed content passed and the damaged Porsche
+failed before launch with both denominator flags false. The product scope is complete; restoring
+the local Porsche content remains a rig-maintenance action before the next Porsche drive. Detail:
+[[issue-603-car-content-preflight-2026-07-15]].
 
 **Delivered and live-proven (2026-07-15):** [#596](https://github.com/agorokh/ac-copilot-trainer/issues/596)
 is **CLOSED** by PRs [#598](https://github.com/agorokh/ac-copilot-trainer/pull/598) and
