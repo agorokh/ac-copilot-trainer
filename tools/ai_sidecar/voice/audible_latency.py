@@ -150,6 +150,59 @@ def make_chirp(samplerate: int, np: Any) -> Any:
     return (CHIRP_AMPLITUDE * sig).astype(np.float32)
 
 
+def _resolve_chirp_output(
+    sd: Any,
+    *,
+    device: str | None,
+    host_api: str | None,
+    samplerate: int,
+) -> tuple[int, int, int]:
+    """Resolve and negotiate the chirp output, including the system-default device."""
+    from tools.ai_sidecar.voice.playback import (
+        DeviceResolutionError,
+        resolve_output_device,
+        resolve_output_layout,
+    )
+
+    devices = list(sd.query_devices())
+    host_apis = list(sd.query_hostapis())
+    if device:
+        device_index = resolve_output_device(
+            device,
+            host_api,
+            devices=devices,
+            host_apis=host_apis,
+        )
+    else:
+        try:
+            default_output = sd.default.device[1]
+            if isinstance(default_output, str):
+                device_index = resolve_output_device(
+                    default_output,
+                    host_api,
+                    devices=devices,
+                    host_apis=host_apis,
+                )
+            else:
+                device_index = int(default_output)
+        except (AttributeError, IndexError, TypeError, ValueError) as exc:
+            raise DeviceResolutionError("no default PortAudio output device is configured") from exc
+        if device_index < 0 or device_index >= len(devices):
+            raise DeviceResolutionError(
+                f"default PortAudio output device index {device_index} is unavailable"
+            )
+
+    layout = resolve_output_layout(
+        device_index,
+        bank_channels=1,
+        samplerate=samplerate,
+        devices=devices,
+        host_apis=host_apis,
+        check_output_settings=sd.check_output_settings,
+    )
+    return device_index, layout.stream_channels, layout.channel_map[0] - 1
+
+
 def play_chirp(label: str, *, device: str | None, host_api: str | None) -> ChirpMark:
     """Play the sync chirp on the PC output and wall-stamp its first sample at the DAC.
 
@@ -160,31 +213,13 @@ def play_chirp(label: str, *, device: str | None, host_api: str | None) -> Chirp
     import numpy as np
     import sounddevice as sd
 
-    device_index: int | None = None
-    stream_channels = 1
-    output_channel = 0
-    if device:
-        from tools.ai_sidecar.voice.playback import resolve_output_device, resolve_output_layout
-
-        devices = list(sd.query_devices())
-        host_apis = list(sd.query_hostapis())
-        device_index = resolve_output_device(
-            device,
-            host_api,
-            devices=devices,
-            host_apis=host_apis,
-        )
-        layout = resolve_output_layout(
-            device_index,
-            bank_channels=1,
-            samplerate=48_000,
-            devices=devices,
-            host_apis=host_apis,
-            check_output_settings=sd.check_output_settings,
-        )
-        stream_channels = layout.stream_channels
-        output_channel = layout.channel_map[0] - 1
     samplerate = 48_000
+    device_index, stream_channels, output_channel = _resolve_chirp_output(
+        sd,
+        device=device,
+        host_api=host_api,
+        samplerate=samplerate,
+    )
     chirp = make_chirp(samplerate, np)
     state: dict[str, Any] = {"pos": 0, "dac_wall_ms": None, "latency_ms": None}
     done = __import__("threading").Event()

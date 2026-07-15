@@ -183,9 +183,7 @@ class VoiceCoach:
                 detail = str(exc) or type(exc).__name__
                 return cls.disabled(f"could not initialize audio backend {backend!r}: {detail}")
 
-        playback_details = getattr(playback, "output_details", {})
-        if not isinstance(playback_details, Mapping):
-            playback_details = {}
+        playback_details = playback.output_details
 
         if dispatch_listener is not None:
             from tools.ai_sidecar.voice.dispatch import DispatchTapPlayback

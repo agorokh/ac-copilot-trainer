@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -47,6 +48,34 @@ def test_chirp_is_locatable_in_noise() -> None:
     assert abs(onset - 2 * SR) <= 48  # within 1 ms
     assert score > 0.5
     assert prom > al.MATCH_MIN_PROMINENCE
+
+
+def test_chirp_negotiates_fixed_layout_for_default_output() -> None:
+    attempted: list[int] = []
+
+    def check_output_settings(*, device, channels, samplerate):  # noqa: ANN001
+        assert device == 0
+        assert samplerate == SR
+        attempted.append(channels)
+        if channels != 6:
+            raise RuntimeError("Invalid number of channels [PaErrorCode -9998]")
+
+    sd = SimpleNamespace(
+        default=SimpleNamespace(device=(1, 0)),
+        query_devices=lambda: [
+            {"name": "5.1 Speakers (USB Sound Device)", "max_output_channels": 6, "hostapi": 0}
+        ],
+        query_hostapis=lambda: [{"name": "Windows WASAPI"}],
+        check_output_settings=check_output_settings,
+    )
+
+    assert al._resolve_chirp_output(
+        sd,
+        device=None,
+        host_api=None,
+        samplerate=SR,
+    ) == (0, 6, 2)
+    assert attempted == [1, 2, 3, 4, 5, 6]
 
 
 def test_find_onset_refuses_absent_template() -> None:

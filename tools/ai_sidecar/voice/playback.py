@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 import time
 import wave
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -51,6 +51,11 @@ class Playback(Protocol):
     @property
     def current(self) -> Utterance | None:
         """The utterance currently sounding, or ``None`` when the channel is idle."""
+        ...
+
+    @property
+    def output_details(self) -> Mapping[str, object]:
+        """JSON-safe output device/layout metadata, empty for non-device implementations."""
         ...
 
     def play(self, utterance: Utterance) -> None:
@@ -331,6 +336,10 @@ class RecordingPlayback:
     @property
     def current(self) -> Utterance | None:
         return self._current
+
+    @property
+    def output_details(self) -> Mapping[str, object]:
+        return {}
 
     def play(self, utterance: Utterance) -> None:
         self.played.append(utterance)

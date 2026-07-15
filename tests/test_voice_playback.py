@@ -98,6 +98,7 @@ def test_output_layout_uses_fixed_multichannel_device_and_center_channel() -> No
 
 def test_recording_playback_tracks_current() -> None:
     pb = RecordingPlayback()
+    assert pb.output_details == {}
     r = Resolver(build_manifest())
     utt = r.resolve(make_advisory(kind="late_brake", urgency="act", corner=2))
     assert pb.current is None

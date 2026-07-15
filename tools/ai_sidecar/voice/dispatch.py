@@ -21,7 +21,7 @@ from __future__ import annotations
 import itertools
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 
 from tools.ai_sidecar.voice.playback import Playback
@@ -84,6 +84,10 @@ class DispatchTapPlayback:
     @property
     def current(self) -> Utterance | None:
         return self._inner.current
+
+    @property
+    def output_details(self) -> Mapping[str, object]:
+        return self._inner.output_details
 
     def play(self, utterance: Utterance) -> None:
         # Stamp the clocks BEFORE the backend call: on the sounddevice fallback, play()
