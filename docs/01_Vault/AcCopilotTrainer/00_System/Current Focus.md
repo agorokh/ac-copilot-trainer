@@ -80,6 +80,19 @@ min-curvature line → QSS → drive with per-combo, provenance-gated line cache
 rig (AC-valid lap, zero recoveries). Active EPIC #529 focus moves to G1 on unseen combos, then P3.
 Detail: [[issue-572-alien-pipeline-2026-07-14]].
 
+**Delivered (2026-07-15):** [#569](https://github.com/agorokh/ac-copilot-trainer/issues/569)
+**CLOSED** by PR [#586](https://github.com/agorokh/ac-copilot-trainer/pull/586)
+([`8a895ee`](https://github.com/agorokh/ac-copilot-trainer/commit/8a895ee)). Completes **H1** of
+the #567 hardening plan: a packaged EXE now reports a real `build_commit` **and** `build_time` on
+`/health` (was `"unknown"` — the frozen binary has no `.git`). Bake = a generated PyInstaller
+`--runtime-hook`, which runs before the entry script; since the launcher re-spawns *itself* for
+the sidecar child, the child inherits it with no propagation logic. **Live-proven on merged
+main**, not on the branch: frozen EXE → `build_commit: "8a895ee-dirty"`,
+`build_time: "2026-07-15T03:00:59Z"`, `endpoints` = 9 routes (composes correctly with #570's
+registry, which landed 24 min earlier), `GET /tablet/dash` → 200. Counterfactual proven with a
+no-bake frozen probe (`unknown`). Detail + rig gotchas:
+[[issue-569-frozen-build-identity-bake-2026-07-14]].
+
 **Delivered (2026-07-14, prior):** [#567](https://github.com/agorokh/ac-copilot-trainer/issues/567)
 **CLOSED** by PR [#568](https://github.com/agorokh/ac-copilot-trainer/pull/568)
 ([`ae54ce9`](https://github.com/agorokh/ac-copilot-trainer/commit/ae54ce9)). Tablet GT dashboard
@@ -88,8 +101,10 @@ Detail: [[issue-572-alien-pipeline-2026-07-14]].
 `--self-test` ground-truth `GET /tablet/dash==200`), a self-healing `adb reverse` keeper
 (`tools/rig_launcher/tablet_tunnel.py`, opt-in `AC_COPILOT_MANAGE_TABLET_TUNNEL`), thread-safe
 supervisor, and read-only off-thread GUI polling. 13 review rounds (two real gating HIGHs fixed);
-`make ci-fast` green. Rig-pending: rebuild the EXE + `--self-test` + one managed launch to confirm
-plug-in-and-connect. Follow-ups #569/#570. Detail:
+`make ci-fast` green. Rig-pending: ~~rebuild the EXE~~ (done 2026-07-15 under #569 — `dist/` now
+holds a fresh merged-main build serving `/tablet/dash` 200, replacing the stale Jul-2 binary) +
+`--self-test` + one managed launch to confirm plug-in-and-connect. Follow-ups: #569 **CLOSED**
+(above), #570 **CLOSED** (PR #585). Detail:
 [[tablet-dash-connection-hardening-2026-07-14]].
 
 **Delivered (2026-07-13):** [#543](https://github.com/agorokh/ac-copilot-trainer/issues/543)
