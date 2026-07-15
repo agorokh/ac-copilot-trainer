@@ -283,8 +283,7 @@ def test_validate_inbound_accepts_known_types() -> None:
         ep.validate_inbound(
             _telemetry_tick(
                 tyre_pressures_psi={"fl": 27.4, "fr": 27.6, "rl": 26.1, "rr": 26.3},
-                brake_temps_c={"fl": 310.0, "fr": 312.0, "rl": 280.0, "rr": 282.0},
-                tyre_wear_pct={"fl": 0.0, "fr": 25.0, "rl": 75.0, "rr": 100.0},
+                tyre_wear_pct={"fl": 0.0, "fr": 25.0, "rl": 7.2, "rr": 100.0},
             )
         )
         is None

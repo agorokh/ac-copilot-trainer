@@ -433,10 +433,15 @@ def test_telemetry_tick_omits_rpm_max_when_missing_or_zero():
 
 
 def test_telemetry_tick_carries_wheel_vitals_and_intervention_flags():
-    """#531 Part D: the live vitals the tablet tyre board reads (pressure/brake-temp/wear) plus
-    the TC/ABS intervention flags. CSP field names are the finicky part — `tyrePressure`,
-    `discTemperature`, `tyreWear` (NOT the SimHub/ACC `brakeTemperature` spelling) — and wheels
-    are 0-BASED (FL=0..RR=3); a 1-based read silently shifts every corner (the #180 regression)."""
+    """#531 Part D: the live vitals the tablet tyre board reads (pressure/wear) plus the TC/ABS
+    intervention flags. CSP field names are the finicky part — `tyrePressure` / `tyreWear` (NOT
+    the SimHub/ACC spellings) — and wheels are 0-BASED (FL=0..RR=3); a 1-based read silently
+    shifts every corner and reads nil for RR (the #180 `rr=0` regression).
+
+    `brake_temps_c` is deliberately NOT emitted: the frozen design gives it no dashboard slot, so
+    streaming it would be a producer with no consumer — the mirror of the `abs_active`-with-no-
+    producer bug this Part fixes. Pinned here so a future edit re-adds it only with a slot.
+    """
     rt = _runtime()
     out = rt.eval(
         r"""
@@ -451,8 +456,8 @@ def test_telemetry_tick_carries_wheel_vitals_and_intervention_flags():
             gear = 3, splinePosition = 0.42, lapCount = 2,
             tractionControlInAction = true, absInAction = false,
             wheels = {
-              [0] = wheel(27.4, 310, 0.98), [1] = wheel(27.6, 312, 0.97),
-              [2] = wheel(26.1, 280, 0.99), [3] = wheel(26.3, 282, 0.96),
+              [0] = wheel(27.4, 310, 0.01), [1] = wheel(27.6, 312, 0.02),
+              [2] = wheel(26.1, 280, 0.03), [3] = wheel(26.3, 282, 0.04),
             },
           }
           M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws })
@@ -460,16 +465,15 @@ def test_telemetry_tick_carries_wheel_vitals_and_intervention_flags():
           return {
             psi_fl = p.tyre_pressures_psi and p.tyre_pressures_psi.fl,
             psi_rr = p.tyre_pressures_psi and p.tyre_pressures_psi.rr,
-            disc_fl = p.brake_temps_c and p.brake_temps_c.fl,
-            disc_rr = p.brake_temps_c and p.brake_temps_c.rr,
+            has_brake_temps = p.brake_temps_c ~= nil,
             tc = p.tc_active, abs = p.abs_active,
           }
         end)()
         """
     )
-    assert (out["psi_fl"], out["psi_rr"]) == (27.4, 26.3)
     # RR is read from wheels[3]: a 1-based loop would read nil here and drop the corner.
-    assert (out["disc_fl"], out["disc_rr"]) == (310, 282)
+    assert (out["psi_fl"], out["psi_rr"]) == (27.4, 26.3)
+    assert out["has_brake_temps"] is False  # no dashboard slot -> not streamed (no dead wire)
     assert out["tc"] is True
     assert out["abs"] is False
 
@@ -530,14 +534,13 @@ def test_telemetry_tick_omits_vitals_and_flags_when_car_lacks_them():
           M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws })
           local p = ws._calls[1].send.payload
           return {
-            psi = p.tyre_pressures_psi ~= nil, disc = p.brake_temps_c ~= nil,
+            psi = p.tyre_pressures_psi ~= nil,
             wear = p.tyre_wear_pct ~= nil, tc = p.tc_active ~= nil, abs = p.abs_active ~= nil,
           }
         end)()
         """
     )
     assert out["psi"] is False
-    assert out["disc"] is False
     assert out["wear"] is False
     assert out["tc"] is False
     assert out["abs"] is False

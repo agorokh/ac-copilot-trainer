@@ -207,28 +207,34 @@ end
 
 
 --- Read the live per-wheel dashboard vitals (#531 Part D) into {fl,fr,rl,rr} maps, via the shared
---- `wheel_read` accessors so the finicky parts (CSP field names — `tyrePressure`/`discTemperature`/
---- `tyreWear`, NOT the SimHub/ACC spellings — and the 0-based wheel order) have one source of
---- truth. Each read is pcall-guarded there and degrades to nil, so a CSP build or car that lacks a
---- channel omits that corner rather than throwing out of the 20 Hz publish path.
+--- `wheel_read` accessors so the finicky parts (CSP field names — `tyrePressure` / `tyreWear`, NOT
+--- the SimHub/ACC spellings — and the 0-based wheel order) have one source of truth. Each read is
+--- pcall-guarded there and degrades to nil, so a CSP build or car that lacks a channel omits that
+--- corner rather than throwing out of the 20 Hz publish path.
+---
+--- Deliberately does NOT read `discTemperature`: the frozen design (DESIGN_SPEC section 4 /
+--- reference_mock.html) gives brake temp no RACE or STINT slot, so streaming it would be a
+--- producer with no consumer — the mirror image of the `abs_active`-with-no-producer bug this
+--- Part fixes. It also reads a flat ambient 26 C on the 911 GT3 R (the #488 caveat in
+--- `wheel_read.brakeTemp`), so a slot invented for it would print a constant. The lap trace still
+--- captures it via `telemetry.lua`. Measurement is on #531 for Part F to decide with evidence.
 ---@param car any
----@return table pressures, table brakeTemps, table wearPct  (values number|nil per corner)
+---@return table pressures, table wearPct  (values number|nil per corner)
 local function _readWheelVitals(car)
-  local pressures, brakeTemps, wearPct = {}, {}, {}
+  local pressures, wearPct = {}, {}
   local wheels = _field(car, "wheels")
   if wheels == nil then
-    return pressures, brakeTemps, wearPct
+    return pressures, wearPct
   end
   for i = 0, 3 do
     local key = wheelRead.WHEEL_KEYS[i]
     local one = _field(wheels, i)
     if one ~= nil then
       pressures[key] = wheelRead.pressure(one)
-      brakeTemps[key] = wheelRead.brakeTemp(one)
       wearPct[key] = _wearPct(wheelRead.wear(one))
     end
   end
-  return pressures, brakeTemps, wearPct
+  return pressures, wearPct
 end
 
 
@@ -316,14 +322,10 @@ function M.publishTelemetryTickIfDue(opts)
   -- pressure slot its own header advertised. Each map is omitted entirely when no corner resolved
   -- (`_cornerMap` returns nil) — an absent vital must render as an explicit unknown on the dash,
   -- never as a frozen last value.
-  local pressures, brakeTemps, wearPct = _readWheelVitals(opts.car)
+  local pressures, wearPct = _readWheelVitals(opts.car)
   local pressureMap = _cornerMap(pressures)
   if pressureMap ~= nil then
     payload.tyre_pressures_psi = pressureMap
-  end
-  local brakeTempMap = _cornerMap(brakeTemps)
-  if brakeTempMap ~= nil then
-    payload.brake_temps_c = brakeTempMap
   end
   local wearMap = _cornerMap(wearPct)
   if wearMap ~= nil then
