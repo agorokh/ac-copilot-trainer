@@ -2,8 +2,10 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T07:27:45Z
+last_updated: 2026-07-15T09:35:12Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-596-partc-actionable-reason-2026-07-15.md
+  - AcCopilotTrainer/03_Investigations/tier3-consumer-repoint-drift-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-575-stale-app-junction-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-531-partd-live-vitals-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-569-frozen-build-identity-bake-2026-07-14.md
@@ -92,6 +94,26 @@ relates_to:
 ---
 
 # Next session handoff
+
+## READY TO MERGE (2026-07-15 09:35Z) — PR #598 / issue #596 Part C
+
+[PR #598](https://github.com/agorokh/ac-copilot-trainer/pull/598) is `CLEAN` + `MERGEABLE` at
+`4def5a2`. Required checks are green; GraphQL has 0 unresolved threads; Qodo reports 0 bugs; the
+resolve-gate ledger is clean; and the current-SHA self-hosted Cursor review has no medium-or-higher
+finding. Two full post-push 10-minute cooldowns completed. Local final parity: **2,952 passed, 113
+skipped, 87.56% coverage, `ci-fast: OK`**.
+
+Review hardening made `AutoDriveReport.reason` a computed property, so direct reads, summary output,
+and `report.json` stay correct through PASS↔FAIL post-construction mutation. `drive_veto_reason` is
+now the one source of truth and `drive_leg_succeeded` its exact inverse. Merge #598, then run the
+normal post-merge workflow. Issue #596 remains open for Parts A/B (pit-start stall and `acs.exe`
+death-rate/retry work). Detail: [[issue-596-partc-actionable-reason-2026-07-15]].
+
+**Tier-3 outage re-observed:** the mandatory task query reached the registered
+`ac_copilot_trainer` workspace but returned HTTP 502 with empty context. The local investigation
+maps this PC consumer to the retired m2pro endpoint while the canonical fleet moved to
+m4max-studio; it remains workstation-ops #1551 consumer-repoint scope. No machine-global config was
+changed. Detail: [[tier3-consumer-repoint-drift-2026-07-15]].
 
 ## Review-resolved (2026-07-15) — #531 Part D intervention evidence (PR #595)
 
