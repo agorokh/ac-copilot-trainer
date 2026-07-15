@@ -52,6 +52,7 @@ from tools.ac_harness.auto_drive import (
     rig_hijack,
     rig_launch,
     run_auto_drive,
+    run_auto_drive_with_sim_retries,
     should_try_line_teleport_on_recovery,
     verify_setup_ack,
     write_evidence,
@@ -567,6 +568,148 @@ def test_sim_dead_vetoes_success_even_when_drove_true():
     )
     assert report.sequence_ok is True
     assert report.ok is False  # sim_dead vetoes despite drove=True
+
+
+def test_sim_death_retries_full_launch_and_preserves_failed_attempt():
+    launches: list[int] = []
+    controllers: list[FakeController] = []
+    outcomes = iter(
+        [
+            DriveStats(drove=True, sim_dead=True, reason="acs.exe died on packet 41"),
+            DriveStats(drove=True, laps=1, total_distance_m=900.0),
+        ]
+    )
+
+    def _launch(config):  # noqa: ANN001
+        launches.append(config.sim_death_retries)
+        return True, "live"
+
+    def _hijack(config):  # noqa: ANN001
+        controller = FakeController()
+        controllers.append(controller)
+        return controller
+
+    def _drive(controller, config, stop):  # noqa: ANN001
+        stop.wait(timeout=2.0)
+        return next(outcomes)
+
+    report = asyncio.run(
+        run_auto_drive_with_sim_retries(
+            _cfg(sim_death_retries=1),
+            launch=_launch,
+            hijack=_hijack,
+            drive=_drive,
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+
+    assert report.ok is True
+    assert len(launches) == 2
+    assert len(report.attempts) == 2
+    assert report.attempts[0]["ok"] is False
+    assert report.attempts[0]["drive"]["sim_dead"] is True
+    assert "packet 41" in report.attempts[0]["reason"]
+    assert report.attempts[1]["ok"] is True
+    assert all(attempt["attempts"] == [] for attempt in report.attempts)
+    assert all(controller.closed for controller in controllers)
+
+
+@pytest.mark.parametrize(
+    "config_kwargs,stats",
+    [
+        ({"skip_launch": True}, DriveStats(drove=True, sim_dead=True)),
+        ({}, DriveStats(drove=True, sim_dead=True, session_replaced=True)),
+        ({}, DriveStats(drove=True, sim_dead=True, recovery_capped=True)),
+    ],
+)
+def test_sim_death_retry_refuses_non_retryable_run_states(config_kwargs, stats):
+    launches: list[int] = []
+
+    def _launch(config):  # noqa: ANN001
+        launches.append(1)
+        return True, "live"
+
+    report = asyncio.run(
+        run_auto_drive_with_sim_retries(
+            _cfg(sim_death_retries=2, **config_kwargs),
+            launch=_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(stats, {}),
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+
+    assert report.ok is False
+    assert len(report.attempts) == 1
+    assert len(launches) == (0 if config_kwargs.get("skip_launch") else 1)
+
+
+def test_sim_death_retry_budget_exhaustion_is_an_evidenced_failure():
+    launches: list[int] = []
+
+    def _launch(config):  # noqa: ANN001
+        launches.append(1)
+        return True, "live"
+
+    report = asyncio.run(
+        run_auto_drive_with_sim_retries(
+            _cfg(sim_death_retries=1),
+            launch=_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(
+                DriveStats(drove=True, sim_dead=True, reason="packet frozen"), {}
+            ),
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+
+    assert report.ok is False
+    assert len(launches) == 2
+    assert len(report.attempts) == 2
+    assert all(attempt["drive"]["sim_dead"] is True for attempt in report.attempts)
+
+
+def test_sim_death_retry_does_not_mask_a_pipeline_exception(monkeypatch):
+    from tools.ac_harness import auto_drive
+
+    calls: list[int] = []
+
+    async def _failed_attempt(config, **kwargs):  # noqa: ANN001
+        calls.append(1)
+        return AutoDriveReport(
+            ok=False,
+            stage="pipeline",
+            drive=DriveStats(drove=True, sim_dead=True),
+            error="pipeline: tap exploded",
+        )
+
+    monkeypatch.setattr(auto_drive, "run_auto_drive", _failed_attempt)
+    report = asyncio.run(
+        auto_drive.run_auto_drive_with_sim_retries(
+            _cfg(sim_death_retries=2),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True), {}),
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+
+    assert calls == [1]
+    assert report.error == "pipeline: tap exploded"
+    assert len(report.attempts) == 1
+
+
+def test_programmatic_sim_death_retry_budget_rejects_negative_values():
+    with pytest.raises(ValueError, match="must be >= 0"):
+        asyncio.run(
+            run_auto_drive_with_sim_retries(
+                _cfg(sim_death_retries=-1),
+                launch=_ok_launch,
+                hijack=lambda c: FakeController(),
+                drive=_drive_returning(DriveStats(drove=True), {}),
+                tap=_tap_returning(CONTINUOUS),
+            )
+        )
 
 
 def test_drive_exception_closes_controller_and_reports_drive_stage():
@@ -2978,6 +3121,8 @@ def test_cli_new_flags_map_to_config(tmp_path):
             "3",
             "--progress-stall-seconds",
             "8",
+            "--sim-death-retries",
+            "2",
             "--no-spawn-line",
         ]
     )
@@ -2988,7 +3133,14 @@ def test_cli_new_flags_map_to_config(tmp_path):
     assert cfg.driver == "ggv"
     assert cfg.max_recoveries == 3
     assert cfg.progress_stall_seconds == 8.0
+    assert cfg.sim_death_retries == 2
     assert cfg.spawn_to_line is False
+
+
+@pytest.mark.parametrize("bad", ["-1", "1.5", "nan"])
+def test_cli_rejects_invalid_sim_death_retry_budgets(bad):
+    with pytest.raises(SystemExit):
+        _build_arg_parser().parse_args(["--track", "spa", "--sim-death-retries", bad])
 
 
 # --------------------------------------------------------------------------- #577 flying-lap window

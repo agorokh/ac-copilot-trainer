@@ -256,6 +256,15 @@ def test_gear_pulse_shifts_out_of_neutral_then_up_then_down():
     assert d._gear_pulse(3000, 4, 90.0, 9.0) == (False, True)  # down past rpm_dn
 
 
+def test_gear_pulse_downshifts_a_stationary_high_gear_car():
+    """#596 Part A: 0 km/h in 4th must not be a permanent gear/speed latch."""
+
+    d = RacingDriver(_straight_line(10), [40.0] * 10, max_speed_kmh=200.0)
+    assert d._gear_pulse(900, 4, 0.0, 1.0) == (False, True)
+    assert d._gear_pulse(900, 3, 0.0, 1.3) == (False, True)
+    assert d._gear_pulse(900, 2, 0.0, 1.6) == (False, False)  # stop at 1st, never N/R
+
+
 def test_default_upshift_fires_below_first_gear_rev_limiter():
     # Live on the GT3 R, 1st gear's rev limiter plateaus at ~7400 rpm. If the shift point sits ABOVE
     # it, the car bounces off the limiter stuck in 1st (observed) — the default must be below it.
