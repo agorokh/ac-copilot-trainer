@@ -109,14 +109,26 @@ def render_runtime_hook(info: BuildInfo) -> str:
 
     Values are embedded with ``repr`` so a hostile or merely odd git output cannot break
     out of the literal.
+
+    Deliberately not ``os.environ.setdefault``: an env var that is *set but empty* would
+    keep setdefault from baking, while the reader (``observability.build_commit``) strips
+    and treats empty as unset — so the EXE would fall back to ``git``/``"unknown"``. The
+    emitted guard mirrors the reader's truthiness check exactly, so the bake and the
+    reader agree on what "already set" means. A non-empty operator value still wins.
     """
     return (
         "# Generated at package time by tools.rig_launcher.build_info (issue #569).\n"
         "# PyInstaller runs runtime hooks BEFORE the entry script, so these are set\n"
-        "# before any sidecar code reads them. setdefault: operator env still wins.\n"
+        "# before any sidecar code reads them. A real operator value still wins; an\n"
+        "# empty one does not (it would strand the frozen EXE on 'unknown').\n"
         "import os\n"
-        f"os.environ.setdefault({BUILD_COMMIT_ENV!r}, {info.commit!r})\n"
-        f"os.environ.setdefault({BUILD_TIME_ENV!r}, {info.build_time!r})\n"
+        "\n"
+        "for _name, _baked in (\n"
+        f"    ({BUILD_COMMIT_ENV!r}, {info.commit!r}),\n"
+        f"    ({BUILD_TIME_ENV!r}, {info.build_time!r}),\n"
+        "):\n"
+        "    if not os.environ.get(_name, '').strip():\n"
+        "        os.environ[_name] = _baked\n"
     )
 
 

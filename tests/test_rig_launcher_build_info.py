@@ -125,10 +125,25 @@ def test_runtime_hook_bakes_into_environment_and_operator_env_still_wins() -> No
     assert os.environ[BUILD_COMMIT_ENV] == "abc1234"
     assert os.environ[BUILD_TIME_ENV] == _STAMP_TEXT
 
-    # setdefault, not assignment: a field override survives the bake.
+    # A real operator override survives the bake (field debugging).
     os.environ[BUILD_COMMIT_ENV] = "operator"
     exec(code, {})
     assert os.environ[BUILD_COMMIT_ENV] == "operator"
+
+
+@pytest.mark.usefixtures("isolated_build_env")
+def test_runtime_hook_bakes_over_a_set_but_empty_env_var() -> None:
+    """Caught on a real frozen EXE: plain ``setdefault`` will not replace a set-but-empty
+    var, but the reader strips and treats empty as unset — so the EXE would fall back to
+    ``git``/"unknown" despite the bake. The hook's guard must match the reader's check."""
+    os.environ[BUILD_COMMIT_ENV] = ""
+    os.environ[BUILD_TIME_ENV] = "   "
+    exec(
+        compile(render_runtime_hook(BuildInfo("abc1234", _STAMP_TEXT)), RUNTIME_HOOK_NAME, "exec"),
+        {},
+    )
+    assert os.environ[BUILD_COMMIT_ENV] == "abc1234"
+    assert os.environ[BUILD_TIME_ENV] == _STAMP_TEXT
 
 
 def test_build_pyinstaller_args_bakes_build_identity(tmp_path: Path) -> None:
