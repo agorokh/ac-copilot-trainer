@@ -2325,6 +2325,27 @@ def test_car_content_preflight_rejects_unusable_lod_configuration(
     assert [issue.check for issue in issues] == [expected_check]
 
 
+def test_car_content_preflight_accepts_inline_comment_on_lod_file(tmp_path):
+    ac_root, _user, _cm = _fake_rig(tmp_path)
+    car_dir = ac_root / "content" / "cars" / "ks_porsche_911_gt3_r_2016"
+    (car_dir / "data" / "lods.ini").write_text(
+        "[LOD_0]\nFILE=ks_porsche_911_gt3_r_2016.kn5 ; main model\nIN=0\nOUT=2000\n"
+    )
+
+    assert car_content_preflight(car_dir) == []
+
+
+def test_car_content_preflight_reports_effective_packed_source(tmp_path):
+    ac_root, _user, _cm = _fake_rig(tmp_path)
+    car_dir = ac_root / "content" / "cars" / "ks_porsche_911_gt3_r_2016"
+    (car_dir / "data.acd").write_bytes(b"malformed")
+
+    issues = car_content_preflight(car_dir)
+
+    assert [issue.check for issue in issues] == ["car_lods"]
+    assert str(car_dir / "data.acd") in issues[0].message
+
+
 def test_cli_persists_non_drive_preflight_failure_without_launch(tmp_path, monkeypatch):
     ac_root, user, cm = _fake_rig(tmp_path)
     car_id = "ks_porsche_911_gt3_r_2016"

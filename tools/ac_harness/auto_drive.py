@@ -1576,7 +1576,7 @@ def car_content_preflight(car_dir: Path) -> list[PreflightIssue]:
         ]
 
     lods_raw = read_car_data_member(car_dir, "lods.ini")
-    source = data_dir if data_dir.is_dir() else data_acd
+    source = data_acd if data_acd.is_file() else data_dir
     if not lods_raw:
         return [
             PreflightIssue(
@@ -1591,7 +1591,9 @@ def car_content_preflight(car_dir: Path) -> list[PreflightIssue]:
             lods_text = lods_raw.decode("utf-8-sig")
         except UnicodeDecodeError:
             lods_text = lods_raw.decode("cp1252")
-        parser = configparser.ConfigParser(strict=False, interpolation=None)
+        parser = configparser.ConfigParser(
+            strict=False, interpolation=None, inline_comment_prefixes=(";", "#")
+        )
         parser.read_string(lods_text)
     except (UnicodeDecodeError, configparser.Error) as exc:
         return [PreflightIssue("car_lods", f"car lods.ini is unreadable ({source}): {exc}")]

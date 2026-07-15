@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.ac_content import read_car_data_archive
+from tools.ac_content import CarDataSource
 
 #: Compound index N maps to sections ``[FRONT_N]`` / ``[REAR_N]``; N==0 also matches bare
 #: ``[FRONT]`` / ``[REAR]`` (AC treats the unsuffixed section as compound 0). Thermal curve lives in
@@ -85,17 +85,23 @@ def _load_archive(car_dir: Path) -> dict[str, str] | None:
 
     archive: dict[str, str] | None = None
     try:
-        members = read_car_data_archive(car_dir)
-        if members is not None:
-            # Only root-level INI/LUT members participate, matching the unpacked flat directory.
-            lowered = {
-                normalized.lower(): blob
-                for name, blob in members.items()
-                if "/" not in (normalized := name.replace("\\", "/"))
-                and Path(normalized).suffix.lower() in (".ini", ".lut")
-            }
-            if "tyres.ini" in lowered:
-                archive = {name: _decode_text(blob) for name, blob in lowered.items()}
+        source = CarDataSource(car_dir)
+        tyres_raw = source.read_member("tyres.ini")
+        if tyres_raw is not None:
+            tyres_text = _decode_text(tyres_raw)
+            archive = {"tyres.ini": tyres_text}
+            # Load only LUTs explicitly referenced by tyres.ini. The accessor caches one packed
+            # decode but reads no unrelated unpacked files, keeping sidecar startup bounded.
+            for section in _parse_ini_sections(tyres_text).values():
+                curve = section.get("PERFORMANCE_CURVE", "").strip()
+                if not curve.lower().endswith(".lut"):
+                    continue
+                member = curve.replace("\\", "/").rsplit("/", 1)[-1]
+                if member.lower() in archive:
+                    continue
+                lut_raw = source.read_member(member)
+                if lut_raw is not None:
+                    archive[member.lower()] = _decode_text(lut_raw)
     except (OSError, ValueError, IndexError):
         archive = None
 
@@ -245,8 +251,8 @@ def _optimal_temp_from_curve(
 def read_tyre_specs(car_dir: str | Path, compound_index: int) -> TyreSpec | None:
     """Resolve ``tyres.ini`` for ``car_dir``; return the :class:`TyreSpec` for ``compound_index``.
 
-    Source preference: unpacked ``data/tyres.ini`` if present, else decrypt ``data.acd`` (folder
-    name is the key). Parses ``[FRONT_<N>]`` (bare ``[FRONT]`` for N==0), falling back to
+    Source preference matches AC: packed ``data.acd`` when present, otherwise unpacked
+    ``data/tyres.ini``. Parses ``[FRONT_<N>]`` (bare ``[FRONT]`` for N==0), falling back to
     ``[REAR_<N>]`` for any key the front section omits. Optimal core temp is the peak of the
     matching ``[THERMAL_FRONT_<N>]`` (or ``[THERMAL_REAR_<N>]``) ``PERFORMANCE_CURVE``.
 

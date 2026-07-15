@@ -105,28 +105,54 @@ def unpack_acd(data: bytes, folder_name: str) -> dict[str, bytes]:
     return files
 
 
-def read_car_data_archive(car_dir: str | Path) -> dict[str, bytes] | None:
-    """Read a car's effective flat data archive without modifying content.
+class CarDataSource:
+    """Lazy flat-member accessor for the data source Assetto Corsa will load.
 
-    Assetto Corsa gives ``data.acd`` precedence when both packed and unpacked sources exist; an
-    unpacked ``data/`` folder becomes effective only when the archive is absent.  Preserve that
-    launch behavior even when the packed archive is malformed rather than silently falling back
-    to content the game would not load.
+    ``data.acd`` has precedence when present. Packed members are decoded at most once per accessor;
+    unpacked files are read only when explicitly requested. Both forms expose the same root-level,
+    case-insensitive contract, so nested packed entries cannot behave differently from ``data/``.
     """
-    try:
-        path = Path(car_dir)
-        acd_path = path / "data.acd"
-        if acd_path.is_file():
-            return unpack_acd(acd_path.read_bytes(), path.name)
 
-        data_dir = path / "data"
-        if data_dir.is_dir():
-            return {
-                child.name: child.read_bytes() for child in data_dir.iterdir() if child.is_file()
-            }
-    except (OSError, TypeError, ValueError, struct.error, IndexError):
+    def __init__(self, car_dir: str | Path) -> None:
+        self.car_dir = Path(car_dir)
+        self._packed_loaded = False
+        self._packed_members: dict[str, bytes] | None = None
+
+    @staticmethod
+    def _member_key(member_name: str) -> str | None:
+        normalized = member_name.replace("\\", "/")
+        if not normalized or "/" in normalized or normalized in (".", ".."):
+            return None
+        return normalized.lower()
+
+    def read_member(self, member_name: str) -> bytes | None:
+        """Read one flat member without falling back to an inactive data source."""
+        try:
+            wanted = self._member_key(member_name)
+            if wanted is None:
+                return None
+
+            acd_path = self.car_dir / "data.acd"
+            if acd_path.is_file():
+                if not self._packed_loaded:
+                    self._packed_loaded = True
+                    self._packed_members = unpack_acd(acd_path.read_bytes(), self.car_dir.name)
+                if self._packed_members is None:
+                    return None
+                for name, content in self._packed_members.items():
+                    normalized = name.replace("\\", "/")
+                    if "/" not in normalized and normalized.lower() == wanted:
+                        return content
+                return None
+
+            data_dir = self.car_dir / "data"
+            if data_dir.is_dir():
+                for child in data_dir.iterdir():
+                    if child.is_file() and child.name.lower() == wanted:
+                        return child.read_bytes()
+        except (OSError, TypeError, ValueError, struct.error, IndexError):
+            return None
         return None
-    return None
 
 
 def read_car_data_member(car_dir: str | Path, member_name: str) -> bytes | None:
@@ -136,16 +162,7 @@ def read_car_data_member(car_dir: str | Path, member_name: str) -> bytes | None:
     source/member. Nested archive paths never alias a root-level member.
     """
     try:
-        normalized = member_name.replace("\\", "/")
-        if not normalized or "/" in normalized or normalized in (".", ".."):
-            return None
-        wanted = normalized.lower()
-        archive = read_car_data_archive(car_dir)
-        if archive is None:
-            return None
-        for name, content in archive.items():
-            if name.replace("\\", "/").lower() == wanted:
-                return content
+        return CarDataSource(car_dir).read_member(member_name)
     except (OSError, TypeError, ValueError, struct.error, IndexError):
         return None
     return None

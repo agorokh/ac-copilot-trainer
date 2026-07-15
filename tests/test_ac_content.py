@@ -5,7 +5,7 @@ from __future__ import annotations
 import struct
 from pathlib import Path
 
-from tools.ac_content import acd_key, read_car_data_member, unpack_acd
+from tools.ac_content import CarDataSource, acd_key, read_car_data_member, unpack_acd
 
 
 def _build_acd(folder_name: str, members: dict[str, bytes]) -> bytes:
@@ -43,6 +43,26 @@ def test_member_lookup_reads_unpacked_source_when_archive_is_absent(tmp_path: Pa
     (car_dir / "data" / "LoDs.InI").write_bytes(expected)
 
     assert read_car_data_member(car_dir, "lods.ini") == expected
+
+
+def test_unpacked_accessor_reads_only_requested_member(tmp_path: Path, monkeypatch) -> None:
+    car_dir = tmp_path / "lazy_car"
+    (car_dir / "data").mkdir(parents=True)
+    (car_dir / "data" / "lods.ini").write_bytes(b"wanted")
+    (car_dir / "data" / "large-unrelated.bin").write_bytes(b"unrelated")
+    original_read_bytes = Path.read_bytes
+    reads: list[str] = []
+
+    def guarded_read_bytes(path: Path) -> bytes:
+        reads.append(path.name)
+        if path.name == "large-unrelated.bin":
+            raise AssertionError("unrequested unpacked member was eagerly loaded")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", guarded_read_bytes)
+
+    assert CarDataSource(car_dir).read_member("lods.ini") == b"wanted"
+    assert reads == ["lods.ini"]
 
 
 def test_member_lookup_prefers_packed_source_when_both_exist(tmp_path: Path) -> None:
