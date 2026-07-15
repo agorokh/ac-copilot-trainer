@@ -5,6 +5,7 @@ memory_tier: canonical
 last_updated: 2026-07-15T20:55:51Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-602-portaudio-fixed-layout-2026-07-15.md
+  - AcCopilotTrainer/03_Investigations/issue-603-car-content-preflight-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-pit-stall-sim-death-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-partc-actionable-reason-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/tier3-consumer-repoint-drift-2026-07-15.md
@@ -113,6 +114,32 @@ cleanly.
 **Resume here:** PR #606 is ready. Confirm the latest stereo-fallback correction through the
 current-SHA remote gate, resolve its review thread, then merge through the normal maintainer
 workflow. Detail: [[issue-602-portaudio-fixed-layout-2026-07-15]].
+
+## Delivered (2026-07-15) — #603 damaged-car preflight CLOSED (PR #607)
+
+PR [#607](https://github.com/agorokh/ac-copilot-trainer/pull/607) merged as
+[`123a577`](https://github.com/agorokh/ac-copilot-trainer/commit/123a5774f1657ab5426ae4f90f759e844c7af800),
+closing [#603](https://github.com/agorokh/ac-copilot-trainer/issues/603). `auto_drive` now validates
+the actual car launch chain before opening AC: effective packed `data.acd` or unpacked `data/`, a
+readable root `lods.ini`, and every referenced non-empty KN5. Fatal content faults persist normal
+`report.json` evidence as `non_drive_preflight_failure`, with `launched=false`, `drive=null`, zero
+attempts, and both drive/sim-death denominator flags false.
+
+The review loop moved generic ACD/source logic into a lazy shared `CarDataSource`, aligned packed
+precedence with AC, made packed/unpacked member lookup consistently flat, preserved preset-only car
+identity, evidenced malformed preset encodings, and accepted inline comments on LOD `FILE=` values.
+Full parity finished at **2,980 passed, 113 skipped, 87.60% coverage**; Actions and resolve-gate were
+green and all GraphQL threads were resolved. Merged-main proof passed **222/222** focused tests;
+real `bmw_m3_gt2` preflight exited 0, while the damaged `ks_porsche_911_gt3_r_2016` exited 2 before
+launch with the explicit non-drive classification. Detail:
+[[issue-603-car-content-preflight-2026-07-15]].
+
+**Resume here:** #603 has no remaining product scope. The local Porsche installation is still
+physically damaged and must be restored through Steam verification or a Content Manager reinstall
+before it can be used for a drive; re-run `--preflight-only` afterward. Phase-B classification found
+no migration, environment, dependency, or workflow action. Tier-3 queries were unavailable again
+because AG_PC still routes to the retired consumer endpoint; this SAVE used the canonical Tier-2
+fallback tracked in [[tier3-consumer-repoint-drift-2026-07-15]].
 
 ## Delivered (2026-07-15) — #596 autonomous-drive reliability CLOSED (PRs #598/#600)
 

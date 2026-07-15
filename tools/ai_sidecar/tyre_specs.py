@@ -8,22 +8,9 @@ references, and the car-specific optimal core temperature baked into the thermal
 `PERFORMANCE_CURVE` — so downstream coaching can key off the *actual* compound the driver
 selected (``ac.getCar().compoundIndex`` / setup ``[TYRES] VALUE``) instead of a generic guess.
 
-On this rig every stock/Kunos car ships **only** ``data.acd`` (no unpacked ``data/`` folder), so
-this module must decrypt the packed+obfuscated ACD container itself. Pure stdlib, Windows-safe.
-
-ACD format (confirmed by decrypting the real ``ks_porsche_911_gt3_r_2016/data.acd`` — see the
-Part-B investigation note). Canonical reference: the ``bovis/acd_extractor`` Ruby implementation
-and aluigi's ZenHAX writeup (``zenhax.com/viewtopic.php?t=90``).
-
-* **Key** — derived from the CAR FOLDER NAME string via 8 small integer algorithms, then rendered
-  as the dash-joined decimal string ``"p1-p2-...-p8"``. The *string* is the key material, so its
-  length is variable (25 chars for the 911), and de-obfuscation indexes byte-by-byte into it.
-* **Container** — leading ``int32``: if it equals ``-1111`` a version ``int32`` follows, otherwise
-  it is already the first filename length. Then repeating records:
-  ``[name_len:uint32][name bytes][content_len:uint32][content]`` where content is stored as
-  ``content_len`` little-endian ``int32``s — only each int's low byte carries the obfuscated char.
-* **De-obfuscation** — ``char = (stored_low_byte - key_ord[i % len(key)]) mod 256`` (subtraction,
-  NOT XOR; empirically verified — XOR yields garbage).
+Stock/Kunos cars commonly ship only ``data.acd`` rather than an unpacked ``data/`` folder.
+The domain-neutral :mod:`tools.ac_content` module owns that packed-container format; this module
+only resolves tyre-specific members from the decoded archive.
 
 Everything is wrapped so a malformed / renamed / missing car degrades to ``None`` (or None-fields)
 and never raises — the sidecar must not crash on one bad car.
@@ -32,11 +19,11 @@ and never raises — the sidecar must not crash on one bad car.
 from __future__ import annotations
 
 import re
-import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-_ACD_DUMMY_LEADING = -1111
+from tools.ac_content import CarDataSource
+
 #: Compound index N maps to sections ``[FRONT_N]`` / ``[REAR_N]``; N==0 also matches bare
 #: ``[FRONT]`` / ``[REAR]`` (AC treats the unsuffixed section as compound 0). Thermal curve lives in
 #: the sibling ``[THERMAL_FRONT*]`` section.
@@ -61,150 +48,6 @@ class TyreSpec:
     dy_ref: float | None  # DY_REF (peak lateral mu)
     optimal_temp_c: float | None  # x at max y of the [THERMAL_*] PERFORMANCE_CURVE LUT
     version: int | None  # [HEADER] VERSION
-
-
-# --------------------------------------------------------------------------------------------------
-# ACD decryption (folder-name key + container unpack)
-# --------------------------------------------------------------------------------------------------
-
-
-def _acd_key(folder_name: str) -> str:
-    """Derive the ACD obfuscation key string from the car folder name.
-
-    Verbatim port of the 8-part integer algorithm from the canonical ``bovis/acd_extractor``
-    ``Cipher.get_key``. Returns the dash-joined decimal string used as key material.
-    """
-    o = [ord(c) for c in folder_name]
-    n = len(o)
-
-    # PART 1: sum of all ordinals
-    p1 = 0
-    for i in range(n):
-        p1 += o[i]
-    p1 &= 0xFF
-
-    # PART 2: alternating multiply / subtract over pairs
-    p2 = 0
-    i = 0
-    while i < n - 1:
-        p2 = p2 * o[i]
-        i += 1
-        p2 = p2 - o[i]
-        i += 1
-    p2 &= 0xFF
-
-    # PART 3: multiply / integer-divide / subtract with +0x1b offset (truncate-toward-zero divide)
-    p3 = 0
-    i = 1
-    while i < n - 3:
-        p3 = p3 * o[i]
-        i += 1
-        if p3 < 0:
-            p3 = -(abs(p3) // (o[i] + 0x1B))
-        else:
-            p3 = p3 // (o[i] + 0x1B)
-        i -= 2
-        p3 = p3 + (-(0x1B) - o[i])
-        i += 4
-    p3 &= 0xFF
-
-    # PART 4: 0x1683 minus ordinals from index 1
-    p4 = 0x1683
-    i = 1
-    while i < n:
-        p4 = p4 - o[i]
-        i += 1
-    p4 &= 0xFF
-
-    # PART 5: 0x42 seeded multiply/add chain with 0xf / 0x16 offsets, stride 4
-    p5 = 0x42
-    i = 1
-    while i < n - 4:
-        a = p5 * (o[i] + 0xF)
-        i -= 1
-        b = o[i]
-        i += 1
-        b = b + 0xF
-        b = b * a
-        b = b + 0x16
-        p5 = b
-        i += 4
-    p5 &= 0xFF
-
-    # PART 6: 0x65 minus every other ordinal
-    p6 = 0x65
-    i = 0
-    while i < n - 2:
-        p6 = p6 - o[i]
-        i += 2
-    p6 &= 0xFF
-
-    # PART 7: 0xab modulo every other ordinal
-    p7 = 0xAB
-    i = 0
-    while i < n - 2:
-        p7 = p7 % o[i]
-        i += 2
-    p7 &= 0xFF
-
-    # PART 8: 0xab alternating integer-divide / add
-    p8 = 0xAB
-    i = 0
-    while i < n - 1:
-        p8 = p8 // o[i]
-        i += 1
-        p8 = p8 + o[i]
-    p8 &= 0xFF
-
-    return f"{p1}-{p2}-{p3}-{p4}-{p5}-{p6}-{p7}-{p8}"
-
-
-def _acd_unpack(data: bytes, folder_name: str) -> dict[str, bytes]:
-    """De-obfuscate a raw ``data.acd`` blob into ``{filename: content_bytes}``.
-
-    Raises on truncation/format errors; callers wrap this and degrade to ``None``.
-    """
-    key = _acd_key(folder_name)
-    key_ord = [ord(c) for c in key]
-    klen = len(key_ord)
-    if klen == 0:  # empty folder name -> unusable key
-        raise ValueError("empty ACD key")
-
-    files: dict[str, bytes] = {}
-    pos = 0
-    total = len(data)
-
-    # Leading int: -1111 => a version int follows; otherwise it IS the first filename length.
-    (lead,) = struct.unpack_from("<l", data, pos)
-    if lead == _ACD_DUMMY_LEADING:
-        pos += 4  # consume the -1111 marker
-        pos += 4  # consume the version int (not needed for extraction)
-
-    while pos < total:
-        (name_len,) = struct.unpack_from("<I", data, pos)
-        pos += 4
-        # A bogus length (obfuscation drift / trailing padding) would overrun — bail cleanly.
-        if name_len == 0 or pos + name_len > total:
-            break
-        name = data[pos : pos + name_len].decode("utf-8", "replace")
-        pos += name_len
-
-        (content_len,) = struct.unpack_from("<I", data, pos)
-        pos += 4
-        content_span = content_len * 4
-        if pos + content_span > total:
-            break
-
-        out = bytearray(content_len)
-        base = pos
-        for j in range(content_len):
-            low = data[base + j * 4]  # low byte of each int32 carries the obfuscated char
-            out[j] = (low - key_ord[j % klen]) & 0xFF
-        pos += content_span
-
-        files[name] = bytes(out)
-
-    return files
 
 
 # --------------------------------------------------------------------------------------------------
@@ -233,8 +76,8 @@ def _decode_text(raw: bytes) -> str:
 def _load_archive(car_dir: Path) -> dict[str, str] | None:
     """Return ``{member_name: text}`` for the car, or ``None`` if no source is readable.
 
-    Prefers an unpacked ``data/`` folder (any car that has been extracted); otherwise decrypts
-    ``data.acd`` using the car FOLDER NAME as the key. Result cached per ``car_dir``.
+    Uses the same effective-source precedence as Assetto Corsa: packed ``data.acd`` when present,
+    otherwise a flat unpacked ``data/`` folder. Result cached per ``car_dir``.
     """
     cache_key = str(car_dir)
     if cache_key in _ARCHIVE_CACHE:
@@ -242,30 +85,24 @@ def _load_archive(car_dir: Path) -> dict[str, str] | None:
 
     archive: dict[str, str] | None = None
     try:
-        # Prefer an unpacked data/ folder. Read the small data files (tyres.ini + any .lut) up
-        # front, lowercasing member names so every downstream lookup is case-insensitive — AC mods
-        # ship TYRES.INI / Tyres.ini too, and a case-exact check misses them on a case-sensitive FS.
-        data_dir = car_dir / "data"
-        members: dict[str, str] = {}
-        if data_dir.is_dir():
-            for child in data_dir.iterdir():
-                if child.is_file() and child.suffix.lower() in (".ini", ".lut"):
-                    try:
-                        members[child.name.lower()] = _decode_text(child.read_bytes())
-                    except OSError:
-                        continue
-        if "tyres.ini" in members:
-            archive = members
-        else:
-            acd_path = car_dir / "data.acd"
-            if acd_path.is_file():
-                raw = acd_path.read_bytes()
-                unpacked = _acd_unpack(raw, car_dir.name)  # key derived from THIS folder's name
-                # Lowercase member names for the same case-insensitive lookups downstream.
-                lowered = {name.lower(): blob for name, blob in unpacked.items()}
-                if "tyres.ini" in lowered:
-                    archive = {name: _decode_text(blob) for name, blob in lowered.items()}
-    except (OSError, ValueError, struct.error, IndexError):
+        source = CarDataSource(car_dir)
+        tyres_raw = source.read_member("tyres.ini")
+        if tyres_raw is not None:
+            tyres_text = _decode_text(tyres_raw)
+            archive = {"tyres.ini": tyres_text}
+            # Load only LUTs explicitly referenced by tyres.ini. The accessor caches one packed
+            # decode but reads no unrelated unpacked files, keeping sidecar startup bounded.
+            for section in _parse_ini_sections(tyres_text).values():
+                curve = section.get("PERFORMANCE_CURVE", "").strip()
+                if not curve.lower().endswith(".lut"):
+                    continue
+                member = curve.replace("\\", "/").rsplit("/", 1)[-1]
+                if member.lower() in archive:
+                    continue
+                lut_raw = source.read_member(member)
+                if lut_raw is not None:
+                    archive[member.lower()] = _decode_text(lut_raw)
+    except (OSError, ValueError, IndexError):
         archive = None
 
     # Bounded insert: evict the oldest entry (dict preserves insertion order) when at capacity.
@@ -414,8 +251,8 @@ def _optimal_temp_from_curve(
 def read_tyre_specs(car_dir: str | Path, compound_index: int) -> TyreSpec | None:
     """Resolve ``tyres.ini`` for ``car_dir``; return the :class:`TyreSpec` for ``compound_index``.
 
-    Source preference: unpacked ``data/tyres.ini`` if present, else decrypt ``data.acd`` (folder
-    name is the key). Parses ``[FRONT_<N>]`` (bare ``[FRONT]`` for N==0), falling back to
+    Source preference matches AC: packed ``data.acd`` when present, otherwise unpacked
+    ``data/tyres.ini``. Parses ``[FRONT_<N>]`` (bare ``[FRONT]`` for N==0), falling back to
     ``[REAR_<N>]`` for any key the front section omits. Optimal core temp is the peak of the
     matching ``[THERMAL_FRONT_<N>]`` (or ``[THERMAL_REAR_<N>]``) ``PERFORMANCE_CURVE``.
 

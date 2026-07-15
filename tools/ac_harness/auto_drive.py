@@ -68,9 +68,10 @@ from collections.abc import Awaitable, Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Protocol
 
+from tools.ac_content import read_car_data_member
 from tools.ac_harness.sequence_probe import (
     Check,
     evaluate_sequence,
@@ -1554,6 +1555,100 @@ class PreflightIssue:
     severity: str = "error"
 
 
+def car_content_preflight(car_dir: Path) -> list[PreflightIssue]:
+    """Validate the selected car's read-only launch chain: data -> LOD config -> KN5s.
+
+    A car directory and its model files can survive a damaged Content Manager operation while
+    ``data.acd`` (or unpacked ``data/``) disappears.  AC then aborts before a drivable session, so
+    the harness must classify that as a non-drive content failure instead of paying launch timeouts
+    or contaminating drive/sim-death denominators (#603).
+    """
+    data_dir = car_dir / "data"
+    data_acd = car_dir / "data.acd"
+    if not data_dir.is_dir() and not data_acd.is_file():
+        return [
+            PreflightIssue(
+                "car_data",
+                f"car content is damaged: {car_dir} has neither data.acd nor an unpacked data/ "
+                "folder. Restore the car or verify its files in Steam/Content Manager before "
+                "running the harness.",
+            )
+        ]
+
+    lods_raw = read_car_data_member(car_dir, "lods.ini")
+    source = data_acd if data_acd.is_file() else data_dir
+    if not lods_raw:
+        return [
+            PreflightIssue(
+                "car_lods",
+                f"car content is damaged: {source} is unreadable or has no lods.ini. Restore "
+                "the car or verify its files in Steam/Content Manager before running the harness.",
+            )
+        ]
+
+    try:
+        try:
+            lods_text = lods_raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            lods_text = lods_raw.decode("cp1252")
+        parser = configparser.ConfigParser(
+            strict=False, interpolation=None, inline_comment_prefixes=(";", "#")
+        )
+        parser.read_string(lods_text)
+    except (UnicodeDecodeError, configparser.Error) as exc:
+        return [PreflightIssue("car_lods", f"car lods.ini is unreadable ({source}): {exc}")]
+
+    sections = [section for section in parser.sections() if re.fullmatch(r"LOD_\d+", section, re.I)]
+    if not sections:
+        return [
+            PreflightIssue(
+                "car_lods",
+                f"car lods.ini in {source} has no [LOD_n] entries; restore or verify the car.",
+            )
+        ]
+
+    invalid: list[str] = []
+    missing: list[str] = []
+    for section in sections:
+        raw_ref = parser.get(section, "FILE", fallback="").strip().strip('"')
+        normalized = raw_ref.replace("\\", "/")
+        ref = PurePosixPath(normalized)
+        if (
+            not normalized
+            or normalized.startswith("/")
+            or re.match(r"^[A-Za-z]:", normalized)
+            or ".." in ref.parts
+            or ref.suffix.lower() != ".kn5"
+        ):
+            invalid.append(f"{section}.FILE={raw_ref or '<missing>'}")
+            continue
+        candidate = car_dir.joinpath(*ref.parts)
+        try:
+            usable = candidate.is_file() and candidate.stat().st_size > 0
+        except OSError:
+            usable = False
+        if not usable:
+            missing.append(str(ref))
+
+    if invalid:
+        return [
+            PreflightIssue(
+                "car_lods",
+                "car lods.ini has invalid LOD model entries: " + ", ".join(invalid[:4]),
+            )
+        ]
+    if missing:
+        return [
+            PreflightIssue(
+                "car_lod_file",
+                "car content is damaged: lods.ini references missing/empty model file(s): "
+                + ", ".join(missing[:4])
+                + ". Restore or verify the car files before running the harness.",
+            )
+        ]
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Installed-app provenance (#575).
 #
@@ -1871,6 +1966,35 @@ def custom_ai_enabled(ac_root: Path, user_dir: Path) -> tuple[bool | None, str]:
     return None, "no [CUSTOM_AI] ENABLED key in " + " or ".join(str(c) for c in candidates)
 
 
+def _read_cm_preset_selection(path: str | Path) -> tuple[str | None, str | None]:
+    """Return ``(car_id, track_id)`` from a readable Quick Drive preset.
+
+    Parsing remains side-effect free so callers can use the effective selection for evidence
+    metadata without mutating the explicit CLI configuration.  Read/JSON errors intentionally
+    propagate: :func:`preflight` turns them into actionable rows, while early evidence naming
+    can safely fall back to generic tags.
+    """
+    preset = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if not isinstance(preset, dict):
+        raise TypeError("Quick Drive preset root must be a JSON object")
+    car_id = str(preset.get("CarId") or "").strip() or None
+    track_id = str(preset.get("TrackId") or "").strip() or None
+    return car_id, track_id
+
+
+def _effective_car_id(config: AutoDriveConfig) -> str | None:
+    """Resolve the selected car for read-only evidence attribution."""
+    if config.car_id:
+        return config.car_id
+    if config.cm_preset is None or not Path(config.cm_preset).is_file():
+        return None
+    try:
+        preset_car, _preset_track = _read_cm_preset_selection(config.cm_preset)
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return None
+    return preset_car
+
+
 def preflight(
     config: AutoDriveConfig, *, app_provenance: AppInstallProvenance | None = None
 ) -> list[PreflightIssue]:
@@ -1886,6 +2010,7 @@ def preflight(
     """
     issues: list[PreflightIssue] = []
     user_dir = resolve_ac_user_dir(config.ac_user_dir)
+    selected_car_id = _effective_car_id(config)
 
     if not config.ac_root.is_dir():
         issues.append(
@@ -1903,13 +2028,6 @@ def preflight(
     else:
         issues.append(PreflightIssue("track", "no track id (pass --track)"))
 
-    if config.car_id:
-        car_dir = config.ac_root / "content" / "cars" / config.car_id
-        if not car_dir.is_dir():
-            issues.append(
-                PreflightIssue("car", f"car content not installed: {car_dir} (check --car id)")
-            )
-
     if config.cm_preset is not None and not Path(config.cm_preset).is_file():
         # A missing --cm-preset must fail here, not later as an uncaught FileNotFoundError from
         # the CM launch — that would bypass the actionable-preflight/evidence path (#460 review).
@@ -1921,14 +2039,12 @@ def preflight(
         )
     elif config.cm_preset is not None and Path(config.cm_preset).is_file():
         try:
-            preset = json.loads(Path(config.cm_preset).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            preset_car, preset_track = _read_cm_preset_selection(config.cm_preset)
+        except (OSError, UnicodeError, ValueError, TypeError) as exc:
             issues.append(
                 PreflightIssue("preset", f"unreadable Quick Drive preset {config.cm_preset}: {exc}")
             )
         else:
-            preset_track = str(preset.get("TrackId") or "")
-            preset_car = str(preset.get("CarId") or "")
             # Compare the FULL TrackId incl. layout: on a multi-layout track a preset launching a
             # different layout than --track-layout would drive the wrong fast_lane.ai (#460 review).
             want_track = config.track_id.lower()
@@ -1955,6 +2071,27 @@ def preflight(
                         f"--car {config.car_id!r} but preset launches CarId {preset_car!r}",
                     )
                 )
+
+    # Validate the actual selected car whether it came from --car or a hand-authored preset.
+    # Preset-only runs are a supported launch path; letting them bypass content validation would
+    # preserve the same full-timeout failure under a different CLI spelling (#603).
+    if selected_car_id:
+        try:
+            validate_ac_id("car", selected_car_id)
+        except ValueError as exc:
+            issues.append(PreflightIssue("car", str(exc)))
+        else:
+            car_dir = config.ac_root / "content" / "cars" / selected_car_id
+            if not car_dir.is_dir():
+                issues.append(
+                    PreflightIssue("car", f"car content not installed: {car_dir} (check car id)")
+                )
+            else:
+                issues.extend(car_content_preflight(car_dir))
+    elif config.cm_preset is not None and Path(config.cm_preset).is_file():
+        issues.append(
+            PreflightIssue("car", "Quick Drive preset has no CarId and --car was not provided")
+        )
 
     provenance = (
         app_install_provenance(config.ac_root) if app_provenance is None else app_provenance
@@ -3824,7 +3961,15 @@ def _main_impl(
                 "the uncertainty-safe QSS envelope (bounded, falsification-gated self-play step)"
             )
 
-    car_tag = config.car_id or "car"
+    effective_car_id = _effective_car_id(config)
+    car_tag = "car"
+    if effective_car_id:
+        try:
+            validate_ac_id("car", effective_car_id)
+        except ValueError:
+            pass  # preflight will report the invalid preset id; never use it as a path segment
+        else:
+            car_tag = effective_car_id
     evidence_dir = args.evidence_dir or (
         Path(".scratch") / "harness-evidence" / f"{_utc_stamp()}_{car_tag}_{config.track_id}"
     )
@@ -3864,6 +4009,45 @@ def _main_impl(
         print("auto-drive: PREFLIGHT FAILED")
         for issue in fatal:
             print(f"  [{issue.check}] {issue.message}")
+        # A launch never started, so this is explicitly a non-drive outcome. Persist that
+        # distinction in the normal evidence surface: downstream reliability summaries can skip
+        # it without guessing from console text, and it can never inflate drive or sim-death
+        # denominators (#603).
+        error = "preflight failed: " + " | ".join(
+            f"[{issue.check}] {issue.message}" for issue in fatal
+        )
+        preflight_report = AutoDriveReport(
+            ok=False,
+            stage="preflight",
+            launched=False,
+            hijacked=False,
+            drive=None,
+            error=error,
+            car_id=effective_car_id,
+            track_id=config.track_id,
+            setup_requested=config.setup,
+        )
+        report_path = write_evidence(
+            evidence_dir,
+            preflight_report,
+            extras={
+                "run": {
+                    "argv": list(argv) if argv is not None else None,
+                    "cm_preset": str(config.cm_preset),
+                    "driver": config.driver,
+                    "app_install": app_provenance.to_dict(),
+                },
+                "preflight": {
+                    "status": "failed",
+                    "classification": "non_drive_preflight_failure",
+                    "counts_as_drive_run": False,
+                    "counts_as_sim_death": False,
+                    "issues": [asdict(issue) for issue in fatal],
+                },
+            },
+        )
+        print(preflight_report.summary())
+        print(f"  evidence: {report_path}")
         return 2
     print("auto-drive: preflight ok")
     if args.preflight_only:

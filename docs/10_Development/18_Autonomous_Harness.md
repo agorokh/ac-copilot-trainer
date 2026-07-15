@@ -15,7 +15,7 @@ one command.
 
 ```bash
 # Prove the autonomous DRIVE (live-verified: Spa flat-out, gears 1→6, reference coaching):
-python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track spa \
+python -m tools.ac_harness.auto_drive --car bmw_m3_gt2 --track magione \
     --driver ggv --wait-lap
 
 # Prove a car SETUP applies + is verified, then complete an autonomous lap:
@@ -27,7 +27,10 @@ The full loop each command owns:
 
 1. **Preflight** — content installed, CSP `[CUSTOM_AI] ENABLED=1`, Content Manager present,
    setup resolvable, preset↔CLI combo consistency. Fails fast with an actionable message
-   (`--preflight-only` runs just this gate).
+   (`--preflight-only` runs just this gate). Selected-car validation follows AC's complete
+   read-only launch chain: a readable packed `data.acd` or unpacked `data/` source must expose
+   `lods.ini`, and every `[LOD_n] FILE=` must name a present, non-empty `.kn5`. A content failure
+   stops before launch.
 2. **Sidecar** — reuses a listening sidecar (e.g. the Game Point launcher's supervised child on
    `:8765`); auto-starts a loopback `tools.ai_sidecar` otherwise (`--no-sidecar-autostart` to
    forbid; `--keep-sidecar` to leave it running).
@@ -65,7 +68,7 @@ Default bundle: `.scratch/harness-evidence/<utc>_<car>_<track>/` (override `--ev
 
 | Artifact | Content |
 |---|---|
-| `report.json` | Final `AutoDriveReport` plus full `attempts` history (a recovered sim death remains measurable), combo/setup ack, drive stats incl. `recoveries`/`spawn_teleport` and bounded `control_trace`, WS frame counts, preset/sidecar provenance, HUD verdict, and lap-archive paths |
+| `report.json` | Final `AutoDriveReport` plus full `attempts` history (a recovered sim death remains measurable), combo/setup ack, drive stats incl. `recoveries`/`spawn_teleport` and bounded `control_trace`, WS frame counts, preset/sidecar provenance, HUD verdict, and lap-archive paths. A fatal preflight also writes this artifact with `stage=preflight`, `launched=false`, no drive/attempt, and `preflight.classification=non_drive_preflight_failure`, explicitly excluded from drive and sim-death denominators. |
 | `generated.cmpreset` | The exact preset launched (when generated) |
 | `hud.png` | Post-run HUD capture (`--hud-region full|left|coaching`) with liveness verdict |
 | `lap_archives` (in report.json) | Paths of `journal/laps/lap_*.json` written during the run — full telemetry traces for session review / setup comparison |
@@ -225,6 +228,7 @@ launch, probe outcome, and re-bake stats so a recycle's timing is visible.
 
 | Symptom | Cause / fix |
 |---|---|
+| Preflight `car_data` / `car_lods` / `car_lod_file` failure | The selected car is locally damaged even if its folder and some `.kn5` models remain. For a stock/Kunos car, use Steam **Assetto Corsa > Properties > Installed Files > Verify integrity**; for a mod, reinstall its original package through Content Manager. Do not borrow another car's `data.acd` (the archive key depends on the folder name). Re-run `python -m tools.ac_harness.auto_drive --car <id> --track <id> --preflight-only`; it must report `preflight ok` before a matrix drive. |
 | Preflight `custom_ai` failure | Set `[CUSTOM_AI] ENABLED=1` in `<AC root>/extension/config/new_behaviour.ini` (user `cfg/extension/new_behaviour.ini` overrides when it carries the key) |
 | `stage=setup`, `applied=False`, fuel mismatch | The launch bake didn't take — check `race.ini [CAR_0] _EXT_SETUP_FILENAME` points at the setup and the CM launch reached LIVE; the setup's `[FUEL] VALUE` is the expected number |
 | `--setup` run: setup `applied=True` but `stage=hijack` | The car stalled at AC's non-hijackable "0 seconds" overlay through every launch cycle (the setup re-bake breaks CM's immediate-start, #466). The setup is applied/verified. The harness fast-fails each stalled cycle and **recycles a fresh launch**; if it still exhausts `max_launches`, reboot the rig (degraded from many hard `acs.exe` kills) and rerun. (A keypress nudge to clear the overlay was tried in-sim and verified NOT to dismiss it, #466 — the relaunch is the only recovery.) |

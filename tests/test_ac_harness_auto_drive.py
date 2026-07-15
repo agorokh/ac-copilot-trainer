@@ -8,6 +8,7 @@ reporting — is verified with no Assetto Corsa, no Windows, and no real sidecar
 from __future__ import annotations
 
 import asyncio
+import json
 import pathlib
 import shutil
 import threading
@@ -26,6 +27,7 @@ from tools.ac_harness.auto_drive import (
     _build_arg_parser,
     _build_driver,
     _config_from_args,
+    _main,
     _wait_live,
     app_install_provenance,
     app_provenance_recheck,
@@ -34,6 +36,7 @@ from tools.ac_harness.auto_drive import (
     bake_setup_into_race_ini,
     build_practice_preset,
     candidate_journal_laps_dirs,
+    car_content_preflight,
     collect_lap_archives,
     compose_failure_reason,
     custom_ai_enabled,
@@ -2254,7 +2257,12 @@ def _fake_rig(tmp_path, *, custom_ai="ENABLED=1\n"):
     ac_root = tmp_path / "ac"
     (ac_root / "content" / "tracks" / "spa" / "ai").mkdir(parents=True)
     (ac_root / "content" / "tracks" / "spa" / "ai" / "fast_lane.ai").write_bytes(b"x")
-    (ac_root / "content" / "cars" / "ks_porsche_911_gt3_r_2016").mkdir(parents=True)
+    car_dir = ac_root / "content" / "cars" / "ks_porsche_911_gt3_r_2016"
+    (car_dir / "data").mkdir(parents=True)
+    (car_dir / "data" / "lods.ini").write_text(
+        "[LOD_0]\nFILE=ks_porsche_911_gt3_r_2016.kn5\nIN=0\nOUT=2000\n"
+    )
+    (car_dir / "ks_porsche_911_gt3_r_2016.kn5").write_bytes(b"healthy model")
     (ac_root / "extension" / "config").mkdir(parents=True)
     (ac_root / "extension" / "config" / "new_behaviour.ini").write_text(
         f"[CUSTOM_AI]\n; hidden\n{custom_ai}"
@@ -2283,6 +2291,179 @@ def test_preflight_passes_on_complete_rig(tmp_path):
         cm_preset=None,
     )
     assert preflight(cfg, app_provenance=_match_provenance()) == []
+
+
+def test_car_content_preflight_classifies_missing_data_source(tmp_path):
+    ac_root, _user, _cm = _fake_rig(tmp_path)
+    car_dir = ac_root / "content" / "cars" / "ks_porsche_911_gt3_r_2016"
+    shutil.rmtree(car_dir / "data")
+
+    issues = car_content_preflight(car_dir)
+
+    assert [issue.check for issue in issues] == ["car_data"]
+    assert "neither data.acd nor an unpacked data/" in issues[0].message
+    assert "Restore" in issues[0].message
+
+
+@pytest.mark.parametrize(
+    ("lods_text", "expected_check"),
+    [
+        ("[HEADER]\nVERSION=1\n", "car_lods"),
+        ("[LOD_0]\nFILE=missing.kn5\nIN=0\nOUT=2000\n", "car_lod_file"),
+        ("[LOD_0]\nFILE=../outside.kn5\nIN=0\nOUT=2000\n", "car_lods"),
+    ],
+)
+def test_car_content_preflight_rejects_unusable_lod_configuration(
+    tmp_path, lods_text, expected_check
+):
+    ac_root, _user, _cm = _fake_rig(tmp_path)
+    car_dir = ac_root / "content" / "cars" / "ks_porsche_911_gt3_r_2016"
+    (car_dir / "data" / "lods.ini").write_text(lods_text)
+
+    issues = car_content_preflight(car_dir)
+
+    assert [issue.check for issue in issues] == [expected_check]
+
+
+def test_car_content_preflight_accepts_inline_comment_on_lod_file(tmp_path):
+    ac_root, _user, _cm = _fake_rig(tmp_path)
+    car_dir = ac_root / "content" / "cars" / "ks_porsche_911_gt3_r_2016"
+    (car_dir / "data" / "lods.ini").write_text(
+        "[LOD_0]\nFILE=ks_porsche_911_gt3_r_2016.kn5 ; main model\nIN=0\nOUT=2000\n"
+    )
+
+    assert car_content_preflight(car_dir) == []
+
+
+def test_car_content_preflight_reports_effective_packed_source(tmp_path):
+    ac_root, _user, _cm = _fake_rig(tmp_path)
+    car_dir = ac_root / "content" / "cars" / "ks_porsche_911_gt3_r_2016"
+    (car_dir / "data.acd").write_bytes(b"malformed")
+
+    issues = car_content_preflight(car_dir)
+
+    assert [issue.check for issue in issues] == ["car_lods"]
+    assert str(car_dir / "data.acd") in issues[0].message
+
+
+def test_cli_persists_non_drive_preflight_failure_without_launch(tmp_path, monkeypatch):
+    ac_root, user, cm = _fake_rig(tmp_path)
+    car_id = "ks_porsche_911_gt3_r_2016"
+    shutil.rmtree(ac_root / "content" / "cars" / car_id / "data")
+    evidence = tmp_path / "evidence"
+    monkeypatch.setattr(
+        "tools.ac_harness.auto_drive.rig_launch",
+        lambda _config: pytest.fail("damaged content must fail before launch"),
+    )
+
+    rc = _main(
+        [
+            "--car",
+            car_id,
+            "--track",
+            "spa",
+            "--ac-root",
+            str(ac_root),
+            "--ac-user-dir",
+            str(user),
+            "--cm-exe",
+            str(cm),
+            "--evidence-dir",
+            str(evidence),
+            "--preflight-only",
+        ]
+    )
+
+    assert rc == 2
+    payload = json.loads((evidence / "report.json").read_text(encoding="utf-8"))
+    assert payload["report"]["stage"] == "preflight"
+    assert payload["report"]["launched"] is False
+    assert payload["report"]["drive"] is None
+    assert payload["report"]["attempts"] == []
+    assert "[car_data]" in payload["report"]["reason"]
+    assert payload["preflight"] == {
+        "status": "failed",
+        "classification": "non_drive_preflight_failure",
+        "counts_as_drive_run": False,
+        "counts_as_sim_death": False,
+        "issues": [
+            {
+                "check": "car_data",
+                "message": payload["preflight"]["issues"][0]["message"],
+                "severity": "error",
+            }
+        ],
+    }
+
+
+def test_preset_only_preflight_failure_keeps_car_identity_in_default_evidence(
+    tmp_path, monkeypatch
+):
+    ac_root, user, cm = _fake_rig(tmp_path)
+    car_id = "ks_porsche_911_gt3_r_2016"
+    shutil.rmtree(ac_root / "content" / "cars" / car_id / "data")
+    preset = tmp_path / "damaged.cmpreset"
+    preset.write_text(json.dumps({"CarId": car_id, "TrackId": "spa"}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "tools.ac_harness.auto_drive.rig_launch",
+        lambda _config: pytest.fail("damaged preset car must fail before launch"),
+    )
+
+    rc = _main(
+        [
+            "--cm-preset",
+            str(preset),
+            "--track",
+            "spa",
+            "--ac-root",
+            str(ac_root),
+            "--ac-user-dir",
+            str(user),
+            "--cm-exe",
+            str(cm),
+            "--preflight-only",
+        ]
+    )
+
+    assert rc == 2
+    reports = list((tmp_path / ".scratch" / "harness-evidence").glob("*/report.json"))
+    assert len(reports) == 1
+    assert car_id in reports[0].parent.name
+    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    assert payload["report"]["car_id"] == car_id
+    assert payload["preflight"]["classification"] == "non_drive_preflight_failure"
+
+
+def test_undecodable_preset_is_evidenced_instead_of_crashing(tmp_path, monkeypatch):
+    ac_root, user, cm = _fake_rig(tmp_path)
+    preset = tmp_path / "invalid-encoding.cmpreset"
+    preset.write_bytes(b'{"CarId":"broken-\xff"}')
+    monkeypatch.chdir(tmp_path)
+
+    rc = _main(
+        [
+            "--cm-preset",
+            str(preset),
+            "--track",
+            "spa",
+            "--ac-root",
+            str(ac_root),
+            "--ac-user-dir",
+            str(user),
+            "--cm-exe",
+            str(cm),
+            "--preflight-only",
+        ]
+    )
+
+    assert rc == 2
+    reports = list((tmp_path / ".scratch" / "harness-evidence").glob("*/report.json"))
+    assert len(reports) == 1
+    assert "_car_spa" in reports[0].parent.name
+    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    assert payload["report"]["car_id"] is None
+    assert any(issue["check"] == "preset" for issue in payload["preflight"]["issues"])
 
 
 def test_preflight_app_version_drift_is_a_warning_not_an_error(tmp_path):
@@ -2583,6 +2764,25 @@ def test_preflight_detects_preset_combo_mismatch(tmp_path):
     checks = {i.check for i in preflight(cfg)}
     assert "preset_track_mismatch" in checks
     assert "preset_car_mismatch" in checks
+
+
+def test_preflight_validates_car_selected_only_by_hand_authored_preset(tmp_path):
+    ac_root, user, cm = _fake_rig(tmp_path)
+    preset = tmp_path / "missing-car.cmpreset"
+    preset.write_text(json.dumps({"CarId": "missing_mod", "TrackId": "spa"}))
+    cfg = _cfg(
+        ac_root=ac_root,
+        ac_user_dir=user,
+        cm_exe=cm,
+        track_id="spa",
+        car_id=None,
+        cm_preset=preset,
+    )
+
+    issues = preflight(cfg, app_provenance=_match_provenance())
+
+    assert [issue.check for issue in issues] == ["car"]
+    assert "missing_mod" in issues[0].message
 
 
 def test_preflight_flags_missing_cm_preset(tmp_path):
