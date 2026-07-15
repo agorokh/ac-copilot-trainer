@@ -105,7 +105,7 @@ def test_chirp_uses_both_front_channels_for_compact_fixed_output() -> None:
 
 
 def test_play_chirp_writes_every_selected_output_channel(monkeypatch) -> None:
-    import sounddevice as sd
+    import sys
 
     written: dict[str, np.ndarray] = {}
 
@@ -137,9 +137,9 @@ def test_play_chirp_writes_every_selected_output_channel(monkeypatch) -> None:
         def __exit__(self, *args) -> None:  # noqa: ANN002
             return None
 
+    fake_sd = SimpleNamespace(CallbackStop=CallbackStop, OutputStream=FakeOutputStream)
     monkeypatch.setattr(al, "_resolve_chirp_output", lambda *args, **kwargs: (0, 4, (0, 1)))
-    monkeypatch.setattr(sd, "CallbackStop", CallbackStop)
-    monkeypatch.setattr(sd, "OutputStream", FakeOutputStream)
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
 
     al.play_chirp("compact", device=None, host_api=None)
 
