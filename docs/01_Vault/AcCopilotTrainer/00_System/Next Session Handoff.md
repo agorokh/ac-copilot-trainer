@@ -204,8 +204,11 @@ computes burn client-side), and Parts E–I.
   The **321 lap archives** there are a cheap, decisive ground-truth source needing **no AC launch** —
   they settled the wear scale. Use `auto_drive.resolve_ac_user_dir()`; guessing `Documents/…` finds
   nothing.
-- **`acs.exe` died in 2 of 5 runs** at ~20 m with identical code; immediate retries drove clean. Sim
-  death is a **flake** — retry before suspecting the diff.
+- **Harness drive reliability is now tracked as [#596](https://github.com/agorokh/ac-copilot-trainer/issues/596)**
+  — only **2 of 6** runs passed clean this session: `acs.exe` death 2/6 (identical code; immediate retry
+  clean both times — **retry before suspecting the diff**), a pit-start stall on `bmw_m3_gt2`
+  (`recovery cap (6) exceeded at 456m` — a repro of the long-documented ~450-580 m flake, now on a
+  third car), and one run that drove 2 laps yet reported `ok=False` with an **empty `reason`**.
 - Phase 1's `.scratch/dash_feeder.py` (Phase-1 node called it *"reusable for Part F"*) **is gone** —
   gitignored `.scratch/`. Part F must rebuild it; promote it out of `.scratch/` next time.
 - **`post_merge_sync.sh` requires HEAD=main** and `main` was checked out in another session's
