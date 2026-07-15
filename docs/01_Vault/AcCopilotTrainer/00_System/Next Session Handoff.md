@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T00:45:00Z
+last_updated: 2026-07-15T02:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-570-route-registry-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-582-l3-corner-refinement-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-577-alien-selfplay-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-572-alien-pipeline-2026-07-14.md
@@ -2189,6 +2190,45 @@ tap spike; **never** automate the user's plaintext Cognito token. No runtime cou
 [PR #334](https://github.com/agorokh/ac-copilot-trainer/pull/334) (implements
 [#333](https://github.com/agorokh/ac-copilot-trainer/issues/333)) —
 `tools/ai_sidecar/coaching_oracle.py` + `tt_overlay_ocr.ps1` + tests; bot review resolved.
+
+---
+
+## Resume here (2026-07-15 — #570 sidecar route registry MERGED + live-proven on merged main)
+
+**This iteration's merge:** **[#570](https://github.com/agorokh/ac-copilot-trainer/issues/570)
+CLOSED / PR [#585](https://github.com/agorokh/ac-copilot-trainer/pull/585) MERGED** `2026-07-15T02:33:20Z`
+as squash [`2dbf7d8`](https://github.com/agorokh/ac-copilot-trainer/commit/2dbf7d8145dbbbb0accedcbe5a5b3c48de54a4b9).
+The sidecar's served-endpoint surface is now ONE structure: `server._ROUTES` (frozen `_Route`
+records) drives **both** handler dispatch and the `/health` advertisement, with
+`SERVED_ENDPOINTS` derived from it. **No `advertise=False` opt-out exists** — a route cannot be
+served without appearing in `/health`, which is what #567/#568 stale-build detection reads.
+
+**The issue undersold the gap.** It called this "nice-to-have — the drift guard already prevents
+the silent-omission failure mode." The guard only enforces **advertised → routed**; nothing
+enforced the reverse. And the parallel structure had **already drifted on main**: `/healthz`,
+`/voice/clips/`, `/voice/dispatches`, `/voice/echoes` were routed but unadvertised. Advertised
+set 6 → 9 (safe — no consumer does exact-set equality; `supervisor.probe_tablet` probes reality
+with a real `GET /tablet/dash`).
+
+**Reviewer caught the recursive version of the same bug.** `ws-ops-cursor-reviewer` (Gemini 3.1
+Pro) MEDIUM on `50eb378`: prefix handlers hardcoded their own route string
+(`path[len("/dash/fonts/"):]`) — parallel structure *reintroduced one layer down*. Fixed in
+`12f730b` (router pre-strips, passes `tail`). **Durable lesson: when a registry owns a string,
+nothing downstream may restate it.**
+
+**Verified on the MERGED artifact** (not the branch): sidecar booted from `origin/main` reported
+`build_commit: 2dbf7d8` and advertised all 9 routes; the live `/health` set reconciles against
+the `_ROUTES` source (`match: True`); real font `/dash/fonts/Saira-Bold.ttf` → 200/82956 B;
+`/healthz` → 200 but unadvertised; `/voice/typo` + `/unrouted` → 426. `make ci-fast` OK
+(2912 passed). Detail: [[issue-570-route-registry-2026-07-15]].
+
+**No follow-ups filed** — reviewer findings were fixed under the parent PR (they bore on this
+outcome); no separable scope surfaced.
+
+**Note for the next session:** local `main` in the primary checkout is pinned by another worktree
+(`~/.codex/worktrees/81f5/ac-copilot-trainer`), so `git pull --ff-only` on `main` aborts there —
+this is the known cross-worktree ownership friction ([[issue-555-cross-worktree-rig-ownership-2026-07-13]]).
+`origin/main` is correct at `2dbf7d8`; verification was done against `origin/main` directly.
 
 ---
 
