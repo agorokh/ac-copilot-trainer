@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-14T22:22:12Z
+last_updated: 2026-07-15T00:45:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-582-l3-corner-refinement-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-577-alien-selfplay-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-572-alien-pipeline-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-543-uncertainty-aware-plant-id-2026-07-13.md
@@ -88,6 +89,35 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-07-15) — #582 L3 per-corner refinement (PR #583 MERGED `b2ef740`)
+
+PR [#583](https://github.com/agorokh/ac-copilot-trainer/pull/583) for
+[#582](https://github.com/agorokh/ac-copilot-trainer/issues/582) — the #577 item-3 follow-up this
+handoff prescribed — squash-merged as
+[`b2ef740`](https://github.com/agorokh/ac-copilot-trainer/commit/b2ef740) at 2026-07-15T00:07:50Z;
+**#582 CLOSED**. EPIC #529 Layer 3 now exists: `corner_refine.py` relaxes measured low-variance
+grip bins from the 1.96-z LCB toward the posterior mean (hard z=1.0 stability floor), re-solves
+each corner interior between QSS-pinned entry/exit speeds, and reverts per corner with a named
+reason when evidence is thin. `--l3` on auto_drive (opt-in); default-on in auto_alien (`--no-l3`).
+
+**Verification (observed):** 4 review rounds (Codex ×5, Qodo ×3 — incl. the `run.alien_line`
+report-shape bug and ggv_scale-aware driven utilisation) all fixed forward; final Qodo Bugs (0),
+0 unresolved threads, resolve-gate clean, merge CI green; `post_merge_classify --pr 583` no flags.
+**Live rig proof on merged main**: `auto_alien … --laps 3 --iterations 2` → `auto-alien: OK`,
+monotonic 107.005 → 101.651 → **96.621 s**, all stages PASS/VALID; L3 honestly reverted all 7
+Magione corners (`no measured low-variance lateral bin in 51–114 km/h`), the iter-2 refit raised
+1 lateral bin → provenance-gated line rebuild fired live; run evidence carries
+`driven_max_ay_utilisation_vs_barrier` (0.9025 @0.95 / 1.0 @1.0). Rig left clean (acs + CM
+stopped). Detail: [[issue-582-l3-corner-refinement-2026-07-14]].
+
+**Resume:** L3's live gain is 0 until corner-speed lateral bins turn `measured` low-variance —
+the self-play ladder is the mechanism (longer merged-main ladder `--iterations 6 --max-scale 1.15`
+remains the next useful experiment; watch the `l3` per-stage summaries flip corners to `refined`).
+**Housekeeping:** local `main` could not ff (branch checked out in the Codex worktree
+`C:/Users/arsen/.codex/worktrees/81f5/ac-copilot-trainer`); `origin/main` (`b2ef740`) is
+authoritative. COM6 is held by another process on the rig — the sidecar's serial retry floods
+stdout every 2 s on long runs (see ops notes in the #582 node).
+
 ## Delivered (2026-07-14) — #577 flying-lap self-play (PR #579 MERGED `5b8fe0a`)
 
 PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) for
@@ -109,10 +139,11 @@ and resolve-gate was clean after the final cooldown. After merge, main CI run
 `make ci-fast`; governance-conformance also passed. `post_merge_classify.py --pr 579` reported no
 flags: no migration, environment, dependency, workflow, or other operator action is required.
 
-**Resume / tracking gap:** issue-body item 3—corridor-constrained L3 per-corner refinement—did
-**not** ship, even though GitHub auto-closed #577 with the PR. Before taking up L3, explicitly reopen
-#577 or create a non-overlapping follow-up issue. A longer merged-main ladder
-(`--iterations 6 --max-scale 1.15`) remains a useful experiment, not a closeout requirement.
+**Resume / tracking gap (RESOLVED 2026-07-15):** issue-body item 3 — corridor-constrained L3
+per-corner refinement — shipped as follow-up
+[#582](https://github.com/agorokh/ac-copilot-trainer/issues/582) / PR #583 (`b2ef740`); see the
+Delivered section above. The longer merged-main ladder (`--iterations 6 --max-scale 1.15`)
+remains a useful experiment, not a closeout requirement.
 
 ## Live proof context (2026-07-14 evening) — #577 self-play
 

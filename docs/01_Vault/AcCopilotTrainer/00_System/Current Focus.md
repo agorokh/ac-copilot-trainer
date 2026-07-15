@@ -2,9 +2,10 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-14T22:22:12Z
+last_updated: 2026-07-15T00:45:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/03_Investigations/issue-582-l3-corner-refinement-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-577-alien-selfplay-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-572-alien-pipeline-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-543-uncertainty-aware-plant-id-2026-07-13.md
@@ -32,7 +33,18 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Delivered (2026-07-14, latest):** [#577](https://github.com/agorokh/ac-copilot-trainer/issues/577)
+**Delivered (2026-07-15, latest):** [#582](https://github.com/agorokh/ac-copilot-trainer/issues/582)
+**CLOSED** by PR [#583](https://github.com/agorokh/ac-copilot-trainer/pull/583)
+([`b2ef740`](https://github.com/agorokh/ac-copilot-trainer/commit/b2ef740)) — **EPIC #529 Layer 3**
+corridor-constrained per-corner refinement (the #577 item-3 follow-up). Evidence-gated relaxation
+of measured low-variance grip bins toward the posterior mean under a hard z=1.0 stability floor;
+QSS-pinned interior re-solve; named per-corner reverts; same artifact/provenance/verify gates.
+Live merged-main proof: `auto-alien: OK`, 107.0 → 101.7 → **96.621 s**, all stages VALID; all 7
+Magione corners honestly reverted (no measured corner-speed lateral bins yet) — gain unlocks as
+the self-play ladder flips those bins to measured. Detail:
+[[issue-582-l3-corner-refinement-2026-07-14]].
+
+**Prior (2026-07-14):** [#577](https://github.com/agorokh/ac-copilot-trainer/issues/577)
 **CLOSED** by PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579)
 ([`5b8fe0a`](https://github.com/agorokh/ac-copilot-trainer/commit/5b8fe0a51f6df3dc3ecaef1a39d4a8138de67ee9)) — **EPIC #529 P3** flying-lap windows plus
 progressive-envelope self-play. Direct and composed `--laps N` runs share a bounded multi-lap
