@@ -15,6 +15,7 @@ import pytest
 from tools.ai_sidecar.tyre_specs import (
     TyreSpec,
     _acd_key,
+    read_car_data_member,
     read_tyre_specs,
 )
 
@@ -122,6 +123,7 @@ def synth_car(tmp_path: Path) -> Path:
     acd = _build_acd(
         folder,
         {
+            "lods.ini": "[LOD_0]\nFILE=synth_test_car.kn5\nIN=0\nOUT=2000\n",
             "tyres.ini": _SYNTH_TYRES_INI,
             "tcurve_r888.lut": _SYNTH_R888_LUT,
             "tcurve_slick.lut": _SYNTH_SLICK_LUT,
@@ -153,6 +155,18 @@ def test_acd_roundtrip_compound0(synth_car: Path) -> None:
         dy_ref=1.42,
         optimal_temp_c=85.0,  # peak of the 3-point PERFORMANCE_CURVE
         version=7,
+    )
+
+
+def test_read_car_data_member_supports_packed_and_unpacked_sources(synth_car: Path) -> None:
+    packed = read_car_data_member(synth_car, "LODS.INI")
+    assert packed is not None and b"FILE=synth_test_car.kn5" in packed
+
+    unpacked = synth_car.parent / "unpacked_car"
+    (unpacked / "data").mkdir(parents=True)
+    (unpacked / "data" / "LoDs.InI").write_bytes(b"[LOD_0]\nFILE=unpacked_car.kn5\n")
+    assert (
+        read_car_data_member(unpacked, "lods.ini") == (unpacked / "data" / "LoDs.InI").read_bytes()
     )
 
 

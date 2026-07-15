@@ -230,6 +230,41 @@ def _decode_text(raw: bytes) -> str:
     return raw.decode("utf-8", "replace")
 
 
+def read_car_data_member(car_dir: str | Path, member_name: str) -> bytes | None:
+    """Read one file from a car's effective ``data/`` or packed ``data.acd`` source.
+
+    Assetto Corsa content can be installed in either form.  Keep the packed-container knowledge
+    here, beside :func:`_acd_unpack`, so callers such as the autonomous-harness preflight do not
+    couple themselves to a private decoder or reimplement the ACD format.  The lookup is
+    case-insensitive (matching AC on Windows), read-only, and returns ``None`` for a missing or
+    malformed source/member.
+    """
+    try:
+        path = Path(car_dir)
+        normalized = member_name.replace("\\", "/")
+        if not normalized or "/" in normalized or normalized in (".", ".."):
+            return None
+        wanted = normalized.lower()
+
+        data_dir = path / "data"
+        if data_dir.is_dir():
+            for child in data_dir.iterdir():
+                if child.is_file() and child.name.lower() == wanted:
+                    return child.read_bytes()
+            return None
+
+        acd_path = path / "data.acd"
+        if not acd_path.is_file():
+            return None
+        unpacked = _acd_unpack(acd_path.read_bytes(), path.name)
+        for name, content in unpacked.items():
+            if name.replace("\\", "/").rsplit("/", 1)[-1].lower() == wanted:
+                return content
+    except (OSError, TypeError, ValueError, struct.error, IndexError):
+        return None
+    return None
+
+
 def _load_archive(car_dir: Path) -> dict[str, str] | None:
     """Return ``{member_name: text}`` for the car, or ``None`` if no source is readable.
 
