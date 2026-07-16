@@ -64,21 +64,26 @@ local function readSessionLapsTotal()
   if idx == nil then
     return nil
   end
-  if sessionLapsCacheIndex ~= idx or (sessionLapsCacheValue == nil and sessionLapsRetryCountdown <= 0) then
-    -- A FAILED read must not negative-cache for the whole session (daemon on PR #618 R9):
-    -- retry, but only every ~120 calls (~2 s at 60 Hz) so a broken CSP build never pays
-    -- the pcall at frame rate. A successful read (or a timed session's honest nil-laps
-    -- payload with ok==true) caches until the session index changes.
+  if sessionLapsCacheIndex ~= idx then
+    -- The previous session's total must NEVER leak across an index change — cleared
+    -- unconditionally BEFORE any read attempt (daemon HIGH on PR #618 R10).
     sessionLapsCacheIndex = idx
+    sessionLapsCacheValue = nil
+    sessionLapsRetryCountdown = 0
+  end
+  if sessionLapsCacheValue == nil and sessionLapsRetryCountdown <= 0 then
+    -- A FAILED read must not negative-cache for the whole session either (R9): retry
+    -- every ~120 calls (~2 s at 60 Hz) so a broken CSP build never pays the pcall at
+    -- frame rate. A successful read — including a timed session's honest no-laps
+    -- answer — settles until the session index changes.
     sessionLapsRetryCountdown = 120
     local ok, sess = pcall(ac.getSession, idx)
     if ok then
-      sessionLapsCacheValue = nil
       local laps = sess and tonumber(sess.laps)
       if laps and laps > 0 then
         sessionLapsCacheValue = laps
       end
-      sessionLapsRetryCountdown = math.huge -- settled for this session index
+      sessionLapsRetryCountdown = math.huge
     end
   elseif sessionLapsCacheValue == nil and sessionLapsRetryCountdown ~= math.huge then
     sessionLapsRetryCountdown = sessionLapsRetryCountdown - 1
