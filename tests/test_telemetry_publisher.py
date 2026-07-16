@@ -874,3 +874,42 @@ def test_tire_temps_carries_tread_imo_when_wheels_expose_it():
     assert out["outer_fr"] == 80
     assert out["core_fl"] == 82
     assert out["no_car_has_inner"] is False
+
+
+def test_tire_temps_publishes_tread_even_without_core_temps():
+    """A car whose core read fails but whose tread channels resolve still publishes —
+    the I/M/O board must not be lost to a core-only gate (Codex on PR #618)."""
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local wheels = {}
+          for i = 0, 3 do
+            wheels[i] = {
+              tyreInsideTemperature = 84, tyreMiddleTemperature = 82, tyreOutsideTemperature = 79,
+            }
+          end
+          M.publishTireTempsIfDue({
+            dt = 0.25, temps = {}, wsBridge = ws, car = { wheels = wheels },
+          })
+          M.reset()
+          local ws2 = make_ws()
+          M.publishTireTempsIfDue({
+            dt = 0.25, temps = {}, wsBridge = ws2, car = { wheels = nil },
+          })
+          local p = ws._calls[1] and ws._calls[1].payload
+          return {
+            published = ws._calls[1] ~= nil,
+            inner_fl = p and p.inner and p.inner.fl,
+            has_core = p and p.fl ~= nil,
+            nothing_published = #ws2._calls == 0,
+          }
+        end)()
+        """
+    )
+    assert out["published"] is True
+    assert out["inner_fl"] == 84
+    assert out["has_core"] is False
+    assert out["nothing_published"] is True

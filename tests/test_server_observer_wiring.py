@@ -727,3 +727,14 @@ def test_wire_voice_builds_track_map_frame(tmp_path, monkeypatch):
     assert frame["topic"] == "track.map"
     assert len(frame["payload"]["outline"]) >= 8
     assert frame["payload"]["corners"][0]["label"] == "T1"
+
+
+def test_rewire_without_geometry_clears_stale_track_map(tmp_path, monkeypatch):
+    """A re-wire whose reference cannot supply geometry must not leave the previous
+    track's map for late subscribers (Codex on PR #618)."""
+    monkeypatch.setattr(server, "_observer", None)
+    monkeypatch.setattr(server, "_track_map_frame", {"topic": "track.map", "payload": {}})
+    ref = tmp_path / "no_geometry.json"
+    ref.write_text(json.dumps({}), encoding="utf-8")
+    server._wire_voice(server.VoiceRuntimeConfig(reference_path=str(ref), bank_dir=None))
+    assert server._track_map_frame is None

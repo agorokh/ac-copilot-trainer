@@ -2712,6 +2712,11 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
     # voice-disabled (or different-bank) configuration can never keep serving stale clips;
     # the enabled path below re-arms via _set_voice_web_bank (PR #519 review).
     _disarm_voice_web_bank()
+    # Same authority for the reference-derived track map (#531 Part F): a re-wire whose
+    # reference cannot supply geometry — or that has no reference at all — must not leave
+    # the previous track's map for late subscribers (Codex on PR #618).
+    global _track_map_frame
+    _track_map_frame = None
     reference_path = voice_settings.reference_path
     bank_dir = voice_settings.bank_dir
     bank_backend = (
@@ -2756,7 +2761,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                 archive = json.load(fh)
             # #531 Part F: the same archive carries real px/pz — build the MAP page's
             # geometry once, best-effort (a map failure must never disable the observer).
-            global _track_map_frame
+            # The stale frame was already cleared at the top of _wire_voice.
             try:
                 from tools.ai_sidecar.track_map import build_track_map
 

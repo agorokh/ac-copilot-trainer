@@ -679,7 +679,10 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     }
     var best = fin(r.best_lap_ms);
     setText("dbTitle", "Debrief" + (best !== null ? " · vs best (" + fmtLap(best) + ")" : ""));
-    var summary = typeof r.screen_summary === "string" && r.screen_summary ? r.screen_summary : "";
+    // screen_summary is list[str] from the producer (session_review.report._screen_summary);
+    // a plain string is tolerated for forward-compat (Codex on PR #618).
+    var summary = Array.isArray(r.screen_summary) ? r.screen_summary.join(" · ")
+      : (typeof r.screen_summary === "string" ? r.screen_summary : "");
     if (problems.length) {
       var top = problems[0];
       setText("dbHead", "Biggest gain · " + String(top.label || top.corner || "—"));
@@ -757,11 +760,23 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     $("mapEmpty").style.display = "none";
   }
   function mapPointAt(spline) {
-    // The outline is spline-ordered and near-uniform; index by fraction, exact enough for a dot.
+    // Look up by the STORED per-point spline (binary search): real traces sample by update
+    // index, so points are denser in slow corners — uniform indexing would drift the dot on
+    // straights (Codex on PR #618). Falls back to uniform only if the spline array is absent.
     var g = mapGeom;
     if (!g || !g.pts.length) return null;
-    var i = Math.max(0, Math.min(g.pts.length - 1, Math.round(spline * (g.pts.length - 1))));
-    return g.pts[i];
+    var sp = g.spline;
+    if (!sp || sp.length !== g.pts.length) {
+      return g.pts[Math.max(0, Math.min(g.pts.length - 1, Math.round(spline * (g.pts.length - 1))))];
+    }
+    var lo = 0, hi = sp.length - 1;
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1;
+      if (sp[mid] < spline) lo = mid + 1; else hi = mid;
+    }
+    // pick the nearer neighbour of the insertion point
+    if (lo > 0 && Math.abs(sp[lo - 1] - spline) < Math.abs(sp[lo] - spline)) lo -= 1;
+    return g.pts[lo];
   }
   function renderMapPage(liveTick, spline) {
     if (mapDirty) { mapDirty = false; buildMapGeometry(); }
@@ -1127,6 +1142,9 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               S.fuelAtLap = null;
               S.burns = []; // burn is per car AND per track length (Codex on PR #547)
               S.race = null; S.raceAt = 0; // sidecar race.status is per identity too (#531)
+              // The debrief and the live-cue fallback gate on S.review — a new identity's
+              // COACH page must not stay pinned to the previous session's report (Codex #618).
+              S.review = null; reviewDirty = true;
               // A REAL identity switch invalidates the setup name (per-session fact; the
               // trainer's follow-up setup.active names the new one — Codex on PR #547).
               // The FIRST session frame after a page load must not: the identity-replay

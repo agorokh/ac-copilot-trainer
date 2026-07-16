@@ -25,6 +25,9 @@ from tools.ai_sidecar.lap_dynamics import LapTrace, lap_trace_from_archive, segm
 
 #: Outline resolution cap — ~2 m spacing on a 5 km lap, well under the A133's SVG budget.
 MAX_OUTLINE_POINTS = 256
+#: A real circuit spans hundreds of metres; anything under this is a zero-filled/degenerate
+#: position column, not geometry (Codex on PR #618).
+MIN_OUTLINE_SPAN_M = 50.0
 
 
 def _round_gear(value: float) -> int | None:
@@ -47,6 +50,13 @@ def build_track_map(archive: dict[str, Any]) -> dict[str, Any] | None:
         return None
     n = len(lap.spline)
     if n < 8:
+        return None
+    # Degenerate-geometry gate (Codex on PR #618): a trace whose px/pz columns were present
+    # but unreadable defaults to 0.0 rows — the "outline" would be a collapsed point that
+    # HIDES the honest no-reference state. Require a real spatial span on both axes' union.
+    span_x = max(lap.x) - min(lap.x)
+    span_z = max(lap.z) - min(lap.z)
+    if max(span_x, span_z) < MIN_OUTLINE_SPAN_M:
         return None
 
     step = max(1, -(-n // MAX_OUTLINE_POINTS))  # ceil-div: the cap is a cap, not a target

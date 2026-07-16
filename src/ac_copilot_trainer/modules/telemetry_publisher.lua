@@ -187,27 +187,43 @@ function M.publishTireTempsIfDue(opts)
   local fr = _finite(temps.fr)
   local rl = _finite(temps.rl)
   local rr = _finite(temps.rr)
-  if fl == nil and fr == nil and rl == nil and rr == nil then
-    -- No wheel temp resolvable on this CSP build/car: treat the sample as UNAVAILABLE rather
-    -- than publishing an empty {} every interval (Lua drops nil-valued keys), which would
-    -- mask the data-source failure as apparently-live-but-empty samples (codex on #185).
-    return false
+  local anyCore = fl ~= nil or fr ~= nil or rl ~= nil or rr ~= nil
+  local innerMap, middleMap, outerMap
+  if not anyCore then
+    -- Core read failed on this CSP build/car: the tread channels decide publishability —
+    -- the STINT board must not lose measured I/M/O to a core-only gate (Codex on PR #618).
+    -- Only a sample with NO wheel temp at all is treated as unavailable rather than
+    -- publishing an empty {} every interval, which would mask the data-source failure as
+    -- apparently-live-but-empty samples (codex on #185).
+    local inner, middle, outer = _treadMaps(opts.car)
+    innerMap = _cornerMap(inner)
+    middleMap = _cornerMap(middle)
+    outerMap = _cornerMap(outer)
+    if innerMap == nil and middleMap == nil and outerMap == nil then
+      return false
+    end
   end
   local due, accum = _due(_tireAccum, tonumber(opts.dt) or 0, TIRE_INTERVAL_SEC)
   _tireAccum = accum
   if not due then
     return false
   end
+  if anyCore then
+    -- Deferred past the 5 Hz gate so the per-wheel tread reads never run at frame rate.
+    local inner, middle, outer = _treadMaps(opts.car)
+    innerMap = _cornerMap(inner)
+    middleMap = _cornerMap(middle)
+    outerMap = _cornerMap(outer)
+  end
   local payload = {
     fl = fl,
     fr = fr,
     rl = rl,
     rr = rr,
+    inner = innerMap,
+    middle = middleMap,
+    outer = outerMap,
   }
-  local inner, middle, outer = _treadMaps(opts.car)
-  payload.inner = _cornerMap(inner)
-  payload.middle = _cornerMap(middle)
-  payload.outer = _cornerMap(outer)
   return wsBridge.publishTopic(TOPIC_TIRE_TEMPS, payload) == true
 end
 

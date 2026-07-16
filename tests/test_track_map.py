@@ -68,3 +68,15 @@ def test_build_track_map_honest_none_on_malformed() -> None:
         for row in archive["trace"]["samples"]
     ]
     assert build_track_map(archive) is None
+
+
+def test_build_track_map_rejects_degenerate_zero_positions() -> None:
+    """Zero-filled px/pz columns (present-but-unreadable) must yield None — a collapsed
+    single-point 'outline' would hide the honest no-reference state (Codex on PR #618)."""
+    archive = _corner_archive()
+    fields = archive["trace"]["fields"]
+    px_i, pz_i = fields.index("px"), fields.index("pz")
+    for row in archive["trace"]["samples"]:
+        row[px_i] = 0.0
+        row[pz_i] = 0.0
+    assert build_track_map(archive) is None
