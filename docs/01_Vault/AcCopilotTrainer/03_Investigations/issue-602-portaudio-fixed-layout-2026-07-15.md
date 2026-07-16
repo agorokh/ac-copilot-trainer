@@ -2,7 +2,7 @@
 type: investigation
 status: verified
 memory_tier: canonical
-last_updated: 2026-07-15T20:55:51Z
+last_updated: 2026-07-16T01:45:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Next Session Handoff.md
@@ -53,6 +53,8 @@ context supplied the session substrate.
 
 ## Resume
 
-PR #606 is ready. Confirm the latest stereo-fallback correction through the current-SHA remote
-gate, resolve its review thread, then merge through the normal maintainer workflow. No additional
-rig reproduction is required unless the selected output device or host API changes.
+PR #606 is **merge-ready** on `7eec481`: required CI green, GraphQL threads resolved,
+resolve-gate clean, and the current-SHA daemon cursor HIGH on sounddevice `index` was
+replied-invalid with 0.5.1 source evidence. Merge through the normal maintainer workflow.
+No additional rig reproduction is required unless the selected output device or host API
+changes.
