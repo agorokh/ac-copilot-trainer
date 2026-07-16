@@ -30,7 +30,8 @@ from __future__ import annotations
 import logging
 import time
 import wave
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -52,6 +53,11 @@ class Playback(Protocol):
         """The utterance currently sounding, or ``None`` when the channel is idle."""
         ...
 
+    @property
+    def output_details(self) -> Mapping[str, object]:
+        """JSON-safe output device/layout metadata, empty for non-device implementations."""
+        ...
+
     def play(self, utterance: Utterance) -> None:
         """Start ``utterance`` asynchronously. Does not block until it finishes."""
         ...
@@ -67,6 +73,35 @@ class Playback(Protocol):
 
 class DeviceResolutionError(RuntimeError):
     """No suitable output device matched the configured name + host-API."""
+
+
+class OutputLayoutError(RuntimeError):
+    """The pinned output device cannot open a stream compatible with the phrase bank."""
+
+
+@dataclass(frozen=True)
+class OutputLayout:
+    """Resolved PortAudio device plus the stream/channel map used for a phrase bank."""
+
+    device_index: int
+    device_name: str
+    host_api: str
+    max_output_channels: int
+    bank_channels: int
+    stream_channels: int
+    channel_map: tuple[int, ...]
+
+    def status(self) -> dict[str, object]:
+        """JSON-safe details for sidecar health and Game Point status."""
+        return {
+            "device_index": self.device_index,
+            "device_name": self.device_name,
+            "host_api": self.host_api,
+            "max_output_channels": self.max_output_channels,
+            "bank_channels": self.bank_channels,
+            "stream_channels": self.stream_channels,
+            "channel_map": list(self.channel_map),
+        }
 
 
 def resolve_output_device(
@@ -127,6 +162,83 @@ def resolve_output_device(
     return matches[0][0]
 
 
+def resolve_output_layout(
+    device_index: int,
+    *,
+    bank_channels: int,
+    samplerate: int,
+    devices: list[dict],
+    host_apis: list[dict],
+    check_output_settings: Callable[..., object],
+) -> OutputLayout:
+    """Choose the smallest stream width the pinned device accepts at the bank sample rate.
+
+    Some Windows WASAPI endpoints expose a fixed speaker layout: the rig's 5.1 endpoint reports
+    six output channels and rejects mono/stereo streams with PortAudio ``-9998``. Keep the bank
+    mono, open the first supported stream width, and map mono to front-center (1-based channel 3)
+    when a multichannel layout is required. Device pinning remains authoritative, so this can never
+    fall through to the similarly named haptic DAC.
+    """
+    if not 0 <= device_index < len(devices):
+        raise OutputLayoutError(f"invalid PortAudio output device index {device_index}")
+    device = devices[device_index]
+    max_channels = int(device.get("max_output_channels", 0))
+    if bank_channels <= 0:
+        raise OutputLayoutError(f"phrase bank has invalid channel count {bank_channels}")
+    if max_channels < bank_channels:
+        raise OutputLayoutError(
+            f"voice device {str(device.get('name', ''))!r} exposes {max_channels} output channels, "
+            f"fewer than the phrase bank's {bank_channels}"
+        )
+
+    api_index = int(device.get("hostapi", -1))
+    api_name = str(host_apis[api_index].get("name", "")) if 0 <= api_index < len(host_apis) else ""
+    failures: list[str] = []
+    stream_channels = 0
+    for candidate in range(bank_channels, max_channels + 1):
+        try:
+            check_output_settings(
+                device=device_index,
+                channels=candidate,
+                samplerate=samplerate,
+            )
+        except Exception as exc:  # noqa: BLE001 - PortAudio uses backend-specific exception types
+            failures.append(f"{candidate}ch={str(exc) or type(exc).__name__}")
+            continue
+        stream_channels = candidate
+        break
+    if stream_channels == 0:
+        tested = "; ".join(failures)
+        raise OutputLayoutError(
+            f"voice device {str(device.get('name', ''))!r} ({api_name or 'unknown host API'}) "
+            f"rejected every {bank_channels}..{max_channels}-channel layout at {samplerate} Hz "
+            f"for a {bank_channels}-channel phrase bank ({tested}); set "
+            "AC_COPILOT_VOICE_DEVICE/AC_COPILOT_VOICE_HOST_API to a compatible output or "
+            "correct the Windows speaker configuration"
+        )
+
+    if bank_channels == 1 and stream_channels >= 6:
+        # Standard 5.1/7.1 layouts place front-center at channel 3, which keeps coaching speech
+        # anchored to the rig's center speaker.
+        channel_map = (3,)
+    elif bank_channels == 1 and stream_channels >= 2:
+        # Stereo and compact 3--5 channel layouts do not have a reliably inferable center channel
+        # without a platform channel mask. Duplicate mono into front-left/right rather than risk
+        # routing speech to an LFE or surround channel.
+        channel_map = (1, 2)
+    else:
+        channel_map = tuple(range(1, bank_channels + 1))
+    return OutputLayout(
+        device_index=device_index,
+        device_name=str(device.get("name", "")),
+        host_api=api_name,
+        max_output_channels=max_channels,
+        bank_channels=bank_channels,
+        stream_channels=stream_channels,
+        channel_map=channel_map,
+    )
+
+
 # --------------------------------------------------------------------------------------------------
 # Pre-decoded clip bank
 # --------------------------------------------------------------------------------------------------
@@ -139,9 +251,12 @@ class Bank:
     lazy-imported here (real-backend territory); the resolver/scheduler never construct a ``Bank``.
     """
 
-    def __init__(self, samplerate: int, clips: dict[str, _np.ndarray]) -> None:
+    def __init__(
+        self, samplerate: int, clips: dict[str, _np.ndarray], *, channels: int = 1
+    ) -> None:
         self.samplerate = samplerate
         self.clips = clips
+        self.channels = channels
 
     def get(self, clip_id: str) -> _np.ndarray | None:
         return self.clips.get(clip_id)
@@ -180,7 +295,9 @@ class Bank:
                 _log.error("voice: failed to decode clip %s (%s): %s", entry.clip_id, fp, exc)
                 continue
             clips[entry.clip_id] = pcm
-        return Bank(samplerate=manifest.samplerate, clips=clips)
+        # _decode_wav_float32 deliberately downmixes every clip to mono, so the hot-path bank has
+        # one channel even when a source WAV was baked with more than one.
+        return Bank(samplerate=manifest.samplerate, clips=clips, channels=1)
 
 
 def _decode_wav_float32(path: str | Path, expected_sr: int, np) -> _np.ndarray:
@@ -227,6 +344,10 @@ class RecordingPlayback:
     @property
     def current(self) -> Utterance | None:
         return self._current
+
+    @property
+    def output_details(self) -> Mapping[str, object]:
+        return {}
 
     def play(self, utterance: Utterance) -> None:
         self.played.append(utterance)
@@ -287,7 +408,6 @@ class RtMixerPlayback:
         *,
         device_name: str | None,
         host_api: str | None,
-        channels: int = 1,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         import rtmixer  # noqa: F401 - imported to fail fast if the extra is missing
@@ -296,15 +416,25 @@ class RtMixerPlayback:
         self._bank = bank
         self._sd = sd
         self._rtmixer = rtmixer
+        devices = list(sd.query_devices())
+        host_apis = list(sd.query_hostapis())
         device_index = resolve_output_device(
             device_name,
             host_api,
-            devices=list(sd.query_devices()),
-            host_apis=list(sd.query_hostapis()),
+            devices=devices,
+            host_apis=host_apis,
+        )
+        self._layout = resolve_output_layout(
+            device_index,
+            bank_channels=bank.channels,
+            samplerate=bank.samplerate,
+            devices=devices,
+            host_apis=host_apis,
+            check_output_settings=sd.check_output_settings,
         )
         self._mixer = rtmixer.Mixer(
             device=device_index,
-            channels=channels,
+            channels=self._layout.stream_channels,
             samplerate=bank.samplerate,
         )
         self._mixer.start()
@@ -313,8 +443,21 @@ class RtMixerPlayback:
         self._clock = clock
         self._current_until = 0.0
         _log.info(
-            "voice: rtmixer stream open on device index %d @ %d Hz", device_index, bank.samplerate
+            "voice: rtmixer stream open device=%r index=%d host_api=%r bank=%dch "
+            "device_max=%dch stream=%dch map=%s @ %d Hz",
+            self._layout.device_name,
+            device_index,
+            self._layout.host_api,
+            self._layout.bank_channels,
+            self._layout.max_output_channels,
+            self._layout.stream_channels,
+            list(self._layout.channel_map),
+            bank.samplerate,
         )
+
+    @property
+    def output_details(self) -> dict[str, object]:
+        return self._layout.status()
 
     @property
     def current(self) -> Utterance | None:
@@ -330,7 +473,15 @@ class RtMixerPlayback:
         if pcm is None:
             _log.error("voice: clip %s absent from bank — staying silent", utterance.clip_id)
             return
-        self._action = self._mixer.play_buffer(pcm, channels=1)
+        mapped_pcm = pcm
+        if self._layout.bank_channels == 1 and len(self._layout.channel_map) > 1:
+            import numpy as np
+
+            mapped_pcm = np.repeat(pcm[:, np.newaxis], len(self._layout.channel_map), axis=1)
+        self._action = self._mixer.play_buffer(
+            mapped_pcm,
+            channels=list(self._layout.channel_map),
+        )
         self._current = utterance
         self._current_until = self._clock() + (len(pcm) / self._bank.samplerate)
 
@@ -396,15 +547,29 @@ class SoundDevicePlayback:
 
         self._bank = bank
         self._sd = sd
+        devices = list(sd.query_devices())
+        host_apis = list(sd.query_hostapis())
         self._device = resolve_output_device(
             device_name,
             host_api,
-            devices=list(sd.query_devices()),
-            host_apis=list(sd.query_hostapis()),
+            devices=devices,
+            host_apis=host_apis,
+        )
+        self._layout = resolve_output_layout(
+            self._device,
+            bank_channels=bank.channels,
+            samplerate=bank.samplerate,
+            devices=devices,
+            host_apis=host_apis,
+            check_output_settings=sd.check_output_settings,
         )
         # Estimated-completion tracking so the channel frees when a clip finishes (not just on
         # cancel/close) — otherwise the scheduler treats it as perpetually busy after the first cue.
         self._timed = _TimedCurrent(clock)
+
+    @property
+    def output_details(self) -> dict[str, object]:
+        return self._layout.status()
 
     @property
     def current(self) -> Utterance | None:
@@ -415,7 +580,15 @@ class SoundDevicePlayback:
         if pcm is None:
             _log.error("voice: clip %s absent from bank — staying silent", utterance.clip_id)
             return
-        self._sd.play(pcm, samplerate=self._bank.samplerate, device=self._device)
+        output = pcm
+        if self._layout.stream_channels != self._layout.bank_channels:
+            import numpy as np
+
+            output = np.zeros((len(pcm), self._layout.stream_channels), dtype=pcm.dtype)
+            for source_index, output_channel in enumerate(self._layout.channel_map):
+                source = pcm if self._layout.bank_channels == 1 else pcm[:, source_index]
+                output[:, output_channel - 1] = source
+        self._sd.play(output, samplerate=self._bank.samplerate, device=self._device)
         self._timed.set(utterance, len(pcm) / self._bank.samplerate)
 
     def cancel(self) -> None:

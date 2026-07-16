@@ -2766,6 +2766,9 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                 coach.start()
                 set_voice_coach(coach)
                 _set_voice_web_bank(Path(bank_dir))
+                playback_details = getattr(coach, "playback_details", {})
+                if not isinstance(playback_details, dict):
+                    playback_details = {}
                 set_voice_runtime_status(
                     configured=True,
                     enabled=True,
@@ -2775,6 +2778,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                     bank_configured=True,
                     reference_configured=True,
                     tts_enabled=False,
+                    **playback_details,
                 )
                 logger.info(
                     "voice: in-process voice coach wired from bank %s "

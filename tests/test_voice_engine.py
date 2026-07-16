@@ -9,13 +9,14 @@ from __future__ import annotations
 import json
 import time
 
+import pytest
 from _voice_support import make_advisory
 
 from tools.ai_sidecar.voice.bake import ToneBackend, bake_bank
 from tools.ai_sidecar.voice.config import VoiceConfig
 from tools.ai_sidecar.voice.engine import VoiceCoach
 from tools.ai_sidecar.voice.manifest import MANIFEST_FILENAME
-from tools.ai_sidecar.voice.playback import RecordingPlayback
+from tools.ai_sidecar.voice.playback import OutputLayoutError, RecordingPlayback
 
 
 def _baked(tmp_path):
@@ -93,6 +94,41 @@ def test_disabled_coach_factory() -> None:
     coach.subscribe(make_advisory())  # no-op, no crash
 
 
+def test_injected_legacy_playback_without_output_details_stays_enabled(tmp_path) -> None:
+    class _LegacyPlayback:
+        current = None
+
+        def play(self, _utterance) -> None:  # noqa: ANN001
+            return None
+
+        def cancel(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    coach = VoiceCoach.from_bank(_baked(tmp_path), VoiceConfig(), playback=_LegacyPlayback())
+
+    assert coach.enabled
+    assert coach.playback_details == {}
+
+
+def test_injected_playback_metadata_failure_stays_enabled(tmp_path) -> None:
+    class _BrokenMetadataPlayback(RecordingPlayback):
+        @property
+        def output_details(self):  # noqa: ANN201
+            raise RuntimeError("metadata unavailable")
+
+    coach = VoiceCoach.from_bank(
+        _baked(tmp_path),
+        VoiceConfig(),
+        playback=_BrokenMetadataPlayback(),
+    )
+
+    assert coach.enabled
+    assert coach.playback_details == {}
+
+
 def test_build_playback_falls_back_to_sounddevice_when_rtmixer_missing(
     monkeypatch, tmp_path
 ) -> None:
@@ -131,8 +167,8 @@ def test_build_playback_falls_back_to_sounddevice_when_rtmixer_missing(
     assert constructed == {"device_name": "Headset", "host_api": "WASAPI"}
 
 
-def test_build_playback_disables_when_no_backend_importable(monkeypatch, tmp_path) -> None:
-    """If neither rtmixer nor sounddevice imports, disable (None) rather than crash."""
+def test_build_playback_raises_when_no_backend_importable(monkeypatch, tmp_path) -> None:
+    """If neither backend imports, preserve the cause so from_bank can surface remediation."""
     import tools.ai_sidecar.voice.playback as pb_mod
 
     class _FakeBank:
@@ -152,10 +188,11 @@ def test_build_playback_disables_when_no_backend_importable(monkeypatch, tmp_pat
     monkeypatch.setattr(pb_mod, "RtMixerPlayback", _FakeRtMixer)
     monkeypatch.setattr(pb_mod, "SoundDevicePlayback", _FakeSoundDevice)
 
-    assert VoiceCoach._build_playback(object(), tmp_path, VoiceConfig(), "rtmixer") is None
+    with pytest.raises(ModuleNotFoundError, match="sounddevice"):
+        VoiceCoach._build_playback(object(), tmp_path, VoiceConfig(), "rtmixer")
 
 
-def test_build_playback_device_fault_still_disables_without_fallback(monkeypatch, tmp_path) -> None:
+def test_build_playback_device_fault_still_raises_without_fallback(monkeypatch, tmp_path) -> None:
     """A real device/driver fault (not a missing module) disables — no silent sounddevice retry.
 
     The same fault would recur on sounddevice, and staying silent beats routing onto the wrong
@@ -182,5 +219,23 @@ def test_build_playback_device_fault_still_disables_without_fallback(monkeypatch
     monkeypatch.setattr(pb_mod, "RtMixerPlayback", _FakeRtMixer)
     monkeypatch.setattr(pb_mod, "SoundDevicePlayback", _FakeSoundDevice)
 
-    assert VoiceCoach._build_playback(object(), tmp_path, VoiceConfig(), "rtmixer") is None
+    with pytest.raises(RuntimeError, match="PortAudio device error"):
+        VoiceCoach._build_playback(object(), tmp_path, VoiceConfig(), "rtmixer")
     assert sd_calls == []  # device fault must not fall through to sounddevice
+
+
+def test_from_bank_preserves_actionable_output_layout_failure(monkeypatch, tmp_path) -> None:
+    _baked(tmp_path)
+
+    def fail_layout(*_args, **_kwargs):
+        raise OutputLayoutError(
+            "voice device 'Rig Speakers' rejected every 1..6-channel layout; "
+            "set AC_COPILOT_VOICE_DEVICE/AC_COPILOT_VOICE_HOST_API to a compatible output"
+        )
+
+    monkeypatch.setattr(VoiceCoach, "_build_playback", fail_layout)
+    coach = VoiceCoach.from_bank(tmp_path, VoiceConfig(device_name="Rig Speakers"))
+
+    assert coach.enabled is False
+    assert "rejected every 1..6-channel layout" in coach.disabled_reason
+    assert "AC_COPILOT_VOICE_DEVICE" in coach.disabled_reason

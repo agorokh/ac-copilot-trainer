@@ -302,6 +302,15 @@ def test_wire_voice_bank_uses_env_audio_routing(tmp_path, monkeypatch):
     class _Coach:
         enabled = True
         disabled_reason = ""
+        playback_details = {
+            "device_index": 16,
+            "device_name": "5.1 Speakers (USB Sound Device)",
+            "host_api": "Windows WASAPI",
+            "max_output_channels": 6,
+            "bank_channels": 1,
+            "stream_channels": 6,
+            "channel_map": [3],
+        }
 
         def start(self) -> None:
             seen["started"] = True
@@ -328,7 +337,14 @@ def test_wire_voice_bank_uses_env_audio_routing(tmp_path, monkeypatch):
     try:
         server._wire_voice(server.VoiceRuntimeConfig(reference_path=str(ref), bank_dir="bank-dir"))
         assert server._voice_coach is not None
-        assert server.voice_runtime_status()["state"] == "enabled"
+        status = server.voice_runtime_status()
+        assert status["state"] == "enabled"
+        assert status["device_name"] == "5.1 Speakers (USB Sound Device)"
+        assert status["host_api"] == "Windows WASAPI"
+        assert status["bank_channels"] == 1
+        assert status["max_output_channels"] == 6
+        assert status["stream_channels"] == 6
+        assert status["channel_map"] == [3]
     finally:
         server.set_voice_coach(None)
 

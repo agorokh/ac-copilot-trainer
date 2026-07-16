@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-15T20:55:00Z
+last_updated: 2026-07-16T01:45:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-602-portaudio-fixed-layout-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-603-car-content-preflight-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-pit-stall-sim-death-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-partc-actionable-reason-2026-07-15.md
@@ -96,6 +97,26 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Review-resolved (2026-07-15) — #602 fixed-layout voice recovery (PR #606)
+
+PR [#606](https://github.com/agorokh/ac-copilot-trainer/pull/606) is **merge-ready** on head
+[`7eec481`](https://github.com/agorokh/ac-copilot-trainer/commit/7eec481adcc739d899da43caa8b9e6b089cc8beb).
+It fixes the `PortAudio -9998` voice-disable failure: mono/48 kHz bank negotiates the pinned
+six-channel Windows WASAPI speaker layout and maps speech to front-center channel 3. Live proof
+remains: Game Point `VOICE ENABLED` with `1ch bank -> 6ch stream/6ch max map=[3]`; WASAPI loopback
+matched `Brake!` on channel 3 at score 1.0.
+
+**Resolve-pr exit (this session):** required checks green (`build`, policy, conformance);
+GraphQL threads all resolved (Codex stereo-map + factory-default chirp); resolve-gate
+`No substantive findings hanging`; current-SHA daemon review present — cursor HIGH on
+`query_devices(kind="output")["index"]` **replied-invalid** with sounddevice 0.5.1 source evidence
+(`device_dict` always includes `'index'`; docs list the same key). Antigravity HIGH (playback
+default-device) treated as advisory/out-of-scope: voice engines intentionally require a pinned
+`AC_COPILOT_VOICE_DEVICE`. No code push this round.
+
+**Resume here:** merge PR #606 through the normal maintainer workflow (`gh pr merge 606` / UI).
+No further review loop work. Detail: [[issue-602-portaudio-fixed-layout-2026-07-15]].
 
 ## Delivered (2026-07-15) — #603 damaged-car preflight CLOSED (PR #607)
 

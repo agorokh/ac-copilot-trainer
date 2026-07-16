@@ -150,6 +150,68 @@ def make_chirp(samplerate: int, np: Any) -> Any:
     return (CHIRP_AMPLITUDE * sig).astype(np.float32)
 
 
+def _resolve_chirp_output(
+    sd: Any,
+    *,
+    device: str | None,
+    host_api: str | None,
+    samplerate: int,
+) -> tuple[int, int, tuple[int, ...]]:
+    """Resolve and negotiate the chirp output, including the system-default device."""
+    from tools.ai_sidecar.voice.playback import (
+        DeviceResolutionError,
+        resolve_output_device,
+        resolve_output_layout,
+    )
+
+    devices = list(sd.query_devices())
+    host_apis = list(sd.query_hostapis())
+    if device:
+        device_index = resolve_output_device(
+            device,
+            host_api,
+            devices=devices,
+            host_apis=host_apis,
+        )
+    else:
+        try:
+            default_output = sd.default.device[1]
+            if default_output is None:
+                # Factory-default sounddevice settings delegate device selection to PortAudio.
+                # query_devices(kind="output") exposes that selected device's concrete index.
+                default_device = sd.query_devices(kind="output")
+                device_index = int(default_device["index"])
+            elif isinstance(default_output, str):
+                device_index = resolve_output_device(
+                    default_output,
+                    host_api,
+                    devices=devices,
+                    host_apis=host_apis,
+                )
+            else:
+                device_index = int(default_output)
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
+            raise DeviceResolutionError("no default PortAudio output device is configured") from exc
+        if device_index < 0 or device_index >= len(devices):
+            raise DeviceResolutionError(
+                f"default PortAudio output device index {device_index} is unavailable"
+            )
+
+    layout = resolve_output_layout(
+        device_index,
+        bank_channels=1,
+        samplerate=samplerate,
+        devices=devices,
+        host_apis=host_apis,
+        check_output_settings=sd.check_output_settings,
+    )
+    return (
+        device_index,
+        layout.stream_channels,
+        tuple(channel - 1 for channel in layout.channel_map),
+    )
+
+
 def play_chirp(label: str, *, device: str | None, host_api: str | None) -> ChirpMark:
     """Play the sync chirp on the PC output and wall-stamp its first sample at the DAC.
 
@@ -160,17 +222,13 @@ def play_chirp(label: str, *, device: str | None, host_api: str | None) -> Chirp
     import numpy as np
     import sounddevice as sd
 
-    device_index: int | None = None
-    if device:
-        from tools.ai_sidecar.voice.playback import resolve_output_device
-
-        device_index = resolve_output_device(
-            device,
-            host_api,
-            devices=list(sd.query_devices()),
-            host_apis=list(sd.query_hostapis()),
-        )
     samplerate = 48_000
+    device_index, stream_channels, output_channels = _resolve_chirp_output(
+        sd,
+        device=device,
+        host_api=host_api,
+        samplerate=samplerate,
+    )
     chirp = make_chirp(samplerate, np)
     state: dict[str, Any] = {"pos": 0, "dac_wall_ms": None, "latency_ms": None}
     done = __import__("threading").Event()
@@ -187,9 +245,10 @@ def play_chirp(label: str, *, device: str | None, host_api: str | None) -> Chirp
                 state["dac_wall_ms"] = None
         pos = state["pos"]
         chunk = chirp[pos : pos + frames]
-        outdata[: len(chunk), 0] = chunk
+        outdata.fill(0.0)
+        for output_channel in output_channels:
+            outdata[: len(chunk), output_channel] = chunk
         if len(chunk) < frames:
-            outdata[len(chunk) :, 0] = 0.0
             done.set()
             raise sd.CallbackStop
         state["pos"] = pos + frames
@@ -197,7 +256,7 @@ def play_chirp(label: str, *, device: str | None, host_api: str | None) -> Chirp
     t_wall_ms = time.time() * 1000.0
     stream = sd.OutputStream(
         samplerate=samplerate,
-        channels=1,
+        channels=stream_channels,
         dtype="float32",
         device=device_index,
         callback=_callback,

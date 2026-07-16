@@ -240,6 +240,12 @@ def test_status_uses_sidecar_voice_health(tmp_path: Path) -> None:
                     "enabled": True,
                     "state": "enabled",
                     "backend": "sounddevice",
+                    "device_name": "5.1 Speakers (USB Sound Device)",
+                    "host_api": "Windows WASAPI",
+                    "bank_channels": 1,
+                    "max_output_channels": 6,
+                    "stream_channels": 6,
+                    "channel_map": [3],
                 },
             }
         )
@@ -249,7 +255,10 @@ def test_status_uses_sidecar_voice_health(tmp_path: Path) -> None:
 
     assert status.voice.ok is True
     assert status.voice.state == "enabled"
-    assert status.voice.detail == "backend=sounddevice"
+    assert status.voice.detail == (
+        "backend=sounddevice; device=5.1 Speakers (USB Sound Device) (Windows WASAPI); "
+        "layout=1ch bank -> 6ch stream/6ch max map=[3]"
+    )
 
 
 def test_status_rejects_skipped_sidecar_voice_when_launcher_requested_voice(
