@@ -75,7 +75,7 @@ If you did not use Copier, complete these manually:
 
 ## 6. MCP and local LLMs
 
-- [ ] Confirm `.mcp.json`: **Context7** (library docs) and **GitHub** MCP are present; set **`GITHUB_PERSONAL_ACCESS_TOKEN`** for Claude Code (see `.env.example`, [TOOLCHAIN.md](TOOLCHAIN.md), skill **`new-project-setup`**).
+- [ ] Confirm `.mcp.json` carries only repo-local servers launched via their wrappers (e.g. `repo-knowledge` via `bash scripts/mcp/repo-knowledge.sh`); GitHub work goes through the `gh` CLI. The retired github/context7 MCP servers must not be added (governance-hub#274; see [TOOLCHAIN.md](TOOLCHAIN.md), skill **`new-project-setup`**). <!-- mcp-retirement-ok -->
 - [ ] Add database or browser servers only when the project needs them.
 - [ ] Document API keys and local inference (Ollama, OpenRouter, HF caches) in `AGENTS.md` § Local development and annotated `.env.example` — never commit secrets. (`CLAUDE.md` should link there instead of duplicating.)
 

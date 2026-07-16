@@ -35,14 +35,6 @@ Define a small set: `bug`, `enhancement`, `docs`, `chore`, `blocked`, `agent`. [
 
 Pushes that touch `.github/workflows/` need a token with **`workflow`** scope (e.g. `gh auth refresh -s workflow`).
 
-## Claude Code: GitHub MCP
+## Claude Code and agents: GitHub access
 
-The repo ships **`.mcp.json`** and **`.cursor/mcp.json`** with the **official** [GitHub MCP Server](https://github.com/github/github-mcp-server) via **Docker** (`docker run …`). The image reference is pinned by **digest** (immutable). Refresh the digest in both files when intentionally bumping the server image. Set **`GITHUB_PERSONAL_ACCESS_TOKEN`** in your environment before starting Claude Code so the container receives it — never commit the token; see `.env.example` and [TOOLCHAIN.md](TOOLCHAIN.md). Skill **`~/.agents/skills/new-project-setup`** walks through bootstrap including this step.
-
-**Deprecation note:** Do not use the npm package `@modelcontextprotocol/server-github` (deprecated as of April 2025 per upstream).
-
-**Image updates:** Occasionally run `docker pull ghcr.io/github/github-mcp-server` (e.g. with your monthly template skim in [MAINTAINING_THE_TEMPLATE.md](MAINTAINING_THE_TEMPLATE.md)).
-
-**No Docker:** Use GitHub’s documented **remote Streamable HTTP** or `claude mcp add-json` flow instead ([install guide](https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-claude.md)).
-
-**Fine-grained PAT (per repository):** grant the smallest set that matches what you will do — for typical Issues + PRs + repo file tools, that usually means **Contents** (read, or read/write if tools mutate files), **Issues**, and **Pull requests** (read/write as needed). Add **Metadata** (read) if the server requires it. **Classic PAT:** choose scopes that mirror the same surface area (e.g. `repo` vs narrower scopes).
+All GitHub operations from agents and humans go through the **`gh` CLI** — verify with `gh auth status`. Repo harness configs (`.mcp.json`, `.cursor/mcp.json`, `.codex/config.toml`) must **not** declare a GitHub MCP server: the `github` and `context7` MCP servers were retired fleet-wide in June 2026 and conformance CI blocks their reintroduction (governance-hub#274; audit: `scripts/check_mcp_retirement.py` in governance-hub). <!-- mcp-retirement-ok --> Skill **`~/.agents/skills/new-project-setup`** walks through bootstrap including this step.

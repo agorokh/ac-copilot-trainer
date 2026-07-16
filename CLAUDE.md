@@ -103,7 +103,7 @@ Project hooks live in `.claude/settings.json`. They run on Edit/Write/Bash/Stop 
 
 ## External docs vs vault
 
-- Prefer **Context7** (see `.mcp.json` and `.claude/rules/context7.md`) for third-party library API facts.
+- Prefer official docs and targeted web search for third-party library API facts. (The github/context7 MCP servers are retired fleet-wide — do not re-add them; governance-hub#274.) <!-- mcp-retirement-ok -->
 - Prefer the **vault** for decisions and architecture that belong to this product.
 
 ---

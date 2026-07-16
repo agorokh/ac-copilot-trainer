@@ -77,7 +77,7 @@ Template maintainers: append one bullet per governance-facing change.
 | When | Do |
 |------|-----|
 | Weekly | Glance at Dependabot PRs; merge or batch. |
-| Monthly | Skim Anthropic / Cursor / GitHub docs for breaking changes to MCP, hooks, or Copilot agents; adjust `.mcp.json` / `.cursor/mcp.json` / `.claude/settings.base.json` then run `make merge-settings` (or `merge_settings.py --no-local` for committed output) / `.github/agents` as needed. Run `docker pull ghcr.io/github/github-mcp-server` and refresh the **digest pin** in both MCP JSON files when bumping the GitHub MCP image. |
+| Monthly | Skim Anthropic / Cursor / GitHub docs for breaking changes to MCP, hooks, or Copilot agents; adjust `.mcp.json` / `.cursor/mcp.json` / `.claude/settings.base.json` then run `make merge-settings` (or `merge_settings.py --no-local` for committed output) / `.github/agents` as needed. |
 | Per real incident | Add an invariant or script check; promote to vault ADR if architectural. |
 
 ## Propagation rule (child → template)
