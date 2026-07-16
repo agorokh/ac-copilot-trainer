@@ -19,6 +19,7 @@ from the voice (the cue/track-misalignment pitfall).
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from tools.ai_sidecar.lap_dynamics import LapTrace, lap_trace_from_archive, segment_corners
@@ -48,23 +49,33 @@ def build_track_map(archive: dict[str, Any]) -> dict[str, Any] | None:
         lap = lap_trace_from_archive(archive)
     except (ValueError, TypeError):
         return None
-    n = len(lap.spline)
+    # Non-finite coordinates would serialize as bare `NaN` tokens that the tablet's
+    # JSON.parse rejects, dropping the only replayed map frame (Codex on PR #618 R6) —
+    # keep only fully finite samples, then re-check viability.
+    finite_idx = [
+        i
+        for i in range(len(lap.spline))
+        if math.isfinite(lap.x[i]) and math.isfinite(lap.z[i]) and math.isfinite(lap.spline[i])
+    ]
+    n = len(finite_idx)
     if n < 8:
         return None
+    xs = [lap.x[i] for i in finite_idx]
+    zs = [lap.z[i] for i in finite_idx]
     # Degenerate-geometry gate (Codex on PR #618): a trace whose px/pz columns were present
     # but unreadable defaults to 0.0 rows — the "outline" would be a collapsed point that
     # HIDES the honest no-reference state. Require a real spatial span on both axes' union.
-    span_x = max(lap.x) - min(lap.x)
-    span_z = max(lap.z) - min(lap.z)
+    span_x = max(xs) - min(xs)
+    span_z = max(zs) - min(zs)
     if max(span_x, span_z) < MIN_OUTLINE_SPAN_M:
         return None
 
     step = max(1, -(-n // MAX_OUTLINE_POINTS))  # ceil-div: the cap is a cap, not a target
-    idx = list(range(0, n, step))
-    if idx[-1] != n - 1:
+    idx = [finite_idx[i] for i in range(0, n, step)]
+    if idx[-1] != finite_idx[-1]:
         # Always keep the final sample: dropping up to step-1 points at S/F would make the
         # client's closing segment a false chord tens of metres off (daemon on PR #618).
-        idx.append(n - 1)
+        idx.append(finite_idx[-1])
     outline = [[round(lap.x[i], 1), round(lap.z[i], 1)] for i in idx]
     spline = [round(lap.spline[i], 4) for i in idx]
 

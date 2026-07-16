@@ -747,11 +747,14 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
   // render the replayed map/review, and single-identity rigs are the common case).
   function identCompatible(carId, trackId) {
     if (carId && S.sessionCarId && String(carId) !== String(S.sessionCarId)) return false;
-    // Venue-level track gate (#618 R4): session producers use full "track/layout" ids while
-    // reference archives may carry the bare track id — comparing the base segment tolerates
-    // that mismatch while still rejecting a genuinely different circuit.
-    if (trackId && S.sessionTrackId
-        && String(trackId).split("/")[0] !== String(S.sessionTrackId).split("/")[0]) return false;
+    // Track gate (#618 R4+R6): when BOTH ids are layout-qualified, compare in full — two
+    // layouts of one venue have different geometry. Base-segment comparison applies only
+    // when one side is bare (reference archives may omit the layout).
+    if (trackId && S.sessionTrackId) {
+      var a = String(trackId), b = String(S.sessionTrackId);
+      var qualified = a.indexOf("/") >= 0 && b.indexOf("/") >= 0;
+      if (qualified ? a !== b : a.split("/")[0] !== b.split("/")[0]) return false;
+    }
     return true;
   }
   function resetMapDom() {
@@ -1216,6 +1219,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
                 // track.map/session.review BEFORE session and never re-sends them; the
                 // compatibility check above already rejected any known mismatch.
                 S.review = null; reviewDirty = true;
+                // The stale live-cue must not repopulate the freshly reset debrief (#618 R6).
+                S.lastCue = null; S.cueAt = 0;
                 // The MAP drops only when car/track actually changed (#618 R5): a
                 // session_index-only transition keeps the same geometry, and track.map
                 // would never be re-sent on this connection.
@@ -1250,6 +1255,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               // live cues, not stay pinned to the previous stint's review (#618 R4). The
               // MAP geometry survives: it is reference-tied, not stint-tied.
               S.review = null; reviewDirty = true;
+              S.lastCue = null; S.cueAt = 0; // and the stale cue must not refill it (R6)
               requestSetupData(ws); // pit work may have changed the setup during the reset
             }
             break;

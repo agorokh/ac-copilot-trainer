@@ -913,3 +913,33 @@ def test_tire_temps_publishes_tread_even_without_core_temps():
     assert out["inner_fl"] == 84
     assert out["has_core"] is False
     assert out["nothing_published"] is True
+
+
+def test_telemetry_tick_carries_session_laps_total_when_positive():
+    """#531 Part F: a lap-count race total rides the tick for the sidecar fuel plan;
+    timed sessions (nil/0) omit the key."""
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local car = {
+            speedKmh = 120, rpm = 6000, gas = 0.5, brake = 0.0, steer = 0.1,
+            gear = 3, splinePosition = 0.42, lapCount = 2,
+          }
+          M.publishTelemetryTickIfDue({
+            dt = 0.06, car = car, wsBridge = ws, sessionLapsTotal = 28,
+          })
+          M.reset()
+          local ws2 = make_ws()
+          M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws2 })
+          return {
+            laps = ws._calls[1].send.payload.session_laps_total,
+            omitted = ws2._calls[1].send.payload.session_laps_total == nil,
+          }
+        end)()
+        """
+    )
+    assert out["laps"] == 28
+    assert out["omitted"] is True

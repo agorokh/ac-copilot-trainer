@@ -2543,6 +2543,17 @@ function script.update(dt)
     -- Was hardcoded 0/0; chassis_read pcall-guards the read and degrades to nil (→ 0 in the
     -- publisher) off-rig, so the live coaching path now sees true lateral/longitudinal load.
     local liveChassis = chassisRead.read(car)
+    -- #531 Part F: a lap-count race's total rides the tick as `session_laps_total` so the
+    -- sidecar's fuel plan (margin-to-flag / pit window) has a real target. pcall-guarded:
+    -- an older CSP build without the session API, or a timed session (laps==0), omits it.
+    local sessionLapsTotal = nil
+    pcall(function()
+      local sess = ac.getSession(sim.currentSessionIndex)
+      local laps = sess and tonumber(sess.laps)
+      if laps and laps > 0 then
+        sessionLapsTotal = laps
+      end
+    end)
     telemetryPublisher.publishTelemetryTickIfDue({
       dt = dt,
       car = car,
@@ -2553,6 +2564,7 @@ function script.update(dt)
       -- #531 Part E: the learned shift profile (#442) rides the tick as `shift_rpm` so the
       -- sidecar's shift observer cues from the same model the in-game HUD teaches.
       shiftProfile = state.shiftProfile,
+      sessionLapsTotal = sessionLapsTotal,
     })
   end)
   -- Round 10: drain any corner_advice replies into state.cornerAdvisories.

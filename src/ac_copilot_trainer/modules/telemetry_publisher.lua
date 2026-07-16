@@ -365,6 +365,13 @@ function M.publishTelemetryTickIfDue(opts)
   if lapTimeMs ~= nil and lapTimeMs >= 0 then
     payload.lap_time_ms = lapTimeMs
   end
+  -- #531 Part F: lap-count race total for the sidecar fuel plan (race_management's
+  -- `_target_laps_remaining` reads `session_laps_total` - lap). Omitted for timed
+  -- sessions / practice (caller passes nil) — the plan then renders its honest fallback.
+  local sessionLaps = _finite(opts.sessionLapsTotal)
+  if sessionLaps ~= nil and sessionLaps > 0 then
+    payload.session_laps_total = sessionLaps
+  end
   local fuel = _finite(_field(car, "fuel"))
   if fuel ~= nil then
     payload.fuel_l = math.max(0, fuel)
