@@ -1168,8 +1168,13 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
             reviewDirty = true;
             break;
           case "track.map":
-            S.map = identCompatible(p.car_id, p.track_id) ? p : null;
-            mapDirty = true;
+            if (identCompatible(p.car_id, p.track_id)) {
+              S.map = p; mapDirty = true;
+            } else {
+              // Full DOM reset on rejection (#618 R5): a dirty-flag alone leaves the
+              // previous track's pace notes under the no-reference state.
+              S.map = null; resetMapDom();
+            }
             break;
           case "setup.active":
             S.setupName = p.name || null;
@@ -1181,6 +1186,12 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
             // re-request setup data (Codex P2 on PR #547), not just a car swap.
             var ident = String(p.car_id || "") + "|" + String(p.track_id || "")
               + "|" + String(p.session_index === undefined ? "" : p.session_index);
+            // Car/track delta computed BEFORE the identity parts update: a session_index-only
+            // transition (practice→quali) must not drop the map (#618 R5 — track.map is only
+            // replayed on subscribe and would stay blank for the rest of the connection).
+            var carTrackChanged = S.sessionIdent !== null && (
+              String(S.sessionCarId || "") !== String(p.car_id || "")
+              || String(S.sessionTrackId || "").split("/")[0] !== String(p.track_id || "").split("/")[0]);
             S.sessionCarId = p.car_id || null;
             S.sessionTrackId = p.track_id || null;
             // Replayed cached frames may have arrived BEFORE this session snapshot — drop
@@ -1199,13 +1210,16 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               S.burns = []; // burn is per car AND per track length (Codex on PR #547)
               S.race = null; S.raceAt = 0; // sidecar race.status is per identity too (#531)
               if (hadIdentity) {
-                // A REAL identity switch drops the debrief and map — the new identity must
-                // not render the previous one's report/outline (Codex #618 R2). The FIRST
-                // session frame must NOT (#618 R4): the subscribe replay delivers
+                // A REAL identity switch drops the debrief — the new session must not
+                // render the previous one's report (Codex #618 R2). The FIRST session
+                // frame must NOT (#618 R4): the subscribe replay delivers
                 // track.map/session.review BEFORE session and never re-sends them; the
                 // compatibility check above already rejected any known mismatch.
                 S.review = null; reviewDirty = true;
-                S.map = null; resetMapDom();
+                // The MAP drops only when car/track actually changed (#618 R5): a
+                // session_index-only transition keeps the same geometry, and track.map
+                // would never be re-sent on this connection.
+                if (carTrackChanged) { S.map = null; resetMapDom(); }
               }
               // A REAL identity switch invalidates the setup name (per-session fact; the
               // trainer's follow-up setup.active names the new one — Codex on PR #547).
