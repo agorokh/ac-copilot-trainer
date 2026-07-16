@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-16T01:45:00Z
+last_updated: 2026-07-16T03:20:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-602-portaudio-fixed-layout-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-603-car-content-preflight-2026-07-15.md
@@ -98,25 +98,24 @@ relates_to:
 
 # Next session handoff
 
-## Review-resolved (2026-07-15) — #602 fixed-layout voice recovery (PR #606)
+## Delivered (2026-07-16) — #602 fixed-layout voice recovery CLOSED (PR #606)
 
-PR [#606](https://github.com/agorokh/ac-copilot-trainer/pull/606) is **merge-ready** on head
-[`7eec481`](https://github.com/agorokh/ac-copilot-trainer/commit/7eec481adcc739d899da43caa8b9e6b089cc8beb).
-It fixes the `PortAudio -9998` voice-disable failure: mono/48 kHz bank negotiates the pinned
-six-channel Windows WASAPI speaker layout and maps speech to front-center channel 3. Live proof
-remains: Game Point `VOICE ENABLED` with `1ch bank -> 6ch stream/6ch max map=[3]`; WASAPI loopback
-matched `Brake!` on channel 3 at score 1.0.
+PR [#606](https://github.com/agorokh/ac-copilot-trainer/pull/606) merged as
+[`a153fda`](https://github.com/agorokh/ac-copilot-trainer/commit/a153fda063490f40963e59a8a40685e8c3d263a6),
+closing [#602](https://github.com/agorokh/ac-copilot-trainer/issues/602). Mono/48 kHz phrase banks
+now negotiate the pinned Windows WASAPI fixed layout (rig: six-channel) and map speech to
+front-center channel 3. Live proof before merge: Game Point `VOICE ENABLED` with
+`1ch bank -> 6ch stream/6ch max map=[3]`; WASAPI loopback matched `Brake!` on channel 3 at
+score 1.0. Review hardening also covered stereo mono-duplication, factory-default chirp layout
+negotiation, multichannel bank expansion, and non-crashing legacy Playback injection.
 
-**Resolve-pr exit (this session):** required checks green (`build`, policy, conformance);
-GraphQL threads all resolved (Codex stereo-map + factory-default chirp); resolve-gate
-`No substantive findings hanging`; current-SHA daemon review present — cursor HIGH on
-`query_devices(kind="output")["index"]` **replied-invalid** with sounddevice 0.5.1 source evidence
-(`device_dict` always includes `'index'`; docs list the same key). Antigravity HIGH (playback
-default-device) treated as advisory/out-of-scope: voice engines intentionally require a pinned
-`AC_COPILOT_VOICE_DEVICE`. No code push this round.
+Post-merge sync (this session): local `main` at `a153fda`; feature branch deleted; Phase B
+classification reported **no** migration/env/deps/workflow follow-ups. Detail:
+[[issue-602-portaudio-fixed-layout-2026-07-15]].
 
-**Resume here:** merge PR #606 through the normal maintainer workflow (`gh pr merge 606` / UI).
-No further review loop work. Detail: [[issue-602-portaudio-fixed-layout-2026-07-15]].
+**Resume here:** #602 has no remaining product scope. Keep `AC_COPILOT_VOICE_DEVICE` /
+`AC_COPILOT_VOICE_HOST_API` pinned to the speaker endpoint (never the haptic USB-DAC). Re-verify
+only if the selected output device or host API changes.
 
 ## Delivered (2026-07-15) — #603 damaged-car preflight CLOSED (PR #607)
 
