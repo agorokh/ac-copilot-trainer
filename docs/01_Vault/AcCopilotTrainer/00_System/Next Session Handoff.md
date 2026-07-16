@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-16T03:20:00Z
+last_updated: 2026-07-16T07:30:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/rig-porsche-data-acd-restore-2026-07-16.md
   - AcCopilotTrainer/03_Investigations/issue-602-portaudio-fixed-layout-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-603-car-content-preflight-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-pit-stall-sim-death-2026-07-15.md
@@ -97,6 +98,15 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Rig maintenance (2026-07-16) — Porsche `data.acd` restored, tablet dash was collateral
+
+The "damaged, LODs list missing" Porsche (#603's trigger) was rig content damage, not a code
+regression: CM's extended-physics patch had renamed `data.acd` → `data.acd~cm_bak_ep` (2026-07-14
+23:47) without writing a replacement. Backup verified via `tools.ac_content` and copied back;
+`--preflight-only` now passes with app provenance `match`. Tablet dash server was healthy the whole
+time (`/tablet/dash` 200) — it was blank only because no race could launch. Detail:
+[[rig-porsche-data-acd-restore-2026-07-16]]. Keep CM "extended physics" unchecked for this car.
 
 ## Delivered (2026-07-16) — #602 fixed-layout voice recovery CLOSED (PR #606)
 
