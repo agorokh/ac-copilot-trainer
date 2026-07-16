@@ -41,6 +41,16 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
+**Active (2026-07-16, autonomous run):** [#531](https://github.com/agorokh/ac-copilot-trainer/issues/531)
+Phase 2+ delivery. Parts **D-remainder + E** MERGED via PR
+[#615](https://github.com/agorokh/ac-copilot-trainer/pull/615)
+([`de04860`](https://github.com/agorokh/ac-copilot-trainer/commit/de0486066538ac1e59486ce2219524ff9c19e27d)):
+`race.status` topic (fuel-as-a-decision + reference-anchored predicted lap), `upshift`/`downshift`
+cues from the learned shift profile, `audio_routing` on every cue, dash predicted row + tier-2
+micro-cue slot. **Next in the same run:** P7 rig-verify from merged main (incl. the unobserved
+TC/ABS intervention flash via #595), then Part F (COACH/MAP/STINT depth), Part G (native-audio
+latency gate), H/I scope reconciliation. Detail: [[issue-531-parte-cues-fuel-2026-07-16]].
+
 **Delivered (2026-07-16):** [#602](https://github.com/agorokh/ac-copilot-trainer/issues/602) is
 **CLOSED** by PR [#606](https://github.com/agorokh/ac-copilot-trainer/pull/606), merge
 [`a153fda`](https://github.com/agorokh/ac-copilot-trainer/commit/a153fda063490f40963e59a8a40685e8c3d263a6).

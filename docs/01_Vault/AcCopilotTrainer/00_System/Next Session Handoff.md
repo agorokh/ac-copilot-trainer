@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-16T07:30:00Z
+last_updated: 2026-07-16T09:00:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-531-parte-cues-fuel-2026-07-16.md
   - AcCopilotTrainer/03_Investigations/rig-tablet-tunnel-keeper-armed-2026-07-16.md
   - AcCopilotTrainer/03_Investigations/rig-porsche-data-acd-restore-2026-07-16.md
   - AcCopilotTrainer/03_Investigations/issue-602-portaudio-fixed-layout-2026-07-15.md
@@ -99,6 +100,25 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-16) — #531 Part D remainder + Part E MERGED (PR #615)
+
+PR [#615](https://github.com/agorokh/ac-copilot-trainer/pull/615) squash-merged as
+[`de04860`](https://github.com/agorokh/ac-copilot-trainer/commit/de0486066538ac1e59486ce2219524ff9c19e27d).
+New `race.status` topic (clean fuel-per-lap / laps-remaining / **predicted lap anchored on the
+delta's own `reference_lap_ms` baseline**), `upshift`/`downshift` cues from the learned
+`shift_profile.lua` model riding the tick as `shift_rpm`, `audio_routing` on every cue
+(`coaching.voice` always `authoritative_pc` — the tap fires post-playback), dash `predicted`
+row + §8 tier-2 micro-cue slot. 6 Codex P2s fixed in one round; daemon review absent (vacuous).
+Detail: [[issue-531-parte-cues-fuel-2026-07-16]].
+
+**Resume here (same autonomous run, task queued):** rig-verify on the P7 from merged main —
+restart the :8765 sidecar, drive via harness, observe fuel/predicted/shift cues on glass +
+the still-unobserved TC/ABS intervention flash (#595 made it evidencable). Then Part F
+(COACH/MAP/STINT depth — reconcile spec-prose "boards never swept" vs the mock's full sweep;
+the mock is the issue-designated ground truth), Part G (native-audio latency gate), Parts H/I
+scope reconciliation. Note the installed AC app junction serves the **primary checkout — now
+on merged main `de04860`** (ff'd this session).
 
 ## Rig maintenance (2026-07-16) — Porsche `data.acd` restored, tablet dash was collateral
 
