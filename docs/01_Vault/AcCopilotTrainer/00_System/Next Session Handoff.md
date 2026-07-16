@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-07-16T09:00:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-531-partf-pages-2026-07-16.md
   - AcCopilotTrainer/03_Investigations/rig-physics-wedge-voice-wasapi-2026-07-16.md
   - AcCopilotTrainer/03_Investigations/issue-531-parte-cues-fuel-2026-07-16.md
   - AcCopilotTrainer/03_Investigations/rig-tablet-tunnel-keeper-armed-2026-07-16.md
@@ -101,6 +102,24 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-16) — #531 Part F MERGED (PR #618, 12 review rounds)
+
+PR [#618](https://github.com/agorokh/ac-copilot-trainer/pull/618) squash-merged as
+[`786f0b8`](https://github.com/agorokh/ac-copilot-trainer/commit/786f0b82d411d4419da6f9cb2cc390ba61eb55cc).
+COACH bound to `session.review`; MAP renders real reference geometry via the new `track.map`
+topic; STINT gains real I/M/O tread temps + a fuel plan with a real race target
+(`session_laps_total`); durable dev feeder shipped. 19 Codex P2s + daemon HIGHs/MEDIUMs all
+fixed or evidence-rebutted (one daemon FP on Lua 0-truthiness rebutted with lupa-executed
+proof). Follow-up: [#622](https://github.com/agorokh/ac-copilot-trainer/issues/622).
+Detail: [[issue-531-partf-pages-2026-07-16]].
+
+**Resume here:** (1) Part F rig-verify on the P7 — BLOCKED on the #619 font-cache reboot
+(operator-run); the wedge watchdog is armed and auto-dumps any recurrence. (2) Then #531
+Part G (native-audio latency gate), Parts H/I reconciliation. Rig state: :8765 sidecar runs
+NO-VOICE from source (not the Game Point EXE); after a clean post-reboot session, rebuild the
+EXE from main (includes Part F) and restore the launcher with voice per #619's retraction.
+
 
 ## RIG INCIDENT (2026-07-16) — physics wedge at go-live; voice DISABLED on the rig (#619)
 
