@@ -11,7 +11,18 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/issue-531-parte-cues-fuel-2026-07-16.md
 ---
 
-# Rig unplayable: voice-armed sidecar wedges AC physics at go-live (#619)
+# Rig unplayable: DirectWrite font-cache hang on AC's main thread (#619)
+
+> **CORRECTION (same day):** the voice/WASAPI attribution below is RETRACTED — wedges
+> occurred with voice off and a healthy run with voice on. Actual root cause: **AC's
+> MAIN thread blocked inside DirectWrite font-collection enumeration** (dump-captured:
+> acs main loop → dwrite.dll → KERNELBASE wait, with devobj.dll enumeration; operator
+> confirmed audio-alive / ESC-dead / HUD-dead). Windows font store changed Jul 13 —
+> the crash/stall pattern begins Jul 13 02:34. Fix: font-cache rebuild (reboot or
+> FontCache purge). Voice re-arm on the rig is unblocked once a clean session is
+> observed post-rebuild. Full detail: #619 correction comment. Durable lesson:
+> **operator-symptom triage (audio? ESC? HUD clock?) discriminates hang scope faster
+> than any theory — ask first, theorize second.**
 
 Operator report 2026-07-16 ~10:00: AC loads, renders one frame, world never moves; wheel/pedals
 "feel" alive; tablet blank. **Not** focus-pause, **not** the tablet dashboard, **not** content.
