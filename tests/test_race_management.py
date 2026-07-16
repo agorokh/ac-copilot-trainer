@@ -155,3 +155,41 @@ def test_conditions_strategy_wet_and_deduped() -> None:
     assert cue.urgency == "act"
     assert cue.detail["classification"] == "wet_regime"
     assert second == []
+
+
+# ------------------------------------------------------------------- fuel_status (#531 Part D)
+def test_fuel_status_surfaces_clean_fields_without_cue_gating() -> None:
+    """#531 Part D remainder: the same numbers the fuel cue buries in `detail`, as an
+    ungated first-class read for the race.status topic."""
+    observer = RaceManagementObserver()
+
+    observer.observe(_tick(lap=0, fuel_l=10.0))
+    observer.observe(_tick(lap=1, fuel_l=8.0))
+
+    status = observer.fuel_status(_tick(lap=1, fuel_l=8.0, target_laps_remaining=3.0))
+    assert status == {
+        "fuel_l": 8.0,
+        "fuel_per_lap_l": 2.0,
+        "laps_remaining": 4.0,
+        "samples": 1,
+        "fuel_per_lap_source": "observed_laps",
+        "target_laps_remaining": 3.0,
+    }
+    # Ungated: an identical second read returns the same fields (no dedup key consumed).
+    assert observer.fuel_status(_tick(lap=1, fuel_l=8.0, target_laps_remaining=3.0)) == status
+
+
+def test_fuel_status_none_without_fuel_or_burn() -> None:
+    observer = RaceManagementObserver()
+    assert observer.fuel_status(_tick(lap=0)) is None  # no fuel channel
+    assert observer.fuel_status(_tick(lap=0, fuel_l=10.0)) is None  # no burn measurable yet
+
+
+def test_fuel_status_does_not_consume_the_advisory_dedup() -> None:
+    """Reading status must never swallow the cue: the advisory still fires after reads."""
+    observer = RaceManagementObserver()
+    observer.observe(_tick(lap=0, fuel_l=10.0))
+    observer.fuel_status(_tick(lap=1, fuel_l=8.0, target_laps_remaining=5.0))
+
+    out = observer.observe(_tick(lap=1, fuel_l=8.0, target_laps_remaining=5.0))
+    assert [a.kind for a in out] == ["fuel_save"]

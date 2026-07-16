@@ -2520,6 +2520,9 @@ function script.update(dt)
         deltaS = rawDelta,
         spline = spNow,
         wsBridge = wsBridge,
+        -- #531 Part D remainder: the baseline this delta is measured against, so the
+        -- sidecar's predicted lap never mixes it with a different lap time.
+        referenceLapMs = state.activeReferenceLapMs,
       })
     end
   end)
@@ -2545,6 +2548,9 @@ function script.update(dt)
       lat_g = liveChassis.accG_lat,
       long_g = liveChassis.accG_long,
       temps = currentTireTemps,
+      -- #531 Part E: the learned shift profile (#442) rides the tick as `shift_rpm` so the
+      -- sidecar's shift observer cues from the same model the in-game HUD teaches.
+      shiftProfile = state.shiftProfile,
     })
   end)
   -- Round 10: drain any corner_advice replies into state.cornerAdvisories.

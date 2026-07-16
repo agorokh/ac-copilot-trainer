@@ -18,6 +18,7 @@
 -- the `test_ws_topic_allowlist` drift-guard can resolve them against KNOWN_TOPICS.
 
 local wheelRead = require("wheel_read")
+local shiftProfileModel = require("shift_profile")
 
 local M = {}
 
@@ -92,9 +93,18 @@ function M.publishDeltaIfDue(opts)
   if not due then
     return false
   end
+  -- #531 Part D remainder: the delta's OWN baseline (the active reference trace's lap time)
+  -- rides with it so the sidecar's predicted lap adds the gap to the RIGHT lap time — the
+  -- stint best is the wrong baseline when an imported reference drives the delta. Omitted
+  -- when unknown (never 0).
+  local referenceLapMs = _finite(opts.referenceLapMs)
+  if referenceLapMs ~= nil and referenceLapMs <= 0 then
+    referenceLapMs = nil
+  end
   return wsBridge.publishTopic(TOPIC_DELTA, {
     delta_s = deltaS,
     spline = _finite(opts.spline),  -- omit a non-finite spline rather than emit unserializable JSON (#185)
+    reference_lap_ms = referenceLapMs,
   }) == true
 end
 
@@ -253,7 +263,7 @@ end
 
 
 --- Publish client→server ``telemetry_tick`` at ~20 Hz (M0 #341). Requires ``wsBridge.sendJson``.
----@param opts table  {dt:number, car:any, wsBridge, lat_g?:number, long_g?:number, temps?:table}
+---@param opts table  {dt:number, car:any, wsBridge, lat_g?:number, long_g?:number, temps?:table, shiftProfile?:table}
 ---@return boolean
 function M.publishTelemetryTickIfDue(opts)
   if type(opts) ~= "table" then
@@ -301,6 +311,19 @@ function M.publishTelemetryTickIfDue(opts)
   local rpmMax = _finite(_field(car, "rpmLimiter"))
   if rpmMax ~= nil and rpmMax > 0 then
     payload.rpm_max = rpmMax
+  end
+  -- #531 Part E: the shift-profile model's resolved upshift target rides the tick so the
+  -- sidecar shift observer cues from the same LEARNED per-gear point the in-game HUD
+  -- teaches (#442), not a re-derived limiter fraction. Only meaningful in a forward gear;
+  -- resolveShiftTarget returns nil when neither a learned profile nor a limiter is known,
+  -- in which case both keys are omitted (unknown, never 0).
+  if gear >= 1 then
+    local shiftRpm, _, shiftProvenance =
+      shiftProfileModel.resolveShiftTarget(opts.shiftProfile, gear, rpmMax)
+    if shiftRpm ~= nil and shiftRpm > 0 then
+      payload.shift_rpm = shiftRpm
+      payload.shift_rpm_source = shiftProvenance
+    end
   end
   local lapTimeMs = _finite(_field(car, "lapTimeMs"))
   if lapTimeMs ~= nil and lapTimeMs >= 0 then

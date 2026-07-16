@@ -550,3 +550,165 @@ def test_calibration_inactive_when_coach_v2_owns_the_cue_path(monkeypatch):
     assert server._brake_calibration_active() is False
     monkeypatch.setattr(server, "_coach_runtime", None)
     assert server._brake_calibration_active() is True
+
+
+# ---------------------------------------------------------------- #531 Part D/E server wiring
+def test_cue_payload_carries_audio_routing_by_register(monkeypatch):
+    """#531 Part E: urgent/critical cues route authoritative_pc; calm/alert tablet_native."""
+    _reset_feed(monkeypatch)
+    server._race_status.reset()
+    advisories = [
+        Advisory(
+            kind="late_brake",
+            corner=1,
+            spline=0.1,
+            urgency="act",
+            message="m",
+            detail={},
+            register="urgent",
+        ),
+        Advisory(
+            kind="fuel_status",
+            corner=-1,
+            spline=0.1,
+            urgency="info",
+            message="m",
+            detail={},
+            register="calm",
+        ),
+    ]
+    observer = _FakeObserver(advisories)
+    monkeypatch.setattr(server, "_observer", observer)
+    monkeypatch.setattr(server, "_shift_observer", None)
+    sent = _capture_broadcast(monkeypatch)
+
+    frame = {"type": "telemetry_tick", "payload": {"spline": 0.1, "speed_kmh": 100}}
+    asyncio.run(_run_publish_cues(frame, exclude="ws-1"))
+
+    routings = {f["payload"]["kind"]: f["payload"]["audio_routing"] for f, _ in sent}
+    assert routings == {"late_brake": "authoritative_pc", "fuel_status": "tablet_native"}
+
+
+def test_shift_observer_cues_broadcast_but_never_reach_voice(monkeypatch):
+    """#531 Part E: upshift/downshift fan out on coaching.cue, but are NOT submitted to the
+    in-process voice coach (no baked clips — the resolver would warn-and-drop per straight)."""
+    _reset_feed(monkeypatch)
+    server._race_status.reset()
+    monkeypatch.setattr(server, "_observer", None)
+    server.set_race_manager(None)
+    shift = _FakeObserver(
+        [
+            Advisory(
+                kind="upshift",
+                corner=-1,
+                spline=0.2,
+                urgency="act",
+                message="Shift up.",
+                detail={},
+                register="calm",
+            )
+        ]
+    )
+    monkeypatch.setattr(server, "_shift_observer", shift)
+
+    class _RecordingCoach:
+        def __init__(self):
+            self.seen = []
+
+        def subscribe(self, advisory):
+            self.seen.append(advisory)
+
+    coach = _RecordingCoach()
+    monkeypatch.setattr(server, "_voice_coach", coach)
+    sent = _capture_broadcast(monkeypatch)
+
+    frame = {"type": "telemetry_tick", "payload": {"rpm": 8800, "gear": 3, "throttle": 0.9}}
+    asyncio.run(_run_publish_cues(frame, exclude="ws-1"))
+
+    kinds = [f["payload"]["kind"] for f, _ in sent if f.get("topic") == "coaching.cue"]
+    assert kinds == ["upshift"]
+    assert sent[0][0]["payload"]["audio_routing"] == "tablet_native"
+    assert coach.seen == []  # not in the voice vocabulary -> never submitted
+
+
+def test_vocabulary_kinds_still_reach_voice(monkeypatch):
+    _reset_feed(monkeypatch)
+    server._race_status.reset()
+    monkeypatch.setattr(server, "_observer", _FakeObserver([_adv(kind="late_brake")]))
+    monkeypatch.setattr(server, "_shift_observer", None)
+
+    class _RecordingCoach:
+        def __init__(self):
+            self.seen = []
+
+        def subscribe(self, advisory):
+            self.seen.append(advisory)
+
+    coach = _RecordingCoach()
+    monkeypatch.setattr(server, "_voice_coach", coach)
+    _capture_broadcast(monkeypatch)
+
+    frame = {"type": "telemetry_tick", "payload": {"spline": 0.5, "speed_kmh": 100}}
+    asyncio.run(_run_publish_cues(frame, exclude="ws-1"))
+    assert [a.kind for a in coach.seen] == ["late_brake"]
+
+
+def test_race_status_published_from_tick_fuel_change_gated(monkeypatch):
+    """#531 Part D remainder: the tick path publishes race.status once per change, quiet on
+    identical payloads."""
+    _reset_feed(monkeypatch)
+    server._race_status.reset()
+    monkeypatch.setattr(server, "_observer", None)
+    monkeypatch.setattr(server, "_shift_observer", None)
+    sent = _capture_broadcast(monkeypatch)
+
+    def _tick_frame(lap, fuel):
+        return {"type": "telemetry_tick", "payload": {"lap": lap, "fuel_l": fuel}}
+
+    asyncio.run(_run_publish_cues(_tick_frame(0, 10.0), exclude="ws-1"))
+    server._peripheral_rate_limiter.reset()  # bypass the 1 Hz cap for the test
+    asyncio.run(_run_publish_cues(_tick_frame(1, 8.0), exclude="ws-1"))
+    server._peripheral_rate_limiter.reset()
+    asyncio.run(_run_publish_cues(_tick_frame(1, 8.0), exclude="ws-1"))
+
+    status_frames = [f for f, _ in sent if f.get("topic") == "race.status"]
+    assert len(status_frames) == 1
+    payload = status_frames[0]["payload"]
+    assert payload["fuel_per_lap_l"] == 2.0
+    assert payload["laps_remaining"] == 4.0
+    assert status_frames[0]["source"] == "sidecar.race_status"
+
+
+def test_relay_taps_feed_race_status_predicted_lap(monkeypatch):
+    """The Lua delta/lap topics flowing through the relay feed the predicted-lap fusion —
+    anchored on the delta's own reference baseline, not the stint best."""
+    server._race_status.reset()
+    server._race_status.note_lap({"lap": 3, "best_lap_ms": 112000.0})
+    server._race_status.note_delta({"delta_s": 0.5, "reference_lap_ms": 110000.0})
+    snap = server._race_status.snapshot()
+    assert snap["predicted_lap_ms"] == 110500
+
+
+def test_release_observer_feed_resets_shift_and_race_status(monkeypatch):
+    """A producer swap must not inherit the previous stream's armed gears or fuel/delta
+    fusion (Codex on PR #615)."""
+    monkeypatch.setattr(server, "_observer_feed_peer", "ws-owner")
+    monkeypatch.setattr(server, "_observer", None)
+    monkeypatch.setattr(server, "_coach_runtime", None)
+    server.set_race_manager(None)
+
+    class _Resettable:
+        def __init__(self):
+            self.resets = 0
+
+        def reset(self):
+            self.resets += 1
+
+    shift = _Resettable()
+    monkeypatch.setattr(server, "_shift_observer", shift)
+    server._race_status.reset()
+    server._race_status.note_fuel({"fuel_l": 10.0, "fuel_per_lap_l": 2.0, "laps_remaining": 5.0})
+
+    server._release_observer_feed("ws-owner")
+    assert shift.resets == 1
+    assert server._race_status.snapshot() is None

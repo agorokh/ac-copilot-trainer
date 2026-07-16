@@ -188,19 +188,36 @@ class RaceManagementObserver:
         self._lap_start_fuel_l = fuel_l
         return True
 
-    def _fuel_advisory(
-        self, frame: dict[str, Any], lap: int | None, *, lap_advanced: bool
-    ) -> Advisory | None:
+    def _fuel_numbers(
+        self, frame: dict[str, Any], lap: int | None
+    ) -> tuple[float, float, float, float | None] | None:
+        """Raw ``(fuel_l, per_lap, laps_remaining, target)`` for the current frame, or ``None``
+        when fuel is unmeasurable. Unrounded — cue thresholds compare against these so a value
+        rounded for the wire can never flip a near-threshold decision (Codex on PR #615)."""
         fuel_l = _num(_pick(frame, "fuel_l", "fuelLevel", "fuel"))
         direct_per_lap = _num(_pick(frame, "fuel_per_lap_l", "fuelPerLapL"))
         if fuel_l is None or (not self.fuel_samples and direct_per_lap is None):
             return None
         per_lap = _mean(list(self.fuel_samples)) if self.fuel_samples else direct_per_lap
-        if per_lap <= 0:
+        if per_lap is None or per_lap <= 0:
             return None
-        laps_remaining = fuel_l / per_lap
-        target = _target_laps_remaining(frame, lap)
-        detail = {
+        return fuel_l, per_lap, fuel_l / per_lap, _target_laps_remaining(frame, lap)
+
+    def fuel_status(self, frame: dict[str, Any], lap: int | None = None) -> dict[str, Any] | None:
+        """Clean fuel fields for the current frame, or ``None`` when fuel is unmeasurable.
+
+        #531 Part D remainder: the same numbers ``_fuel_advisory`` buries inside a cue ``detail``,
+        surfaced as first-class fields so the ``race.status`` topic (and any other consumer) can
+        read fuel-as-a-decision without parsing cues. Ungated — no dedup, no register ladder;
+        callers rate-limit. ``lap`` defaults to the frame's own lap counter.
+        """
+        if lap is None:
+            lap = _lap(frame)
+        numbers = self._fuel_numbers(frame, lap)
+        if numbers is None:
+            return None
+        fuel_l, per_lap, laps_remaining, target = numbers
+        status = {
             "fuel_l": round(fuel_l, 2),
             "fuel_per_lap_l": round(per_lap, 3),
             "laps_remaining": round(laps_remaining, 2),
@@ -208,7 +225,18 @@ class RaceManagementObserver:
             "fuel_per_lap_source": "observed_laps" if self.fuel_samples else "frame",
         }
         if target is not None:
-            detail["target_laps_remaining"] = round(target, 2)
+            status["target_laps_remaining"] = round(target, 2)
+        return status
+
+    def _fuel_advisory(
+        self, frame: dict[str, Any], lap: int | None, *, lap_advanced: bool
+    ) -> Advisory | None:
+        numbers = self._fuel_numbers(frame, lap)
+        if numbers is None:
+            return None
+        _fuel_l, per_lap, laps_remaining, target = numbers
+        detail = self.fuel_status(frame, lap)
+        if target is not None:
             deficit = target - laps_remaining
             if deficit > _FUEL_SHORT_MARGIN_LAPS:
                 register = "critical" if deficit >= _FUEL_CRITICAL_DEFICIT_LAPS else "urgent"
