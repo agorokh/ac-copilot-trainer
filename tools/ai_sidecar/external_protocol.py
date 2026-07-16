@@ -256,10 +256,21 @@ TOPIC_SESSION_REVIEW = "session.review"
 #: telemetry_tick fuel channel + the Lua ``delta``/``lap`` topics. Low-rate (~1 Hz),
 #: change-gated, honest — absent fields are unmeasured, never zero-filled.
 TOPIC_RACE_STATUS = "race.status"
+#: Topic the sidecar publishes the reference-derived track geometry on (#531 Part F): a
+#: downsampled spline-ordered outline (real px/pz from the loaded reference archive) plus the
+#: coach-aligned corner list. Event-driven (built once at reference wire time), cached, and
+#: replayed to late subscribers like the other sidecar-produced snapshots.
+TOPIC_TRACK_MAP = "track.map"
 # Topics the sidecar produces directly (no loopback Lua relay). Voice/offline clients may
 # state.subscribe to these without a Lua peer connected.
 SIDECAR_PRODUCED_TOPICS: frozenset[str] = frozenset(
-    {TOPIC_COACHING_CUE, TOPIC_COACHING_VOICE, TOPIC_SESSION_REVIEW, TOPIC_RACE_STATUS}
+    {
+        TOPIC_COACHING_CUE,
+        TOPIC_COACHING_VOICE,
+        TOPIC_SESSION_REVIEW,
+        TOPIC_RACE_STATUS,
+        TOPIC_TRACK_MAP,
+    }
 )
 KNOWN_TOPICS: frozenset[str] = frozenset(
     {
@@ -280,6 +291,8 @@ KNOWN_TOPICS: frozenset[str] = frozenset(
         TOPIC_SESSION_REVIEW,
         # Sidecar-originated fused race status (#531 Part D remainder).
         TOPIC_RACE_STATUS,
+        # Sidecar-originated reference-derived track geometry (#531 Part F).
+        TOPIC_TRACK_MAP,
     }
 )
 
@@ -388,6 +401,18 @@ def make_race_status(payload: dict[str, Any]) -> dict[str, Any]:
         "topic": TOPIC_RACE_STATUS,
         "payload": payload,
         "source": "sidecar.race_status",
+    }
+
+
+def make_track_map(payload: dict[str, Any]) -> dict[str, Any]:
+    """Build a ``track.map`` topic frame (#531 Part F) — see
+    :func:`tools.ai_sidecar.track_map.build_track_map` for the payload contract."""
+    return {
+        ENVELOPE_KEY: ENVELOPE_VERSION,
+        TYPE_KEY: TYPE_STATE_SNAPSHOT,
+        "topic": TOPIC_TRACK_MAP,
+        "payload": payload,
+        "source": "sidecar.track_map",
     }
 
 

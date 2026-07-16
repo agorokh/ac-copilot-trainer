@@ -109,60 +109,6 @@ function M.publishDeltaIfDue(opts)
 end
 
 
---- Publish `tire_temps` at ~5 Hz. `opts.temps` is {fl, fr, rl, rr} (numbers or nil), e.g. from
---- `tire_monitor`'s :currentTemps(car).
----@param opts table  {dt:number, temps:table, wsBridge}
----@return boolean  true if a frame was actually published this call
-function M.publishTireTempsIfDue(opts)
-  if type(opts) ~= "table" then
-    return false
-  end
-  local wsBridge = _wsReady(opts)
-  if not wsBridge then
-    return false
-  end
-  local temps = opts.temps
-  if type(temps) ~= "table" then
-    return false
-  end
-  local fl = _finite(temps.fl)
-  local fr = _finite(temps.fr)
-  local rl = _finite(temps.rl)
-  local rr = _finite(temps.rr)
-  if fl == nil and fr == nil and rl == nil and rr == nil then
-    -- No wheel temp resolvable on this CSP build/car: treat the sample as UNAVAILABLE rather
-    -- than publishing an empty {} every interval (Lua drops nil-valued keys), which would
-    -- mask the data-source failure as apparently-live-but-empty samples (codex on #185).
-    return false
-  end
-  local due, accum = _due(_tireAccum, tonumber(opts.dt) or 0, TIRE_INTERVAL_SEC)
-  _tireAccum = accum
-  if not due then
-    return false
-  end
-  return wsBridge.publishTopic(TOPIC_TIRE_TEMPS, {
-    fl = fl,
-    fr = fr,
-    rl = rl,
-    rr = rr,
-  }) == true
-end
-
-
-local function _clamp(v, lo, hi)
-  v = tonumber(v)
-  if v == nil or v ~= v or v == math.huge or v == -math.huge then
-    return lo
-  end
-  if v < lo then
-    return lo
-  end
-  if v > hi then
-    return hi
-  end
-  return v
-end
-
 local function _field(obj, key)
   if obj == nil then
     return nil
@@ -196,6 +142,89 @@ local function _cornerMap(values)
   return nil
 end
 
+
+-- #531 Part F: cross-tread temps (inner/mid/outer) for the STINT page, from the #490 Tier-1
+-- wheel channels. Per-wheel pcall-free (wheel_read guards its own field reads); a wheel or
+-- channel that does not resolve is simply absent from its map, and an entirely-empty map is
+-- omitted from the payload (unknown, never zero-filled).
+local function _treadMaps(car)
+  local inner, middle, outer = {}, {}, {}
+  local wheels = car and _field(car, "wheels")
+  if wheels == nil then
+    return nil, nil, nil
+  end
+  for i = 0, 3 do
+    local key = wheelRead.WHEEL_KEYS[i]
+    local one = _field(wheels, i)
+    if one ~= nil then
+      inner[key] = wheelRead.tyreTempInner(one)
+      middle[key] = wheelRead.tyreTempMid(one)
+      outer[key] = wheelRead.tyreTempOuter(one)
+    end
+  end
+  return inner, middle, outer
+end
+
+
+--- Publish `tire_temps` at ~5 Hz. `opts.temps` is {fl, fr, rl, rr} (numbers or nil), e.g. from
+--- `tire_monitor`'s :currentTemps(car). `opts.car` (optional) additionally sources the
+--- inner/mid/outer cross-tread maps for the STINT page (#531 Part F).
+---@param opts table  {dt:number, temps:table, wsBridge, car?:any}
+---@return boolean  true if a frame was actually published this call
+function M.publishTireTempsIfDue(opts)
+  if type(opts) ~= "table" then
+    return false
+  end
+  local wsBridge = _wsReady(opts)
+  if not wsBridge then
+    return false
+  end
+  local temps = opts.temps
+  if type(temps) ~= "table" then
+    return false
+  end
+  local fl = _finite(temps.fl)
+  local fr = _finite(temps.fr)
+  local rl = _finite(temps.rl)
+  local rr = _finite(temps.rr)
+  if fl == nil and fr == nil and rl == nil and rr == nil then
+    -- No wheel temp resolvable on this CSP build/car: treat the sample as UNAVAILABLE rather
+    -- than publishing an empty {} every interval (Lua drops nil-valued keys), which would
+    -- mask the data-source failure as apparently-live-but-empty samples (codex on #185).
+    return false
+  end
+  local due, accum = _due(_tireAccum, tonumber(opts.dt) or 0, TIRE_INTERVAL_SEC)
+  _tireAccum = accum
+  if not due then
+    return false
+  end
+  local payload = {
+    fl = fl,
+    fr = fr,
+    rl = rl,
+    rr = rr,
+  }
+  local inner, middle, outer = _treadMaps(opts.car)
+  payload.inner = _cornerMap(inner)
+  payload.middle = _cornerMap(middle)
+  payload.outer = _cornerMap(outer)
+  return wsBridge.publishTopic(TOPIC_TIRE_TEMPS, payload) == true
+end
+
+
+local function _clamp(v, lo, hi)
+  v = tonumber(v)
+  if v == nil or v ~= v or v == math.huge or v == -math.huge then
+    return lo
+  end
+  if v < lo then
+    return lo
+  end
+  if v > hi then
+    return hi
+  end
+  return v
+end
 
 -- #531 Part D: CSP `ac.StateWheel.tyreWear` is 0..1 wear CONSUMED — 0.0 is a NEW tyre and the
 -- value grows with use. Matches the wire field `tyre_wear_pct` (0 = new, 100 = gone), which the

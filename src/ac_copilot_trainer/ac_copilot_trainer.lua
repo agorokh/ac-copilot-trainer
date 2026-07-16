@@ -2536,6 +2536,8 @@ function script.update(dt)
       dt = dt,
       temps = currentTireTemps,
       wsBridge = wsBridge,
+      -- #531 Part F: sources the inner/mid/outer cross-tread maps for the STINT page.
+      car = car,
     })
     -- Real measured g-forces (issue #478): CSP `car.acceleration` is in G (.x lateral, .z long).
     -- Was hardcoded 0/0; chassis_read pcall-guards the read and degrades to nil (→ 0 in the

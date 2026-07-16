@@ -1,0 +1,85 @@
+"""Track-map payload for the tablet MAP page (#531 Part F).
+
+Built once from the loaded reference archive — the same artifact that arms the realtime
+observer — because its trace carries real world coordinates (``px``/``pz``, in the archive
+since the Tier-B channel work) ordered by spline. No track-install parsing, no invented
+geometry: **no reference archive → no map** (the page renders its explicit unknown).
+
+Payload shape (the ``track.map`` topic):
+
+``{track_id?, car_id?, source: "reference_archive", lap_ms?,
+   outline: [[x, z], ...],       # downsampled to <= MAX_OUTLINE_POINTS, spline-ordered
+   spline:  [s, ...],            # per outline point — the client maps live spline -> dot
+   corners: [{label, spline, entry_spline, min_speed_kmh, gear?}, ...]}``
+
+Corners come from :func:`tools.ai_sidecar.lap_dynamics.segment_corners` — the SAME
+segmentation the coach's spoken turn numbers use, so the map's T-labels can never drift
+from the voice (the cue/track-misalignment pitfall).
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from tools.ai_sidecar.lap_dynamics import LapTrace, lap_trace_from_archive, segment_corners
+
+#: Outline resolution cap — ~2 m spacing on a 5 km lap, well under the A133's SVG budget.
+MAX_OUTLINE_POINTS = 256
+
+
+def _round_gear(value: float) -> int | None:
+    try:
+        g = int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+    return g if g >= 1 else None
+
+
+def build_track_map(archive: dict[str, Any]) -> dict[str, Any] | None:
+    """The ``track.map`` payload for ``archive``, or ``None`` when it cannot be built honestly.
+
+    Never raises: a malformed archive (no trace, no position channels, too few samples)
+    returns ``None`` — the caller logs and the MAP page keeps its explicit unknown.
+    """
+    try:
+        lap = lap_trace_from_archive(archive)
+    except (ValueError, TypeError):
+        return None
+    n = len(lap.spline)
+    if n < 8:
+        return None
+
+    step = max(1, -(-n // MAX_OUTLINE_POINTS))  # ceil-div: the cap is a cap, not a target
+    idx = list(range(0, n, step))
+    outline = [[round(lap.x[i], 1), round(lap.z[i], 1)] for i in idx]
+    spline = [round(lap.spline[i], 4) for i in idx]
+
+    corners: list[dict[str, Any]] = []
+    for turn, (entry_i, apex_i, _exit_i) in enumerate(segment_corners(lap), start=1):
+        corner: dict[str, Any] = {
+            "label": f"T{turn}",
+            "spline": round(lap.spline[apex_i], 4),
+            "entry_spline": round(lap.spline[entry_i], 4),
+            "min_speed_kmh": round(lap.v_ms[apex_i] * 3.6),
+        }
+        gear = _round_gear(lap.gear[apex_i])
+        if gear is not None:
+            corner["gear"] = gear
+        corners.append(corner)
+
+    payload: dict[str, Any] = {
+        "source": "reference_archive",
+        "outline": outline,
+        "spline": spline,
+        "corners": corners,
+    }
+    if lap.track_id:
+        payload["track_id"] = lap.track_id
+    if lap.car_id:
+        payload["car_id"] = lap.car_id
+    if lap.lap_ms is not None and lap.lap_ms > 0:
+        payload["lap_ms"] = lap.lap_ms
+    return payload
+
+
+__all__ = ["MAX_OUTLINE_POINTS", "build_track_map", "LapTrace"]

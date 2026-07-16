@@ -160,6 +160,13 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
 .crow{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line)}
 .cnm{font-family:var(--fd);font-weight:600;font-size:14px;letter-spacing:.04em;text-transform:uppercase;color:var(--mute)}
 .cg{font-family:var(--fm);font-size:11px;color:var(--dim)}
+/* #531 Part F — mock-faithful COACH cause bars + MAP corner badges (reference_mock.html). */
+.cbadge{font-family:var(--fd);font-weight:700;font-size:12px;color:var(--brass);border:1px solid var(--edge);padding:1px 6px}
+.phase{display:flex;align-items:center;gap:10px;padding:9px 0}
+.phase .pl{font-family:var(--fd);font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);width:64px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pbar{flex:1;height:16px;background:var(--raise);position:relative}
+.pbf{position:absolute;top:0;bottom:0;left:50%}
+.pv{font-family:var(--fr);font-weight:700;font-size:16px;font-variant-numeric:tabular-nums;width:70px;text-align:right}
 .nodata{font-family:var(--fd);font-weight:600;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);text-align:center;line-height:1.8}
 .tcell{border:1px solid var(--edge);padding:10px}
 </style>
@@ -237,37 +244,45 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     </div>
   </div>
 
-  <!-- COACH (post-lap debrief; full reference-vs-you split lands with #531 Part F) -->
+  <!-- COACH (post-lap debrief, #531 Part F — bound to the sidecar session.review topic) -->
   <div class="page" id="p-coach">
     <div class="sketch">
-      <div class="panel pad" style="flex:1;display:flex;flex-direction:column"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
-        <div class="mh">Debrief</div>
-        <div style="font-family:var(--fd);font-weight:800;font-size:26px;text-transform:uppercase;color:var(--chalk);margin:6px 0 4px" id="dbHead">&mdash;</div>
-        <div class="mono" style="font-size:13px;color:var(--mute);line-height:1.6;margin-bottom:12px" id="dbBody">Live coaching lines appear here as they arrive.</div>
-        <div class="nodata" style="margin:auto">PER-PHASE DELTA SPLIT &mdash; PHASE 2 (#531 PART F)</div>
+      <div class="panel pad" style="flex:1;display:flex;flex-direction:column;overflow:hidden"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh" id="dbTitle">Debrief</div>
+        <div style="font-family:var(--fd);font-weight:800;font-size:26px;text-transform:uppercase;color:var(--chalk);margin:6px 0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" id="dbHead">&mdash;</div>
+        <div class="mono" style="font-size:13px;color:var(--mute);line-height:1.6;margin-bottom:12px" id="dbBody">Live coaching lines appear here as they arrive; the full debrief lands with the post-session review.</div>
+        <div id="dbCauses"></div>
       </div>
-      <div class="panel pad" style="width:320px;display:flex;flex-direction:column"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
-        <div class="mh">Laps</div>
+      <div class="panel pad" style="width:320px;display:flex;flex-direction:column;overflow:hidden"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh">Priorities &middot; time lost</div>
+        <div id="dbPriorities"><div class="mono" style="font-size:12px;color:var(--dim);margin-top:4px" id="dbPrioEmpty">review pending &mdash; complete a session</div></div>
+        <div class="mh" style="margin-top:12px">Laps</div>
         <div class="crow"><span class="cnm">Last</span><span class="cg" id="dbLast" style="font-size:14px;color:var(--chalk)">&mdash;</span></div>
         <div class="crow"><span class="cnm">Best</span><span class="cg" id="dbBest" style="font-size:14px;color:var(--clear)">&mdash;</span></div>
         <div class="crow" style="border-bottom:0"><span class="cnm">Laps done</span><span class="cg" id="dbLaps" style="font-size:14px;color:var(--chalk)">&mdash;</span></div>
-        <div class="nodata" style="margin:auto">PRIORITIES BY TIME LOST &mdash; PHASE 2</div>
       </div>
     </div>
   </div>
 
-  <!-- MAP (track map + pace notes land with #531 Part F) -->
+  <!-- MAP (real geometry from the sidecar track.map topic — #531 Part F) -->
   <div class="page" id="p-map">
     <div class="sketch">
       <div class="panel mapmain"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
-        <div class="nodata">TRACK MAP &mdash; PHASE 2 (#531 PART F)<br><span class="mono" style="font-size:12px;color:var(--faint);text-transform:none">spline position <span id="mapSpline">&mdash;</span></span></div>
+        <svg id="mapSvg" viewBox="0 0 620 380" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="display:none">
+          <path id="mapTrough" d="" fill="none" stroke="#20242A" stroke-width="15" stroke-linejoin="round"></path>
+          <path id="mapLine" d="" fill="none" stroke="#49B6C9" stroke-width="3" stroke-linejoin="round"></path>
+          <rect id="mapStart" x="0" y="0" width="9" height="26" fill="#EEF1F3" style="display:none"></rect>
+          <circle id="mapDot" cx="0" cy="0" r="10" fill="#F23B2C" style="display:none"></circle>
+          <circle id="mapDotRing" cx="0" cy="0" r="10" fill="none" stroke="#0B0C0D" stroke-width="2" style="display:none"></circle>
+        </svg>
+        <div class="nodata" id="mapEmpty">TRACK MAP &mdash; NO REFERENCE LOADED<br><span class="mono" style="font-size:12px;color:var(--faint);text-transform:none">spline position <span id="mapSpline">&mdash;</span></span></div>
       </div>
       <div class="panel mside"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
         <div style="display:flex;justify-content:space-between;align-items:baseline"><span class="lbl" style="font-size:11px" id="mapLap">lap &mdash;</span><span style="font-family:var(--fr);font-weight:700;font-size:24px;color:var(--chalk)" id="mapCur">&mdash;</span></div>
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:6px;border-bottom:1px solid var(--line);padding-bottom:12px"><span class="lbl" style="font-size:11px">delta</span><span style="font-family:var(--fr);font-weight:700;font-size:24px;color:var(--dim)" id="mapDelta">&mdash;</span></div>
         <div class="mh" style="margin-top:12px">Ahead</div>
         <div class="crow" style="border-bottom:0"><span class="cnm" id="mapNext">&mdash;</span><span class="cg" id="mapNextSub"></span></div>
-        <div class="nodata" style="margin:auto">PACE-NOTE QUEUE &mdash; PHASE 2</div>
+        <div id="mapQueue"></div>
       </div>
     </div>
   </div>
@@ -276,7 +291,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
   <div class="page" id="p-stint">
     <div class="sketch">
       <div class="panel pad" style="flex:1"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
-        <div class="mh">Tyres &middot; core temp (inner/mid/outer &mdash; Phase 2)</div>
+        <div class="mh">Tyres &middot; tread inner / mid / outer + wear</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:6px">
           <div class="tcell"><div class="lbl" style="font-size:10px">FL</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px" id="st-fl">&mdash;</div><div class="mono" style="font-size:12px;color:var(--dim)" id="stp-fl">&mdash; psi &middot; &mdash; wear</div></div>
           <div class="tcell"><div class="lbl" style="font-size:10px">FR</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px" id="st-fr">&mdash;</div><div class="mono" style="font-size:12px;color:var(--dim)" id="stp-fr">&mdash; psi &middot; &mdash; wear</div></div>
@@ -285,10 +300,11 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
         </div>
       </div>
       <div class="panel pad" style="width:320px;display:flex;flex-direction:column"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
-        <div class="mh">Fuel</div>
-        <div style="display:flex;align-items:baseline;gap:8px;margin-top:4px"><span style="font-family:var(--fr);font-weight:700;font-size:34px;color:var(--chalk)" id="stFuel">&mdash;</span><span class="lbl" style="font-size:11px">litres onboard</span></div>
-        <div class="mono" style="font-size:13px;color:var(--mute);line-height:1.8;margin-top:10px" id="stFuelSub">burn &mdash;</div>
-        <div class="nodata" style="margin:auto">PIT WINDOW &mdash; PHASE 2</div>
+        <div class="mh" id="stPlanTitle">Fuel</div>
+        <div style="display:flex;align-items:baseline;gap:8px;margin-top:4px"><span style="font-family:var(--fr);font-weight:700;font-size:34px;color:var(--chalk)" id="stFuel">&mdash;</span><span class="lbl" style="font-size:11px" id="stFuelUnit">litres onboard</span></div>
+        <div class="mono" style="font-size:13px;color:var(--mute);line-height:1.8;margin-top:10px;white-space:pre-line" id="stFuelSub">burn &mdash;</div>
+        <div class="mh" style="margin-top:14px">Pit window</div>
+        <div class="mono" style="font-size:13px;color:var(--chalk);margin-top:4px" id="stPit">&mdash; (no race target set)</div>
       </div>
     </div>
   </div>
@@ -320,6 +336,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     fuelAtLap: null, burns: [],     // client-side fuel-per-lap (median of last 3 lap diffs)
     lastCue: null, cueAt: 0,        // latest coaching.cue payload + receive time (tier-2 micro)
     race: null, raceAt: 0,          // race.status payload (sidecar fuel/predicted, #531 Part D)
+    review: null,                   // session.review payload (COACH debrief, #531 Part F)
+    map: null,                      // track.map payload (MAP geometry, #531 Part F)
   };
 
   // ---- helpers ---------------------------------------------------------------------------
@@ -570,7 +588,16 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       setEl(pe, p !== null ? p.toFixed(1) : "—");
       var pfg = p !== null ? "" : "var(--dim)";
       if (pe._fg !== pfg) { pe.style.color = pfg; pe._fg = pfg; }
-      setText("st-" + c, t !== null ? Math.round(t) + "° core" : "—");
+      // #531 Part F: cross-tread I/M/O when the producer streams it; the core temp remains
+      // the honest fallback (an absent tread channel never fabricates a spread).
+      var imo = null;
+      if (fresh && S.tires.inner && S.tires.middle && S.tires.outer) {
+        var ti = fin(S.tires.inner[c]), tm = fin(S.tires.middle[c]), to = fin(S.tires.outer[c]);
+        if (ti !== null && tm !== null && to !== null) {
+          imo = Math.round(ti) + " · " + Math.round(tm) + " · " + Math.round(to) + "°";
+        }
+      }
+      setText("st-" + c, imo !== null ? imo : (t !== null ? Math.round(t) + "° core" : "—"));
       setText("stp-" + c, (p !== null ? p.toFixed(1) + " psi" : "— psi")
         + " · " + (w !== null ? Math.round(w) + "% wear" : "— wear"));
     }
@@ -638,6 +665,144 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       setText("cMicro", micro);
     }
   }
+  // ---- COACH page (#531 Part F): bound to the sidecar session.review topic ---------------
+  var reviewDirty = false;
+  function renderCoachPage() {
+    if (!reviewDirty) return;
+    reviewDirty = false;
+    var r = S.review;
+    var problems = r && Array.isArray(r.problems) ? r.problems : [];
+    if (!r || r.error) {
+      setText("dbTitle", "Debrief");
+      if (r && r.error) { setText("dbHead", "REVIEW FAILED"); setText("dbBody", String(r.error)); }
+      return;
+    }
+    var best = fin(r.best_lap_ms);
+    setText("dbTitle", "Debrief" + (best !== null ? " · vs best (" + fmtLap(best) + ")" : ""));
+    var summary = typeof r.screen_summary === "string" && r.screen_summary ? r.screen_summary : "";
+    if (problems.length) {
+      var top = problems[0];
+      setText("dbHead", "Biggest gain · " + String(top.label || top.corner || "—"));
+      var line = String(top.headline || "");
+      if (top.recommended_fix) line += (line ? " — " : "") + String(top.recommended_fix);
+      setText("dbBody", line || summary || "—");
+      // Cause split for the top problem: measured attribution counts, weighted into the
+      // mock's bar rows. Bars render only for causes that were actually observed.
+      var causes = Array.isArray(top.causes) ? top.causes.slice(0, 4) : [];
+      var totalC = 0;
+      causes.forEach(function (c) { totalC += (fin(c.count) || 0); });
+      var html = "";
+      causes.forEach(function (c) {
+        var w = totalC > 0 ? Math.round(((fin(c.count) || 0) / totalC) * 46) : 0;
+        html += '<div class="phase"><span class="pl">' + esc(String(c.cause || "")) + '</span>'
+          + '<div class="pbar"><span class="pbf" style="width:' + w + '%;background:var(--brake)"></span></div>'
+          + '<span class="pv" style="color:var(--brake)">' + (fin(c.count) || 0) + '×</span></div>';
+      });
+      $("dbCauses").innerHTML = html;
+    } else {
+      setText("dbHead", summary ? "SESSION REVIEW" : "—");
+      setText("dbBody", summary || "Review generated with no corner problems above threshold.");
+      $("dbCauses").innerHTML = "";
+    }
+    var pr = "";
+    problems.slice(0, 4).forEach(function (p, i) {
+      var loss = fin(p.total_time_loss_s);
+      var col = i === 0 ? "var(--brake)" : (i === 1 ? "var(--brake)" : "var(--lift)");
+      pr += '<div class="crow"' + (i === 3 ? ' style="border-bottom:0"' : "") + '><span class="cnm"'
+        + (i === 0 ? ' style="color:var(--chalk)"' : "") + ">" + esc(String(p.label || "T?"))
+        + " · " + esc(shortFix(p)) + '</span><span class="cg" style="color:' + col + ';font-size:13px">'
+        + (loss !== null ? loss.toFixed(2) : "—") + "</span></div>";
+    });
+    $("dbPriorities").innerHTML = pr
+      || '<div class="mono" style="font-size:12px;color:var(--dim);margin-top:4px">no corner problems above threshold</div>';
+  }
+  function shortFix(p) {
+    var fix = String(p.recommended_fix || p.primary_cause || "").toLowerCase();
+    return fix.length > 22 ? fix.slice(0, 22) + "…" : fix;
+  }
+  function esc(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // ---- MAP page (#531 Part F): real geometry from the sidecar track.map topic -------------
+  var mapDirty = false;
+  var mapGeom = null; // {pts:[[svgx,svgy]...], spline:[...], corners:[...]} in viewBox space
+  function buildMapGeometry() {
+    var m = S.map;
+    var outline = m && Array.isArray(m.outline) ? m.outline : null;
+    if (!outline || outline.length < 8) { mapGeom = null; return; }
+    var minX = 1 / 0, maxX = -1 / 0, minZ = 1 / 0, maxZ = -1 / 0;
+    outline.forEach(function (p) {
+      if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];
+      if (p[1] < minZ) minZ = p[1]; if (p[1] > maxZ) maxZ = p[1];
+    });
+    var pad = 30, W = 620, H = 380;
+    var sx = (W - 2 * pad) / Math.max(1, maxX - minX);
+    var sy = (H - 2 * pad) / Math.max(1, maxZ - minZ);
+    var sc = Math.min(sx, sy);
+    var ox = (W - (maxX - minX) * sc) / 2, oy = (H - (maxZ - minZ) * sc) / 2;
+    var pts = outline.map(function (p) {
+      return [ox + (p[0] - minX) * sc, oy + (p[1] - minZ) * sc];
+    });
+    mapGeom = { pts: pts, spline: m.spline || [], corners: Array.isArray(m.corners) ? m.corners : [] };
+    var d = "M" + pts.map(function (p) { return p[0].toFixed(1) + "," + p[1].toFixed(1); }).join(" L") + " Z";
+    $("mapTrough").setAttribute("d", d);
+    $("mapLine").setAttribute("d", d);
+    var s0 = pts[0];
+    var st = $("mapStart");
+    st.setAttribute("x", (s0[0] - 4.5).toFixed(1));
+    st.setAttribute("y", (s0[1] - 13).toFixed(1));
+    st.style.display = "";
+    $("mapSvg").style.display = "";
+    $("mapEmpty").style.display = "none";
+  }
+  function mapPointAt(spline) {
+    // The outline is spline-ordered and near-uniform; index by fraction, exact enough for a dot.
+    var g = mapGeom;
+    if (!g || !g.pts.length) return null;
+    var i = Math.max(0, Math.min(g.pts.length - 1, Math.round(spline * (g.pts.length - 1))));
+    return g.pts[i];
+  }
+  function renderMapPage(liveTick, spline) {
+    if (mapDirty) { mapDirty = false; buildMapGeometry(); }
+    var g = mapGeom;
+    if (!g) return; // honest empty state stays
+    var dot = $("mapDot"), ring = $("mapDotRing");
+    if (liveTick && spline !== null) {
+      var p = mapPointAt(spline);
+      if (p) {
+        dot.setAttribute("cx", p[0].toFixed(1)); dot.setAttribute("cy", p[1].toFixed(1));
+        ring.setAttribute("cx", p[0].toFixed(1)); ring.setAttribute("cy", p[1].toFixed(1));
+        dot.style.display = ""; ring.style.display = "";
+      }
+    } else {
+      dot.style.display = "none"; ring.style.display = "none";
+    }
+    // Pace-note queue: the next up-to-3 coach-aligned corners ahead of the live spline.
+    var corners = g.corners;
+    if (!corners.length) { $("mapQueue").innerHTML = ""; return; }
+    var s = spline !== null ? spline : 0;
+    var ahead = corners.slice().sort(function (a, b) {
+      var da = (a.spline - s + 1) % 1, db = (b.spline - s + 1) % 1;
+      return da - db;
+    }).slice(0, 3);
+    var key = ahead.map(function (c) { return c.label; }).join("|");
+    if ($("mapQueue")._key === key) return; // change-gated DOM write
+    $("mapQueue")._key = key;
+    var html = "";
+    ahead.forEach(function (c, i) {
+      var note = (fin(c.gear) !== null ? ordinalGear(c.gear) : "")
+        + (fin(c.min_speed_kmh) !== null ? (fin(c.gear) !== null ? " · " : "") + Math.round(c.min_speed_kmh) : "");
+      html += '<div class="crow"' + (i === 2 ? ' style="border-bottom:0"' : "")
+        + '><span style="display:flex;gap:9px;align-items:center"><span class="cbadge">' + esc(String(c.label || "")) + "</span></span>"
+        + '<span class="cg">' + esc(note || "—") + "</span></div>";
+    });
+    $("mapQueue").innerHTML = html;
+  }
+  function ordinalGear(g) {
+    return g === 1 ? "1st" : g === 2 ? "2nd" : g === 3 ? "3rd" : g + "th";
+  }
+
   // Kind → short lane verb for the tier-2 micro-cue slot. Deliberately NOT every cue kind:
   // corner coaching already owns the snapshot line, and an unmapped kind renders nothing
   // rather than a raw identifier.
@@ -769,8 +934,29 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       setText("stintM", "—");
       setText("stintSub", "burn unknown");
     }
-    setText("stFuel", fuel !== null ? fuel.toFixed(1) : "—");
-    setText("stFuelSub", burnShown !== null ? "burn " + burnShown.toFixed(2) + " L/lap" + burnSrc : "burn — (complete a lap)");
+    // STINT fuel plan (#531 Part F): margin-to-flag + pit window when the sidecar knows the
+    // race target (race.status target_laps_remaining); plain onboard litres otherwise.
+    var target = race ? fin(race.target_laps_remaining) : null;
+    if (target !== null && lapsLeft !== null && burnShown !== null) {
+      var margin = lapsLeft - target;
+      var need = target * burnShown;
+      setText("stPlanTitle", "Fuel plan · " + Math.ceil(target) + " laps to flag");
+      setText("stFuel", (margin >= 0 ? "+" : "−") + Math.abs(margin).toFixed(1));
+      setText("stFuelUnit", "lap margin to flag");
+      $("stFuel").style.color = margin >= 0 ? "var(--clear)" : "var(--brake)";
+      setText("stFuelSub", "onboard " + (fuel !== null ? fuel.toFixed(1) : "—") + " L\nburn "
+        + burnShown.toFixed(2) + " L/lap" + burnSrc + "\nto flag need " + need.toFixed(1) + " L");
+      setText("stPit", margin >= 0 ? "no stop needed" : "pit within " + Math.max(0, Math.floor(lapsLeft)) + " laps");
+      $("stPit").style.color = margin >= 0 ? "var(--chalk)" : "var(--brake)";
+    } else {
+      setText("stPlanTitle", "Fuel");
+      setText("stFuel", fuel !== null ? fuel.toFixed(1) : "—");
+      setText("stFuelUnit", "litres onboard");
+      $("stFuel").style.color = "var(--chalk)";
+      setText("stFuelSub", burnShown !== null ? "burn " + burnShown.toFixed(2) + " L/lap" + burnSrc : "burn — (complete a lap)");
+      setText("stPit", "— (no race target set)");
+      $("stPit").style.color = "var(--chalk)";
+    }
 
     // header weather/temps: render only when the producer actually sends them
     var wx = live && typeof t.weather_type === "string" && t.weather_type ? t.weather_type : null;
@@ -798,6 +984,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     $("mapDelta").style.color = d === null ? "var(--dim)" : (d <= 0 ? "var(--clear)" : "var(--brake)");
     var spl = live ? fin(t.spline) : null;
     setText("mapSpline", spl !== null ? (spl * 100).toFixed(1) + "%" : "—");
+    renderMapPage(live, spl);
+    renderCoachPage();
     // Same freshness gate as the RACE lane: MAP must not keep advertising a corner whose
     // producer stopped (Codex on PR #547).
     var snap = S.coach !== null && (Date.now() - S.coachAt) < STALE_MS ? S.coach : null;
@@ -806,7 +994,9 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     setText("dbLast", S.lap ? fmtLap(fin(S.lap.last_lap_ms)) : "—");
     setText("dbBest", S.lap ? fmtLap(fin(S.lap.best_lap_ms)) : "—");
     setText("dbLaps", S.lap && fin(S.lap.laps_completed) !== null ? String(S.lap.laps_completed) : "—");
-    if (S.lastCue) {
+    if (S.lastCue && !S.review) {
+      // Pre-review fallback only (#531 Part F): once a session.review lands, the debrief
+      // owns dbHead/dbBody (renderCoachPage) and the live-cue line must not clobber it.
       // coaching.cue contract: `message` is the human-readable line (kind/corner/urgency/
       // message/spline/detail per make_coaching_cue); `detail` is a structured object —
       // never stringify it at the UI (Qodo on PR #547).
@@ -884,7 +1074,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       ws.send(JSON.stringify({
         v: 1, type: "state.subscribe",
         topics: ["coaching.snapshot", "coaching.cue", "coaching.voice", "delta", "tire_temps",
-                 "setup.active", "session", "lap", "connection", "race.status"],
+                 "setup.active", "session", "lap", "connection", "race.status",
+                 "session.review", "track.map"],
       }));
       requestSetupData(ws);
       // Re-request per-car ranges until they arrive (AC may connect after the tablet), then
@@ -917,6 +1108,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
           case "coaching.snapshot": S.coach = p; S.coachAt = Date.now(); break;
           case "coaching.cue": S.lastCue = p; S.cueAt = Date.now(); break;
           case "race.status": S.race = p; S.raceAt = Date.now(); break;
+          case "session.review": S.review = p; reviewDirty = true; break;
+          case "track.map": S.map = p; mapDirty = true; break;
           case "setup.active":
             S.setupName = p.name || null;
             renderHeader();

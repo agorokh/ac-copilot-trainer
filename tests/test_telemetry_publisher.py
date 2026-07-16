@@ -828,3 +828,49 @@ def test_delta_carries_reference_lap_ms_when_known():
     assert out["with_ref"] == 90000
     assert out["without_has"] is False
     assert out["zero_has"] is False
+
+
+def test_tire_temps_carries_tread_imo_when_wheels_expose_it():
+    """#531 Part F: inner/mid/outer cross-tread maps ride the tire_temps topic when the
+    #490 Tier-1 wheel channels resolve; omitted entirely when the car lacks them."""
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local wheels = {}
+          for i = 0, 3 do
+            wheels[i] = {
+              tyreInsideTemperature = 84 + i,
+              tyreMiddleTemperature = 82 + i,
+              tyreOutsideTemperature = 79 + i,
+            }
+          end
+          local car = { wheels = wheels }
+          M.publishTireTempsIfDue({
+            dt = 0.25, temps = { fl = 82, fr = 84, rl = 86, rr = 88 }, wsBridge = ws, car = car,
+          })
+          M.reset()
+          local ws2 = make_ws()
+          M.publishTireTempsIfDue({
+            dt = 0.25, temps = { fl = 82, fr = 84, rl = 86, rr = 88 }, wsBridge = ws2,
+            car = { wheels = nil },
+          })
+          local p = ws._calls[1] and ws._calls[1].payload
+          local p2 = ws2._calls[1] and ws2._calls[1].payload
+          return {
+            inner_fl = p and p.inner and p.inner.fl,
+            middle_rr = p and p.middle and p.middle.rr,
+            outer_fr = p and p.outer and p.outer.fr,
+            core_fl = p and p.fl,
+            no_car_has_inner = p2.inner ~= nil,
+          }
+        end)()
+        """
+    )
+    assert out["inner_fl"] == 84
+    assert out["middle_rr"] == 85
+    assert out["outer_fr"] == 80
+    assert out["core_fl"] == 82
+    assert out["no_car_has_inner"] is False

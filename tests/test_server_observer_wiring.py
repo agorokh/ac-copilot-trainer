@@ -712,3 +712,18 @@ def test_release_observer_feed_resets_shift_and_race_status(monkeypatch):
     server._release_observer_feed("ws-owner")
     assert shift.resets == 1
     assert server._race_status.snapshot() is None
+
+
+def test_wire_voice_builds_track_map_frame(tmp_path, monkeypatch):
+    """#531 Part F: wiring a corner-bearing reference also builds the track.map frame the
+    subscribe replay path serves to late subscribers."""
+    monkeypatch.setattr(server, "_observer", None)
+    monkeypatch.setattr(server, "_track_map_frame", None)
+    ref = tmp_path / "ref.json"
+    ref.write_text(json.dumps(_corner_archive()), encoding="utf-8")
+    server._wire_voice(server.VoiceRuntimeConfig(reference_path=str(ref), bank_dir=None))
+    frame = server._track_map_frame
+    assert frame is not None
+    assert frame["topic"] == "track.map"
+    assert len(frame["payload"]["outline"]) >= 8
+    assert frame["payload"]["corners"][0]["label"] == "T1"
