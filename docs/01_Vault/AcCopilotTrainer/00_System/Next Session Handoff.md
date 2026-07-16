@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-07-16T07:30:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/rig-tablet-tunnel-keeper-armed-2026-07-16.md
   - AcCopilotTrainer/03_Investigations/rig-porsche-data-acd-restore-2026-07-16.md
   - AcCopilotTrainer/03_Investigations/issue-602-portaudio-fixed-layout-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-603-car-content-preflight-2026-07-15.md
@@ -107,6 +108,14 @@ regression: CM's extended-physics patch had renamed `data.acd` → `data.acd~cm_
 `--preflight-only` now passes with app provenance `match`. Tablet dash server was healthy the whole
 time (`/tablet/dash` 200) — it was blank only because no race could launch. Detail:
 [[rig-porsche-data-acd-restore-2026-07-16]]. Keep CM "extended physics" unchecked for this car.
+
+**Follow-up (same day):** the dash stayed dead after the car fix — the adb daemon was down and the
+reverse tunnel gone, and the #567 keeper was dormant because `AC_COPILOT_MANAGE_TABLET_TUNNEL` was
+never set on the rig. Now armed durably (`setx`, User scope), Game Point relaunched with `--start`,
+and self-heal proven live (`adb reverse --remove-all` → keeper re-asserted within the 5 s poll
+tick, tablet stayed connected). Detail: [[rig-tablet-tunnel-keeper-armed-2026-07-16]]. Running EXE
+is still `8a895ee-dirty` (pre-#602: voice disabled) — the EXE rebuild from merged main remains the
+open rig step.
 
 ## Delivered (2026-07-16) — #602 fixed-layout voice recovery CLOSED (PR #606)
 
