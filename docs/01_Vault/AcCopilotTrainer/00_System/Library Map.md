@@ -14,4 +14,4 @@ relates_to:
 |------------|------|-------|
 | _Add rows as the project grows_ | | |
 
-Use Context7 MCP for upstream API details; record **project-specific** integration choices here.
+Use official docs and targeted web search for upstream API details (the context7 MCP server is retired fleet-wide; governance-hub#274 <!-- mcp-retirement-ok -->); record **project-specific** integration choices here.
