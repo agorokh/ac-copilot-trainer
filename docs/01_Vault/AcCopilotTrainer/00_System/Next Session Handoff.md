@@ -113,9 +113,13 @@ time (`/tablet/dash` 200) — it was blank only because no race could launch. De
 reverse tunnel gone, and the #567 keeper was dormant because `AC_COPILOT_MANAGE_TABLET_TUNNEL` was
 never set on the rig. Now armed durably (`setx`, User scope), Game Point relaunched with `--start`,
 and self-heal proven live (`adb reverse --remove-all` → keeper re-asserted within the 5 s poll
-tick, tablet stayed connected). Detail: [[rig-tablet-tunnel-keeper-armed-2026-07-16]]. Running EXE
-is still `8a895ee-dirty` (pre-#602: voice disabled) — the EXE rebuild from merged main remains the
-open rig step.
+tick, tablet stayed connected). Detail: [[rig-tablet-tunnel-keeper-armed-2026-07-16]].
+
+**EXE rebuild DONE (same day):** packaged Game Point rebuilt from clean merged main —
+`/health` now reports `build_commit: 63345d6` (non-dirty), packaged `--self-test` green on both
+tablet endpoints, and **voice is ENABLED**: the #602 fix is live on the rig (rtmixer on the 5.1
+USB device, `1ch bank -> 6ch stream`, speech on front-center `channel_map=[3]`). Both peers
+connected (`screen_peers=1`, `browser_peers=1`). No open rig steps from this maintenance arc.
 
 ## Delivered (2026-07-16) — #602 fixed-layout voice recovery CLOSED (PR #606)
 
