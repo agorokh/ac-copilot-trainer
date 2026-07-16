@@ -708,3 +708,88 @@ def test_entry_isolates_tire_stream_from_optional_delta_failures():
     assert "publishTireTempsIfDue" not in delta_block
     assert "pcall(function()" in tyre_block
     assert "publishTireTempsIfDue" in tyre_block
+
+
+# --------------------------------------------------------------------------- shift_rpm (#531 E)
+def test_telemetry_tick_carries_learned_shift_rpm_from_profile():
+    """#531 Part E: the resolved shift target rides the tick so the sidecar shift observer
+    cues from the SAME learned per-gear model the in-game HUD teaches (#442)."""
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local car = {
+            speedKmh = 120, rpm = 6000, gas = 0.9, brake = 0.0, steer = 0.1,
+            gear = 3, splinePosition = 0.42, lapCount = 2, rpmLimiter = 9000,
+          }
+          local profile = {
+            hasLearnedShift = true,
+            byGear = { [3] = 7400 },
+            defaultRpm = 7600,
+          }
+          M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws, shiftProfile = profile })
+          local p = ws._calls[1] and ws._calls[1].send.payload
+          return { shift_rpm = p and p.shift_rpm, source = p and p.shift_rpm_source }
+        end)()
+        """
+    )
+    assert out["shift_rpm"] == 7400
+    assert out["source"] == "learned"
+
+
+def test_telemetry_tick_shift_rpm_heuristic_without_profile():
+    """No learned profile -> the shift_profile heuristic fraction of the real limiter."""
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local car = {
+            speedKmh = 120, rpm = 6000, gas = 0.9, brake = 0.0, steer = 0.1,
+            gear = 3, splinePosition = 0.42, lapCount = 2, rpmLimiter = 9000,
+          }
+          M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws })
+          local p = ws._calls[1] and ws._calls[1].send.payload
+          return { shift_rpm = p and p.shift_rpm, source = p and p.shift_rpm_source }
+        end)()
+        """
+    )
+    assert out["shift_rpm"] == 9000 * 0.92
+    assert out["source"] == "heuristic"
+
+
+def test_telemetry_tick_omits_shift_rpm_in_neutral_or_without_limiter():
+    """Neutral has no shift point, and no-limiter+no-profile resolves nothing — both omit
+    the keys (unknown, never 0)."""
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local neutral = {
+            speedKmh = 0, rpm = 900, gas = 0.0, brake = 0.0, steer = 0.0,
+            gear = 0, splinePosition = 0.0, lapCount = 0, rpmLimiter = 9000,
+          }
+          M.publishTelemetryTickIfDue({ dt = 0.06, car = neutral, wsBridge = ws })
+          M.reset()
+          local ws2 = make_ws()
+          local noLimiter = {
+            speedKmh = 120, rpm = 6000, gas = 0.9, brake = 0.0, steer = 0.1,
+            gear = 3, splinePosition = 0.42, lapCount = 2,
+          }
+          M.publishTelemetryTickIfDue({ dt = 0.06, car = noLimiter, wsBridge = ws2 })
+          local p1 = ws._calls[1] and ws._calls[1].send.payload
+          local p2 = ws2._calls[1] and ws2._calls[1].send.payload
+          return {
+            neutral_has = p1.shift_rpm ~= nil,
+            nolimiter_has = p2.shift_rpm ~= nil,
+          }
+        end)()
+        """
+    )
+    assert out["neutral_has"] is False
+    assert out["nolimiter_has"] is False

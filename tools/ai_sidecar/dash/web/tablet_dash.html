@@ -199,6 +199,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
         <div class="trow"><span class="k">current</span><span class="t" id="tCur">&mdash;</span></div>
         <div class="trow"><span class="k">last</span><span class="t" id="tLast">&mdash;</span></div>
         <div class="trow"><span class="k">best</span><span class="t" id="tBest" style="color:var(--clear)">&mdash;</span></div>
+        <div class="trow"><span class="k">predicted</span><span class="t" id="tPred" style="color:var(--data)">&mdash;</span></div>
         <div class="stint"><div class="mh" style="margin-bottom:4px">Stint &middot; fuel to flag</div>
           <div style="display:flex;align-items:baseline;justify-content:space-between"><span class="m" id="stintM">&mdash;</span><span class="mono" style="font-size:12px;color:var(--dim)" id="stintSub"></span></div></div>
       </div>
@@ -300,6 +301,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
   var $ = function (id) { return document.getElementById(id); };
   var RIBBON_CELLS = 20;
   var STALE_MS = 3000;
+  var RACE_STATUS_STALE_MS = 6000; // race.status is ~1 Hz + change-gated; allow a quiet gap
+  var CUE_MICRO_MS = 4000;         // tier-2 micro-cue dwell (§8: at most one, then blank)
   var RENDER_MIN_MS = 66; // <=15 Hz DOM writes (A133 budget)
 
   // ---- live state (written by WS handlers, read by the render loop) ----------------------
@@ -315,7 +318,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     sessionIdent: null,             // "car|track|session" key (re-request setup data on change)
     spinners: null,                 // setup.spinner.list.result .spinners
     fuelAtLap: null, burns: [],     // client-side fuel-per-lap (median of last 3 lap diffs)
-    lastCue: null,                  // latest coaching.cue text for the debrief page
+    lastCue: null, cueAt: 0,        // latest coaching.cue payload + receive time (tier-2 micro)
+    race: null, raceAt: 0,          // race.status payload (sidecar fuel/predicted, #531 Part D)
   };
 
   // ---- helpers ---------------------------------------------------------------------------
@@ -624,10 +628,30 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
         sub = tgt !== null ? "min " + Math.round(tgt) + " km/h" : String(snap.secondary_line || "");
         micro = snap.corner_label && snap.primary_line ? String(snap.primary_line) : "";
       }
+      // #531 Part E tier-2: a fresh actionable cue takes the single micro-cue slot (§8: at
+      // most ONE CommandVerb-lite), then blanks after its dwell. Corner cues stay with the
+      // snapshot line above; this slot carries the stint/shift verbs the snapshot never says.
+      var cueMicro = microCueLabel();
+      if (cueMicro) micro = cueMicro;
       setText("cNext", head);
       setText("cSub", sub);
       setText("cMicro", micro);
     }
+  }
+  // Kind → short lane verb for the tier-2 micro-cue slot. Deliberately NOT every cue kind:
+  // corner coaching already owns the snapshot line, and an unmapped kind renders nothing
+  // rather than a raw identifier.
+  var MICRO_CUE_LABELS = {
+    upshift: "UPSHIFT ▲", downshift: "DOWNSHIFT ▼", fuel_save: "FUEL SAVE",
+    fuel_status: "FUEL", tyre_manage: "TYRES", brake_manage: "BRAKES",
+    conditions_strategy: "CONDITIONS"
+  };
+  function microCueLabel() {
+    if (!S.lastCue || (Date.now() - S.cueAt) >= CUE_MICRO_MS) return "";
+    var label = MICRO_CUE_LABELS[String(S.lastCue.kind || "")];
+    if (!label) return "";
+    var corner = fin(S.lastCue.corner);
+    return corner !== null && corner >= 0 ? label + " · T" + (corner + 1) : label;
   }
 
   // ---- fuel-as-a-decision (client-side burn from lap boundaries) ----------------------------
@@ -712,16 +736,31 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     setText("tCur", live ? fmtLap(fin(t.lap_time_ms)) : "—");
     setText("tLast", S.lap ? fmtLap(fin(S.lap.last_lap_ms)) : "—");
     setText("tBest", S.lap ? fmtLap(fin(S.lap.best_lap_ms)) : "—");
+    // #531 Part D remainder: predicted lap (stint best + live delta) is computed SIDECAR-side
+    // on race.status; a stale/absent status renders the honest unknown, never a frozen value.
+    var race = S.race !== null && (Date.now() - S.raceAt) < RACE_STATUS_STALE_MS ? S.race : null;
+    setText("tPred", race ? fmtLap(fin(race.predicted_lap_ms)) : "—");
 
-    // fuel
+    // fuel — prefer the sidecar-computed race.status fields (#531 Part D remainder: observed
+    // whole-lap burn, target-aware); fall back to the client-side burn estimate when absent.
     var fuel = live ? fin(t.fuel_l) : null;
     var cap = live ? fin(t.fuel_capacity_l) : null;
     var burn = medianBurn();
-    if (fuel !== null && burn !== null) {
-      setText("fuelBig", (fuel / burn).toFixed(1));
+    var lapsLeft = null, burnShown = null, burnSrc = "";
+    if (race && fin(race.laps_remaining) !== null && fin(race.fuel_per_lap_l) !== null) {
+      lapsLeft = race.laps_remaining;
+      burnShown = race.fuel_per_lap_l;
+      if (fuel === null) fuel = fin(race.fuel_l);
+    } else if (fuel !== null && burn !== null) {
+      lapsLeft = fuel / burn;
+      burnShown = burn;
+      burnSrc = " est";
+    }
+    if (fuel !== null && lapsLeft !== null) {
+      setText("fuelBig", lapsLeft.toFixed(1));
       setText("fuelUnit", "laps left");
-      setText("fuelSub", fuel.toFixed(1) + " L · " + burn.toFixed(2) + " L/lap");
-      setText("stintM", "+" + (fuel / burn).toFixed(1));
+      setText("fuelSub", fuel.toFixed(1) + " L · " + burnShown.toFixed(2) + " L/lap" + burnSrc);
+      setText("stintM", "+" + lapsLeft.toFixed(1));
       setText("stintSub", "laps of fuel");
     } else {
       setText("fuelBig", fuel !== null ? fuel.toFixed(1) : "—");
@@ -731,7 +770,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       setText("stintSub", "burn unknown");
     }
     setText("stFuel", fuel !== null ? fuel.toFixed(1) : "—");
-    setText("stFuelSub", burn !== null ? "burn " + burn.toFixed(2) + " L/lap" : "burn — (complete a lap)");
+    setText("stFuelSub", burnShown !== null ? "burn " + burnShown.toFixed(2) + " L/lap" + burnSrc : "burn — (complete a lap)");
 
     // header weather/temps: render only when the producer actually sends them
     var wx = live && typeof t.weather_type === "string" && t.weather_type ? t.weather_type : null;
@@ -845,7 +884,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       ws.send(JSON.stringify({
         v: 1, type: "state.subscribe",
         topics: ["coaching.snapshot", "coaching.cue", "coaching.voice", "delta", "tire_temps",
-                 "setup.active", "session", "lap", "connection"],
+                 "setup.active", "session", "lap", "connection", "race.status"],
       }));
       requestSetupData(ws);
       // Re-request per-car ranges until they arrive (AC may connect after the tablet), then
@@ -876,7 +915,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
           case "tire_temps": S.tires = p; S.tiresAt = Date.now(); break;
           case "lap": onLapFrame(p); break;
           case "coaching.snapshot": S.coach = p; S.coachAt = Date.now(); break;
-          case "coaching.cue": S.lastCue = p; break;
+          case "coaching.cue": S.lastCue = p; S.cueAt = Date.now(); break;
+          case "race.status": S.race = p; S.raceAt = Date.now(); break;
           case "setup.active":
             S.setupName = p.name || null;
             renderHeader();
@@ -893,6 +933,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               S.lap = null; // prior identity's Last/Best are wrong now
               S.fuelAtLap = null;
               S.burns = []; // burn is per car AND per track length (Codex on PR #547)
+              S.race = null; S.raceAt = 0; // sidecar race.status is per identity too (#531)
               // A REAL identity switch invalidates the setup name (per-session fact; the
               // trainer's follow-up setup.active names the new one — Codex on PR #547).
               // The FIRST session frame after a page load must not: the identity-replay

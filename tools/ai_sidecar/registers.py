@@ -44,3 +44,26 @@ REGISTER_RANK: dict[str, int] = {register: rank for rank, register in enumerate(
 def register_rank(register: object, default: int = 0) -> int:
     """Ordering helper for intensity comparisons, accepting legacy aliases."""
     return REGISTER_RANK.get(normalize_register(register), default)
+
+
+#: Audio-routing values carried on ``coaching.cue`` / ``coaching.voice`` payloads (#531 Part E).
+#: ``authoritative_pc`` = the PC WASAPI in-ear path owns the audible cue; ``tablet_native`` = the
+#: cue is glanceable/info-tier and a tablet endpoint may voice it natively. The field is a routing
+#: HINT for remote endpoints — the in-process PC coach's own scheduling is unchanged by it.
+AUDIO_ROUTING_AUTHORITATIVE_PC = "authoritative_pc"
+AUDIO_ROUTING_TABLET_NATIVE = "tablet_native"
+AUDIO_ROUTINGS: tuple[str, ...] = (AUDIO_ROUTING_AUTHORITATIVE_PC, AUDIO_ROUTING_TABLET_NATIVE)
+
+
+def audio_routing_for_register(register: object) -> str:
+    """Map an intensity register to its audio route (#531 Part E).
+
+    ``urgent``/``critical`` cues stay on the authoritative PC WASAPI path (measured sub-150 ms);
+    ``calm``/``alert`` cues may be voiced by the tablet. The boundary is policy, not physics:
+    #531 Part G re-derives it from the measured tablet native-audio dispatch→audible latency —
+    until that number is on record the PC keeps everything critical (the P7's WebAudio path
+    measured ~605 ms acoustic, over the 450 ms budget).
+    """
+    if register_rank(register) >= REGISTER_RANK["urgent"]:
+        return AUDIO_ROUTING_AUTHORITATIVE_PC
+    return AUDIO_ROUTING_TABLET_NATIVE

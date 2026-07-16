@@ -24,6 +24,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 
+from tools.ai_sidecar.registers import audio_routing_for_register
 from tools.ai_sidecar.voice.playback import Playback
 from tools.ai_sidecar.voice.utterance import Utterance
 
@@ -54,7 +55,12 @@ class VoiceDispatch:
 
     def to_payload(self) -> dict[str, object]:
         """The ``coaching.voice`` wire payload (plain JSON-safe dict)."""
-        return asdict(self)
+        payload = asdict(self)
+        # #531 Part E: the routing hint travels with the dispatched clip too, so a tablet
+        # endpoint can tell "mirror only" (authoritative_pc — the PC already spoke it) from
+        # "you may own the audio" (tablet_native) without re-deriving the register policy.
+        payload["audio_routing"] = audio_routing_for_register(self.register)
+        return payload
 
 
 class DispatchTapPlayback:

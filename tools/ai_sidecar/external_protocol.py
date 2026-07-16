@@ -251,10 +251,15 @@ TOPIC_COACHING_CUE = "coaching.cue"
 #: in-ear coach says without re-implementing the arbitration client-side.
 TOPIC_COACHING_VOICE = "coaching.voice"
 TOPIC_SESSION_REVIEW = "session.review"
+#: Topic the sidecar publishes fused race status on (#531 Part D remainder): clean
+#: fuel-per-lap / laps-remaining / predicted-lap fields, computed sidecar-side from the
+#: telemetry_tick fuel channel + the Lua ``delta``/``lap`` topics. Low-rate (~1 Hz),
+#: change-gated, honest — absent fields are unmeasured, never zero-filled.
+TOPIC_RACE_STATUS = "race.status"
 # Topics the sidecar produces directly (no loopback Lua relay). Voice/offline clients may
 # state.subscribe to these without a Lua peer connected.
 SIDECAR_PRODUCED_TOPICS: frozenset[str] = frozenset(
-    {TOPIC_COACHING_CUE, TOPIC_COACHING_VOICE, TOPIC_SESSION_REVIEW}
+    {TOPIC_COACHING_CUE, TOPIC_COACHING_VOICE, TOPIC_SESSION_REVIEW, TOPIC_RACE_STATUS}
 )
 KNOWN_TOPICS: frozenset[str] = frozenset(
     {
@@ -273,6 +278,8 @@ KNOWN_TOPICS: frozenset[str] = frozenset(
         TOPIC_COACHING_VOICE,
         # Sidecar-originated post-session debrief report (issue #404 Part A).
         TOPIC_SESSION_REVIEW,
+        # Sidecar-originated fused race status (#531 Part D remainder).
+        TOPIC_RACE_STATUS,
     }
 )
 
@@ -365,6 +372,22 @@ def make_coaching_voice(payload: dict[str, Any]) -> dict[str, Any]:
         "topic": TOPIC_COACHING_VOICE,
         "payload": payload,
         "source": "sidecar.voice",
+    }
+
+
+def make_race_status(payload: dict[str, Any]) -> dict[str, Any]:
+    """Build a ``race.status`` topic frame (#531 Part D remainder).
+
+    Sidecar-originated ``state.snapshot`` envelope, same shape as every topic. ``payload``
+    carries the fused fields from :class:`tools.ai_sidecar.race_status.RaceStatusTracker`
+    (fuel-as-a-decision + stint best + live delta + predicted lap).
+    """
+    return {
+        ENVELOPE_KEY: ENVELOPE_VERSION,
+        TYPE_KEY: TYPE_STATE_SNAPSHOT,
+        "topic": TOPIC_RACE_STATUS,
+        "payload": payload,
+        "source": "sidecar.race_status",
     }
 
 
@@ -544,6 +567,10 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
         # treats 0 as "unknown -> omit the key", so a present rpm_max must be POSITIVE —
         # accepting 0 here would let a buggy producer render "N / 0" (Qodo on PR #547).
         "rpm_max": (1, None),
+        # #531 Part E: the Lua shift-profile model's resolved upshift target rides the tick so
+        # the sidecar shift observer cues from the LEARNED point, not just the limiter
+        # heuristic. Same positivity contract as rpm_max (0 = unknown -> producer omits).
+        "shift_rpm": (1, None),
         "fuel_l": (0, None),
         "fuel_capacity_l": (0, None),
         "fuel_per_lap_l": (0, None),
@@ -560,7 +587,7 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
         err = _validate_optional_number(payload, key, min_value=min_value, max_value=max_value)
         if err is not None:
             return err
-    for key in ("weather_type", "tyre_compound"):
+    for key in ("weather_type", "tyre_compound", "shift_rpm_source"):
         if key in payload and not isinstance(payload[key], str):
             return f"{key} must be a string"
     # #531 Part D: `tc_active` joins the `abs_active` slot so the dashboard can flash BOTH

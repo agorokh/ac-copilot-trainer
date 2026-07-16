@@ -96,6 +96,7 @@ from tools.ai_sidecar.external_protocol import (
     make_coaching_voice,
     make_error,
     make_hello_ack,
+    make_race_status,
     topics_are_sidecar_only,
     validate_inbound,
 )
@@ -110,9 +111,13 @@ from tools.ai_sidecar.protocol import (
     resolve_lap_archive,
 )
 from tools.ai_sidecar.race_management import RaceManagementObserver
+from tools.ai_sidecar.race_status import RaceStatusTracker
 from tools.ai_sidecar.realtime_observer import (
     RealtimeObserver,
 )
+from tools.ai_sidecar.registers import audio_routing_for_register
+from tools.ai_sidecar.shift_observer import ShiftObserver
+from tools.ai_sidecar.voice.vocabulary import KINDS as VOICE_KINDS
 from tools.ai_sidecar.se_proxy import (
     DEFAULT_SETUP_EXCHANGE_ENDPOINT,
     ENV_SETUP_EXCHANGE_ENDPOINT,
@@ -169,6 +174,13 @@ _observer: RealtimeObserver | None = None
 # producer in place of the legacy observer's apex_deficit/late_brake output.
 _coach_runtime: Any | None = None
 _race_manager: Any | None = RaceManagementObserver()
+# #531 Part E: live upshift/downshift cues from the tick (learned shift_rpm or limiter
+# heuristic). Rides the same single-producer telemetry feed as the race manager.
+_shift_observer: Any | None = ShiftObserver()
+# #531 Part D remainder: fused fuel/best/delta/predicted state behind the `race.status` topic.
+_race_status: RaceStatusTracker = RaceStatusTracker()
+#: Publish cadence cap for `race.status` (change-gated on top of this).
+RACE_STATUS_MAX_HZ = 1.0
 # The observer holds single-monotonic-stream state (last spline/lap, per-corner passes), so only ONE
 # producer may feed it. The first telemetry producer claims the feed; a second concurrent loopback
 # producer is still routed to peripherals but NOT into the observer (interleaving would corrupt wrap
@@ -238,6 +250,12 @@ def set_race_manager(manager: Any | None) -> None:
     """Install (or clear) the stint-level race-management observer."""
     global _race_manager
     _race_manager = manager
+
+
+def set_shift_observer(observer: Any | None) -> None:
+    """Install (or clear) the live shift-cue observer (#531 Part E)."""
+    global _shift_observer
+    _shift_observer = observer
 
 
 def set_voice_coach(coach: Any | None) -> None:
@@ -453,6 +471,9 @@ def _reset_external_state() -> None:
     _voice_echo_log.clear()
     if _race_manager is not None:
         _race_manager.reset()
+    if _shift_observer is not None:
+        _shift_observer.reset()
+    _race_status.reset()
     # The single-producer observer feed is external-peer state: a full reset (server (re)start or
     # teardown) leaves no producer owning the feed, so the next telemetry producer can claim it.
     # Without this, a stale owner persists and the next producer is silently rejected by the guard
@@ -1449,18 +1470,44 @@ def _advisory_to_payload(advisory: Any) -> dict[str, Any] | None:
     if not isinstance(kind, str) or not kind or not isinstance(urgency, str) or not urgency:
         logger.warning("voice: dropping advisory with missing kind/urgency: %r", advisory)
         return None
+    register = getattr(advisory, "register", "calm")
     return {
         "kind": kind,
         "corner": getattr(advisory, "corner", None),
         "urgency": urgency,
         # issue #368: the tone tier + severity travel on the cue so a WS voice client renders the
         # same intensity the in-process coach speaks (additive — older consumers ignore them).
-        "register": getattr(advisory, "register", "calm"),
+        "register": register,
         "intensity": getattr(advisory, "intensity", 0.0),
+        # #531 Part E: which endpoint owns the AUDIBLE cue — urgent/critical stay on the
+        # authoritative PC WASAPI path; calm/alert may be voiced by the tablet (Part G gates
+        # the native path on a measured latency). Routing hint only; additive.
+        "audio_routing": audio_routing_for_register(register),
         "message": getattr(advisory, "message", ""),
         "spline": getattr(advisory, "spline", None),
         "detail": getattr(advisory, "detail", {}),
     }
+
+
+async def _publish_race_status(*, exclude: Any) -> None:
+    """Broadcast the fused ``race.status`` payload when it changed (#531 Part D remainder).
+
+    Rate-capped at ``RACE_STATUS_MAX_HZ`` and change-gated by the tracker, so a parked car
+    (or a paused sim) goes quiet instead of re-broadcasting the same numbers. Never raises
+    into the telemetry loop.
+    """
+    try:
+        if not _peripheral_rate_limiter.allow(("race.status",), RACE_STATUS_MAX_HZ):
+            return
+        payload = _race_status.snapshot_if_changed()
+        if payload is None:
+            return
+        frame = make_race_status(payload)
+        task = asyncio.create_task(_broadcast_external(frame, exclude=exclude))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+    except Exception:
+        logger.exception("failed to publish race.status")
 
 
 async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None:
@@ -1482,7 +1529,8 @@ async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None
     # not reference-corner geometry.
     observer = _coach_runtime if _coach_runtime is not None else _observer
     race_manager = _race_manager
-    if observer is None and race_manager is None:
+    shift_observer = _shift_observer
+    if observer is None and race_manager is None and shift_observer is None:
         return
     if not _peripheral_rate_limiter.allow((TYPE_TELEMETRY_TICK, "observer"), TELEMETRY_TICK_MAX_HZ):
         return
@@ -1509,12 +1557,28 @@ async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None
             advisories.extend(race_manager.observe(frame))
         except Exception:
             logger.exception("race-management observer failed on telemetry_tick")
+    if shift_observer is not None:
+        try:
+            advisories.extend(shift_observer.observe(frame))
+        except Exception:
+            logger.exception("shift observer failed on telemetry_tick")
+    # #531 Part D remainder: the same guarded single-producer tick also feeds the fused
+    # race-status state (fuel-as-a-decision); publish is change-gated + rate-limited.
+    if race_manager is not None:
+        try:
+            _race_status.note_fuel(race_manager.fuel_status(frame))
+        except Exception:
+            logger.exception("race-status fuel update failed on telemetry_tick")
+    await _publish_race_status(exclude=exclude)
     if not advisories:
         return
     ts_sim = frame.get("ts_sim")
     coach = _voice_coach
     for advisory in advisories:
-        if coach is not None:
+        # #531 Part E: only vocabulary-covered kinds reach the in-process voice coach. Shift
+        # cues (upshift/downshift) are tablet-tier by routing policy AND have no baked clips —
+        # submitting them would only warn-and-drop in the resolver on every straight.
+        if coach is not None and getattr(advisory, "kind", None) in VOICE_KINDS:
             try:
                 coach.subscribe(advisory)
             except Exception:
@@ -2250,6 +2314,20 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     # responds with `config.value` / `config.ack` / `action.ack` /
     # `state.snapshot`, which are also forwarded back through this same path.
     topic = data.get("topic")
+    # #531 Part D remainder: the Lua `delta` / `lap` topics feed the fused race-status state
+    # (predicted lap = stint best + live gap) on their way through the relay. Read-only tap;
+    # the frames still broadcast unchanged below.
+    if t == TYPE_STATE_SNAPSHOT and isinstance(topic, str):
+        tap_payload = data.get("payload")
+        if topic == "delta":
+            _race_status.note_delta(tap_payload if isinstance(tap_payload, dict) else None)
+        elif topic == "lap":
+            _race_status.note_lap(tap_payload if isinstance(tap_payload, dict) else None)
+        elif topic == "session":
+            # A session frame means a NEW car/track/session identity (the Lua publisher is
+            # change-detected): the prior identity's best/delta/fuel must not leak into the
+            # next one's predicted lap. The tracker refills within a lap.
+            _race_status.reset()
     if t == TYPE_STATE_SNAPSHOT and isinstance(topic, str) and topic in IDENTITY_REPLAY_TOPICS:
         # #531 Part B: remember the latest identity snapshot for late-subscriber replay,
         # tied to the producing peer — its disconnect invalidates the cached identity

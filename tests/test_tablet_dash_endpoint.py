@@ -445,3 +445,34 @@ def test_identity_replay_topics_exclude_continuous_streams() -> None:
     for continuous in ("delta", "tire_temps", "coaching.snapshot", "lap"):
         assert continuous not in ep.IDENTITY_REPLAY_TOPICS
     assert ep.IDENTITY_REPLAY_TOPICS <= ep.KNOWN_TOPICS
+
+
+def test_validate_telemetry_tick_accepts_shift_rpm_and_rejects_bad() -> None:
+    """#531 Part E: the learned shift target rides the tick; same positivity contract as
+    rpm_max (0 = unknown -> the producer omits the key)."""
+    assert ep.validate_inbound(_tick_frame(shift_rpm=7400.0, shift_rpm_source="learned")) is None
+    assert ep.validate_inbound(_tick_frame()) is None  # optional
+    err = ep.validate_inbound(_tick_frame(shift_rpm=0))
+    assert err is not None and "shift_rpm" in err
+    err = ep.validate_inbound(_tick_frame(shift_rpm=-100))
+    assert err is not None and "shift_rpm" in err
+    err = ep.validate_inbound(_tick_frame(shift_rpm_source=42))
+    assert err is not None and "shift_rpm_source" in err
+
+
+def test_race_status_topic_is_sidecar_produced_and_subscribable() -> None:
+    """#531 Part D remainder: race.status joins the allow-list AND the sidecar-produced set
+    (a tablet without a Lua peer may still subscribe)."""
+    assert ep.TOPIC_RACE_STATUS in ep.KNOWN_TOPICS
+    assert ep.TOPIC_RACE_STATUS in ep.SIDECAR_PRODUCED_TOPICS
+    # Continuous-ish stream: deliberately NOT identity-replayed (a stale sample would
+    # masquerade as live fuel/predicted numbers).
+    assert ep.TOPIC_RACE_STATUS not in ep.IDENTITY_REPLAY_TOPICS
+
+
+def test_make_race_status_shape() -> None:
+    frame = ep.make_race_status({"fuel_l": 8.0, "laps_remaining": 4.0})
+    assert frame["type"] == ep.TYPE_STATE_SNAPSHOT
+    assert frame["topic"] == ep.TOPIC_RACE_STATUS
+    assert frame["source"] == "sidecar.race_status"
+    assert frame["payload"] == {"fuel_l": 8.0, "laps_remaining": 4.0}
