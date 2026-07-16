@@ -769,12 +769,17 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     q._key = null;
   }
   function buildMapGeometry() {
+    var m = S.map;
+    var outline = m && Array.isArray(m.outline) ? m.outline : null;
+    if (!outline || outline.length < 8) {
+      // A map that fails to build must leave NO residue — including the pace-note queue
+      // (daemon on PR #618 R8); resetMapDom also invalidates the queue cache key.
+      resetMapDom();
+      return;
+    }
     // A new map invalidates the pace-note cache even when the next three labels match the
     // previous track's (T1|T2|T3 is the common case) — the notes behind them changed (#618 R3).
     $("mapQueue")._key = null;
-    var m = S.map;
-    var outline = m && Array.isArray(m.outline) ? m.outline : null;
-    if (!outline || outline.length < 8) { mapGeom = null; $("mapSvg").style.display = "none"; $("mapEmpty").style.display = ""; return; }
     var minX = 1 / 0, maxX = -1 / 0, minZ = 1 / 0, maxZ = -1 / 0;
     outline.forEach(function (p) {
       if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];

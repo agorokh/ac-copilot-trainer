@@ -81,11 +81,21 @@ def build_track_map(archive: dict[str, Any]) -> dict[str, Any] | None:
 
     corners: list[dict[str, Any]] = []
     for turn, (entry_i, apex_i, _exit_i) in enumerate(segment_corners(lap), start=1):
+        # Same finiteness contract as the outline (daemon on PR #618 R8): one non-finite
+        # corner metric would serialize as a bare NaN/Infinity token and kill the whole
+        # frame at the tablet's JSON.parse. Skip the corner, keep the map.
+        spline_apex = lap.spline[apex_i]
+        spline_entry = lap.spline[entry_i]
+        v_apex = lap.v_ms[apex_i]
+        if not (
+            math.isfinite(spline_apex) and math.isfinite(spline_entry) and math.isfinite(v_apex)
+        ):
+            continue
         corner: dict[str, Any] = {
             "label": f"T{turn}",
-            "spline": round(lap.spline[apex_i], 4),
-            "entry_spline": round(lap.spline[entry_i], 4),
-            "min_speed_kmh": round(lap.v_ms[apex_i] * 3.6),
+            "spline": round(spline_apex, 4),
+            "entry_spline": round(spline_entry, 4),
+            "min_speed_kmh": round(v_apex * 3.6),
         }
         gear = _round_gear(lap.gear[apex_i])
         if gear is not None:
