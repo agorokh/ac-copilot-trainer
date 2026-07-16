@@ -116,8 +116,6 @@ from tools.ai_sidecar.realtime_observer import (
     RealtimeObserver,
 )
 from tools.ai_sidecar.registers import audio_routing_for_register
-from tools.ai_sidecar.shift_observer import ShiftObserver
-from tools.ai_sidecar.voice.vocabulary import KINDS as VOICE_KINDS
 from tools.ai_sidecar.se_proxy import (
     DEFAULT_SETUP_EXCHANGE_ENDPOINT,
     ENV_SETUP_EXCHANGE_ENDPOINT,
@@ -144,6 +142,8 @@ from tools.ai_sidecar.setup_optimizer import (
     suggest_closed_loop,
     suggest_next_setup,
 )
+from tools.ai_sidecar.shift_observer import ShiftObserver
+from tools.ai_sidecar.voice.vocabulary import KINDS as VOICE_KINDS
 
 logger = logging.getLogger(__name__)
 

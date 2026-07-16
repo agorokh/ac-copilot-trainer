@@ -729,7 +729,9 @@ def test_telemetry_tick_carries_learned_shift_rpm_from_profile():
             byGear = { [3] = 7400 },
             defaultRpm = 7600,
           }
-          M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws, shiftProfile = profile })
+          M.publishTelemetryTickIfDue({
+            dt = 0.06, car = car, wsBridge = ws, shiftProfile = profile,
+          })
           local p = ws._calls[1] and ws._calls[1].send.payload
           return { shift_rpm = p and p.shift_rpm, source = p and p.shift_rpm_source }
         end)()

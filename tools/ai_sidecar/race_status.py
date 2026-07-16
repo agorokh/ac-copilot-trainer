@@ -18,8 +18,9 @@ FRESH delta — a stale delta drops the prediction rather than freezing it. Pure
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 #: A delta older than this cannot anchor a predicted lap (the 10 Hz producer paused/stopped).
 DELTA_FRESH_S = 5.0

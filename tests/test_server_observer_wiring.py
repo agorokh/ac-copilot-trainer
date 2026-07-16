@@ -558,10 +558,24 @@ def test_cue_payload_carries_audio_routing_by_register(monkeypatch):
     _reset_feed(monkeypatch)
     server._race_status.reset()
     advisories = [
-        Advisory(kind="late_brake", corner=1, spline=0.1, urgency="act", message="m",
-                 detail={}, register="urgent"),
-        Advisory(kind="fuel_status", corner=-1, spline=0.1, urgency="info", message="m",
-                 detail={}, register="calm"),
+        Advisory(
+            kind="late_brake",
+            corner=1,
+            spline=0.1,
+            urgency="act",
+            message="m",
+            detail={},
+            register="urgent",
+        ),
+        Advisory(
+            kind="fuel_status",
+            corner=-1,
+            spline=0.1,
+            urgency="info",
+            message="m",
+            detail={},
+            register="calm",
+        ),
     ]
     observer = _FakeObserver(advisories)
     monkeypatch.setattr(server, "_observer", observer)
@@ -583,8 +597,17 @@ def test_shift_observer_cues_broadcast_but_never_reach_voice(monkeypatch):
     monkeypatch.setattr(server, "_observer", None)
     server.set_race_manager(None)
     shift = _FakeObserver(
-        [Advisory(kind="upshift", corner=-1, spline=0.2, urgency="act", message="Shift up.",
-                  detail={}, register="calm")]
+        [
+            Advisory(
+                kind="upshift",
+                corner=-1,
+                spline=0.2,
+                urgency="act",
+                message="Shift up.",
+                detail={},
+                register="calm",
+            )
+        ]
     )
     monkeypatch.setattr(server, "_shift_observer", shift)
 

@@ -25,8 +25,9 @@ missing/non-finite channels disable the cue for that frame — ``0`` is a legiti
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from tools.ai_sidecar.realtime_observer import Advisory
 
@@ -163,10 +164,9 @@ class ShiftObserver:
         else:
             if self._bog_since is None:
                 self._bog_since = now
-            if (
-                (now - self._bog_since) >= DOWNSHIFT_SUSTAIN_S
-                and (now - self._last_downshift_at) >= DOWNSHIFT_COOLDOWN_S
-            ):
+            if (now - self._bog_since) >= DOWNSHIFT_SUSTAIN_S and (
+                now - self._last_downshift_at
+            ) >= DOWNSHIFT_COOLDOWN_S:
                 self._last_downshift_at = now
                 self._bog_since = None
                 out.append(
