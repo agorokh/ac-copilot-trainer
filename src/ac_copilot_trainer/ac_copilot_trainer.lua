@@ -50,6 +50,46 @@ local MANIFEST_WINDOW_SIZES = {
 }
 
 local sim ---@type ac.StateSim
+
+-- #531 Part F: lap-count race total for the sidecar fuel plan (`session_laps_total` on the
+-- tick). Cached per session index — static session metadata must not be re-read, nor a pcall
+-- closure allocated, at 60 Hz in the update loop (self-hosted reviewer on PR #618).
+-- pcall-guarded: an older CSP build without the session API, or a timed session (laps == 0),
+-- yields nil and the key is omitted.
+local sessionLapsCacheIndex = nil
+local sessionLapsCacheValue = nil
+local sessionLapsRetryCountdown = 0
+local function readSessionLapsTotal()
+  local idx = sim and sim.currentSessionIndex or nil
+  if idx == nil then
+    return nil
+  end
+  if sessionLapsCacheIndex ~= idx then
+    -- The previous session's total must NEVER leak across an index change — cleared
+    -- unconditionally BEFORE any read attempt (daemon HIGH on PR #618 R10).
+    sessionLapsCacheIndex = idx
+    sessionLapsCacheValue = nil
+    sessionLapsRetryCountdown = 0
+  end
+  if sessionLapsCacheValue == nil and sessionLapsRetryCountdown <= 0 then
+    -- A FAILED read must not negative-cache for the whole session either (R9): retry
+    -- every ~120 calls (~2 s at 60 Hz) so a broken CSP build never pays the pcall at
+    -- frame rate. A successful read — including a timed session's honest no-laps
+    -- answer — settles until the session index changes.
+    sessionLapsRetryCountdown = 120
+    local ok, sess = pcall(ac.getSession, idx)
+    if ok then
+      local laps = sess and tonumber(sess.laps)
+      if laps and laps > 0 then
+        sessionLapsCacheValue = laps
+      end
+      sessionLapsRetryCountdown = math.huge
+    end
+  elseif sessionLapsCacheValue == nil and sessionLapsRetryCountdown ~= math.huge then
+    sessionLapsRetryCountdown = sessionLapsRetryCountdown - 1
+  end
+  return sessionLapsCacheValue
+end
 local car ---@type ac.StateCar
 
 --- Defaults for `ac.storage` (issue #57 Part A). Keys must stay stable across versions.
@@ -2536,6 +2576,8 @@ function script.update(dt)
       dt = dt,
       temps = currentTireTemps,
       wsBridge = wsBridge,
+      -- #531 Part F: sources the inner/mid/outer cross-tread maps for the STINT page.
+      car = car,
     })
     -- Real measured g-forces (issue #478): CSP `car.acceleration` is in G (.x lateral, .z long).
     -- Was hardcoded 0/0; chassis_read pcall-guards the read and degrades to nil (→ 0 in the
@@ -2551,6 +2593,7 @@ function script.update(dt)
       -- #531 Part E: the learned shift profile (#442) rides the tick as `shift_rpm` so the
       -- sidecar's shift observer cues from the same model the in-game HUD teaches.
       shiftProfile = state.shiftProfile,
+      sessionLapsTotal = readSessionLapsTotal(),
     })
   end)
   -- Round 10: drain any corner_advice replies into state.cornerAdvisories.

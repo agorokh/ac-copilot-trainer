@@ -712,3 +712,29 @@ def test_release_observer_feed_resets_shift_and_race_status(monkeypatch):
     server._release_observer_feed("ws-owner")
     assert shift.resets == 1
     assert server._race_status.snapshot() is None
+
+
+def test_wire_voice_builds_track_map_frame(tmp_path, monkeypatch):
+    """#531 Part F: wiring a corner-bearing reference also builds the track.map frame the
+    subscribe replay path serves to late subscribers."""
+    monkeypatch.setattr(server, "_observer", None)
+    monkeypatch.setattr(server, "_track_map_frame", None)
+    ref = tmp_path / "ref.json"
+    ref.write_text(json.dumps(_corner_archive()), encoding="utf-8")
+    server._wire_voice(server.VoiceRuntimeConfig(reference_path=str(ref), bank_dir=None))
+    frame = server._track_map_frame
+    assert frame is not None
+    assert frame["topic"] == "track.map"
+    assert len(frame["payload"]["outline"]) >= 8
+    assert frame["payload"]["corners"][0]["label"] == "T1"
+
+
+def test_rewire_without_geometry_clears_stale_track_map(tmp_path, monkeypatch):
+    """A re-wire whose reference cannot supply geometry must not leave the previous
+    track's map for late subscribers (Codex on PR #618)."""
+    monkeypatch.setattr(server, "_observer", None)
+    monkeypatch.setattr(server, "_track_map_frame", {"topic": "track.map", "payload": {}})
+    ref = tmp_path / "no_geometry.json"
+    ref.write_text(json.dumps({}), encoding="utf-8")
+    server._wire_voice(server.VoiceRuntimeConfig(reference_path=str(ref), bank_dir=None))
+    assert server._track_map_frame is None

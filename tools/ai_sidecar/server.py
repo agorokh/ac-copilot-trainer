@@ -97,6 +97,7 @@ from tools.ai_sidecar.external_protocol import (
     make_error,
     make_hello_ack,
     make_race_status,
+    make_track_map,
     topics_are_sidecar_only,
     validate_inbound,
 )
@@ -181,6 +182,11 @@ _shift_observer: Any | None = ShiftObserver()
 _race_status: RaceStatusTracker = RaceStatusTracker()
 #: Publish cadence cap for `race.status` (change-gated on top of this).
 RACE_STATUS_MAX_HZ = 1.0
+# #531 Part F: the reference-derived `track.map` frame, built once at voice/observer wire
+# time. Held OUTSIDE `_sidecar_state_cache` because that cache is cleared by
+# `_reset_external_state()` at serve start (after wiring); the subscribe replay path
+# consults this global as the fallback.
+_track_map_frame: dict[str, Any] | None = None
 # The observer holds single-monotonic-stream state (last spline/lap, per-corner passes), so only ONE
 # producer may feed it. The first telemetry producer claims the feed; a second concurrent loopback
 # producer is still routed to peripherals but NOT into the observer (interleaving would corrupt wrap
@@ -2303,6 +2309,10 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
         # sidecar-only fast path below and the relayed mixed-topic subscribe.
         for topic in data.get("topics") or []:
             cached = _sidecar_state_cache.get(str(topic))
+            # #531 Part F: track.map is built at wire time (before the serve-start cache
+            # reset), so its frame lives in a global rather than the peer-scoped cache.
+            if cached is None and str(topic) == "track.map":
+                cached = _track_map_frame
             if cached is not None:
                 await _safe_send(websocket, cached)
     if t in (TYPE_STATE_SUBSCRIBE, TYPE_STATE_UNSUBSCRIBE) and topics_are_sidecar_only(
@@ -2702,6 +2712,11 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
     # voice-disabled (or different-bank) configuration can never keep serving stale clips;
     # the enabled path below re-arms via _set_voice_web_bank (PR #519 review).
     _disarm_voice_web_bank()
+    # Same authority for the reference-derived track map (#531 Part F): a re-wire whose
+    # reference cannot supply geometry — or that has no reference at all — must not leave
+    # the previous track's map for late subscribers (Codex on PR #618).
+    global _track_map_frame
+    _track_map_frame = None
     reference_path = voice_settings.reference_path
     bank_dir = voice_settings.bank_dir
     bank_backend = (
@@ -2744,6 +2759,24 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
 
             with open(reference_path, encoding="utf-8") as fh:
                 archive = json.load(fh)
+            # #531 Part F: the same archive carries real px/pz — build the MAP page's
+            # geometry once, best-effort (a map failure must never disable the observer).
+            # The stale frame was already cleared at the top of _wire_voice.
+            try:
+                from tools.ai_sidecar.track_map import build_track_map
+
+                map_payload = build_track_map(archive)
+                if map_payload is not None:
+                    _track_map_frame = make_track_map(map_payload)
+                    logger.info(
+                        "track.map built from reference: %d outline points, %d corners",
+                        len(map_payload.get("outline") or []),
+                        len(map_payload.get("corners") or []),
+                    )
+                else:
+                    logger.info("track.map not built: reference lacks usable geometry")
+            except Exception:
+                logger.exception("track.map build failed (non-fatal)")
             # Issue #522: the anticipatory lead is the full audibility budget (clip + audio
             # latency + human reaction). Tunable per rig; clamped to a sane coaching range.
             observer = build_observer_from_reference(

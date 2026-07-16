@@ -476,3 +476,17 @@ def test_make_race_status_shape() -> None:
     assert frame["topic"] == ep.TOPIC_RACE_STATUS
     assert frame["source"] == "sidecar.race_status"
     assert frame["payload"] == {"fuel_l": 8.0, "laps_remaining": 4.0}
+
+
+def test_track_map_topic_is_sidecar_produced_and_subscribable() -> None:
+    """#531 Part F: track.map joins the allow-list + sidecar-produced set (event-driven,
+    built at reference wire time)."""
+    assert ep.TOPIC_TRACK_MAP in ep.KNOWN_TOPICS
+    assert ep.TOPIC_TRACK_MAP in ep.SIDECAR_PRODUCED_TOPICS
+
+
+def test_make_track_map_shape() -> None:
+    frame = ep.make_track_map({"outline": [[0, 0]], "spline": [0.0], "corners": []})
+    assert frame["type"] == ep.TYPE_STATE_SNAPSHOT
+    assert frame["topic"] == ep.TOPIC_TRACK_MAP
+    assert frame["source"] == "sidecar.track_map"
