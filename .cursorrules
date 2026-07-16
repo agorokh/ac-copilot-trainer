@@ -7,7 +7,7 @@ You are working in a repository governed by **AGENTS.md**, **AGENT_CORE_PRINCIPL
 3. **Vault** is canonical architecture memory: `docs/01_Vault/AcCopilotTrainer/` (rename on bootstrap); graph schema `docs/01_Vault/00_Graph_Schema.md`. Follow `docs/00_Core/SESSION_LIFECYCLE.md` (LOAD → OPERATE → SAVE). Update `Next Session Handoff.md` when leaving work incomplete.
 4. No secrets in files, Issues, or PRs. Use `.env` locally only.
 5. Put throwaway experiments in **`.scratch/`** (gitignored), not in `src/` or the vault.
-6. For third-party API details, prefer **Context7** via MCP over guessing (see `.mcp.json`).
+6. For third-party API details, prefer official docs and targeted web search over guessing.
 7. **Cursor Task** — valid `subagent_type` values are only **`generalPurpose`**, **`explore`**, **`shell`**, **`best-of-n-runner`**. For procedures that name Claude Code agents (e.g. `pr-resolution-follow-up`), use **`generalPurpose`** plus the checklist from **`.claude/agents/*.md`**, or run those steps inline. See **`.cursor/rules/cursor-task-delegation.mdc`**.
 
 Project-specific rules live under `.cursor/rules/*.mdc` and override this file where they conflict.

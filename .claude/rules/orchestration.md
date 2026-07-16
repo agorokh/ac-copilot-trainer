@@ -30,4 +30,4 @@ paths:
 | `new-project-setup` | After **Use this template** |
 | `release-notes` | Maintainer release blurbs (user-invoked) |
 
-**Context discipline:** Issue/PR **JSON from `gh` first**; then open only the files the task names. **Link** canonical docs instead of pasting them. Use **Context7** for third-party library facts; use the **vault** for *this* product’s decisions.
+**Context discipline:** Issue/PR **JSON from `gh` first**; then open only the files the task names. **Link** canonical docs instead of pasting them. Use official docs and targeted web search for third-party library facts; use the **vault** for *this* product’s decisions.
