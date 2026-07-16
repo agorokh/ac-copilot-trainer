@@ -188,32 +188,23 @@ function M.publishTireTempsIfDue(opts)
   local rl = _finite(temps.rl)
   local rr = _finite(temps.rr)
   local anyCore = fl ~= nil or fr ~= nil or rl ~= nil or rr ~= nil
-  local innerMap, middleMap, outerMap
-  if not anyCore then
-    -- Core read failed on this CSP build/car: the tread channels decide publishability —
-    -- the STINT board must not lose measured I/M/O to a core-only gate (Codex on PR #618).
-    -- Only a sample with NO wheel temp at all is treated as unavailable rather than
-    -- publishing an empty {} every interval, which would mask the data-source failure as
-    -- apparently-live-but-empty samples (codex on #185).
-    local inner, middle, outer = _treadMaps(opts.car)
-    innerMap = _cornerMap(inner)
-    middleMap = _cornerMap(middle)
-    outerMap = _cornerMap(outer)
-    if innerMap == nil and middleMap == nil and outerMap == nil then
-      return false
-    end
-  end
+  -- The 5 Hz gate runs BEFORE any per-wheel tread read on BOTH branches (daemon MEDIUM on
+  -- PR #618: the tread-only path was reading four wheels at frame rate). On a car with no
+  -- wheel temps at all this consumes at most one publish slot per interval and sends
+  -- nothing — still never an empty {} frame masking the data-source failure (#185).
   local due, accum = _due(_tireAccum, tonumber(opts.dt) or 0, TIRE_INTERVAL_SEC)
   _tireAccum = accum
   if not due then
     return false
   end
-  if anyCore then
-    -- Deferred past the 5 Hz gate so the per-wheel tread reads never run at frame rate.
-    local inner, middle, outer = _treadMaps(opts.car)
-    innerMap = _cornerMap(inner)
-    middleMap = _cornerMap(middle)
-    outerMap = _cornerMap(outer)
+  local inner, middle, outer = _treadMaps(opts.car)
+  local innerMap = _cornerMap(inner)
+  local middleMap = _cornerMap(middle)
+  local outerMap = _cornerMap(outer)
+  if not anyCore and innerMap == nil and middleMap == nil and outerMap == nil then
+    -- No wheel temp resolvable AT ALL (core or tread) on this CSP build/car: unavailable,
+    -- not empty — the STINT board keeps its explicit unknowns (Codex on PR #618 + #185).
+    return false
   end
   local payload = {
     fl = fl,
