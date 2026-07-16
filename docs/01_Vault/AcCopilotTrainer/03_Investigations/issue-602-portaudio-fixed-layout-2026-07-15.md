@@ -1,8 +1,8 @@
 ---
 type: investigation
-status: verified
+status: closed
 memory_tier: canonical
-last_updated: 2026-07-16T01:45:00Z
+last_updated: 2026-07-16T03:20:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Next Session Handoff.md
@@ -13,10 +13,13 @@ relates_to:
 
 ## Outcome
 
-PR [#606](https://github.com/agorokh/ac-copilot-trainer/pull/606) fixes the rig voice
-failure caused by opening the selected Windows WASAPI endpoint as a one-channel stream. The
-phrase bank is mono/48 kHz, while `5.1 Speakers (USB Sound Device)` reports six output channels
-and rejects one- and two-channel streams with PortAudio `-9998`. It accepts a six-channel stream.
+PR [#606](https://github.com/agorokh/ac-copilot-trainer/pull/606) **MERGED** as
+[`a153fda`](https://github.com/agorokh/ac-copilot-trainer/commit/a153fda063490f40963e59a8a40685e8c3d263a6)
+(2026-07-16), closing [#602](https://github.com/agorokh/ac-copilot-trainer/issues/602). It fixed
+the rig voice failure caused by opening the selected Windows WASAPI endpoint as a one-channel
+stream. The phrase bank is mono/48 kHz, while `5.1 Speakers (USB Sound Device)` reports six
+output channels and rejects one- and two-channel streams with PortAudio `-9998`. It accepts a
+six-channel stream.
 
 The playback backends now probe supported output widths, open the smallest compatible layout,
 and route mono phrases to front-center channel 3 when the negotiated device has at least three
@@ -53,8 +56,6 @@ context supplied the session substrate.
 
 ## Resume
 
-PR #606 is **merge-ready** on `7eec481`: required CI green, GraphQL threads resolved,
-resolve-gate clean, and the current-SHA daemon cursor HIGH on sounddevice `index` was
-replied-invalid with 0.5.1 source evidence. Merge through the normal maintainer workflow.
-No additional rig reproduction is required unless the selected output device or host API
-changes.
+#602 / PR #606 shipped on `main` at `a153fda`. No remaining product scope. Keep voice pinned via
+`AC_COPILOT_VOICE_DEVICE` / `AC_COPILOT_VOICE_HOST_API`. Re-verify only if the selected output
+device or host API changes. Post-merge classification: no migration/env/deps/workflow actions.
