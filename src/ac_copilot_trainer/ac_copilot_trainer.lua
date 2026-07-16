@@ -2520,6 +2520,9 @@ function script.update(dt)
         deltaS = rawDelta,
         spline = spNow,
         wsBridge = wsBridge,
+        -- #531 Part D remainder: the baseline this delta is measured against, so the
+        -- sidecar's predicted lap never mixes it with a different lap time.
+        referenceLapMs = state.activeReferenceLapMs,
       })
     end
   end)

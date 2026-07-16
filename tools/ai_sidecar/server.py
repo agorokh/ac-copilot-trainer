@@ -1344,6 +1344,12 @@ def _release_observer_feed(websocket: Any) -> None:
             _coach_runtime.reset()
         if _race_manager is not None:
             _race_manager.reset()
+        # #531 Parts D/E: the shift observer and race-status fusion are single-stream state
+        # too — a producer swap must not inherit the previous stream's armed gears or
+        # fuel/delta fusion (Codex on PR #615).
+        if _shift_observer is not None:
+            _shift_observer.reset()
+        _race_status.reset()
 
 
 def _drop_external_peer(peer: Any) -> None:
@@ -1566,7 +1572,14 @@ async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None
     # race-status state (fuel-as-a-decision); publish is change-gated + rate-limited.
     if race_manager is not None:
         try:
-            _race_status.note_fuel(race_manager.fuel_status(frame))
+            status = race_manager.fuel_status(frame)
+            # channel_live disambiguates the two None cases: a frame that DOES carry fuel
+            # but yields no status means the burn state reset (rollback/refuel) — the
+            # tracker must drop the prior stint's numbers, not freeze them (Codex #615).
+            tick_payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
+            fuel_raw = tick_payload.get("fuel_l", frame.get("fuel_l"))
+            channel_live = isinstance(fuel_raw, (int, float)) and not isinstance(fuel_raw, bool)
+            _race_status.note_fuel(status, channel_live=channel_live)
         except Exception:
             logger.exception("race-status fuel update failed on telemetry_tick")
     await _publish_race_status(exclude=exclude)
@@ -2324,10 +2337,11 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
         elif topic == "lap":
             _race_status.note_lap(tap_payload if isinstance(tap_payload, dict) else None)
         elif topic == "session":
-            # A session frame means a NEW car/track/session identity (the Lua publisher is
-            # change-detected): the prior identity's best/delta/fuel must not leak into the
-            # next one's predicted lap. The tracker refills within a lap.
-            _race_status.reset()
+            # The prior identity's best/delta/fuel must not leak into the next one's
+            # predicted lap — but the bridge also RE-EMITS the current session to late
+            # subscribers, so the tracker resets only on a real identity change (it
+            # compares car/track/session itself; Codex on PR #615).
+            _race_status.note_session(tap_payload if isinstance(tap_payload, dict) else None)
     if t == TYPE_STATE_SNAPSHOT and isinstance(topic, str) and topic in IDENTITY_REPLAY_TOPICS:
         # #531 Part B: remember the latest identity snapshot for late-subscriber replay,
         # tied to the producing peer — its disconnect invalidates the cached identity

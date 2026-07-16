@@ -25,19 +25,22 @@ def test_calm_alert_and_unknown_route_tablet() -> None:
     assert audio_routing_for_register("bogus") == AUDIO_ROUTING_TABLET_NATIVE
 
 
-def test_voice_dispatch_payload_carries_audio_routing() -> None:
-    dispatch = VoiceDispatch(
-        seq=1,
-        clip_id="late_brake.act.urgent.c3",
-        kind="late_brake",
-        urgency="act",
-        register="urgent",
-        corner=3,
-        text="Brake!",
-        duration_ms=420.0,
-        t_wall_ms=1_000.0,
-        t_mono_ms=2_000.0,
-    )
-    payload = dispatch.to_payload()
-    assert payload["audio_routing"] == AUDIO_ROUTING_AUTHORITATIVE_PC
-    assert payload["clip_id"] == "late_brake.act.urgent.c3"
+def test_voice_dispatch_payload_is_always_pc_owned() -> None:
+    """coaching.voice frames exist only AFTER the PC playback sounded the clip — the routing
+    on this stream is authoritative_pc by construction, regardless of register; a
+    register-based hint would invite the tablet to re-speak a clip the PC just played
+    (Codex on PR #615)."""
+    for register in ("urgent", "calm"):
+        dispatch = VoiceDispatch(
+            seq=1,
+            clip_id=f"fuel_status.info.{register}",
+            kind="fuel_status",
+            urgency="info",
+            register=register,
+            corner=None,
+            text="Fuel.",
+            duration_ms=420.0,
+            t_wall_ms=1_000.0,
+            t_mono_ms=2_000.0,
+        )
+        assert dispatch.to_payload()["audio_routing"] == AUDIO_ROUTING_AUTHORITATIVE_PC

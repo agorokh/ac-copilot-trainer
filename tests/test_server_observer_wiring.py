@@ -680,9 +680,35 @@ def test_race_status_published_from_tick_fuel_change_gated(monkeypatch):
 
 
 def test_relay_taps_feed_race_status_predicted_lap(monkeypatch):
-    """The Lua delta/lap topics flowing through the relay feed the predicted-lap fusion."""
+    """The Lua delta/lap topics flowing through the relay feed the predicted-lap fusion —
+    anchored on the delta's own reference baseline, not the stint best."""
     server._race_status.reset()
     server._race_status.note_lap({"lap": 3, "best_lap_ms": 112000.0})
-    server._race_status.note_delta({"delta_s": 0.5})
+    server._race_status.note_delta({"delta_s": 0.5, "reference_lap_ms": 110000.0})
     snap = server._race_status.snapshot()
-    assert snap["predicted_lap_ms"] == 112500
+    assert snap["predicted_lap_ms"] == 110500
+
+
+def test_release_observer_feed_resets_shift_and_race_status(monkeypatch):
+    """A producer swap must not inherit the previous stream's armed gears or fuel/delta
+    fusion (Codex on PR #615)."""
+    monkeypatch.setattr(server, "_observer_feed_peer", "ws-owner")
+    monkeypatch.setattr(server, "_observer", None)
+    monkeypatch.setattr(server, "_coach_runtime", None)
+    server.set_race_manager(None)
+
+    class _Resettable:
+        def __init__(self):
+            self.resets = 0
+
+        def reset(self):
+            self.resets += 1
+
+    shift = _Resettable()
+    monkeypatch.setattr(server, "_shift_observer", shift)
+    server._race_status.reset()
+    server._race_status.note_fuel({"fuel_l": 10.0, "fuel_per_lap_l": 2.0, "laps_remaining": 5.0})
+
+    server._release_observer_feed("ws-owner")
+    assert shift.resets == 1
+    assert server._race_status.snapshot() is None

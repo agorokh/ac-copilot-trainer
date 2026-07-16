@@ -44,25 +44,35 @@ class RaceStatusTracker:
     _fuel: dict[str, Any] | None = None
     _delta_s: float | None = None
     _delta_at: float = field(default=float("-inf"))
+    _reference_lap_ms: float | None = None
     _best_lap_ms: float | None = None
     _last_lap_ms: float | None = None
     _lap: int | None = None
+    _session_key: tuple[str, str, str] | None = None
     _last_published: tuple[Any, ...] | None = None
 
     def reset(self) -> None:
         self._fuel = None
         self._delta_s = None
         self._delta_at = float("-inf")
+        self._reference_lap_ms = None
         self._best_lap_ms = None
         self._last_lap_ms = None
         self._lap = None
         self._last_published = None
 
-    def note_fuel(self, status: dict[str, Any] | None) -> None:
-        """Latest clean fuel fields (from ``RaceManagementObserver.fuel_status``); ``None`` keeps
-        the previous measurement (a frame missing the fuel channel is unknown, not empty)."""
+    def note_fuel(self, status: dict[str, Any] | None, *, channel_live: bool = False) -> None:
+        """Latest clean fuel fields (from ``RaceManagementObserver.fuel_status``).
+
+        ``None`` with ``channel_live=False`` keeps the previous measurement (the frame simply
+        lacked the fuel channel — unknown, not empty). ``None`` with ``channel_live=True``
+        means the channel IS reporting but the burn state reset (lap rollback / refuel), so the
+        previous stint's numbers are stale and must be dropped, not frozen (Codex on PR #615).
+        """
         if isinstance(status, dict) and status:
             self._fuel = dict(status)
+        elif status is None and channel_live:
+            self._fuel = None
 
     def note_delta(self, payload: dict[str, Any] | None) -> None:
         if not isinstance(payload, dict):
@@ -71,6 +81,24 @@ class RaceStatusTracker:
         if delta is not None:
             self._delta_s = delta
             self._delta_at = self.clock()
+            # The delta's OWN baseline (the active reference trace's lap time), when the
+            # producer carries it. Stored with the delta — the two are meaningless apart.
+            self._reference_lap_ms = _num(payload.get("reference_lap_ms"))
+
+    def note_session(self, payload: dict[str, Any] | None) -> None:
+        """Reset the fusion only on a REAL identity change. The Lua bridge re-emits the
+        current ``session`` snapshot to late subscribers, so a frame alone is not a change
+        (Codex on PR #615) — compare car/track/session before dropping state."""
+        if not isinstance(payload, dict):
+            return
+        key = (
+            str(payload.get("car_id") or ""),
+            str(payload.get("track_id") or ""),
+            str(payload.get("session_index") if payload.get("session_index") is not None else ""),
+        )
+        if self._session_key is not None and key != self._session_key:
+            self.reset()
+        self._session_key = key
 
     def note_lap(self, payload: dict[str, Any] | None) -> None:
         if not isinstance(payload, dict):
@@ -101,11 +129,12 @@ class RaceStatusTracker:
         delta_fresh = self._delta_s is not None and (now - self._delta_at) <= DELTA_FRESH_S
         if delta_fresh:
             out["delta_s"] = self._delta_s
-            if self._best_lap_ms is not None:
-                # Stint best + live gap: the standard GT "predicted lap". Clamped at zero
-                # defensively; a huge negative delta means the reference is invalid, not a
-                # negative lap time.
-                predicted = self._best_lap_ms + self._delta_s * 1000.0
+            if self._reference_lap_ms is not None and self._reference_lap_ms > 0:
+                # Predicted lap = the delta's OWN reference lap time + the live gap. The stint
+                # best is the WRONG baseline when an imported/faster reference drives the delta
+                # (Codex on PR #615) — so the prediction exists only when the producer carries
+                # `reference_lap_ms` with the delta. Suppressed (never guessed) otherwise.
+                predicted = self._reference_lap_ms + self._delta_s * 1000.0
                 if predicted > 0:
                     out["predicted_lap_ms"] = round(predicted)
         return out or None

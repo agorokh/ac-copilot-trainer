@@ -93,9 +93,18 @@ function M.publishDeltaIfDue(opts)
   if not due then
     return false
   end
+  -- #531 Part D remainder: the delta's OWN baseline (the active reference trace's lap time)
+  -- rides with it so the sidecar's predicted lap adds the gap to the RIGHT lap time — the
+  -- stint best is the wrong baseline when an imported reference drives the delta. Omitted
+  -- when unknown (never 0).
+  local referenceLapMs = _finite(opts.referenceLapMs)
+  if referenceLapMs ~= nil and referenceLapMs <= 0 then
+    referenceLapMs = nil
+  end
   return wsBridge.publishTopic(TOPIC_DELTA, {
     delta_s = deltaS,
     spline = _finite(opts.spline),  -- omit a non-finite spline rather than emit unserializable JSON (#185)
+    reference_lap_ms = referenceLapMs,
   }) == true
 end
 

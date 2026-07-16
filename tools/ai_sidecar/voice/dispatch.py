@@ -24,7 +24,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 
-from tools.ai_sidecar.registers import audio_routing_for_register
+from tools.ai_sidecar.registers import AUDIO_ROUTING_AUTHORITATIVE_PC
 from tools.ai_sidecar.voice.playback import Playback
 from tools.ai_sidecar.voice.utterance import Utterance
 
@@ -56,10 +56,12 @@ class VoiceDispatch:
     def to_payload(self) -> dict[str, object]:
         """The ``coaching.voice`` wire payload (plain JSON-safe dict)."""
         payload = asdict(self)
-        # #531 Part E: the routing hint travels with the dispatched clip too, so a tablet
-        # endpoint can tell "mirror only" (authoritative_pc — the PC already spoke it) from
-        # "you may own the audio" (tablet_native) without re-deriving the register policy.
-        payload["audio_routing"] = audio_routing_for_register(self.register)
+        # #531 Part E: every frame on this stream is a clip the in-process PC playback has
+        # ALREADY sounded (the tap fires post-play), so the audio owner is the PC by
+        # construction — regardless of register. A register-based hint here would invite a
+        # tablet endpoint to re-speak calm/alert clips the PC just played (Codex on PR #615).
+        # Part G revisits when tablet-native playback + PC-side suppression land together.
+        payload["audio_routing"] = AUDIO_ROUTING_AUTHORITATIVE_PC
         return payload
 
 

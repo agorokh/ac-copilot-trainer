@@ -795,3 +795,36 @@ def test_telemetry_tick_omits_shift_rpm_in_neutral_or_without_limiter():
     )
     assert out["neutral_has"] is False
     assert out["nolimiter_has"] is False
+
+
+def test_delta_carries_reference_lap_ms_when_known():
+    """#531 Part D remainder: the delta's own baseline rides with it so the sidecar's
+    predicted lap adds the gap to the RIGHT lap time; omitted when unknown or 0."""
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          M.publishDeltaIfDue({
+            dt = 0.15, deltaS = 0.42, spline = 0.5, wsBridge = ws, referenceLapMs = 90000,
+          })
+          M.reset()
+          local ws2 = make_ws()
+          M.publishDeltaIfDue({ dt = 0.15, deltaS = 0.42, spline = 0.5, wsBridge = ws2 })
+          M.reset()
+          local ws3 = make_ws()
+          M.publishDeltaIfDue({
+            dt = 0.15, deltaS = 0.42, spline = 0.5, wsBridge = ws3, referenceLapMs = 0,
+          })
+          return {
+            with_ref = ws._calls[1] and ws._calls[1].payload.reference_lap_ms,
+            without_has = ws2._calls[1].payload.reference_lap_ms ~= nil,
+            zero_has = ws3._calls[1].payload.reference_lap_ms ~= nil,
+          }
+        end)()
+        """
+    )
+    assert out["with_ref"] == 90000
+    assert out["without_has"] is False
+    assert out["zero_has"] is False
