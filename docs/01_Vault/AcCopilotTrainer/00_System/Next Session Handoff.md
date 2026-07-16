@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-07-16T09:00:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/rig-physics-wedge-voice-wasapi-2026-07-16.md
   - AcCopilotTrainer/03_Investigations/issue-531-parte-cues-fuel-2026-07-16.md
   - AcCopilotTrainer/03_Investigations/rig-tablet-tunnel-keeper-armed-2026-07-16.md
   - AcCopilotTrainer/03_Investigations/rig-porsche-data-acd-restore-2026-07-16.md
@@ -100,6 +101,18 @@ relates_to:
 ---
 
 # Next session handoff
+
+## RIG INCIDENT (2026-07-16) — physics wedge at go-live; voice DISABLED on the rig (#619)
+
+AC froze at the first frame on every launch (operator + 3 harness repro): `acpmf_physics.packetId`
+STAGNANT at a fixed init point while status stayed LIVE. Discriminator: killing the **voice-armed**
+sidecar (six-channel pinned WASAPI from #602) produced the first clean lap of the day. Filed
+[#619](https://github.com/agorokh/ac-copilot-trainer/issues/619) with probe timeline, FMOD errors,
+a 4.2 GB wedged-process dump (`.scratch/acs_wedged_2564.dmp`), and the Config-A PASS bundle.
+**Rig mitigation: :8765 sidecar runs WITHOUT voice — do not re-arm voice until #619 is
+root-caused.** Detail: [[rig-physics-wedge-voice-wasapi-2026-07-16]]. The worsening #596 flake
+retro-attributes to this, not the dashboard.
+
 
 ## Delivered (2026-07-16) — #531 Part D remainder + Part E MERGED (PR #615)
 
