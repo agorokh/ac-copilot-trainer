@@ -332,6 +332,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     setupName: null,                // setup.active .name
     carName: null, trackName: null, // setup.list.result identity
     sessionIdent: null,             // "car|track|session" key (re-request setup data on change)
+    sessionCarId: null, sessionTrackId: null, // identity parts for replay-frame gating (#618 R3)
     spinners: null,                 // setup.spinner.list.result .spinners
     fuelAtLap: null, burns: [],     // client-side fuel-per-lap (median of last 3 lap diffs)
     lastCue: null, cueAt: 0,        // latest coaching.cue payload + receive time (tier-2 micro)
@@ -741,6 +742,14 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
   // ---- MAP page (#531 Part F): real geometry from the sidecar track.map topic -------------
   var mapDirty = false;
   var mapGeom = null; // {pts:[[svgx,svgy]...], spline:[...], corners:[...]} in viewBox space
+  // Identity gate for replayed sidecar frames (#618 R3): reject only a KNOWN mismatch —
+  // when either side lacks an id, accept (a fresh tablet with no session yet must still
+  // render the replayed map/review, and single-identity rigs are the common case).
+  function identCompatible(carId, trackId) {
+    if (carId && S.sessionCarId && String(carId) !== String(S.sessionCarId)) return false;
+    if (trackId && S.sessionTrackId && String(trackId) !== String(S.sessionTrackId)) return false;
+    return true;
+  }
   function resetMapDom() {
     mapGeom = null;
     mapDirty = false;
@@ -753,9 +762,12 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     q._key = null;
   }
   function buildMapGeometry() {
+    // A new map invalidates the pace-note cache even when the next three labels match the
+    // previous track's (T1|T2|T3 is the common case) — the notes behind them changed (#618 R3).
+    $("mapQueue")._key = null;
     var m = S.map;
     var outline = m && Array.isArray(m.outline) ? m.outline : null;
-    if (!outline || outline.length < 8) { mapGeom = null; return; }
+    if (!outline || outline.length < 8) { mapGeom = null; $("mapSvg").style.display = "none"; $("mapEmpty").style.display = ""; return; }
     var minX = 1 / 0, maxX = -1 / 0, minZ = 1 / 0, maxZ = -1 / 0;
     outline.forEach(function (p) {
       if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];
@@ -1145,8 +1157,16 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
           case "coaching.snapshot": S.coach = p; S.coachAt = Date.now(); break;
           case "coaching.cue": S.lastCue = p; S.cueAt = Date.now(); break;
           case "race.status": S.race = p; S.raceAt = Date.now(); break;
-          case "session.review": S.review = p; reviewDirty = true; break;
-          case "track.map": S.map = p; mapDirty = true; break;
+          case "session.review":
+            // Late-subscriber replay can deliver a PREVIOUS identity's cached review after
+            // the session snapshot (#618 R3) — accept only when identity-compatible.
+            S.review = identCompatible(p.car_id, p.track_id) ? p : null;
+            reviewDirty = true;
+            break;
+          case "track.map":
+            S.map = identCompatible(p.car_id, p.track_id) ? p : null;
+            mapDirty = true;
+            break;
           case "setup.active":
             S.setupName = p.name || null;
             renderHeader();
@@ -1157,6 +1177,16 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
             // re-request setup data (Codex P2 on PR #547), not just a car swap.
             var ident = String(p.car_id || "") + "|" + String(p.track_id || "")
               + "|" + String(p.session_index === undefined ? "" : p.session_index);
+            S.sessionCarId = p.car_id || null;
+            S.sessionTrackId = p.track_id || null;
+            // Replayed cached frames may have arrived BEFORE this session snapshot — drop
+            // any that a known identity now contradicts (#618 R3).
+            if (S.review && !identCompatible(S.review.car_id, S.review.track_id)) {
+              S.review = null; reviewDirty = true;
+            }
+            if (S.map && !identCompatible(S.map.car_id, S.map.track_id)) {
+              S.map = null; resetMapDom();
+            }
             if (ident !== S.sessionIdent) {
               var hadIdentity = S.sessionIdent !== null;
               S.sessionIdent = ident;
