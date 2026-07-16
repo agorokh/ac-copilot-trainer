@@ -58,21 +58,30 @@ local sim ---@type ac.StateSim
 -- yields nil and the key is omitted.
 local sessionLapsCacheIndex = nil
 local sessionLapsCacheValue = nil
+local sessionLapsRetryCountdown = 0
 local function readSessionLapsTotal()
   local idx = sim and sim.currentSessionIndex or nil
   if idx == nil then
     return nil
   end
-  if sessionLapsCacheIndex ~= idx then
+  if sessionLapsCacheIndex ~= idx or (sessionLapsCacheValue == nil and sessionLapsRetryCountdown <= 0) then
+    -- A FAILED read must not negative-cache for the whole session (daemon on PR #618 R9):
+    -- retry, but only every ~120 calls (~2 s at 60 Hz) so a broken CSP build never pays
+    -- the pcall at frame rate. A successful read (or a timed session's honest nil-laps
+    -- payload with ok==true) caches until the session index changes.
     sessionLapsCacheIndex = idx
-    sessionLapsCacheValue = nil
+    sessionLapsRetryCountdown = 120
     local ok, sess = pcall(ac.getSession, idx)
-    if ok and sess then
-      local laps = tonumber(sess.laps)
+    if ok then
+      sessionLapsCacheValue = nil
+      local laps = sess and tonumber(sess.laps)
       if laps and laps > 0 then
         sessionLapsCacheValue = laps
       end
+      sessionLapsRetryCountdown = math.huge -- settled for this session index
     end
+  elseif sessionLapsCacheValue == nil and sessionLapsRetryCountdown ~= math.huge then
+    sessionLapsRetryCountdown = sessionLapsRetryCountdown - 1
   end
   return sessionLapsCacheValue
 end
