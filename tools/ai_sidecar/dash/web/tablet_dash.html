@@ -839,10 +839,16 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     } else {
       dot.style.display = "none"; ring.style.display = "none";
     }
-    // Pace-note queue: the next up-to-3 coach-aligned corners ahead of the live spline.
+    // Pace-note queue: the next up-to-3 coach-aligned corners ahead of the LIVE spline.
+    // Without a live position the "ahead" ordering would be fabricated from spline 0 —
+    // blank the queue instead, matching the hidden dot (#618 R11).
     var corners = g.corners;
-    if (!corners.length) { $("mapQueue").innerHTML = ""; return; }
-    var s = spline !== null ? spline : 0;
+    if (!corners.length || !liveTick || spline === null) {
+      var q = $("mapQueue");
+      if (q._key) { q.innerHTML = ""; q._key = null; } // change-gated: populated keys are non-empty
+      return;
+    }
+    var s = spline;
     var ahead = corners.slice().sort(function (a, b) {
       var da = (a.spline - s + 1) % 1, db = (b.spline - s + 1) % 1;
       return da - db;

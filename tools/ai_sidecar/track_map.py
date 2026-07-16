@@ -33,9 +33,12 @@ MIN_OUTLINE_SPAN_M = 50.0
 
 def _round_gear(value: float) -> int | None:
     try:
-        g = int(round(float(value)))
+        f = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(f):  # Infinity would raise OverflowError at int() (#618 R11)
+        return None
+    g = int(round(f))
     return g if g >= 1 else None
 
 
@@ -76,6 +79,10 @@ def build_track_map(archive: dict[str, Any]) -> dict[str, Any] | None:
         # Always keep the final sample: dropping up to step-1 points at S/F would make the
         # client's closing segment a false chord tens of metres off (daemon on PR #618).
         idx.append(finite_idx[-1])
+    if len(idx) > MAX_OUTLINE_POINTS:
+        # The forced tail can overshoot the cap by one (daemon R11) — drop the point before
+        # it, keeping the first and last samples exact.
+        del idx[-2]
     outline = [[round(lap.x[i], 1), round(lap.z[i], 1)] for i in idx]
     spline = [round(lap.spline[i], 4) for i in idx]
 
