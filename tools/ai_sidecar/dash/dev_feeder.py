@@ -86,22 +86,36 @@ def _tick_payload(s: float, lap: int, lap_time_ms: float, fuel_l: float) -> dict
     }
 
 
-def _load_reference_spline(path: str) -> list[float] | None:
+def _load_reference(path: str) -> tuple[list[float] | None, str | None, str | None]:
+    """(spline series, car_id, track_id) from a lap archive.
+
+    The archive's own identity matters (#618 R7): the feeder's session snapshot must match
+    the sidecar's reference-derived ``track.map``/``session.review`` payloads, or the
+    tablet's identity gate correctly rejects them and the pages under test stay empty.
+    """
     archive = json.loads(Path(path).read_text(encoding="utf-8"))
     trace = archive.get("trace") or {}
     fields, samples = trace.get("fields") or [], trace.get("samples") or []
+    spline = None
     if "spline" in fields and samples:
         i_sp = fields.index("spline")
-        return [float(row[i_sp]) for row in samples]
-    return None
+        spline = [float(row[i_sp]) for row in samples]
+    car = (archive.get("car") or {}).get("id")
+    track = (archive.get("track") or {}).get("id")
+    return spline, car, track
 
 
 async def _run(args: argparse.Namespace) -> None:
     uri = f"ws://127.0.0.1:{args.port}/"
     reference_spline: list[float] | None = None
+    session_car, session_track = "dev_feeder_gt3", "synthetic"
     if args.reference:
         # One-shot startup read of a small file — fine to do before the socket opens.
-        reference_spline = await asyncio.to_thread(_load_reference_spline, args.reference)
+        reference_spline, ref_car, ref_track = await asyncio.to_thread(
+            _load_reference, args.reference
+        )
+        session_car = ref_car or session_car
+        session_track = ref_track or session_track
 
     async with ws_connect(uri, max_size=2**22) as ws:
 
@@ -126,8 +140,8 @@ async def _run(args: argparse.Namespace) -> None:
                 "type": "state.snapshot",
                 "topic": "session",
                 "payload": {
-                    "car_id": "dev_feeder_gt3",
-                    "track_id": "synthetic",
+                    "car_id": session_car,
+                    "track_id": session_track,
                     "session_index": 0,
                 },
             }

@@ -1192,9 +1192,12 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
             // Car/track delta computed BEFORE the identity parts update: a session_index-only
             // transition (practice→quali) must not drop the map (#618 R5 — track.map is only
             // replayed on subscribe and would stay blank for the rest of the connection).
+            // FULL track-id comparison (layout-sensitive, #618 R7): a layout switch must
+            // drop the map even when a bare-id archive slipped the compat gate, while a
+            // session_index-only transition (same full track id) still keeps it.
             var carTrackChanged = S.sessionIdent !== null && (
               String(S.sessionCarId || "") !== String(p.car_id || "")
-              || String(S.sessionTrackId || "").split("/")[0] !== String(p.track_id || "").split("/")[0]);
+              || String(S.sessionTrackId || "") !== String(p.track_id || ""));
             S.sessionCarId = p.car_id || null;
             S.sessionTrackId = p.track_id || null;
             // Replayed cached frames may have arrived BEFORE this session snapshot — drop
