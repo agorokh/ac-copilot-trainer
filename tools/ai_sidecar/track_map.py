@@ -61,6 +61,10 @@ def build_track_map(archive: dict[str, Any]) -> dict[str, Any] | None:
 
     step = max(1, -(-n // MAX_OUTLINE_POINTS))  # ceil-div: the cap is a cap, not a target
     idx = list(range(0, n, step))
+    if idx[-1] != n - 1:
+        # Always keep the final sample: dropping up to step-1 points at S/F would make the
+        # client's closing segment a false chord tens of metres off (daemon on PR #618).
+        idx.append(n - 1)
     outline = [[round(lap.x[i], 1), round(lap.z[i], 1)] for i in idx]
     spline = [round(lap.spline[i], 4) for i in idx]
 

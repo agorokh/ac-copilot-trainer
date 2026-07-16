@@ -673,8 +673,19 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     var r = S.review;
     var problems = r && Array.isArray(r.problems) ? r.problems : [];
     if (!r || r.error) {
+      // Full reset to the empty state — an identity change nulls S.review, and leaving the
+      // prior session's causes/priorities in the DOM would show a stale debrief for the new
+      // car/track (daemon HIGH on PR #618).
       setText("dbTitle", "Debrief");
-      if (r && r.error) { setText("dbHead", "REVIEW FAILED"); setText("dbBody", String(r.error)); }
+      if (r && r.error) {
+        setText("dbHead", "REVIEW FAILED");
+        setText("dbBody", String(r.error));
+      } else {
+        setText("dbHead", "—");
+        setText("dbBody", "Live coaching lines appear here as they arrive; the full debrief lands with the post-session review.");
+      }
+      $("dbCauses").innerHTML = "";
+      $("dbPriorities").innerHTML = '<div class="mono" style="font-size:12px;color:var(--dim);margin-top:4px">review pending — complete a session</div>';
       return;
     }
     var best = fin(r.best_lap_ms);
@@ -730,6 +741,17 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
   // ---- MAP page (#531 Part F): real geometry from the sidecar track.map topic -------------
   var mapDirty = false;
   var mapGeom = null; // {pts:[[svgx,svgy]...], spline:[...], corners:[...]} in viewBox space
+  function resetMapDom() {
+    mapGeom = null;
+    mapDirty = false;
+    $("mapSvg").style.display = "none";
+    $("mapEmpty").style.display = "";
+    $("mapDot").style.display = "none";
+    $("mapDotRing").style.display = "none";
+    var q = $("mapQueue");
+    q.innerHTML = "";
+    q._key = null;
+  }
   function buildMapGeometry() {
     var m = S.map;
     var outline = m && Array.isArray(m.outline) ? m.outline : null;
@@ -1145,6 +1167,9 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               // The debrief and the live-cue fallback gate on S.review — a new identity's
               // COACH page must not stay pinned to the previous session's report (Codex #618).
               S.review = null; reviewDirty = true;
+              // Same for the MAP geometry: the previous track's outline must drop to the
+              // explicit empty state until the new identity's track.map arrives (#618 R2).
+              S.map = null; resetMapDom();
               // A REAL identity switch invalidates the setup name (per-session fact; the
               // trainer's follow-up setup.active names the new one — Codex on PR #547).
               // The FIRST session frame after a page load must not: the identity-replay

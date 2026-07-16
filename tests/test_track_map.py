@@ -80,3 +80,23 @@ def test_build_track_map_rejects_degenerate_zero_positions() -> None:
         row[px_i] = 0.0
         row[pz_i] = 0.0
     assert build_track_map(archive) is None
+
+
+def test_build_track_map_always_keeps_the_final_sample() -> None:
+    """Downsampling must include the last sample — dropping the S/F tail makes the client's
+    closing segment a false chord (daemon MEDIUM on PR #618)."""
+    archive = _corner_archive()
+    trace = archive["trace"]
+    base = trace["samples"]
+    n = len(base) * 20 + 7  # deliberately NOT divisible by the step
+    big = []
+    for i in range(n):
+        row = list(base[i % len(base)])
+        row[0] = i / n
+        big.append(row)
+    trace["samples"] = big
+    trace["samples_count"] = len(big)
+
+    payload = build_track_map(archive)
+    assert payload is not None
+    assert payload["spline"][-1] == round(big[-1][0], 4)
