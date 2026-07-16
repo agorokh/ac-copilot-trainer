@@ -747,7 +747,11 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
   // render the replayed map/review, and single-identity rigs are the common case).
   function identCompatible(carId, trackId) {
     if (carId && S.sessionCarId && String(carId) !== String(S.sessionCarId)) return false;
-    if (trackId && S.sessionTrackId && String(trackId) !== String(S.sessionTrackId)) return false;
+    // Venue-level track gate (#618 R4): session producers use full "track/layout" ids while
+    // reference archives may carry the bare track id — comparing the base segment tolerates
+    // that mismatch while still rejecting a genuinely different circuit.
+    if (trackId && S.sessionTrackId
+        && String(trackId).split("/")[0] !== String(S.sessionTrackId).split("/")[0]) return false;
     return true;
   }
   function resetMapDom() {
@@ -1194,12 +1198,15 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               S.fuelAtLap = null;
               S.burns = []; // burn is per car AND per track length (Codex on PR #547)
               S.race = null; S.raceAt = 0; // sidecar race.status is per identity too (#531)
-              // The debrief and the live-cue fallback gate on S.review — a new identity's
-              // COACH page must not stay pinned to the previous session's report (Codex #618).
-              S.review = null; reviewDirty = true;
-              // Same for the MAP geometry: the previous track's outline must drop to the
-              // explicit empty state until the new identity's track.map arrives (#618 R2).
-              S.map = null; resetMapDom();
+              if (hadIdentity) {
+                // A REAL identity switch drops the debrief and map — the new identity must
+                // not render the previous one's report/outline (Codex #618 R2). The FIRST
+                // session frame must NOT (#618 R4): the subscribe replay delivers
+                // track.map/session.review BEFORE session and never re-sends them; the
+                // compatibility check above already rejected any known mismatch.
+                S.review = null; reviewDirty = true;
+                S.map = null; resetMapDom();
+              }
               // A REAL identity switch invalidates the setup name (per-session fact; the
               // trainer's follow-up setup.active names the new one — Codex on PR #547).
               // The FIRST session frame after a page load must not: the identity-replay
@@ -1225,6 +1232,10 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               // a reset, and must not wipe live state.
               S.lap = null;
               S.fuelAtLap = null;
+              // A stint reset stales the debrief too — the fresh stint must fall back to
+              // live cues, not stay pinned to the previous stint's review (#618 R4). The
+              // MAP geometry survives: it is reference-tied, not stint-tied.
+              S.review = null; reviewDirty = true;
               requestSetupData(ws); // pit work may have changed the setup during the reset
             }
             break;
