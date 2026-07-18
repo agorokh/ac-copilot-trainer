@@ -203,14 +203,25 @@ def read_rig_session_owner(path: str | Path) -> dict[str, Any] | None:
     except FileNotFoundError:
         return None
     try:
+        if sys.platform == "win32":
+            # Windows exclusive byte-range locks deny overlapping reads. Reading byte zero is a
+            # contend-only status query: it fails with ERROR_LOCK_VIOLATION when owned and never
+            # acquires a lock that could race a real launcher.
+            lock_file.seek(0)
+            try:
+                lock_file.read(1)
+            except OSError as exc:
+                if not RigSessionLock._is_lock_contention(exc):
+                    raise
+                return RigSessionLock._read_owner(lock_file) or {"cwd": "unknown"}
+            return None
         try:
             RigSessionLock._lock_byte(lock_file)
         except OSError as exc:
             if RigSessionLock._is_lock_contention(exc):
-                return RigSessionLock._read_owner(lock_file)
+                return RigSessionLock._read_owner(lock_file) or {"cwd": "unknown"}
             raise
-        else:
-            RigSessionLock._unlock_byte(lock_file)
-            return None
+        RigSessionLock._unlock_byte(lock_file)
+        return None
     finally:
         lock_file.close()

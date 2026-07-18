@@ -39,8 +39,9 @@ The resolve loop is active; merge and Windows-rig proof remain separate future s
   a Stable AC action, an AC Session status row, dedicated logs, source/frozen child dispatch, and
   PyInstaller coverage. Restarted Game Point instances read the live machine lock rather than
   claiming an owned rig is idle; AC-session failures remain visible without poisoning sidecar
-  readiness. Status uses the OS lock byte as authority (not reusable PID metadata), while real
-  launch acquisition has a one-second grace around the brief status probe. After a local child
+  readiness. Status uses the OS lock byte as authority (not reusable PID metadata); on Windows it
+  queries ownership with a locked-byte read that never acquires the exclusive byte, and contention
+  with in-flight metadata reports an explicit unknown owner rather than idle. After a local child
   exits, external lock ownership supersedes the stale exit row. PID-scoped generated presets are
   removed when ownership ends, and transient readiness flicker uses the same consecutive-sample
   threshold as render stalls.

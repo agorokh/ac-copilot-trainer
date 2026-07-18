@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+import tools.ac_harness.rig_lock as rig_lock_module
 from tools.ac_harness.rig_lock import (
     RigSessionBusy,
     RigSessionLock,
@@ -103,6 +104,36 @@ def test_stale_metadata_with_reused_live_pid_is_not_authoritative(tmp_path: Path
     path.write_bytes(b"\0" + json.dumps(stale).encode("utf-8"))
 
     assert read_rig_session_owner(path) is None
+
+
+def test_windows_status_probe_never_acquires_the_exclusive_byte(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "rig-session.lock"
+    path.write_bytes(b"\0")
+
+    def fail_lock(_lock_file) -> None:
+        raise AssertionError("Windows status must use a contend-only byte read")
+
+    monkeypatch.setattr(rig_lock_module.sys, "platform", "win32")
+    monkeypatch.setattr(RigSessionLock, "_lock_byte", fail_lock)
+
+    assert read_rig_session_owner(path) is None
+
+
+def test_contended_lock_without_metadata_returns_unknown_owner(tmp_path: Path) -> None:
+    path = tmp_path / "rig-session.lock"
+    lock = RigSessionLock(path, owner=_owner(os.getpid()))
+    lock.acquire()
+    try:
+        assert lock._file is not None
+        lock._file.seek(1)
+        lock._file.truncate()
+        lock._file.flush()
+
+        assert read_rig_session_owner(path) == {"cwd": "unknown"}
+    finally:
+        lock.release()
 
 
 def test_lock_validates_timing(tmp_path: Path) -> None:
