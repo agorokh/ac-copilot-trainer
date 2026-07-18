@@ -60,6 +60,16 @@ def test_never_live_when_process_up_but_render_never_starts():
     assert classify(samples, go_live_timeout=30.0) is LaunchVerdict.NEVER_LIVE
 
 
+def test_process_exit_after_first_appearing_fails_before_go_live_timeout():
+    samples = [
+        Sample(t=0.0, gfx_packet=None, acs_alive=False),
+        Sample(t=1.0, gfx_packet=100, acs_alive=True, entry_ready=False),
+        Sample(t=2.0, gfx_packet=None, acs_alive=False),
+    ]
+
+    assert classify(samples, go_live_timeout=80.0) is LaunchVerdict.NEVER_LIVE
+
+
 def test_stable_when_render_advances_through_the_window():
     samples = steady(0.0, 60.0, first_packet=100)
     assert classify(samples, go_live_timeout=30.0, stability_window=45.0) is LaunchVerdict.STABLE

@@ -56,7 +56,9 @@ The resolve loop is active; merge and Windows-rig proof remain separate future s
   propagating. Ctrl-C remains the console escape hatch, while Game Point's **Release AC** writes a
   durable sibling signal that works for its no-console child even after the GUI is closed and
   reopened. Lock-probe I/O uncertainty is visibly fail-closed (`AC Session: UNKNOWN`) rather than
-  silently reported as a healthy owner.
+  silently reported as a healthy owner. An `acs.exe` that appears and then exits before go-live
+  fails immediately instead of burning the full timeout, and the developer preview action map
+  remains synchronized with the production buttons.
 
 ## Verification contract
 

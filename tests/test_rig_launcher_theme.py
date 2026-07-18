@@ -161,6 +161,7 @@ def test_failed_ac_session_is_visible_without_misdirecting_to_start() -> None:
 
 def test_launcher_buttons_are_uppercase_with_start_emphasis() -> None:
     from tools.rig_launcher import view
+    from tools.rig_launcher.preview import _NOOP_ACTIONS
 
     labels = [label for label, _key, _primary in view._BUTTONS]
     assert labels == [
@@ -183,6 +184,7 @@ def test_launcher_buttons_are_uppercase_with_start_emphasis() -> None:
     ]
     # Start is 1.5x each secondary action (1.5fr vs 1fr in the design grid).
     assert view._BUTTON_WEIGHTS == (3, 2, 2, 2, 2, 2, 2)
+    assert set(_NOOP_ACTIONS) == {key for _label, key, _primary in view._BUTTONS}
 
 
 def test_resolve_font_prefers_available_family() -> None:

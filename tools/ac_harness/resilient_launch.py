@@ -121,6 +121,7 @@ def classify(
     prev_packet: int | None = None
     stall_run = 0
     not_ready_run = 0
+    seen_acs_alive = False
 
     for sample in samples:
         ready = sample.entry_ready is True and sample.drivable is True
@@ -132,6 +133,9 @@ def classify(
             and sample.gfx_packet != prev_packet
         )
         if live_since is None:
+            if seen_acs_alive and not sample.acs_alive:
+                return LaunchVerdict.NEVER_LIVE
+            seen_acs_alive = seen_acs_alive or sample.acs_alive
             if sample.t - t0 >= go_live_timeout:
                 return LaunchVerdict.NEVER_LIVE
             if advanced and ready:

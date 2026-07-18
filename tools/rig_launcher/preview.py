@@ -22,7 +22,16 @@ from tools.rig_launcher.supervisor import GamePointStatus, ProbeResult
 from tools.rig_launcher.view import build_launcher_view
 
 _NOOP_ACTIONS = {
-    key: (lambda: None) for key in ("start", "refresh", "logs", "settings", "setup_diff")
+    key: (lambda: None)
+    for key in (
+        "start",
+        "resilient_launch",
+        "resilient_release",
+        "refresh",
+        "logs",
+        "settings",
+        "setup_diff",
+    )
 }
 
 
