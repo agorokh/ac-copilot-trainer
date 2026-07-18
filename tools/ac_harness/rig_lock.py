@@ -187,3 +187,29 @@ class RigSessionLock:
             import fcntl
 
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def read_rig_session_owner(path: str | Path) -> dict[str, Any] | None:
+    """Return live owner metadata without mutating or taking over the rig session.
+
+    The metadata bytes alone are not authoritative because an owner can crash between writing
+    them and releasing the OS lock. Probe the same lock byte non-blockingly: contention means the
+    metadata belongs to a live owner; successfully taking the byte means the file is stale/idle.
+    """
+    lock_path = Path(path)
+    try:
+        lock_file = lock_path.open("r+b")
+    except FileNotFoundError:
+        return None
+    try:
+        try:
+            RigSessionLock._lock_byte(lock_file)
+        except OSError as exc:
+            if RigSessionLock._is_lock_contention(exc):
+                return RigSessionLock._read_owner(lock_file)
+            raise
+        else:
+            RigSessionLock._unlock_byte(lock_file)
+            return None
+    finally:
+        lock_file.close()

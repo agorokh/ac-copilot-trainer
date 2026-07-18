@@ -146,6 +146,19 @@ def test_summary_for_falls_back_to_state_word_without_detail() -> None:
     assert theme.summary_for(status) == ("PRESS START", "brake", "DISABLED")
 
 
+def test_failed_optional_ac_session_does_not_poison_sidecar_readiness() -> None:
+    status = _status(
+        resilient=ProbeResult("ac_session", False, "exited", "exit=1; press STABLE AC")
+    )
+
+    assert status.ok is True
+    assert theme.summary_for(status) == (
+        "READY TO DRIVE",
+        "clear",
+        "sidecar · screen live",
+    )
+
+
 def test_launcher_buttons_are_uppercase_with_start_emphasis() -> None:
     from tools.rig_launcher import view
 

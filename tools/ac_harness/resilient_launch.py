@@ -276,6 +276,18 @@ def _ensure_cm_running(  # pragma: no cover - rig-only
     return False
 
 
+def _wait_process_exit(  # pragma: no cover - rig-only
+    image: str, *, timeout: float = 15.0, poll: float = 0.25
+) -> bool:
+    """Wait until a killed Windows process has left the table before reusing its IPC name."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _process_running(image):
+            return True
+        time.sleep(poll)
+    return not _process_running(image)
+
+
 def _ensure_acs_gone(  # pragma: no cover - rig-only
     acs_alive: Callable[[], bool], *, timeout: float = 15.0, poll: float = 1.0
 ) -> None:
@@ -407,6 +419,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         _log(f"RIG BUSY — {exc}")
         return 3
     _log(f"rig lock acquired -> {rig_lock.path}")
+    preset: Path | None = None
+    cm_restart_pending = False
     try:
         # The generated preset is application state: keep it under the same approved per-user
         # Harness root as the cross-worktree lock, and create it only after ownership is acquired.
@@ -424,9 +438,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         actuator = ContentManagerActuator(preset=preset, cm_exe=None)
 
         def watch_attempt(attempt: int) -> LaunchVerdict:
+            nonlocal cm_restart_pending
             _log(f"attempt {attempt}/{args.max_attempts}: launching via Content Manager")
             # A wedged acs from the previous attempt must be GONE before relaunching.
             _ensure_acs_gone(acs_alive)
+            if cm_restart_pending:
+                if not _wait_process_exit("Content Manager.exe"):
+                    _log("WARNING: Content Manager is still exiting; deferring the next launch")
+                    return LaunchVerdict.NEVER_LIVE
+                cm_restart_pending = False
             # The quick-drive URL is IPC to a RUNNING CM. Do not spend a full attempt when its
             # executable is absent or startup failed.
             if not _ensure_cm_running(ContentManagerActuator.DEFAULT_CM_EXE):
@@ -443,8 +463,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             return verdict
 
         def cold_restart_cm() -> None:
+            nonlocal cm_restart_pending
             _log("two consecutive never_live — cold-restarting Content Manager (stale preset IPC)")
             actuator.restart_content_manager()
+            cm_restart_pending = not _wait_process_exit("Content Manager.exe")
 
         report = run_retry_loop(
             watch_attempt,
@@ -469,6 +491,13 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             _log("operator released rig ownership; AC left LIVE")
         return 0
     finally:
+        if preset is not None:
+            try:
+                preset.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                _log(f"WARNING: could not remove generated preset {preset}: {exc}")
         rig_lock.release()
 
 

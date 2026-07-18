@@ -162,6 +162,9 @@ class GamePointConfig:
     #: than one authorized device is attached.
     adb_path: str | None = None
     adb_serial: str | None = None
+    #: Test/embedding override for the machine-wide rig ownership file. Production uses the
+    #: Harness LocalAppData path from ``default_rig_session_lock_path``.
+    rig_lock_path: Path | None = None
     paths: LauncherPaths | None = None
 
     @classmethod
@@ -252,15 +255,7 @@ class GamePointStatus:
 
     @property
     def ok(self) -> bool:
-        rows = (
-            self.sidecar,
-            self.screen,
-            self.voice,
-            self.simhub,
-            self.tablet,
-            self.resilient,
-            *self.checks,
-        )
+        rows = (self.sidecar, self.screen, self.voice, self.simhub, self.tablet, *self.checks)
         return all(row.ok for row in rows if row.state not in {"skipped", "absent"})
 
     def to_dict(self) -> dict[str, object]:
@@ -493,6 +488,27 @@ class GamePointSupervisor:
                     "running",
                     f"pid={self._resilient_process.pid}",
                 )
+        owner = self._rig_session_owner()
+        if owner is not None:
+            detail = " ".join(
+                f"{key}={owner[key]}"
+                for key in ("pid", "car", "track", "started_at")
+                if owner.get(key) not in (None, "")
+            )
+            return ProbeResult(
+                "ac_session",
+                True,
+                "running",
+                f"owned by another launcher{(': ' + detail) if detail else ''}",
+            )
+        with self._proc_lock:
+            if self._resilient_process is not None and self._resilient_process.poll() is None:
+                return ProbeResult(
+                    "ac_session",
+                    True,
+                    "running",
+                    f"pid={self._resilient_process.pid}",
+                )
             if self._resilient_log_handle is not None:
                 try:
                     self._resilient_log_handle.close()
@@ -532,6 +548,19 @@ class GamePointSupervisor:
     def _resilient_process_status(self) -> ProbeResult:
         with self._proc_lock:
             if self._resilient_process is None:
+                owner = self._rig_session_owner()
+                if owner is not None:
+                    detail = " ".join(
+                        f"{key}={owner[key]}"
+                        for key in ("pid", "car", "track", "started_at")
+                        if owner.get(key) not in (None, "")
+                    )
+                    return ProbeResult(
+                        "ac_session",
+                        True,
+                        "running",
+                        f"owned by another launcher{(': ' + detail) if detail else ''}",
+                    )
                 if not self.config.resilient_car or not self.config.resilient_track:
                     return ProbeResult(
                         "ac_session",
@@ -559,6 +588,20 @@ class GamePointSupervisor:
                 "exited",
                 f"exit={rc}; log={self.paths.resilient_log_path}",
             )
+
+    def _rig_session_owner(self) -> dict[str, Any] | None:
+        """Read machine-wide ownership so restarted Game Point instances adopt status truth."""
+        if self.config.rig_lock_path is None and sys.platform != "win32":
+            return None
+        from tools.ac_harness.rig_lock import (
+            default_rig_session_lock_path,
+            read_rig_session_owner,
+        )
+
+        path = self.config.rig_lock_path or default_rig_session_lock_path(
+            local_app_data=self._environ.get("LOCALAPPDATA")
+        )
+        return read_rig_session_owner(path)
 
     def stop_sidecar(self, *, timeout: float = 5.0) -> ProbeResult:
         with self._proc_lock:

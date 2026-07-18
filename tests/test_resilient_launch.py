@@ -20,6 +20,7 @@ from tools.ac_harness.resilient_launch import (
     _non_negative_float,
     _positive_float,
     _positive_int,
+    _wait_process_exit,
     _watch_live,
     classify,
     run_retry_loop,
@@ -229,6 +230,24 @@ def test_streaming_watch_waits_through_short_hitch(monkeypatch):
         )
         is LaunchVerdict.STABLE
     )
+
+
+def test_wait_process_exit_rejects_lingering_killed_process(monkeypatch):
+    now = 0.0
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch._process_running", lambda _image: True)
+
+    assert _wait_process_exit("Content Manager.exe", timeout=1.0, poll=0.25) is False
+    assert now == 1.0
 
 
 @pytest.mark.parametrize(

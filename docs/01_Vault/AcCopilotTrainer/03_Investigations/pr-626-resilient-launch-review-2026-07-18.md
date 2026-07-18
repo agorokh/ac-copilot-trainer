@@ -29,11 +29,14 @@ The resolve loop is active; merge and Windows-rig proof remain separate future s
   the operator releases it. Generated presets live under the approved per-user Harness root and use
   PID-scoped names.
 - Content Manager startup failures fail the attempt cleanly; retries kill the complete `acs.exe`
-  process tree; finite positive/non-negative CLI types reject NaN and infinity.
+  process tree and wait for a killed CM to leave before reusing its IPC name; finite
+  positive/non-negative CLI types reject NaN and infinity.
 - Shared preset and foreground-window helpers remove the `auto_drive` layering dependency.
 - The driver-facing path now follows the Game Point invariant: non-secret car/track/layout settings,
   a Stable AC action, an AC Session status row, dedicated logs, source/frozen child dispatch, and
-  PyInstaller coverage.
+  PyInstaller coverage. Restarted Game Point instances read the live machine lock rather than
+  claiming an owned rig is idle; AC-session failures remain visible without poisoning sidecar
+  readiness. PID-scoped generated presets are removed when ownership ends.
 
 ## Verification contract
 

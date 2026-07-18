@@ -16,6 +16,7 @@ from tools.ac_harness.rig_lock import (
     RigSessionLock,
     RigSessionOwner,
     default_rig_session_lock_path,
+    read_rig_session_owner,
 )
 
 
@@ -73,9 +74,17 @@ with RigSessionLock(path, owner=owner):
         assert exc_info.value.owner["pid"] == 4242
         assert exc_info.value.owner["car"] == "peer-car"
         assert "peer-worktree" in str(exc_info.value)
+        assert read_rig_session_owner(path) == {
+            "pid": 4242,
+            "cwd": "peer-worktree",
+            "car": "peer-car",
+            "track": "peer-track",
+            "started_at": None,
+        }
     finally:
         release.touch()
         proc.wait(timeout=5)
+    assert read_rig_session_owner(path) is None
 
 
 def test_lock_is_released_for_next_owner(tmp_path: Path) -> None:

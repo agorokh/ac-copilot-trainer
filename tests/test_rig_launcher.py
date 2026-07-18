@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 import tools.rig_launcher.supervisor as supervisor_module
+from tools.ac_harness.rig_lock import RigSessionLock, RigSessionOwner
 from tools.rig_launcher.app import (
     _open_path,
     config_from_args,
@@ -249,6 +250,37 @@ def test_start_resilient_session_requires_car_and_track(tmp_path: Path) -> None:
     assert result.state == "unconfigured"
     assert "resilient_car" in result.detail
     assert "resilient_track" in result.detail
+
+
+def test_resilient_status_adopts_machine_wide_lock_owner(tmp_path: Path) -> None:
+    lock_path = tmp_path / "rig-session.lock"
+    cfg = GamePointConfig(
+        resilient_car="configured-car",
+        resilient_track="configured-track",
+        rig_lock_path=lock_path,
+        paths=LauncherPaths(tmp_path / "game-point"),
+    )
+
+    def fail_popen(*_args: Any, **_kwargs: Any) -> _Proc:
+        raise AssertionError("an owned rig must not spawn a second resilient child")
+
+    sup = GamePointSupervisor(cfg, environ={}, popen=fail_popen)
+    owner = RigSessionOwner(
+        pid=777,
+        cwd="other-game-point",
+        car="live-car",
+        track="live-track",
+        started_at="2026-07-18T21:00:00Z",
+    )
+    with RigSessionLock(lock_path, owner=owner):
+        status = sup._resilient_process_status()
+        started = sup.start_resilient_session()
+
+    assert status.ok is True
+    assert status.state == "running"
+    assert "pid=777" in status.detail
+    assert "live-car" in status.detail
+    assert started == status
 
 
 def test_preflight_blocks_external_bind_without_token(tmp_path: Path) -> None:
