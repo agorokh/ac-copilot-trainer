@@ -78,6 +78,7 @@ from tools.ac_harness.sequence_probe import (
     intervention_summary,
     tap_frames,
 )
+from tools.ac_harness.window_utils import minimize_foreground_window
 from tools.ai_sidecar.external_protocol import CLIENT_CLASS_OBSERVER
 
 if TYPE_CHECKING:
@@ -2427,31 +2428,6 @@ def _log(msg: str) -> None:  # pragma: no cover - rig-only progress trace
     print(f"[auto-drive {time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def _minimize_foreground_window() -> None:  # pragma: no cover - rig-only
-    """Best-effort: minimize whatever window holds the foreground before a CM launch.
-
-    Live-found on the rig (2026-06-22 vault note; re-confirmed 2026-07-02 with the agent's own
-    window in the attempt-3 HUD capture): a foreground window that is not CM/AC makes CM's
-    auto-start race lose almost every time — AC sits at the pre-drive screen with LIVE status and
-    advancing physics. Never minimizes AC or Content Manager themselves.
-    """
-    import ctypes
-
-    try:
-        user32 = ctypes.windll.user32
-        hwnd = user32.GetForegroundWindow()
-        if not hwnd:
-            return
-        buf = ctypes.create_unicode_buffer(256)
-        user32.GetWindowTextW(hwnd, buf, 255)
-        title = (buf.value or "").lower()
-        if "assetto corsa" in title or "content manager" in title:
-            return
-        user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
-    except Exception:  # noqa: BLE001 - purely best-effort; a launch retry covers a miss
-        return
-
-
 def _race_ini_path(config: AutoDriveConfig) -> Path:  # pragma: no cover - rig-only
     """``<AC user data>/cfg/race.ini`` — the file CM regenerates and acs reads at spawn."""
     return resolve_ac_user_dir(config.ac_user_dir) / "cfg" / "race.ini"
@@ -2478,7 +2454,7 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
             "launching AC via Content Manager"
             + (" (setup baked into race.ini)" if config.setup_ini is not None else "")
         )
-        _minimize_foreground_window()  # the CM auto-start race needs the desktop foreground free
+        minimize_foreground_window()  # the CM auto-start race needs the desktop foreground free
         if config.setup_ini is not None:
             race_ini = _race_ini_path(config)
             with race_ini_setup_bake_loop(

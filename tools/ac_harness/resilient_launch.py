@@ -18,7 +18,7 @@ Why the existing pieces do not cover it:
   on a bounded window, so it cannot hand a live session to a human driver.
 
 The launch itself reuses the proven primitives (``ContentManagerActuator`` +
-``_minimize_foreground_window`` + a freshly generated deterministic preset). A prototype that
+``minimize_foreground_window`` + a freshly generated deterministic preset). A prototype that
 hand-rolled the ``acmanager://`` URL returned ``never_live`` repeatedly because it skipped the
 foreground-minimize (CM's auto-start race loses when a window holds the desktop foreground) and
 CM's stale-session cold-restart (#537/#558) — both are handled here.
@@ -30,6 +30,7 @@ is unit-tested off-rig with no Assetto Corsa present.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -49,6 +50,7 @@ NEVER_LIVE_BEFORE_CM_RESTART = 2
 class LaunchVerdict(StrEnum):
     """Outcome of watching one launch attempt."""
 
+    PENDING = "pending"
     STABLE = "stable"
     FROZE = "froze"
     NEVER_LIVE = "never_live"
@@ -59,13 +61,15 @@ class Sample:
     """One observation of the sim's render liveness.
 
     ``gfx_packet`` is ``acpmf_graphics.packetId`` — it advances once per rendered frame, so a
-    frozen render loop pins it while the process stays alive. ``None`` means the shared-memory
-    section was not mapped (sim not up yet).
+    frozen render loop pins it while the process stays alive. ``entry_ready`` preserves the
+    graphics page's LIVE + not-in-pit predicate so an advancing pre-drive menu cannot pass as a
+    drivable session. ``None`` means that field could not be read yet.
     """
 
     t: float
     gfx_packet: int | None
     acs_alive: bool
+    entry_ready: bool | None = True
 
 
 def classify(
@@ -89,7 +93,13 @@ def classify(
     did not survive, and the caller must retry either way.
     """
     if not samples:
-        return LaunchVerdict.NEVER_LIVE
+        return LaunchVerdict.PENDING
+    if go_live_timeout <= 0:
+        raise ValueError("go_live_timeout must be > 0")
+    if stability_window <= 0:
+        raise ValueError("stability_window must be > 0")
+    if stall_samples <= 0:
+        raise ValueError("stall_samples must be > 0")
 
     t0 = samples[0].t
     live_since: float | None = None
@@ -104,12 +114,14 @@ def classify(
             and sample.gfx_packet != prev_packet
         )
         if live_since is None:
-            if advanced:
+            if advanced and sample.entry_ready is True:
                 live_since = sample.t
             elif sample.t - t0 >= go_live_timeout:
                 return LaunchVerdict.NEVER_LIVE
         else:
             if not sample.acs_alive:
+                return LaunchVerdict.FROZE
+            if sample.entry_ready is False:
                 return LaunchVerdict.FROZE
             if advanced:
                 stall_run = 0
@@ -117,15 +129,20 @@ def classify(
                 stall_run += 1
                 if stall_run >= stall_samples:
                     return LaunchVerdict.FROZE
-            if sample.t - live_since >= stability_window:
+            if (
+                advanced
+                and sample.entry_ready is True
+                and sample.t - live_since >= stability_window
+            ):
                 return LaunchVerdict.STABLE
         if sample.gfx_packet is not None:
             prev_packet = sample.gfx_packet
 
     if live_since is None:
-        return LaunchVerdict.NEVER_LIVE
-    # Trace ended before the window elapsed and before any stall — not yet proven stable.
-    return LaunchVerdict.FROZE if stall_run else LaunchVerdict.NEVER_LIVE
+        return LaunchVerdict.PENDING
+    # The trace ended before either terminal threshold. A short hitch is not a freeze, and an
+    # advancing live session is not a never-live failure merely because its window is unfinished.
+    return LaunchVerdict.PENDING
 
 
 @dataclass(frozen=True)
@@ -168,10 +185,19 @@ def run_retry_loop(
     ``NEVER_LIVE`` verdicts is seen — the hook the CLI uses to cold-restart a stale Content
     Manager (#537/#558) rather than pointlessly re-sending the same URL.
     """
+    if max_attempts <= 0:
+        raise ValueError("max_attempts must be > 0")
+    if never_live_before_restart <= 0:
+        raise ValueError("never_live_before_restart must be > 0")
+
     froze = never_live = 0
     never_live_run = 0
+    last_verdict = LaunchVerdict.NEVER_LIVE
     for attempt in range(1, max_attempts + 1):
         verdict = watch_attempt(attempt)
+        if verdict is LaunchVerdict.PENDING:
+            raise ValueError("watch_attempt returned a non-terminal PENDING verdict")
+        last_verdict = verdict
         if verdict is LaunchVerdict.STABLE:
             return LaunchReport(verdict, attempt, froze, never_live)
         if verdict is LaunchVerdict.FROZE:
@@ -183,7 +209,7 @@ def run_retry_loop(
             if never_live_run >= never_live_before_restart and on_never_live_streak is not None:
                 on_never_live_streak()
                 never_live_run = 0
-    return LaunchReport(LaunchVerdict.NEVER_LIVE, max_attempts, froze, never_live)
+    return LaunchReport(last_verdict, max_attempts, froze, never_live)
 
 
 # --------------------------------------------------------------------------------------
@@ -196,18 +222,21 @@ def _log(msg: str) -> None:  # pragma: no cover - rig-only progress trace
 
 
 def _sample_now(
-    read_packet: Callable[[], int | None], acs_alive: Callable[[], bool]
+    read_state: Callable[[], tuple[int | None, bool | None]], acs_alive: Callable[[], bool]
 ) -> Sample:  # pragma: no cover - rig-only
-    return Sample(t=time.monotonic(), gfx_packet=read_packet(), acs_alive=acs_alive())
+    packet, entry_ready = read_state()
+    return Sample(
+        t=time.monotonic(),
+        gfx_packet=packet,
+        acs_alive=acs_alive(),
+        entry_ready=entry_ready,
+    )
 
 
 def _process_running(image: str) -> bool:  # pragma: no cover - rig-only
-    import subprocess
+    from tools.ac_harness.entry_launcher import running_process_ids
 
-    out = subprocess.run(
-        ["tasklist", "/fi", f"imagename eq {image}"], capture_output=True, text=True
-    ).stdout.lower()
-    return image.lower() in out
+    return bool(running_process_ids(image))
 
 
 def _ensure_cm_running(  # pragma: no cover - rig-only
@@ -262,7 +291,7 @@ def _ensure_acs_gone(  # pragma: no cover - rig-only
 
 
 def _watch_live(  # pragma: no cover - rig-only
-    read_packet: Callable[[], int | None],
+    read_state: Callable[[], tuple[int | None, bool | None]],
     acs_alive: Callable[[], bool],
     *,
     go_live_timeout: float,
@@ -273,19 +302,35 @@ def _watch_live(  # pragma: no cover - rig-only
     samples: list[Sample] = []
     deadline = time.monotonic() + go_live_timeout + stability_window + 30.0
     while time.monotonic() < deadline:
-        samples.append(_sample_now(read_packet, acs_alive))
+        samples.append(_sample_now(read_state, acs_alive))
         verdict = classify(
             samples, go_live_timeout=go_live_timeout, stability_window=stability_window
         )
-        # classify() returns NEVER_LIVE for "not yet decided" traces; only trust it once the
-        # go-live budget is actually spent.
-        decided = verdict in (LaunchVerdict.STABLE, LaunchVerdict.FROZE) or (
-            samples[-1].t - samples[0].t >= go_live_timeout
-        )
-        if decided:
+        if verdict is not LaunchVerdict.PENDING:
             return verdict
         time.sleep(poll_interval)
     return LaunchVerdict.FROZE
+
+
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be > 0")
+    return parsed
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be > 0")
+    return parsed
+
+
+def _non_negative_float(value: str) -> float:
+    parsed = float(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return parsed
 
 
 def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-only entrypoint
@@ -295,9 +340,17 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     parser.add_argument("--car", required=True, help="car id, e.g. ks_porsche_911_gt3_r_2016")
     parser.add_argument("--track", required=True, help="track id, e.g. spa")
     parser.add_argument("--layout", default=None, help="track layout for multi-layout circuits")
-    parser.add_argument("--stability-window", type=float, default=DEFAULT_STABILITY_WINDOW)
-    parser.add_argument("--go-live-timeout", type=float, default=DEFAULT_GO_LIVE_TIMEOUT)
-    parser.add_argument("--max-attempts", type=int, default=DEFAULT_MAX_ATTEMPTS)
+    parser.add_argument(
+        "--stability-window", type=_positive_float, default=DEFAULT_STABILITY_WINDOW
+    )
+    parser.add_argument("--go-live-timeout", type=_positive_float, default=DEFAULT_GO_LIVE_TIMEOUT)
+    parser.add_argument("--max-attempts", type=_positive_int, default=DEFAULT_MAX_ATTEMPTS)
+    parser.add_argument(
+        "--rig-lock-timeout",
+        type=_non_negative_float,
+        default=0.0,
+        help="seconds to wait for the machine-wide rig lock (default: fail immediately)",
+    )
     parser.add_argument(
         "--preset-dir",
         default=None,
@@ -307,9 +360,16 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
     import tempfile
 
-    from tools.ac_harness.auto_drive import _minimize_foreground_window, build_practice_preset
-    from tools.ac_harness.entry_launcher import ContentManagerActuator
+    from tools.ac_harness.auto_drive import build_practice_preset
+    from tools.ac_harness.entry_launcher import ContentManagerActuator, running_process_ids
+    from tools.ac_harness.rig_lock import (
+        RigSessionBusy,
+        RigSessionLock,
+        RigSessionOwner,
+        default_rig_session_lock_path,
+    )
     from tools.ac_harness.shared_memory import SharedMemoryReader, SharedMemoryUnavailable
+    from tools.ac_harness.window_utils import minimize_foreground_window
 
     preset_dir = Path(args.preset_dir) if args.preset_dir else Path(tempfile.mkdtemp())
     preset_dir.mkdir(parents=True, exist_ok=True)
@@ -323,30 +383,22 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     # cm_exe=None -> ContentManagerActuator.DEFAULT_CM_EXE (standard install path).
     actuator = ContentManagerActuator(preset=preset, cm_exe=None)
 
-    def read_packet() -> int | None:
-        """Current ``acpmf_graphics.packetId``; ``None`` while the sim is not mapped."""
+    def read_state() -> tuple[int | None, bool | None]:
+        """Current render packet and LIVE+not-in-pit readiness from one graphics snapshot."""
         try:
             reader = SharedMemoryReader(with_physics=False)
         except (SharedMemoryUnavailable, OSError):
-            return None
+            return None, None
         try:
-            return reader.read_graphics().packet_id
+            graphics = reader.read_graphics()
+            return graphics.packet_id, graphics.is_live and not graphics.is_in_pit
         except (SharedMemoryUnavailable, OSError):
-            return None
+            return None, None
         finally:
             reader.close()
 
     def acs_alive() -> bool:
-        import subprocess
-
-        return (
-            subprocess.run(
-                ["tasklist", "/fi", "imagename eq acs.exe"], capture_output=True, text=True
-            )
-            .stdout.lower()
-            .count("acs.exe")
-            > 0
-        )
+        return bool(running_process_ids("acs.exe"))
 
     def watch_attempt(attempt: int) -> LaunchVerdict:
         _log(f"attempt {attempt}/{args.max_attempts}: launching via Content Manager")
@@ -357,10 +409,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         _ensure_acs_gone(acs_alive)
         # The quick-drive URL is IPC to a RUNNING CM — a dead CM silently swallows every launch.
         _ensure_cm_running(ContentManagerActuator.DEFAULT_CM_EXE)
-        _minimize_foreground_window()  # CM's auto-start race loses if a window holds foreground
+        minimize_foreground_window()  # CM's auto-start race loses if a window holds foreground
         actuator.launch() if attempt == 1 else actuator.relaunch()
         verdict = _watch_live(
-            read_packet,
+            read_state,
             acs_alive,
             go_live_timeout=args.go_live_timeout,
             stability_window=args.stability_window,
@@ -372,13 +424,48 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         _log("two consecutive never_live — cold-restarting Content Manager (stale preset IPC)")
         actuator.restart_content_manager()
 
-    report = run_retry_loop(
-        watch_attempt,
-        max_attempts=args.max_attempts,
-        on_never_live_streak=cold_restart_cm,
+    rig_lock = RigSessionLock(
+        default_rig_session_lock_path(),
+        owner=RigSessionOwner(
+            pid=os.getpid(),
+            cwd=str(Path.cwd()),
+            car=args.car,
+            track=args.track,
+            started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        ),
+        timeout=args.rig_lock_timeout,
     )
-    _log(report.summary())
-    return 0 if report.succeeded else 1
+    try:
+        rig_lock.acquire()
+    except RigSessionBusy as exc:
+        _log(f"RIG BUSY — {exc}")
+        return 3
+    _log(f"rig lock acquired -> {rig_lock.path}")
+    try:
+        report = run_retry_loop(
+            watch_attempt,
+            max_attempts=args.max_attempts,
+            on_never_live_streak=cold_restart_cm,
+        )
+        _log(report.summary())
+        if not report.succeeded:
+            return 1
+
+        # The stable session belongs to this operator-facing launcher until AC exits. Releasing
+        # the cross-worktree lock immediately after the gate would let a peer harness kill the
+        # human driver's live session. Ctrl-C is an explicit ownership release and leaves AC up.
+        _log(
+            "stable session handed to operator; holding rig ownership until AC exits "
+            "(Ctrl-C releases)"
+        )
+        try:
+            while acs_alive():
+                time.sleep(1.0)
+        except KeyboardInterrupt:
+            _log("operator released rig ownership; AC left LIVE")
+        return 0
+    finally:
+        rig_lock.release()
 
 
 if __name__ == "__main__":  # pragma: no cover

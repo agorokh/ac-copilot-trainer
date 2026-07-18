@@ -8,11 +8,17 @@ semantics against synthetic traces — no Assetto Corsa, no Windows shared memor
 
 from __future__ import annotations
 
+import argparse
+
 import pytest
 
 from tools.ac_harness.resilient_launch import (
     LaunchVerdict,
     Sample,
+    _non_negative_float,
+    _positive_float,
+    _positive_int,
+    _watch_live,
     classify,
     run_retry_loop,
 )
@@ -73,14 +79,29 @@ def test_short_stall_then_recovery_is_not_a_freeze():
     assert verdict is LaunchVerdict.STABLE
 
 
+def test_unfinished_live_trace_is_pending_not_a_terminal_failure():
+    samples = steady(0.0, 20.0, first_packet=100)
+    assert classify(samples, go_live_timeout=10.0, stability_window=60.0) is LaunchVerdict.PENDING
+
+
+def test_advancing_pre_drive_menu_is_not_accepted_as_stable():
+    samples = [
+        Sample(t=float(t), gfx_packet=100 + t, acs_alive=True, entry_ready=False)
+        for t in range(0, 61)
+    ]
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=20.0) is LaunchVerdict.NEVER_LIVE
+    )
+
+
 def test_acs_exit_after_go_live_is_froze_not_stable():
     samples = steady(0.0, 10.0, first_packet=100)
     samples += trace([(11.0, None, False)])
     assert classify(samples, go_live_timeout=30.0, stability_window=45.0) is LaunchVerdict.FROZE
 
 
-def test_empty_trace_is_never_live():
-    assert classify([]) is LaunchVerdict.NEVER_LIVE
+def test_empty_trace_is_pending():
+    assert classify([]) is LaunchVerdict.PENDING
 
 
 def test_stability_window_is_measured_from_go_live_not_from_launch():
@@ -103,6 +124,7 @@ class TestRetryLoop:
         report = run_retry_loop(lambda i: LaunchVerdict.FROZE, max_attempts=4)
         assert not report.succeeded
         assert report.attempts == 4 and report.froze == 4
+        assert report.verdict is LaunchVerdict.FROZE
         assert "reboot" in report.summary()
 
     def test_cold_restarts_cm_after_consecutive_never_live(self):
@@ -128,6 +150,10 @@ class TestRetryLoop:
         )
         assert calls == []
 
+    def test_rejects_pending_attempt_result(self):
+        with pytest.raises(ValueError, match="non-terminal"):
+            run_retry_loop(lambda _: LaunchVerdict.PENDING, max_attempts=1)
+
 
 @pytest.mark.parametrize("stall_samples", [2, 3, 5])
 def test_stall_threshold_is_honored(stall_samples: int):
@@ -138,3 +164,77 @@ def test_stall_threshold_is_honored(stall_samples: int):
         samples, go_live_timeout=30.0, stability_window=120.0, stall_samples=stall_samples
     )
     assert verdict is LaunchVerdict.FROZE
+
+
+def test_streaming_watch_survives_go_live_timeout_until_stability(monkeypatch):
+    now = 0.0
+    packet = 100
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    def read_state() -> tuple[int, bool]:
+        nonlocal packet
+        packet += 1
+        return packet, True
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+    assert (
+        _watch_live(
+            read_state,
+            lambda: True,
+            go_live_timeout=2.0,
+            stability_window=5.0,
+            poll_interval=1.0,
+        )
+        is LaunchVerdict.STABLE
+    )
+
+
+def test_streaming_watch_waits_through_short_hitch(monkeypatch):
+    now = 0.0
+    packets = iter([100, 101, 102, 102, 102, 103, 104, 105, 106, 107])
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+    assert (
+        _watch_live(
+            lambda: (next(packets), True),
+            lambda: True,
+            go_live_timeout=2.0,
+            stability_window=5.0,
+            poll_interval=1.0,
+        )
+        is LaunchVerdict.STABLE
+    )
+
+
+@pytest.mark.parametrize(
+    ("parser", "value"),
+    [
+        (_positive_float, "0"),
+        (_positive_float, "-1"),
+        (_positive_int, "0"),
+        (_positive_int, "-2"),
+    ],
+)
+def test_positive_cli_types_reject_non_positive(parser, value):
+    with pytest.raises(argparse.ArgumentTypeError, match="must be > 0"):
+        parser(value)
+
+
+def test_rig_lock_timeout_cli_type_rejects_negative():
+    with pytest.raises(argparse.ArgumentTypeError, match="must be >= 0"):
+        _non_negative_float("-0.1")
