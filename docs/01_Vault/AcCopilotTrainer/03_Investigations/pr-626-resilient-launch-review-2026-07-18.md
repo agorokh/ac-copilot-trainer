@@ -45,7 +45,9 @@ The resolve loop is active; merge and Windows-rig proof remain separate future s
   exits, external lock ownership supersedes the stale exit row. PID-scoped generated presets are
   removed when ownership ends. Transient readiness flicker uses the same consecutive-sample
   threshold as render stalls, unknown shared-memory observations break both consecutive runs, and
-  a surviving `acs.exe` after bounded cleanup now aborts relaunch rather than reusing stale state.
+  a surviving `acs.exe` after bounded cleanup now aborts relaunch and holds machine-wide ownership
+  while retrying teardown rather than exposing the wedged sim as idle. Ctrl-C is the explicit
+  operator release hatch.
 
 ## Verification contract
 

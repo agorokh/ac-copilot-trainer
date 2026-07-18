@@ -17,6 +17,7 @@ from tools.ac_harness.resilient_launch import (
     Sample,
     _ensure_acs_gone,
     _ensure_cm_running,
+    _hold_rig_until_acs_gone,
     _non_negative_float,
     _positive_float,
     _positive_int,
@@ -360,6 +361,37 @@ def test_ensure_acs_gone_returns_false_when_process_survives(monkeypatch):
 
     assert _ensure_acs_gone(lambda: True, timeout=1.0, poll=0.25) is False
     assert now == 1.0
+
+
+def test_cleanup_failure_holds_ownership_until_acs_is_gone(monkeypatch):
+    cleanup_results = iter([False, False, True])
+    cleanup_calls: list[int] = []
+    sleeps: list[float] = []
+
+    def retry_cleanup(_acs_alive):
+        cleanup_calls.append(1)
+        return next(cleanup_results)
+
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch.time.sleep", lambda seconds: sleeps.append(seconds)
+    )
+
+    _hold_rig_until_acs_gone(lambda: True, retry_cleanup=retry_cleanup, poll=0.25)
+
+    assert len(cleanup_calls) == 3
+    assert sleeps == [0.25, 0.25]
+
+
+def test_cleanup_hold_allows_only_explicit_operator_release(monkeypatch):
+    def interrupt(_acs_alive):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch.time.sleep",
+        lambda _seconds: pytest.fail("interrupt must release before sleeping"),
+    )
+
+    _hold_rig_until_acs_gone(lambda: True, retry_cleanup=interrupt)
 
 
 def test_ensure_cm_running_fails_fast_when_executable_is_missing(tmp_path):

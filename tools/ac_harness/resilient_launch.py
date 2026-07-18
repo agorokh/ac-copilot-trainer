@@ -321,7 +321,10 @@ def _ensure_acs_gone(  # pragma: no cover - rig-only
 
     if not acs_alive():
         return True
-    subprocess.run(["taskkill", "/im", "acs.exe", "/f", "/t"], capture_output=True)
+    try:
+        subprocess.run(["taskkill", "/im", "acs.exe", "/f", "/t"], capture_output=True)
+    except OSError as exc:
+        _log(f"ERROR: failed to invoke taskkill for acs.exe: {exc}")
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not acs_alive():
@@ -331,6 +334,32 @@ def _ensure_acs_gone(  # pragma: no cover - rig-only
         return True
     _log("ERROR: acs.exe still present after kill+wait; relaunch aborted")
     return False
+
+
+def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
+    acs_alive: Callable[[], bool],
+    *,
+    retry_cleanup: Callable[[Callable[[], bool]], bool] = _ensure_acs_gone,
+    poll: float = 1.0,
+) -> None:
+    """Keep machine-wide ownership after cleanup fails until the unsafe sim is gone.
+
+    Returning from the launcher would release the OS lock and let a peer inherit a known-wedged
+    ``acs.exe``. Keep retrying teardown while ownership is held. Ctrl-C is the only explicit
+    operator escape hatch; as elsewhere in this launcher, it deliberately releases ownership.
+    """
+    _log(
+        "UNSAFE RIG: acs.exe survived cleanup; retaining ownership and retrying "
+        "(Ctrl-C explicitly releases)"
+    )
+    while acs_alive():
+        try:
+            if retry_cleanup(acs_alive):
+                return
+            time.sleep(poll)
+        except KeyboardInterrupt:
+            _log("operator explicitly released unsafe rig ownership; acs.exe may still be alive")
+            return
 
 
 def _watch_live(  # pragma: no cover - rig-only
@@ -503,17 +532,20 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             )
         except _AcsCleanupTimeout as exc:
             _log(f"launch aborted: {exc}")
+            _hold_rig_until_acs_gone(acs_alive)
             return 1
         except _ContentManagerRestartTimeout as exc:
             _log(f"restart aborted: {exc}")
-            _ensure_acs_gone(acs_alive)
+            if not _ensure_acs_gone(acs_alive):
+                _hold_rig_until_acs_gone(acs_alive)
             return 1
         _log(report.summary())
         if not report.succeeded:
             # A FROZE terminal verdict deliberately leaves acs.exe alive so the watcher can
             # diagnose it. Once the attempt budget is exhausted, kill that corpse while the
             # machine-wide lock is still held; peers must never inherit a wedged sim.
-            _ensure_acs_gone(acs_alive)
+            if not _ensure_acs_gone(acs_alive):
+                _hold_rig_until_acs_gone(acs_alive)
             return 1
 
         # The stable session belongs to this operator-facing launcher until AC exits. Releasing
