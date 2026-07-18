@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-16T03:20:00Z
+last_updated: 2026-07-18T21:12:57Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
   - AcCopilotTrainer/03_Investigations/issue-602-portaudio-fixed-layout-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-603-car-content-preflight-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-pit-stall-sim-death-2026-07-15.md
@@ -40,6 +41,13 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Active review (2026-07-18):** PR
+[#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
+operator session launcher through Game Point, with a machine-wide lock held across the live session.
+The resolve loop is converging current-head checks, review threads, and self-hosted findings; it is
+not a merge or Windows-rig verification step. Detail:
+[[pr-626-resilient-launch-review-2026-07-18]].
 
 **Active (2026-07-16, autonomous run):** [#531](https://github.com/agorokh/ac-copilot-trainer/issues/531)
 Phase 2+ delivery. Parts **D-remainder + E** MERGED via PR

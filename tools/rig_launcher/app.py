@@ -62,6 +62,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-dir", default=None)
     parser.add_argument("--start-simhub", action="store_true")
     parser.add_argument(
+        "--resilient-launch",
+        action="store_true",
+        help="Start the configured stable AC driver session and exit.",
+    )
+    parser.add_argument("--resilient-car", default=None, help="AC car id for the stable session.")
+    parser.add_argument(
+        "--resilient-track", default=None, help="AC track id for the stable session."
+    )
+    parser.add_argument(
+        "--resilient-layout",
+        default=None,
+        help="Optional AC track layout for the stable session.",
+    )
+    parser.add_argument(
         "--build-exe",
         action="store_true",
         help="Run PyInstaller to build the windowed launcher executable.",
@@ -97,12 +111,18 @@ def config_from_args(args: argparse.Namespace) -> GamePointConfig:
         if args.external_bind is not None
         else config.external_bind,
         token=config.token,
+        serial_port=config.serial_port,
         reference_archive=config.reference_archive,
         voice_bank=config.voice_bank,
         voice_tts=config.voice_tts,
         setup_store=config.setup_store,
         simhub_exe=config.simhub_exe,
         start_simhub=args.start_simhub or config.start_simhub,
+        resilient_car=args.resilient_car or config.resilient_car,
+        resilient_track=args.resilient_track or config.resilient_track,
+        resilient_layout=args.resilient_layout
+        if args.resilient_layout is not None
+        else config.resilient_layout,
         manage_tablet_tunnel=config.manage_tablet_tunnel,
         adb_path=config.adb_path,
         adb_serial=config.adb_serial,
@@ -179,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "--sidecar-child":
         return run_sidecar_child(argv[1:])
+    if argv and argv[0] == "--resilient-launch-child":
+        return run_resilient_launch_child(argv[1:])
 
     args = build_arg_parser().parse_args(argv)
     project_root = Path(__file__).resolve().parents[2]
@@ -218,6 +240,11 @@ def main(argv: list[str] | None = None) -> int:
 
     supervisor = GamePointSupervisor(config_from_args(args))
     try:
+        if args.resilient_launch:
+            result = supervisor.start_resilient_session()
+            detail = f" - {result.detail}" if result.detail else ""
+            print(f"{result.name}: {result.state}{detail}")
+            return 0 if result.ok else 1
         if args.self_test:
             # The self-test owns the sidecar it starts: stop it as soon as the checks finish so
             # a release-gate run never leaves an orphaned sidecar for the next launch to adopt
@@ -339,6 +366,18 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
             _launch_simhub_and_report()
         refresh()
 
+    def start_resilient() -> None:
+        result = supervisor.start_resilient_session()
+        if not result.ok:
+            from tkinter import messagebox
+
+            messagebox.showwarning(
+                "Stable AC session",
+                result.detail or "The resilient AC session could not start.",
+                parent=root,
+            )
+        refresh()
+
     def open_logs() -> None:
         path = supervisor.paths.logs_dir
         path.mkdir(parents=True, exist_ok=True)
@@ -383,6 +422,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
         root,
         actions={
             "start": start,
+            "resilient_launch": start_resilient,
             "refresh": refresh,
             "logs": open_logs,
             "settings": open_settings,
@@ -431,6 +471,13 @@ def run_sidecar_child(argv: list[str]) -> int:
     finally:
         sys.argv = old_argv
     return 0
+
+
+def run_resilient_launch_child(argv: list[str]) -> int:
+    """Run the resilient AC launcher from inside a frozen Game Point executable."""
+    from tools.ac_harness.resilient_launch import main as resilient_main
+
+    return resilient_main(argv)
 
 
 if __name__ == "__main__":

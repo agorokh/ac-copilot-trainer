@@ -1,7 +1,7 @@
 """Racing Atelier themed Tk view for the Game Point launcher (epic #432, Part B).
 
 ``build_launcher_view`` renders the carbon/brass status panel that maps 1:1 onto
-``GamePointStatus`` (sidecar / screen / voice / simhub). It owns
+``GamePointStatus`` (sidecar / screen / voice / simhub / tablet / AC session). It owns
 *presentation only*: every behaviour (start, refresh, open logs/settings, setup
 diff) is passed in via ``actions`` and the caller drives redraws with
 ``LauncherView.update(status)``. Keeping the view free of supervisor/polling
@@ -30,6 +30,7 @@ _ROWS: tuple[tuple[str, str], ...] = (
     ("Voice", "voice"),
     ("SimHub", "simhub"),
     ("Tablet", "tablet"),
+    ("AC Session", "resilient"),
 )
 
 #: (label, action key, is-primary) for each footer button. Labels are uppercase
@@ -37,6 +38,7 @@ _ROWS: tuple[tuple[str, str], ...] = (
 #: design mock omits, kept as a fifth column.
 _BUTTONS: tuple[tuple[str, str, bool], ...] = (
     ("▶ START", "start", True),
+    ("STABLE AC", "resilient_launch", False),
     ("REFRESH", "refresh", False),
     ("LOGS", "logs", False),
     ("SETTINGS", "settings", False),
@@ -45,7 +47,7 @@ _BUTTONS: tuple[tuple[str, str, bool], ...] = (
 
 #: grid column weights: Start is 1.5x each secondary action (design
 #: grid-template-columns 1.5fr 1fr 1fr 1fr, extended with the Setup Diff column).
-_BUTTON_WEIGHTS: tuple[int, ...] = (3, 2, 2, 2, 2)
+_BUTTON_WEIGHTS: tuple[int, ...] = (3, 2, 2, 2, 2, 2)
 
 _ARM = 15  # px arm length of the brass corner brackets
 

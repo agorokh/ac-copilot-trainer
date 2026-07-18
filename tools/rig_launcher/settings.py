@@ -27,6 +27,9 @@ class LauncherSettings:
     setup_store: str | None = None
     simhub_exe: str | None = None
     start_simhub: bool | None = None
+    resilient_car: str | None = None
+    resilient_track: str | None = None
+    resilient_layout: str | None = None
 
     @classmethod
     def load(cls, path: Path) -> LauncherSettings:
@@ -47,6 +50,9 @@ class LauncherSettings:
             setup_store=_optional_text(payload.get("setup_store")),
             simhub_exe=_optional_text(payload.get("simhub_exe")),
             start_simhub=_optional_bool(payload.get("start_simhub")),
+            resilient_car=_optional_text(payload.get("resilient_car")),
+            resilient_track=_optional_text(payload.get("resilient_track")),
+            resilient_layout=_optional_text(payload.get("resilient_layout")),
         )
 
 
@@ -132,6 +138,9 @@ def default_settings_payload() -> dict[str, object]:
         "_schema": SETTINGS_SCHEMA,
         "external_bind": "",
         "reference_archive": "",
+        "resilient_car": "",
+        "resilient_layout": "",
+        "resilient_track": "",
         "setup_store": "",
         "sidecar_port": DEFAULT_PORT,
         "simhub_exe": "",

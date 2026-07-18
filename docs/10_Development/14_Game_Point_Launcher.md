@@ -93,6 +93,33 @@ or failed audio backend reports `voice: DISABLED - <reason>` and makes the
 overall status `needs_attention`; the launcher does not treat the mere presence
 of `AC_COPILOT_VOICE_BANK` as proof that audio initialized.
 
+## Stable AC driver session
+
+The **Stable AC** button is the operator-facing entrypoint for the resilient
+Content Manager launch loop from issue #624. It retries the stochastic CSP
+session-init livelock, proves continuous render progress for the configured
+stability window, and then leaves the successful session live for the driver.
+The `AC Session` row reports `unconfigured`, `idle`, `running`, or the child
+exit code; progress is appended to `logs/resilient-launch.log`.
+
+Configure the non-secret car and circuit identifiers in the per-user
+`settings.json`:
+
+```json
+{
+  "resilient_car": "ks_porsche_911_gt3_r_2016",
+  "resilient_track": "spa",
+  "resilient_layout": ""
+}
+```
+
+Environment variables `AC_COPILOT_RESILIENT_CAR`,
+`AC_COPILOT_RESILIENT_TRACK`, and `AC_COPILOT_RESILIENT_LAYOUT` override those
+values. For a one-shot command, use `--resilient-launch` with optional
+`--resilient-car`, `--resilient-track`, and `--resilient-layout` CLI overrides.
+The packaged executable dispatches the same child workflow, and closing Game
+Point does not terminate a stable operator session.
+
 ## SimHub auto-start
 
 SimHub is the operator's haptics/dashboard app (e.g. ShakeIt bass-shaker

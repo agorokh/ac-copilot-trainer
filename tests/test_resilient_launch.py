@@ -15,6 +15,8 @@ import pytest
 from tools.ac_harness.resilient_launch import (
     LaunchVerdict,
     Sample,
+    _ensure_acs_gone,
+    _ensure_cm_running,
     _non_negative_float,
     _positive_float,
     _positive_int,
@@ -92,6 +94,14 @@ def test_advancing_pre_drive_menu_is_not_accepted_as_stable():
     assert (
         classify(samples, go_live_timeout=30.0, stability_window=20.0) is LaunchVerdict.NEVER_LIVE
     )
+
+
+def test_first_ready_frame_at_go_live_deadline_is_too_late():
+    samples = [
+        Sample(t=0.0, gfx_packet=100, acs_alive=True, entry_ready=False),
+        Sample(t=5.0, gfx_packet=101, acs_alive=True, entry_ready=True),
+    ]
+    assert classify(samples, go_live_timeout=5.0, stability_window=20.0) is LaunchVerdict.NEVER_LIVE
 
 
 def test_acs_exit_after_go_live_is_froze_not_stable():
@@ -222,19 +232,43 @@ def test_streaming_watch_waits_through_short_hitch(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("parser", "value"),
+    ("parser", "value", "message"),
     [
-        (_positive_float, "0"),
-        (_positive_float, "-1"),
-        (_positive_int, "0"),
-        (_positive_int, "-2"),
+        (_positive_float, "0", "finite and > 0"),
+        (_positive_float, "-1", "finite and > 0"),
+        (_positive_int, "0", "must be > 0"),
+        (_positive_int, "-2", "must be > 0"),
     ],
 )
-def test_positive_cli_types_reject_non_positive(parser, value):
-    with pytest.raises(argparse.ArgumentTypeError, match="must be > 0"):
+def test_positive_cli_types_reject_non_positive(parser, value, message):
+    with pytest.raises(argparse.ArgumentTypeError, match=message):
         parser(value)
 
 
 def test_rig_lock_timeout_cli_type_rejects_negative():
-    with pytest.raises(argparse.ArgumentTypeError, match="must be >= 0"):
+    with pytest.raises(argparse.ArgumentTypeError, match="finite and >= 0"):
         _non_negative_float("-0.1")
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_float_cli_types_reject_non_finite(value):
+    with pytest.raises(argparse.ArgumentTypeError, match="finite"):
+        _positive_float(value)
+    with pytest.raises(argparse.ArgumentTypeError, match="finite"):
+        _non_negative_float(value)
+
+
+def test_ensure_acs_gone_kills_the_full_process_tree(monkeypatch):
+    calls: list[list[str]] = []
+    alive = iter([True, False])
+
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda command, **_kwargs: calls.append(command),
+    )
+    _ensure_acs_gone(lambda: next(alive))
+    assert calls == [["taskkill", "/im", "acs.exe", "/f", "/t"]]
+
+
+def test_ensure_cm_running_fails_fast_when_executable_is_missing(tmp_path):
+    assert _ensure_cm_running(tmp_path / "missing.exe") is False

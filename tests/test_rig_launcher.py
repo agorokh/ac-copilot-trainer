@@ -18,6 +18,7 @@ from tools.rig_launcher.app import (
     main,
     render_setup_diff_lines,
     run_gui,
+    run_resilient_launch_child,
     run_setup_diff_gui,
     run_sidecar_child,
 )
@@ -172,6 +173,82 @@ def test_frozen_sidecar_command_uses_bundled_child_mode(tmp_path: Path) -> None:
     assert command[:2] == ["AC-Copilot-Game-Point.exe", "--sidecar-child"]
     assert "-m" not in command
     assert "tools.ai_sidecar" not in command
+
+
+def test_resilient_command_routes_source_and_frozen_launcher(tmp_path: Path) -> None:
+    cfg = GamePointConfig(
+        resilient_car="ks_porsche_911_gt3_r_2016",
+        resilient_track="spa",
+        resilient_layout="gp",
+        paths=LauncherPaths(tmp_path),
+    )
+
+    source = GamePointSupervisor(cfg, environ={}, python_executable="python")
+    frozen = GamePointSupervisor(
+        cfg,
+        environ={},
+        python_executable="AC-Copilot-Game-Point.exe",
+        frozen=True,
+    )
+
+    assert source.resilient_command() == [
+        "python",
+        "-m",
+        "tools.ac_harness.resilient_launch",
+        "--car",
+        "ks_porsche_911_gt3_r_2016",
+        "--track",
+        "spa",
+        "--layout",
+        "gp",
+    ]
+    assert frozen.resilient_command()[:2] == [
+        "AC-Copilot-Game-Point.exe",
+        "--resilient-launch-child",
+    ]
+
+
+def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> None:
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+    proc = _Proc()
+
+    def fake_popen(command: list[str], **kwargs: Any) -> _Proc:
+        calls.append((command, kwargs))
+        return proc
+
+    cfg = GamePointConfig(
+        resilient_car="car",
+        resilient_track="track",
+        paths=LauncherPaths(tmp_path),
+    )
+    sup = GamePointSupervisor(
+        cfg,
+        environ={},
+        popen=fake_popen,
+        python_executable="python",
+    )
+
+    started = sup.start_resilient_session()
+    running = sup._resilient_process_status()
+    sup.close()
+
+    assert started.state == "starting"
+    assert running.state == "running"
+    assert calls[0][0][-4:] == ["--car", "car", "--track", "track"]
+    assert calls[0][1]["cwd"] == str(_repo_root())
+    assert (tmp_path / "logs" / "resilient-launch.log").exists()
+    assert proc.terminated is False
+
+
+def test_start_resilient_session_requires_car_and_track(tmp_path: Path) -> None:
+    sup = GamePointSupervisor(GamePointConfig(paths=LauncherPaths(tmp_path)), environ={})
+
+    result = sup.start_resilient_session()
+
+    assert result.ok is False
+    assert result.state == "unconfigured"
+    assert "resilient_car" in result.detail
+    assert "resilient_track" in result.detail
 
 
 def test_preflight_blocks_external_bind_without_token(tmp_path: Path) -> None:
@@ -899,6 +976,9 @@ def test_config_from_settings_file_supplies_non_secret_defaults(tmp_path: Path) 
                 "sidecar_port": 9999,
                 "simhub_exe": "SimHubWPF.exe",
                 "start_simhub": True,
+                "resilient_car": "ks_porsche_911_gt3_r_2016",
+                "resilient_track": "spa",
+                "resilient_layout": "gp",
                 "voice_bank": "bank",
                 "voice_tts": True,
             }
@@ -916,12 +996,23 @@ def test_config_from_settings_file_supplies_non_secret_defaults(tmp_path: Path) 
     assert cfg.setup_store == "setup.jsonl"
     assert cfg.simhub_exe == "SimHubWPF.exe"
     assert cfg.start_simhub is True
+    assert cfg.resilient_car == "ks_porsche_911_gt3_r_2016"
+    assert cfg.resilient_track == "spa"
+    assert cfg.resilient_layout == "gp"
     assert cfg.token is None
 
 
 def test_env_overrides_settings_file(tmp_path: Path) -> None:
     (tmp_path / "settings.json").write_text(
-        json.dumps({"sidecar_port": 9999, "voice_tts": False, "start_simhub": False}),
+        json.dumps(
+            {
+                "sidecar_port": 9999,
+                "voice_tts": False,
+                "start_simhub": False,
+                "resilient_car": "settings-car",
+                "resilient_track": "settings-track",
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -930,6 +1021,8 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
             "AC_COPILOT_SIDECAR_PORT": "8766",
             "AC_COPILOT_VOICE_TTS": "1",
             "AC_COPILOT_START_SIMHUB": "1",
+            "AC_COPILOT_RESILIENT_CAR": "env-car",
+            "AC_COPILOT_RESILIENT_TRACK": "env-track",
         },
         paths=LauncherPaths(tmp_path),
     )
@@ -937,6 +1030,8 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
     assert cfg.port == 8766
     assert cfg.voice_tts is True
     assert cfg.start_simhub is True
+    assert cfg.resilient_car == "env-car"
+    assert cfg.resilient_track == "env-track"
 
 
 def test_ensure_settings_file_writes_non_secret_template(tmp_path: Path) -> None:
@@ -947,6 +1042,8 @@ def test_ensure_settings_file_writes_non_secret_template(tmp_path: Path) -> None
     assert path == tmp_path / "settings.json"
     assert payload["sidecar_port"] == 8765
     assert payload["external_bind"] == ""
+    assert payload["resilient_car"] == ""
+    assert payload["resilient_track"] == ""
     assert "token" not in json.dumps(payload).lower()
 
 
@@ -1068,6 +1165,20 @@ def test_build_pyinstaller_args_bundles_pyserial_for_serial_transport(tmp_path: 
 
     assert _has_option_value(args, "--hidden-import", "serial")
     assert _has_option_value(args, "--hidden-import", "serial.tools.list_ports")
+
+
+def test_build_pyinstaller_args_bundles_resilient_child(tmp_path: Path) -> None:
+    args = build_pyinstaller_args(tmp_path, onefile=True, windowed=True)
+
+    for module in (
+        "tools.ac_harness.resilient_launch",
+        "tools.ac_harness.entry_launcher",
+        "tools.ac_harness.preset_utils",
+        "tools.ac_harness.rig_lock",
+        "tools.ac_harness.shared_memory",
+        "tools.ac_harness.window_utils",
+    ):
+        assert _has_option_value(args, "--hidden-import", module)
 
 
 def test_build_pyinstaller_args_collects_optional_rtmixer_when_installed(
@@ -1204,6 +1315,21 @@ def test_sidecar_child_entrypoint_rewrites_sys_argv(monkeypatch) -> None:
 
     assert run_sidecar_child(["--port", "8765"]) == 0
     assert seen["argv"] == ["ai_sidecar", "--port", "8765"]
+
+
+def test_resilient_child_entrypoint_forwards_arguments(monkeypatch) -> None:
+    from tools.ac_harness import resilient_launch
+
+    seen: list[list[str]] = []
+
+    def fake_main(argv: list[str]) -> int:
+        seen.append(argv)
+        return 7
+
+    monkeypatch.setattr(resilient_launch, "main", fake_main)
+
+    assert run_resilient_launch_child(["--car", "car", "--track", "track"]) == 7
+    assert seen == [["--car", "car", "--track", "track"]]
 
 
 def test_run_gui_falls_back_when_tk_init_fails(monkeypatch, capsys) -> None:

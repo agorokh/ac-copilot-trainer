@@ -72,6 +72,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Protocol
 
 from tools.ac_content import read_car_data_member
+from tools.ac_harness.preset_utils import build_practice_preset
 from tools.ac_harness.sequence_probe import (
     Check,
     evaluate_sequence,
@@ -1465,78 +1466,6 @@ def fuel_matches(expected_l: float | None, observed_l: float | None, tolerance_l
     if expected_l is None or observed_l is None:
         return False
     return abs(observed_l - expected_l) <= tolerance_l
-
-
-# ---------------------------------------------------------------------------
-# Deterministic Quick Drive preset generation (pure; #459 Part B — the #154 Part-G
-# determinism-lock preset).
-# ---------------------------------------------------------------------------
-def build_practice_preset(
-    car_id: str, track_id: str, *, start_type: str = "START", layout: str | None = None
-) -> str:
-    """Render a deterministic Content Manager Quick Drive practice preset (JSON string).
-
-    Field shapes mirror a CM-exported ``.cmpreset`` proven live on this rig (Imola/Mugello/Spa
-    runs, 2026-06-27): clear weather, 26 °C, 12:00, optimum static track state, no penalties, all
-    driving assists off except factory ABS/TC and tyre blankets. Every field is pinned so two runs
-    of the same combo launch the same session — the determinism-lock preset from #154 Part G.
-
-    ``start_type`` is CM's ``ModeData.StartType``: ``"START"`` spawns at the start line (proven
-    for plain drive runs), ``"PIT"`` in the pit box. ``layout`` (for multi-layout tracks) is folded
-    into CM's ``TrackId`` as ``<track>/<layout>`` so the launched circuit matches the racing line
-    ``rig_drive`` follows — else CM launches the base circuit while the driver steers a different
-    layout's ``fast_lane.ai`` (#460 review).
-    """
-    if start_type not in ("START", "PIT"):
-        raise ValueError(f"start_type must be 'START' or 'PIT', got {start_type!r}")
-    track_field = f"{track_id}/{layout}" if layout else track_id
-    mode_data = {
-        "StartType": start_type,
-        "Penalties": False,
-        "PlayerBallast": 0,
-        "PlayerRestrictor": 0,
-    }
-    assists = {
-        "IdealLine": False,
-        "AutoBlip": True,
-        "StabilityControl": 0.0,
-        "AutoBrake": False,
-        "AutoShifter": False,
-        "SlipSteam": 1.0,
-        "AutoClutch": False,
-        "Abs": 1,
-        "TractionControl": 1,
-        "VisualDamage": True,
-        "Damage": 0.0,
-        "TyreWear": 0.0,
-        "FuelConsumption": 0.0,
-        "TyreBlankets": True,
-    }
-    track_state = {
-        "s": 1.0,
-        "t": 1.0,
-        "r": 0.0,
-        "g": 1,
-        "d": "Perfect track for hotlapping.",
-        "w": False,
-    }
-    preset = {
-        "Mode": "/Pages/Drive/QuickDrive_Practice.xaml",
-        "ModeData": json.dumps(mode_data, separators=(",", ":")),
-        "CarId": car_id,
-        "TrackId": track_field,
-        "WeatherId": "3_clear",
-        "RealConditions": False,
-        "Temperature": 26.0,
-        "Time": 43200,
-        "TimeMultipler": 1,
-        "tpc": False,
-        "TrackPropertiesData": json.dumps(track_state, separators=(",", ":")),
-        "asc": False,
-        "AssistsData": json.dumps(assists, separators=(",", ":")),
-        "ico": True,
-    }
-    return json.dumps(preset, separators=(",", ":"))
 
 
 # ---------------------------------------------------------------------------

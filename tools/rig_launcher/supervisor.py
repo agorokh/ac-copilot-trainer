@@ -110,6 +110,10 @@ class LauncherPaths:
     def sidecar_log_path(self) -> Path:
         return self.logs_dir / "sidecar.log"
 
+    @property
+    def resilient_log_path(self) -> Path:
+        return self.logs_dir / "resilient-launch.log"
+
 
 @dataclass(frozen=True)
 class ProbeResult:
@@ -146,6 +150,9 @@ class GamePointConfig:
     setup_store: str | None = None
     simhub_exe: str | None = None
     start_simhub: bool = False
+    resilient_car: str | None = None
+    resilient_track: str | None = None
+    resilient_layout: str | None = None
     #: Manage the tablet dashboard's ``adb reverse`` USB tunnel (issue #567). Opt-in
     #: (house pattern, cf. ``start_simhub``): off by default so CI / non-rig hosts never
     #: shell out to adb; the rig sets ``AC_COPILOT_MANAGE_TABLET_TUNNEL=1``.
@@ -207,6 +214,18 @@ class GamePointConfig:
             ),
             simhub_exe=_configured_text(env_map.get("AC_COPILOT_SIMHUB_EXE"), settings.simhub_exe),
             start_simhub=start_simhub,
+            resilient_car=_configured_text(
+                env_map.get("AC_COPILOT_RESILIENT_CAR"),
+                settings.resilient_car,
+            ),
+            resilient_track=_configured_text(
+                env_map.get("AC_COPILOT_RESILIENT_TRACK"),
+                settings.resilient_track,
+            ),
+            resilient_layout=_configured_text(
+                env_map.get("AC_COPILOT_RESILIENT_LAYOUT"),
+                settings.resilient_layout,
+            ),
             manage_tablet_tunnel=manage_tablet_tunnel,
             paths=resolved_paths,
         )
@@ -226,11 +245,22 @@ class GamePointStatus:
     #: Tablet dashboard ``adb reverse`` USB tunnel keeper (issue #567). Defaulted so
     #: direct constructions (and pre-#567 callers) stay valid; ``poll_status`` fills it.
     tablet: ProbeResult = field(default_factory=lambda: ProbeResult("tablet", True, "unmanaged"))
+    resilient: ProbeResult = field(
+        default_factory=lambda: ProbeResult("ac_session", True, "unconfigured")
+    )
     checks: tuple[ProbeResult, ...] = field(default_factory=tuple)
 
     @property
     def ok(self) -> bool:
-        rows = (self.sidecar, self.screen, self.voice, self.simhub, self.tablet, *self.checks)
+        rows = (
+            self.sidecar,
+            self.screen,
+            self.voice,
+            self.simhub,
+            self.tablet,
+            self.resilient,
+            *self.checks,
+        )
         return all(row.ok for row in rows if row.state not in {"skipped", "absent"})
 
     def to_dict(self) -> dict[str, object]:
@@ -242,6 +272,7 @@ class GamePointStatus:
             "voice": self.voice.to_dict(),
             "simhub": self.simhub.to_dict(),
             "tablet": self.tablet.to_dict(),
+            "resilient": self.resilient.to_dict(),
             "log_path": self.log_path,
             "status_path": self.status_path,
             "checks": [check.to_dict() for check in self.checks],
@@ -271,6 +302,8 @@ class GamePointSupervisor:
         self._python = python_executable or sys.executable
         self._frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
         self._sidecar_process: Any | None = None
+        self._resilient_process: Any | None = None
+        self._resilient_log_handle: Any | None = None
         self._log_handles: list[Any] = []
         # The GUI polls on a worker thread while START / toggle run on the Tk main thread, so the
         # sidecar process handle + log handles are touched from two threads. Serialize those
@@ -298,6 +331,20 @@ class GamePointSupervisor:
             )
             if setup_store:
                 args.extend(["--setup-store", setup_store])
+        return args
+
+    def resilient_command(self) -> list[str]:
+        """Build the canonical operator-session command for source or frozen launchers."""
+        if self._frozen:
+            args = [self._python, "--resilient-launch-child"]
+        else:
+            args = [self._python, "-m", "tools.ac_harness.resilient_launch"]
+        if self.config.resilient_car:
+            args.extend(["--car", self.config.resilient_car])
+        if self.config.resilient_track:
+            args.extend(["--track", self.config.resilient_track])
+        if self.config.resilient_layout:
+            args.extend(["--layout", self.config.resilient_layout])
         return args
 
     def _launcher_path_base(self) -> Path:
@@ -421,6 +468,98 @@ class GamePointSupervisor:
                 return ProbeResult("sidecar", False, "start_failed", str(exc))
             return ProbeResult("sidecar", True, "starting", f"pid={self._sidecar_process.pid}")
 
+    def start_resilient_session(self) -> ProbeResult:
+        """Start one detached resilient AC session from the canonical Game Point surface."""
+        missing = [
+            name
+            for name, value in (
+                ("resilient_car", self.config.resilient_car),
+                ("resilient_track", self.config.resilient_track),
+            )
+            if not value
+        ]
+        if missing:
+            return ProbeResult(
+                "ac_session",
+                False,
+                "unconfigured",
+                f"set {', '.join(missing)} in settings.json or the matching environment variables",
+            )
+        with self._proc_lock:
+            if self._resilient_process is not None and self._resilient_process.poll() is None:
+                return ProbeResult(
+                    "ac_session",
+                    True,
+                    "running",
+                    f"pid={self._resilient_process.pid}",
+                )
+            if self._resilient_log_handle is not None:
+                try:
+                    self._resilient_log_handle.close()
+                except OSError:
+                    pass
+                self._resilient_log_handle = None
+            try:
+                self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
+                log = self.paths.resilient_log_path.open("a", encoding="utf-8")
+                self._resilient_log_handle = log
+                self._resilient_process = self._popen(
+                    self.resilient_command(),
+                    **_subprocess_kwargs(
+                        cwd=self._sidecar_working_directory(),
+                        env=dict(self._environ),
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                    ),
+                )
+            except (OSError, FileNotFoundError) as exc:
+                self._resilient_process = None
+                if self._resilient_log_handle is not None:
+                    try:
+                        self._resilient_log_handle.close()
+                    except OSError:
+                        pass
+                    self._resilient_log_handle = None
+                return ProbeResult("ac_session", False, "start_failed", str(exc))
+            return ProbeResult(
+                "ac_session",
+                True,
+                "starting",
+                f"pid={self._resilient_process.pid}; log={self.paths.resilient_log_path}",
+            )
+
+    def _resilient_process_status(self) -> ProbeResult:
+        with self._proc_lock:
+            if self._resilient_process is None:
+                if not self.config.resilient_car or not self.config.resilient_track:
+                    return ProbeResult(
+                        "ac_session",
+                        True,
+                        "unconfigured",
+                        "set resilient_car and resilient_track in settings",
+                    )
+                return ProbeResult(
+                    "ac_session",
+                    True,
+                    "idle",
+                    "press STABLE AC to start a driver session",
+                )
+            rc = self._resilient_process.poll()
+            if rc is None:
+                return ProbeResult(
+                    "ac_session",
+                    True,
+                    "running",
+                    f"pid={self._resilient_process.pid}",
+                )
+            return ProbeResult(
+                "ac_session",
+                rc == 0,
+                "exited",
+                f"exit={rc}; log={self.paths.resilient_log_path}",
+            )
+
     def stop_sidecar(self, *, timeout: float = 5.0) -> ProbeResult:
         with self._proc_lock:
             proc = self._sidecar_process
@@ -465,6 +604,7 @@ class GamePointSupervisor:
             voice=self.probe_voice(health_payload),
             simhub=self.probe_simhub(start=start_sim),
             tablet=self.probe_tablet(health_payload),
+            resilient=self._resilient_process_status(),
             log_path=str(self.paths.sidecar_log_path),
             status_path=str(self.paths.status_path),
             checks=checks,
@@ -687,6 +827,14 @@ class GamePointSupervisor:
         with self._proc_lock:
             self.stop_sidecar()
             self._close_log_handles()
+            # The resilient child owns the machine-wide rig lock and the live AC session.
+            # Closing Game Point must not kill that operator session; only release our log handle.
+            if self._resilient_log_handle is not None:
+                try:
+                    self._resilient_log_handle.close()
+                except OSError:
+                    pass
+                self._resilient_log_handle = None
 
     def _read_health(self) -> ProbeResult:
         return self._read_health_payload()[0]
@@ -832,6 +980,21 @@ def build_pyinstaller_args(
         "serial",
         "--hidden-import",
         "serial.tools.list_ports",
+        # The packaged launcher dispatches this operator-facing AC workflow through a child
+        # mode. Its rig imports are deliberately lazy so pure logic tests run off-Windows,
+        # therefore name the complete frozen child surface explicitly.
+        "--hidden-import",
+        "tools.ac_harness.resilient_launch",
+        "--hidden-import",
+        "tools.ac_harness.entry_launcher",
+        "--hidden-import",
+        "tools.ac_harness.preset_utils",
+        "--hidden-import",
+        "tools.ac_harness.rig_lock",
+        "--hidden-import",
+        "tools.ac_harness.shared_memory",
+        "--hidden-import",
+        "tools.ac_harness.window_utils",
         "--runtime-hook",
         str(runtime_hook),
     ]
@@ -1023,6 +1186,7 @@ def render_status_lines(status: GamePointStatus) -> list[str]:
         status.voice,
         status.simhub,
         status.tablet,
+        status.resilient,
         *status.checks,
     ]
     return [f"{row.name}: {row.state}{(' - ' + row.detail) if row.detail else ''}" for row in rows]

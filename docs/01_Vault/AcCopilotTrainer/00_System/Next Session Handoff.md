@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-16T09:00:00Z
+last_updated: 2026-07-18T21:12:57Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
   - AcCopilotTrainer/03_Investigations/issue-531-partf-pages-2026-07-16.md
   - AcCopilotTrainer/03_Investigations/rig-physics-wedge-voice-wasapi-2026-07-16.md
   - AcCopilotTrainer/03_Investigations/issue-531-parte-cues-fuel-2026-07-16.md
@@ -102,6 +103,15 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Active (2026-07-18) — PR #626 resilient AC launcher in review
+
+PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) routes issue #624's bounded
+CSP-init retry and stable-session handoff through the canonical Game Point launcher. Review
+hardening now covers streaming verdict semantics, LIVE/not-in-pit readiness, cross-worktree rig
+ownership, approved preset storage, Content Manager failure handling, finite CLI inputs, process
+tree cleanup, and source/frozen Game Point dispatch. Merge and Windows-rig proof are still separate
+future states. Detail: [[pr-626-resilient-launch-review-2026-07-18]].
 
 ## Delivered (2026-07-16) — #531 Part F MERGED (PR #618, 12 review rounds)
 

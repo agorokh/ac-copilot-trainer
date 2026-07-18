@@ -30,6 +30,7 @@ is unit-tested off-rig with no Assetto Corsa present.
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 import time
@@ -114,10 +115,10 @@ def classify(
             and sample.gfx_packet != prev_packet
         )
         if live_since is None:
+            if sample.t - t0 >= go_live_timeout:
+                return LaunchVerdict.NEVER_LIVE
             if advanced and sample.entry_ready is True:
                 live_since = sample.t
-            elif sample.t - t0 >= go_live_timeout:
-                return LaunchVerdict.NEVER_LIVE
         else:
             if not sample.acs_alive:
                 return LaunchVerdict.FROZE
@@ -256,8 +257,15 @@ def _ensure_cm_running(  # pragma: no cover - rig-only
 
     if _process_running("Content Manager.exe"):
         return True
+    if not cm_exe.is_file():
+        _log(f"WARNING: Content Manager executable not found: {cm_exe}")
+        return False
     _log("Content Manager not running — starting it before sending the quick-drive URL")
-    subprocess.Popen([str(cm_exe)])
+    try:
+        subprocess.Popen([str(cm_exe)])
+    except OSError as exc:
+        _log(f"WARNING: Content Manager failed to start: {exc}")
+        return False
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if _process_running("Content Manager.exe"):
@@ -281,7 +289,7 @@ def _ensure_acs_gone(  # pragma: no cover - rig-only
 
     if not acs_alive():
         return
-    subprocess.run(["taskkill", "/im", "acs.exe", "/f"], capture_output=True)
+    subprocess.run(["taskkill", "/im", "acs.exe", "/f", "/t"], capture_output=True)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not acs_alive():
@@ -314,8 +322,8 @@ def _watch_live(  # pragma: no cover - rig-only
 
 def _positive_float(value: str) -> float:
     parsed = float(value)
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("must be > 0")
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be finite and > 0")
     return parsed
 
 
@@ -328,8 +336,8 @@ def _positive_int(value: str) -> int:
 
 def _non_negative_float(value: str) -> float:
     parsed = float(value)
-    if parsed < 0:
-        raise argparse.ArgumentTypeError("must be >= 0")
+    if not math.isfinite(parsed) or parsed < 0:
+        raise argparse.ArgumentTypeError("must be finite and >= 0")
     return parsed
 
 
@@ -351,17 +359,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         default=0.0,
         help="seconds to wait for the machine-wide rig lock (default: fail immediately)",
     )
-    parser.add_argument(
-        "--preset-dir",
-        default=None,
-        help="where to write the generated .cmpreset (default: a temp dir)",
-    )
     args = parser.parse_args(argv)
 
-    import tempfile
-
-    from tools.ac_harness.auto_drive import build_practice_preset
     from tools.ac_harness.entry_launcher import ContentManagerActuator, running_process_ids
+    from tools.ac_harness.preset_utils import build_practice_preset
     from tools.ac_harness.rig_lock import (
         RigSessionBusy,
         RigSessionLock,
@@ -370,18 +371,6 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     )
     from tools.ac_harness.shared_memory import SharedMemoryReader, SharedMemoryUnavailable
     from tools.ac_harness.window_utils import minimize_foreground_window
-
-    preset_dir = Path(args.preset_dir) if args.preset_dir else Path(tempfile.mkdtemp())
-    preset_dir.mkdir(parents=True, exist_ok=True)
-    preset = preset_dir / "resilient_launch.cmpreset"
-    preset.write_text(
-        build_practice_preset(args.car, args.track, start_type="START", layout=args.layout),
-        encoding="utf-8",
-    )
-    _log(f"preset -> {preset}")
-
-    # cm_exe=None -> ContentManagerActuator.DEFAULT_CM_EXE (standard install path).
-    actuator = ContentManagerActuator(preset=preset, cm_exe=None)
 
     def read_state() -> tuple[int | None, bool | None]:
         """Current render packet and LIVE+not-in-pit readiness from one graphics snapshot."""
@@ -400,32 +389,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     def acs_alive() -> bool:
         return bool(running_process_ids("acs.exe"))
 
-    def watch_attempt(attempt: int) -> LaunchVerdict:
-        _log(f"attempt {attempt}/{args.max_attempts}: launching via Content Manager")
-        # A wedged acs from the previous attempt must be GONE before relaunching. Without this
-        # the next attempt burns its whole go-live budget failing to start against the corpse and
-        # reports a spurious never_live — observed live as an alternating froze/never_live cadence
-        # that halved the effective attempt rate.
-        _ensure_acs_gone(acs_alive)
-        # The quick-drive URL is IPC to a RUNNING CM — a dead CM silently swallows every launch.
-        _ensure_cm_running(ContentManagerActuator.DEFAULT_CM_EXE)
-        minimize_foreground_window()  # CM's auto-start race loses if a window holds foreground
-        actuator.launch() if attempt == 1 else actuator.relaunch()
-        verdict = _watch_live(
-            read_state,
-            acs_alive,
-            go_live_timeout=args.go_live_timeout,
-            stability_window=args.stability_window,
-        )
-        _log(f"attempt {attempt}: {verdict}")
-        return verdict
-
-    def cold_restart_cm() -> None:
-        _log("two consecutive never_live — cold-restarting Content Manager (stale preset IPC)")
-        actuator.restart_content_manager()
-
+    lock_path = default_rig_session_lock_path()
     rig_lock = RigSessionLock(
-        default_rig_session_lock_path(),
+        lock_path,
         owner=RigSessionOwner(
             pid=os.getpid(),
             cwd=str(Path.cwd()),
@@ -442,6 +408,44 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         return 3
     _log(f"rig lock acquired -> {rig_lock.path}")
     try:
+        # The generated preset is application state: keep it under the same approved per-user
+        # Harness root as the cross-worktree lock, and create it only after ownership is acquired.
+        # A PID-scoped filename also prevents stale runs from sharing one mutable preset path.
+        preset_dir = lock_path.parent / "presets"
+        preset_dir.mkdir(parents=True, exist_ok=True)
+        preset = preset_dir / f"resilient-launch-{os.getpid()}.cmpreset"
+        preset.write_text(
+            build_practice_preset(args.car, args.track, start_type="START", layout=args.layout),
+            encoding="utf-8",
+        )
+        _log(f"preset -> {preset}")
+
+        # cm_exe=None -> ContentManagerActuator.DEFAULT_CM_EXE (standard install path).
+        actuator = ContentManagerActuator(preset=preset, cm_exe=None)
+
+        def watch_attempt(attempt: int) -> LaunchVerdict:
+            _log(f"attempt {attempt}/{args.max_attempts}: launching via Content Manager")
+            # A wedged acs from the previous attempt must be GONE before relaunching.
+            _ensure_acs_gone(acs_alive)
+            # The quick-drive URL is IPC to a RUNNING CM. Do not spend a full attempt when its
+            # executable is absent or startup failed.
+            if not _ensure_cm_running(ContentManagerActuator.DEFAULT_CM_EXE):
+                return LaunchVerdict.NEVER_LIVE
+            minimize_foreground_window()
+            actuator.launch() if attempt == 1 else actuator.relaunch()
+            verdict = _watch_live(
+                read_state,
+                acs_alive,
+                go_live_timeout=args.go_live_timeout,
+                stability_window=args.stability_window,
+            )
+            _log(f"attempt {attempt}: {verdict}")
+            return verdict
+
+        def cold_restart_cm() -> None:
+            _log("two consecutive never_live — cold-restarting Content Manager (stale preset IPC)")
+            actuator.restart_content_manager()
+
         report = run_retry_loop(
             watch_attempt,
             max_attempts=args.max_attempts,
