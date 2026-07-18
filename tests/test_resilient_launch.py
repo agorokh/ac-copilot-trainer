@@ -82,10 +82,41 @@ def test_short_stall_then_recovery_is_not_a_freeze():
     assert verdict is LaunchVerdict.STABLE
 
 
+def test_unknown_graphics_sample_breaks_the_consecutive_stall_run():
+    samples = steady(0.0, 10.0, first_packet=100)
+    held = samples[-1].gfx_packet
+    samples += trace([(11.0, held, True), (12.0, held, True)])
+    samples.append(Sample(t=13.0, gfx_packet=None, acs_alive=True, entry_ready=None))
+    samples += trace([(14.0, held, True), (15.0, held, True)])
+    samples += steady(16.0, 60.0, first_packet=held + 60)
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.STABLE
+    )
+
+
 def test_single_not_ready_flicker_does_not_abort_stability_window():
     samples = steady(0.0, 10.0, first_packet=100)
     samples.append(Sample(t=11.0, gfx_packet=800, acs_alive=True, entry_ready=False))
     samples += steady(12.0, 60.0, first_packet=860)
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.STABLE
+    )
+
+
+def test_unknown_readiness_breaks_the_consecutive_not_ready_run():
+    samples = steady(0.0, 10.0, first_packet=100)
+    samples += [
+        Sample(t=11.0, gfx_packet=800, acs_alive=True, entry_ready=False),
+        Sample(t=12.0, gfx_packet=801, acs_alive=True, entry_ready=False),
+        Sample(t=13.0, gfx_packet=802, acs_alive=True, entry_ready=None),
+        Sample(t=14.0, gfx_packet=803, acs_alive=True, entry_ready=False),
+        Sample(t=15.0, gfx_packet=804, acs_alive=True, entry_ready=False),
+    ]
+    samples += steady(16.0, 60.0, first_packet=860)
 
     assert (
         classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
@@ -309,8 +340,26 @@ def test_ensure_acs_gone_kills_the_full_process_tree(monkeypatch):
         "subprocess.run",
         lambda command, **_kwargs: calls.append(command),
     )
-    _ensure_acs_gone(lambda: next(alive))
+    assert _ensure_acs_gone(lambda: next(alive)) is True
     assert calls == [["taskkill", "/im", "acs.exe", "/f", "/t"]]
+
+
+def test_ensure_acs_gone_returns_false_when_process_survives(monkeypatch):
+    now = 0.0
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr("subprocess.run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+
+    assert _ensure_acs_gone(lambda: True, timeout=1.0, poll=0.25) is False
+    assert now == 1.0
 
 
 def test_ensure_cm_running_fails_fast_when_executable_is_missing(tmp_path):

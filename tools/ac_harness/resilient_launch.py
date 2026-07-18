@@ -61,6 +61,10 @@ class _ContentManagerRestartTimeout(RuntimeError):
     """A killed Content Manager never released its process/IPC identity."""
 
 
+class _AcsCleanupTimeout(RuntimeError):
+    """A killed Assetto Corsa process remained alive past the cleanup deadline."""
+
+
 @dataclass(frozen=True)
 class Sample:
     """One observation of the sim's render liveness.
@@ -133,12 +137,18 @@ def classify(
                     return LaunchVerdict.FROZE
             elif sample.entry_ready is True:
                 not_ready_run = 0
+            else:
+                # An unavailable graphics observation cannot extend a consecutive run.
+                not_ready_run = 0
             if advanced:
                 stall_run = 0
             elif sample.gfx_packet is not None and sample.gfx_packet == prev_packet:
                 stall_run += 1
                 if stall_run >= stall_samples:
                     return LaunchVerdict.FROZE
+            else:
+                # Missing shared memory is unknown, not another observation of the same packet.
+                stall_run = 0
             if (
                 advanced
                 and sample.entry_ready is True
@@ -299,24 +309,28 @@ def _wait_process_exit(  # pragma: no cover - rig-only
 
 def _ensure_acs_gone(  # pragma: no cover - rig-only
     acs_alive: Callable[[], bool], *, timeout: float = 15.0, poll: float = 1.0
-) -> None:
+) -> bool:
     """Kill any surviving ``acs.exe`` and wait until it has really left the process table.
 
     A wedged sim keeps its window and shared-memory section, so launching on top of it makes
     Content Manager's next start fail to reach LIVE. ``taskkill`` returning is not sufficient —
-    the process can linger — so poll (bounded) until it is actually gone.
+    the process can linger — so poll (bounded) until it is actually gone. The caller must abort
+    rather than relaunch when this returns ``False``.
     """
     import subprocess
 
     if not acs_alive():
-        return
+        return True
     subprocess.run(["taskkill", "/im", "acs.exe", "/f", "/t"], capture_output=True)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not acs_alive():
-            return
+            return True
         time.sleep(poll)
-    _log("WARNING: acs.exe still present after kill+wait; launching anyway")
+    if not acs_alive():
+        return True
+    _log("ERROR: acs.exe still present after kill+wait; relaunch aborted")
+    return False
 
 
 def _watch_live(  # pragma: no cover - rig-only
@@ -452,7 +466,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         def watch_attempt(attempt: int) -> LaunchVerdict:
             _log(f"attempt {attempt}/{args.max_attempts}: launching via Content Manager")
             # A wedged acs from the previous attempt must be GONE before relaunching.
-            _ensure_acs_gone(acs_alive)
+            if not _ensure_acs_gone(acs_alive):
+                raise _AcsCleanupTimeout("acs.exe remained alive after the bounded cleanup wait")
             # The quick-drive URL is IPC to a RUNNING CM. Do not spend a full attempt when its
             # executable is absent or startup failed.
             if not _ensure_cm_running(ContentManagerActuator.DEFAULT_CM_EXE):
@@ -486,6 +501,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 max_attempts=args.max_attempts,
                 on_never_live_streak=cold_restart_cm,
             )
+        except _AcsCleanupTimeout as exc:
+            _log(f"launch aborted: {exc}")
+            return 1
         except _ContentManagerRestartTimeout as exc:
             _log(f"restart aborted: {exc}")
             _ensure_acs_gone(acs_alive)

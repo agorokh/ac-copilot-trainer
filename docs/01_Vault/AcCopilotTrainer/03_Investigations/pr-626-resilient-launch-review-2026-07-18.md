@@ -43,8 +43,9 @@ The resolve loop is active; merge and Windows-rig proof remain separate future s
   queries ownership with a locked-byte read that never acquires the exclusive byte, and contention
   with in-flight metadata reports an explicit unknown owner rather than idle. After a local child
   exits, external lock ownership supersedes the stale exit row. PID-scoped generated presets are
-  removed when ownership ends, and transient readiness flicker uses the same consecutive-sample
-  threshold as render stalls.
+  removed when ownership ends. Transient readiness flicker uses the same consecutive-sample
+  threshold as render stalls, unknown shared-memory observations break both consecutive runs, and
+  a surviving `acs.exe` after bounded cleanup now aborts relaunch rather than reusing stale state.
 
 ## Verification contract
 
