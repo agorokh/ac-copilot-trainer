@@ -107,6 +107,9 @@ so the recovery action is unambiguous without conflating it with sidecar START.
 Because the packaged child has no console, **Release AC** writes the shared
 ownership-release signal; the child then drops the rig lock while deliberately
 leaving AC live. The signal also works after Game Point is closed and reopened.
+If the ownership file cannot be read or probed, the AC Session row reports
+`unknown`, aggregate status stays non-green, and Stable AC refuses to spawn
+until ownership can be determined.
 
 Configure the non-secret car and circuit identifiers in the per-user
 `settings.json`:

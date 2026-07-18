@@ -23,6 +23,7 @@ from tools.ac_harness.resilient_launch import (
     _positive_int,
     _probe_car0_drivable,
     _run_with_safe_release,
+    _sample_now,
     _wait_process_exit,
     _watch_live,
     classify,
@@ -282,6 +283,25 @@ def test_streaming_watch_survives_go_live_timeout_until_stability(monkeypatch):
     )
 
 
+def test_sample_timestamp_precedes_blocking_readiness_work(monkeypatch):
+    now = 10.0
+
+    def monotonic() -> float:
+        return now
+
+    def read_state() -> tuple[int, bool, bool]:
+        nonlocal now
+        now += 5.0
+        return 101, True, True
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+
+    sample = _sample_now(read_state, lambda: True)
+
+    assert sample.t == 10.0
+    assert now == 15.0
+
+
 def test_streaming_watch_waits_through_short_hitch(monkeypatch):
     now = 0.0
     packets = iter([100, 101, 102, 102, 102, 103, 104, 105, 106, 107])
@@ -477,6 +497,17 @@ def test_car0_probe_mapping_failure_is_retryable() -> None:
         raise SharedMemoryUnavailable("mapping unavailable")
 
     assert _probe_car0_drivable(controller_factory=fail_controller) is False
+
+
+def test_car0_probe_close_failure_invalidates_drivability() -> None:
+    class Controller:
+        def read_car_data(self):
+            return {"packet_id": 1}
+
+        def close(self):
+            raise OSError("unmap failed")
+
+    assert _probe_car0_drivable(controller_factory=Controller) is False
 
 
 def test_ensure_cm_running_fails_fast_when_executable_is_missing(tmp_path):

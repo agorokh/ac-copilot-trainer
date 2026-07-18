@@ -504,17 +504,7 @@ class GamePointSupervisor:
                 )
         owner = self._rig_session_owner()
         if owner is not None:
-            detail = " ".join(
-                f"{key}={owner[key]}"
-                for key in ("pid", "car", "track", "started_at")
-                if owner.get(key) not in (None, "")
-            )
-            return ProbeResult(
-                "ac_session",
-                True,
-                "running",
-                f"owned by another launcher{(': ' + detail) if detail else ''}",
-            )
+            return self._rig_owner_status(owner)
         with self._proc_lock:
             if self._resilient_process is not None and self._resilient_process.poll() is None:
                 return ProbeResult(
@@ -594,17 +584,7 @@ class GamePointSupervisor:
             if self._resilient_process is None:
                 owner = self._rig_session_owner()
                 if owner is not None:
-                    detail = " ".join(
-                        f"{key}={owner[key]}"
-                        for key in ("pid", "car", "track", "started_at")
-                        if owner.get(key) not in (None, "")
-                    )
-                    return ProbeResult(
-                        "ac_session",
-                        True,
-                        "running",
-                        f"owned by another launcher{(': ' + detail) if detail else ''}",
-                    )
+                    return self._rig_owner_status(owner)
                 if not self.config.resilient_car or not self.config.resilient_track:
                     return ProbeResult(
                         "ac_session",
@@ -628,23 +608,34 @@ class GamePointSupervisor:
                 )
             owner = self._rig_session_owner()
             if owner is not None:
-                detail = " ".join(
-                    f"{key}={owner[key]}"
-                    for key in ("pid", "car", "track", "started_at")
-                    if owner.get(key) not in (None, "")
-                )
-                return ProbeResult(
-                    "ac_session",
-                    True,
-                    "running",
-                    f"owned by another launcher{(': ' + detail) if detail else ''}",
-                )
+                return self._rig_owner_status(owner)
             return ProbeResult(
                 "ac_session",
                 rc == 0,
                 "exited",
                 f"exit={rc}; log={self.paths.resilient_log_path}",
             )
+
+    @staticmethod
+    def _rig_owner_status(owner: Mapping[str, Any]) -> ProbeResult:
+        if owner.get("cwd") == "unknown":
+            return ProbeResult(
+                "ac_session",
+                False,
+                "unknown",
+                "rig lock status unavailable; refusing Stable AC until the lock can be probed",
+            )
+        detail = " ".join(
+            f"{key}={owner[key]}"
+            for key in ("pid", "car", "track", "started_at")
+            if owner.get(key) not in (None, "")
+        )
+        return ProbeResult(
+            "ac_session",
+            True,
+            "running",
+            f"owned by another launcher{(': ' + detail) if detail else ''}",
+        )
 
     def _rig_session_owner(self) -> dict[str, Any] | None:
         """Read machine-wide ownership so restarted Game Point instances adopt status truth."""

@@ -252,6 +252,9 @@ def _sample_now(
     ],
     acs_alive: Callable[[], bool],
 ) -> Sample:  # pragma: no cover - rig-only
+    # Stamp the observation before readiness work: the Car0 handshake can block for up to five
+    # seconds, but a session that became ready inside the go-live budget must not be dated late.
+    observed_at = time.monotonic()
     state = read_state()
     if len(state) == 2:
         packet, entry_ready = state
@@ -259,7 +262,7 @@ def _sample_now(
     else:
         packet, entry_ready, drivable = state
     return Sample(
-        t=time.monotonic(),
+        t=observed_at,
         gfx_packet=packet,
         acs_alive=acs_alive(),
         entry_ready=entry_ready,
@@ -421,6 +424,7 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
     from tools.ac_harness.shared_memory import SharedMemoryUnavailable
 
     controller: object | None = None
+    drivable = False
     try:
         if controller_factory is None:
             from tools.ac_harness.custom_ai import CustomAIController
@@ -431,18 +435,22 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if controller.read_car_data() is not None:  # type: ignore[attr-defined]
-                return True
+                drivable = True
+                break
             time.sleep(poll)
-        return controller.read_car_data() is not None  # type: ignore[attr-defined]
+        else:
+            drivable = controller.read_car_data() is not None  # type: ignore[attr-defined]
     except (SharedMemoryUnavailable, OSError) as exc:
         _log(f"Car0 drivability probe unavailable: {exc}")
-        return False
+        drivable = False
     finally:
         if controller is not None:
             try:
                 controller.close()  # type: ignore[attr-defined]
             except (SharedMemoryUnavailable, OSError) as exc:
                 _log(f"WARNING: could not close Car0 drivability probe: {exc}")
+                drivable = False
+    return drivable
 
 
 def _watch_live(  # pragma: no cover - rig-only

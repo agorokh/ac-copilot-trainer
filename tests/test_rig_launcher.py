@@ -312,6 +312,33 @@ def test_reopened_game_point_can_signal_detached_lock_owner(tmp_path: Path) -> N
     assert (tmp_path / "rig-session.release").exists()
 
 
+def test_unknown_rig_lock_status_is_visible_and_blocks_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spawned: list[bool] = []
+    cfg = GamePointConfig(
+        resilient_car="car",
+        resilient_track="track",
+        rig_lock_path=tmp_path / "rig-session.lock",
+        paths=LauncherPaths(tmp_path / "game-point"),
+    )
+    sup = GamePointSupervisor(
+        cfg,
+        environ={},
+        popen=lambda *_args, **_kwargs: spawned.append(True),
+    )
+    monkeypatch.setattr(sup, "_rig_session_owner", lambda: {"cwd": "unknown"})
+
+    status = sup._resilient_process_status()
+    started = sup.start_resilient_session()
+
+    assert status.ok is False
+    assert status.state == "unknown"
+    assert "lock status unavailable" in status.detail
+    assert started == status
+    assert spawned == []
+
+
 def test_resilient_status_adopts_machine_wide_lock_owner(tmp_path: Path) -> None:
     lock_path = tmp_path / "rig-session.lock"
     cfg = GamePointConfig(
