@@ -82,6 +82,30 @@ def test_short_stall_then_recovery_is_not_a_freeze():
     assert verdict is LaunchVerdict.STABLE
 
 
+def test_single_not_ready_flicker_does_not_abort_stability_window():
+    samples = steady(0.0, 10.0, first_packet=100)
+    samples.append(Sample(t=11.0, gfx_packet=800, acs_alive=True, entry_ready=False))
+    samples += steady(12.0, 60.0, first_packet=860)
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.STABLE
+    )
+
+
+def test_sustained_not_ready_state_fails_the_attempt():
+    samples = steady(0.0, 10.0, first_packet=100)
+    samples += [
+        Sample(t=11.0 + index, gfx_packet=800 + index, acs_alive=True, entry_ready=False)
+        for index in range(4)
+    ]
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.FROZE
+    )
+
+
 def test_unfinished_live_trace_is_pending_not_a_terminal_failure():
     samples = steady(0.0, 20.0, first_packet=100)
     assert classify(samples, go_live_timeout=10.0, stability_window=60.0) is LaunchVerdict.PENDING

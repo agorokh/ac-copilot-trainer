@@ -57,6 +57,10 @@ class LaunchVerdict(StrEnum):
     NEVER_LIVE = "never_live"
 
 
+class _ContentManagerRestartTimeout(RuntimeError):
+    """A killed Content Manager never released its process/IPC identity."""
+
+
 @dataclass(frozen=True)
 class Sample:
     """One observation of the sim's render liveness.
@@ -106,6 +110,7 @@ def classify(
     live_since: float | None = None
     prev_packet: int | None = None
     stall_run = 0
+    not_ready_run = 0
 
     for sample in samples:
         advanced = (
@@ -123,7 +128,11 @@ def classify(
             if not sample.acs_alive:
                 return LaunchVerdict.FROZE
             if sample.entry_ready is False:
-                return LaunchVerdict.FROZE
+                not_ready_run += 1
+                if not_ready_run >= stall_samples:
+                    return LaunchVerdict.FROZE
+            elif sample.entry_ready is True:
+                not_ready_run = 0
             if advanced:
                 stall_run = 0
             elif sample.gfx_packet is not None and sample.gfx_packet == prev_packet:
@@ -420,7 +429,6 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         return 3
     _log(f"rig lock acquired -> {rig_lock.path}")
     preset: Path | None = None
-    cm_restart_pending = False
     try:
         # The generated preset is application state: keep it under the same approved per-user
         # Harness root as the cross-worktree lock, and create it only after ownership is acquired.
@@ -438,15 +446,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         actuator = ContentManagerActuator(preset=preset, cm_exe=None)
 
         def watch_attempt(attempt: int) -> LaunchVerdict:
-            nonlocal cm_restart_pending
             _log(f"attempt {attempt}/{args.max_attempts}: launching via Content Manager")
             # A wedged acs from the previous attempt must be GONE before relaunching.
             _ensure_acs_gone(acs_alive)
-            if cm_restart_pending:
-                if not _wait_process_exit("Content Manager.exe"):
-                    _log("WARNING: Content Manager is still exiting; deferring the next launch")
-                    return LaunchVerdict.NEVER_LIVE
-                cm_restart_pending = False
             # The quick-drive URL is IPC to a RUNNING CM. Do not spend a full attempt when its
             # executable is absent or startup failed.
             if not _ensure_cm_running(ContentManagerActuator.DEFAULT_CM_EXE):
@@ -463,18 +465,29 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             return verdict
 
         def cold_restart_cm() -> None:
-            nonlocal cm_restart_pending
             _log("two consecutive never_live — cold-restarting Content Manager (stale preset IPC)")
             actuator.restart_content_manager()
-            cm_restart_pending = not _wait_process_exit("Content Manager.exe")
+            if not _wait_process_exit("Content Manager.exe"):
+                raise _ContentManagerRestartTimeout(
+                    "Content Manager remained alive after the bounded shutdown wait"
+                )
 
-        report = run_retry_loop(
-            watch_attempt,
-            max_attempts=args.max_attempts,
-            on_never_live_streak=cold_restart_cm,
-        )
+        try:
+            report = run_retry_loop(
+                watch_attempt,
+                max_attempts=args.max_attempts,
+                on_never_live_streak=cold_restart_cm,
+            )
+        except _ContentManagerRestartTimeout as exc:
+            _log(f"restart aborted: {exc}")
+            _ensure_acs_gone(acs_alive)
+            return 1
         _log(report.summary())
         if not report.succeeded:
+            # A FROZE terminal verdict deliberately leaves acs.exe alive so the watcher can
+            # diagnose it. Once the attempt budget is exhausted, kill that corpse while the
+            # machine-wide lock is still held; peers must never inherit a wedged sim.
+            _ensure_acs_gone(acs_alive)
             return 1
 
         # The stable session belongs to this operator-facing launcher until AC exits. Releasing

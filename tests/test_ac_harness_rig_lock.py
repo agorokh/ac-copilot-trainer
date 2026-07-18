@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import json
 import os
 import subprocess
 import sys
@@ -40,6 +41,7 @@ def test_second_process_fails_busy_with_owner_metadata(tmp_path: Path) -> None:
     ready = tmp_path / "ready"
     release = tmp_path / "release"
     script = """
+import os
 import sys
 import time
 from pathlib import Path
@@ -47,7 +49,7 @@ from tools.ac_harness.rig_lock import RigSessionLock, RigSessionOwner
 
 path, ready, release = map(Path, sys.argv[1:])
 owner = RigSessionOwner(
-    pid=4242, cwd='peer-worktree', car='peer-car', track='peer-track'
+    pid=os.getpid(), cwd='peer-worktree', car='peer-car', track='peer-track'
 )
 with RigSessionLock(path, owner=owner):
     ready.touch()
@@ -71,11 +73,11 @@ with RigSessionLock(path, owner=owner):
         with pytest.raises(RigSessionBusy) as exc_info:
             RigSessionLock(path, owner=_owner(9999)).acquire()
 
-        assert exc_info.value.owner["pid"] == 4242
+        assert exc_info.value.owner["pid"] == proc.pid
         assert exc_info.value.owner["car"] == "peer-car"
         assert "peer-worktree" in str(exc_info.value)
         assert read_rig_session_owner(path) == {
-            "pid": 4242,
+            "pid": proc.pid,
             "cwd": "peer-worktree",
             "car": "peer-car",
             "track": "peer-track",
@@ -93,6 +95,21 @@ def test_lock_is_released_for_next_owner(tmp_path: Path) -> None:
         pass
     with RigSessionLock(path, owner=_owner(2)):
         assert path.exists()
+
+
+def test_owner_status_read_never_takes_the_exclusive_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "rig-session.lock"
+    expected = _owner(os.getpid()).to_dict()
+    path.write_bytes(b"\0" + json.dumps(expected).encode("utf-8"))
+
+    def fail_lock(_lock_file) -> None:
+        raise AssertionError("status reads must not contend with zero-timeout launch acquisition")
+
+    monkeypatch.setattr(RigSessionLock, "_lock_byte", fail_lock)
+
+    assert read_rig_session_owner(path) == expected
 
 
 def test_lock_validates_timing(tmp_path: Path) -> None:
