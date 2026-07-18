@@ -65,6 +65,10 @@ class _AcsCleanupTimeout(RuntimeError):
     """A killed Assetto Corsa process remained alive past the cleanup deadline."""
 
 
+class _OperatorRelease(RuntimeError):
+    """Game Point explicitly requested release of resilient rig ownership."""
+
+
 @dataclass(frozen=True)
 class Sample:
     """One observation of the sim's render liveness.
@@ -350,6 +354,7 @@ def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
     acs_alive: Callable[[], bool],
     *,
     retry_cleanup: Callable[[Callable[[], bool]], bool] = _ensure_acs_gone,
+    release_requested: Callable[[], bool] | None = None,
     poll: float = 1.0,
 ) -> None:
     """Keep machine-wide ownership after cleanup fails until the unsafe sim is gone.
@@ -363,6 +368,9 @@ def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
         "(Ctrl-C explicitly releases)"
     )
     while acs_alive():
+        if release_requested is not None and release_requested():
+            _log("Game Point explicitly released unsafe rig ownership; acs.exe may still be alive")
+            return
         try:
             if retry_cleanup(acs_alive):
                 return
@@ -372,26 +380,35 @@ def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
             return
 
 
-def _make_rig_safe(acs_alive: Callable[[], bool]) -> None:  # pragma: no cover - rig-only
+def _make_rig_safe(  # pragma: no cover - rig-only
+    acs_alive: Callable[[], bool],
+    *,
+    release_requested: Callable[[], bool] | None = None,
+) -> None:
     """Confirm no live sim can outlast machine-wide ownership."""
     if acs_alive() and not _ensure_acs_gone(acs_alive):
-        _hold_rig_until_acs_gone(acs_alive)
+        _hold_rig_until_acs_gone(acs_alive, release_requested=release_requested)
 
 
 def _run_with_safe_release(
-    run: Callable[[], LaunchReport], acs_alive: Callable[[], bool]
+    run: Callable[[], LaunchReport],
+    acs_alive: Callable[[], bool],
+    *,
+    release_requested: Callable[[], bool] | None = None,
 ) -> LaunchReport:
     """Run the retry engine and make the rig safe before propagating any abnormal exit."""
     try:
         return run()
+    except _OperatorRelease:
+        raise
     except BaseException:
-        _make_rig_safe(acs_alive)
+        _make_rig_safe(acs_alive, release_requested=release_requested)
         raise
 
 
 def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
     *,
-    timeout: float = 1.0,
+    timeout: float = 5.0,
     poll: float = 0.1,
     controller_factory: Callable[[], object] | None = None,
 ) -> bool:
@@ -401,22 +418,31 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
     despite LIVE/not-in-pit and advancing packets. Close immediately after the probe so control is
     returned to the human driver before the stability window continues.
     """
-    if controller_factory is None:
-        from tools.ac_harness.custom_ai import CustomAIController
+    from tools.ac_harness.shared_memory import SharedMemoryUnavailable
 
-        def controller_factory() -> object:
-            return CustomAIController(0)
-
-    controller = controller_factory()
+    controller: object | None = None
     try:
+        if controller_factory is None:
+            from tools.ac_harness.custom_ai import CustomAIController
+
+            controller = CustomAIController(0)
+        else:
+            controller = controller_factory()
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if controller.read_car_data() is not None:  # type: ignore[attr-defined]
                 return True
             time.sleep(poll)
         return controller.read_car_data() is not None  # type: ignore[attr-defined]
+    except (SharedMemoryUnavailable, OSError) as exc:
+        _log(f"Car0 drivability probe unavailable: {exc}")
+        return False
     finally:
-        controller.close()  # type: ignore[attr-defined]
+        if controller is not None:
+            try:
+                controller.close()  # type: ignore[attr-defined]
+            except (SharedMemoryUnavailable, OSError) as exc:
+                _log(f"WARNING: could not close Car0 drivability probe: {exc}")
 
 
 def _watch_live(  # pragma: no cover - rig-only
@@ -484,6 +510,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         help="seconds to wait for the machine-wide rig lock (default: 1.0)",
     )
     parser.add_argument("--rig-lock-path", type=Path, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--rig-release-path", type=Path, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     from tools.ac_harness.entry_launcher import (
@@ -519,6 +546,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         return bool(running_process_ids("acs.exe"))
 
     lock_path = args.rig_lock_path or default_rig_session_lock_path()
+    release_path = args.rig_release_path or (lock_path.parent / "rig-session.release")
+
+    def release_requested() -> bool:
+        return release_path.exists()
+
     rig_lock = RigSessionLock(
         lock_path,
         owner=RigSessionOwner(
@@ -538,6 +570,13 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     _log(f"rig lock acquired -> {rig_lock.path}")
     preset: Path | None = None
     try:
+        if args.rig_release_path is None:
+            try:
+                release_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                _log(f"WARNING: could not clear stale release request {release_path}: {exc}")
         # The generated preset is application state: keep it under the same approved per-user
         # Harness root as the cross-worktree lock, and create it only after ownership is acquired.
         # A PID-scoped filename also prevents stale runs from sharing one mutable preset path.
@@ -554,6 +593,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         actuator = ContentManagerActuator(preset=preset, cm_exe=None)
 
         def watch_attempt(attempt: int) -> LaunchVerdict:
+            if release_requested():
+                raise _OperatorRelease
             _log(f"attempt {attempt}/{args.max_attempts}: launching via Content Manager")
             # A wedged acs from the previous attempt must be GONE before relaunching.
             if not _ensure_acs_gone(acs_alive):
@@ -572,6 +613,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
             def read_attempt_state() -> tuple[int | None, bool | None, bool | None]:
                 nonlocal car0_ready
+                if release_requested():
+                    raise _OperatorRelease
                 packet, entry_ready = read_state()
                 if entry_ready is True and not car0_ready:
                     car0_ready = _probe_car0_drivable()
@@ -602,7 +645,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     on_never_live_streak=cold_restart_cm,
                 ),
                 acs_alive,
+                release_requested=release_requested,
             )
+        except _OperatorRelease:
+            _log("Game Point explicitly released rig ownership during launch")
+            return 0
         except _AcsCleanupTimeout as exc:
             _log(f"launch aborted: {exc}")
             return 1
@@ -614,7 +661,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # A FROZE terminal verdict deliberately leaves acs.exe alive so the watcher can
             # diagnose it. Once the attempt budget is exhausted, kill that corpse while the
             # machine-wide lock is still held; peers must never inherit a wedged sim.
-            _make_rig_safe(acs_alive)
+            _make_rig_safe(acs_alive, release_requested=release_requested)
             return 1
 
         # The stable session belongs to this operator-facing launcher until AC exits. Releasing
@@ -625,8 +672,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             "(Ctrl-C releases)"
         )
         try:
-            while acs_alive():
+            while acs_alive() and not release_requested():
                 time.sleep(1.0)
+            if release_requested():
+                _log("Game Point explicitly released rig ownership; AC left LIVE")
         except KeyboardInterrupt:
             _log("operator released rig ownership; AC left LIVE")
         return 0
@@ -638,6 +687,12 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 pass
             except OSError as exc:
                 _log(f"WARNING: could not remove generated preset {preset}: {exc}")
+        try:
+            release_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            _log(f"WARNING: could not remove release request {release_path}: {exc}")
         rig_lock.release()
 
 

@@ -47,10 +47,13 @@ The resolve loop is active; merge and Windows-rig proof remain separate future s
   PID-scoped generated presets are removed when ownership ends. Transient readiness flicker uses
   the same consecutive-sample threshold as render stalls, unknown shared-memory observations break
   both consecutive runs, and STABLE additionally requires the rig-proven Car0 drivability
-  handshake (#466), not only LIVE + not-in-pit. A surviving `acs.exe` after bounded cleanup aborts
-  relaunch and holds machine-wide ownership while retrying teardown rather than exposing the
-  wedged sim as idle; abnormal retry exits run the same safety path before propagating. Ctrl-C is
-  the explicit operator release hatch.
+  handshake (#466), not only LIVE + not-in-pit. The handshake uses the proven five-second window;
+  mapping failures stay retryable, and its lazy Custom-AI dependency is included in the frozen
+  package. A surviving `acs.exe` after bounded cleanup aborts relaunch and holds machine-wide
+  ownership while retrying teardown rather than exposing the wedged sim as idle; abnormal retry
+  exits run the same safety path before propagating. Ctrl-C remains the console escape hatch, while
+  Game Point's **Release AC** writes a durable sibling signal that works for its no-console child
+  even after the GUI is closed and reopened.
 
 ## Verification contract
 

@@ -205,6 +205,8 @@ def test_resilient_command_routes_source_and_frozen_launcher(tmp_path: Path) -> 
         "gp",
         "--rig-lock-path",
         str(tmp_path / "rig-session.lock"),
+        "--rig-release-path",
+        str(tmp_path / "rig-session.release"),
         "--rig-lock-timeout",
         "1.0",
     ]
@@ -225,6 +227,7 @@ def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> N
     cfg = GamePointConfig(
         resilient_car="car",
         resilient_track="track",
+        rig_lock_path=tmp_path / "rig-session.lock",
         paths=LauncherPaths(tmp_path),
     )
     sup = GamePointSupervisor(
@@ -234,20 +237,27 @@ def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> N
         python_executable="python",
     )
 
+    release_path = tmp_path / "rig-session.release"
+    release_path.touch()
     started = sup.start_resilient_session()
     running = sup._resilient_process_status()
     sup.close()
 
     assert started.state == "starting"
     assert running.state == "running"
-    assert calls[0][0][-6:] == [
+    assert calls[0][0][-10:] == [
         "--car",
         "car",
         "--track",
         "track",
+        "--rig-lock-path",
+        str(tmp_path / "rig-session.lock"),
+        "--rig-release-path",
+        str(release_path),
         "--rig-lock-timeout",
         "1.0",
     ]
+    assert not release_path.exists()
     assert calls[0][1]["cwd"] == str(_repo_root())
     assert (tmp_path / "logs" / "resilient-launch.log").exists()
     assert proc.terminated is False
@@ -262,6 +272,44 @@ def test_start_resilient_session_requires_car_and_track(tmp_path: Path) -> None:
     assert result.state == "unconfigured"
     assert "resilient_car" in result.detail
     assert "resilient_track" in result.detail
+
+
+def test_release_resilient_session_signals_detached_child(tmp_path: Path) -> None:
+    lock_path = tmp_path / "rig-session.lock"
+    proc = _Proc()
+    cfg = GamePointConfig(
+        resilient_car="car",
+        resilient_track="track",
+        rig_lock_path=lock_path,
+        paths=LauncherPaths(tmp_path / "game-point"),
+    )
+    sup = GamePointSupervisor(cfg, environ={}, popen=lambda *_args, **_kwargs: proc)
+
+    assert sup.start_resilient_session().state == "starting"
+    released = sup.release_resilient_session()
+
+    assert released.ok is True
+    assert released.state == "release_requested"
+    assert (tmp_path / "rig-session.release").exists()
+    assert proc.terminated is False
+
+
+def test_reopened_game_point_can_signal_detached_lock_owner(tmp_path: Path) -> None:
+    lock_path = tmp_path / "rig-session.lock"
+    cfg = GamePointConfig(
+        resilient_car="car",
+        resilient_track="track",
+        rig_lock_path=lock_path,
+        paths=LauncherPaths(tmp_path / "game-point"),
+    )
+    sup = GamePointSupervisor(cfg, environ={})
+    owner = RigSessionOwner(pid=os.getpid(), cwd="detached-game-point", car="car", track="track")
+
+    with RigSessionLock(lock_path, owner=owner):
+        released = sup.release_resilient_session()
+
+    assert released.state == "release_requested"
+    assert (tmp_path / "rig-session.release").exists()
 
 
 def test_resilient_status_adopts_machine_wide_lock_owner(tmp_path: Path) -> None:
@@ -1217,6 +1265,7 @@ def test_build_pyinstaller_args_bundles_resilient_child(tmp_path: Path) -> None:
     for module in (
         "tools.ac_harness.resilient_launch",
         "tools.ac_harness.entry_launcher",
+        "tools.ac_harness.custom_ai",
         "tools.ac_harness.preset_utils",
         "tools.ac_harness.rig_lock",
         "tools.ac_harness.shared_memory",

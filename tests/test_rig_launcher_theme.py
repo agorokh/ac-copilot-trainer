@@ -163,7 +163,15 @@ def test_launcher_buttons_are_uppercase_with_start_emphasis() -> None:
     from tools.rig_launcher import view
 
     labels = [label for label, _key, _primary in view._BUTTONS]
-    assert labels == ["▶ START", "STABLE AC", "REFRESH", "LOGS", "SETTINGS", "SETUP DIFF"]
+    assert labels == [
+        "▶ START",
+        "STABLE AC",
+        "RELEASE AC",
+        "REFRESH",
+        "LOGS",
+        "SETTINGS",
+        "SETUP DIFF",
+    ]
     assert [primary for _label, _key, primary in view._BUTTONS] == [
         True,
         False,
@@ -171,9 +179,10 @@ def test_launcher_buttons_are_uppercase_with_start_emphasis() -> None:
         False,
         False,
         False,
+        False,
     ]
     # Start is 1.5x each secondary action (1.5fr vs 1fr in the design grid).
-    assert view._BUTTON_WEIGHTS == (3, 2, 2, 2, 2, 2)
+    assert view._BUTTON_WEIGHTS == (3, 2, 2, 2, 2, 2, 2)
 
 
 def test_resolve_font_prefers_available_family() -> None:

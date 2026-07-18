@@ -378,6 +378,18 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
             )
         refresh()
 
+    def release_resilient() -> None:
+        result = supervisor.release_resilient_session()
+        if not result.ok:
+            from tkinter import messagebox
+
+            messagebox.showwarning(
+                "Release AC ownership",
+                result.detail or "The resilient AC session could not be released.",
+                parent=root,
+            )
+        refresh()
+
     def open_logs() -> None:
         path = supervisor.paths.logs_dir
         path.mkdir(parents=True, exist_ok=True)
@@ -423,6 +435,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
         actions={
             "start": start,
             "resilient_launch": start_resilient,
+            "resilient_release": release_resilient,
             "refresh": refresh,
             "logs": open_logs,
             "settings": open_settings,

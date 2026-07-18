@@ -28,6 +28,7 @@ from tools.ac_harness.resilient_launch import (
     classify,
     run_retry_loop,
 )
+from tools.ac_harness.shared_memory import SharedMemoryUnavailable
 
 
 def trace(points: list[tuple[float, int | None, bool]]) -> list[Sample]:
@@ -412,6 +413,14 @@ def test_cleanup_hold_allows_only_explicit_operator_release(monkeypatch):
     _hold_rig_until_acs_gone(lambda: True, retry_cleanup=interrupt)
 
 
+def test_cleanup_hold_honors_game_point_release_signal() -> None:
+    _hold_rig_until_acs_gone(
+        lambda: True,
+        retry_cleanup=lambda _acs_alive: pytest.fail("release must precede another cleanup"),
+        release_requested=lambda: True,
+    )
+
+
 def test_abnormal_retry_exit_makes_rig_safe_before_propagating(monkeypatch):
     calls: list[str] = []
 
@@ -421,7 +430,7 @@ def test_abnormal_retry_exit_makes_rig_safe_before_propagating(monkeypatch):
 
     monkeypatch.setattr(
         "tools.ac_harness.resilient_launch._make_rig_safe",
-        lambda _acs_alive: calls.append("safe"),
+        lambda _acs_alive, **_kwargs: calls.append("safe"),
     )
 
     with pytest.raises(RuntimeError, match="watch failed"):
@@ -431,7 +440,7 @@ def test_abnormal_retry_exit_makes_rig_safe_before_propagating(monkeypatch):
 
 
 def test_car0_probe_closes_controller_after_handshake(monkeypatch):
-    reads = iter([None, {"packet_id": 1}])
+    reads = iter([None] * 12 + [{"packet_id": 1}])
     closed: list[bool] = []
     now = 0.0
 
@@ -454,13 +463,20 @@ def test_car0_probe_closes_controller_after_handshake(monkeypatch):
 
     assert (
         _probe_car0_drivable(
-            timeout=1.0,
             poll=0.1,
             controller_factory=Controller,
         )
         is True
     )
     assert closed == [True]
+    assert now > 1.0
+
+
+def test_car0_probe_mapping_failure_is_retryable() -> None:
+    def fail_controller() -> object:
+        raise SharedMemoryUnavailable("mapping unavailable")
+
+    assert _probe_car0_drivable(controller_factory=fail_controller) is False
 
 
 def test_ensure_cm_running_fails_fast_when_executable_is_missing(tmp_path):

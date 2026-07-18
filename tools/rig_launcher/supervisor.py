@@ -350,6 +350,7 @@ class GamePointSupervisor:
             args.extend(["--layout", self.config.resilient_layout])
         if self.config.rig_lock_path is not None:
             args.extend(["--rig-lock-path", str(self.config.rig_lock_path)])
+        args.extend(["--rig-release-path", str(self._rig_release_path())])
         # Game Point polls the authoritative lock byte for status. Give a real launcher enough
         # grace to outwait that microsecond probe rather than false-failing on a zero-timeout race.
         args.extend(["--rig-lock-timeout", "1.0"])
@@ -529,6 +530,10 @@ class GamePointSupervisor:
                     pass
                 self._resilient_log_handle = None
             try:
+                try:
+                    self._rig_release_path().unlink()
+                except FileNotFoundError:
+                    pass
                 self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
                 log = self.paths.resilient_log_path.open("a", encoding="utf-8")
                 self._resilient_log_handle = log
@@ -557,6 +562,32 @@ class GamePointSupervisor:
                 "starting",
                 f"pid={self._resilient_process.pid}; log={self.paths.resilient_log_path}",
             )
+
+    def release_resilient_session(self) -> ProbeResult:
+        """Signal the no-console resilient child to release machine-wide ownership.
+
+        The child may outlive Game Point, so this uses a shared sentinel next to the authoritative
+        lock rather than a transient process handle. AC itself is deliberately left running.
+        """
+        with self._proc_lock:
+            local_running = (
+                self._resilient_process is not None and self._resilient_process.poll() is None
+            )
+        owner = self._rig_session_owner()
+        if not local_running and owner is None:
+            return ProbeResult("ac_session", True, "idle", "no resilient session owns the rig")
+        release_path = self._rig_release_path()
+        try:
+            release_path.parent.mkdir(parents=True, exist_ok=True)
+            release_path.touch()
+        except OSError as exc:
+            return ProbeResult("ac_session", False, "release_failed", str(exc))
+        return ProbeResult(
+            "ac_session",
+            True,
+            "release_requested",
+            f"ownership release requested; AC left live; signal={release_path}",
+        )
 
     def _resilient_process_status(self) -> ProbeResult:
         with self._proc_lock:
@@ -619,15 +650,19 @@ class GamePointSupervisor:
         """Read machine-wide ownership so restarted Game Point instances adopt status truth."""
         if self.config.rig_lock_path is None and sys.platform != "win32":
             return None
-        from tools.ac_harness.rig_lock import (
-            default_rig_session_lock_path,
-            read_rig_session_owner,
-        )
+        from tools.ac_harness.rig_lock import read_rig_session_owner
 
-        path = self.config.rig_lock_path or default_rig_session_lock_path(
+        return read_rig_session_owner(self._rig_lock_path())
+
+    def _rig_lock_path(self) -> Path:
+        from tools.ac_harness.rig_lock import default_rig_session_lock_path
+
+        return self.config.rig_lock_path or default_rig_session_lock_path(
             local_app_data=self._environ.get("LOCALAPPDATA")
         )
-        return read_rig_session_owner(path)
+
+    def _rig_release_path(self) -> Path:
+        return self._rig_lock_path().parent / "rig-session.release"
 
     def stop_sidecar(self, *, timeout: float = 5.0) -> ProbeResult:
         with self._proc_lock:
@@ -1056,6 +1091,8 @@ def build_pyinstaller_args(
         "tools.ac_harness.resilient_launch",
         "--hidden-import",
         "tools.ac_harness.entry_launcher",
+        "--hidden-import",
+        "tools.ac_harness.custom_ai",
         "--hidden-import",
         "tools.ac_harness.preset_utils",
         "--hidden-import",
