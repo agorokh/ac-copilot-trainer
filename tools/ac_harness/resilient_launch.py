@@ -377,12 +377,16 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     parser.add_argument(
         "--rig-lock-timeout",
         type=_non_negative_float,
-        default=0.0,
-        help="seconds to wait for the machine-wide rig lock (default: fail immediately)",
+        default=1.0,
+        help="seconds to wait for the machine-wide rig lock (default: 1.0)",
     )
     args = parser.parse_args(argv)
 
-    from tools.ac_harness.entry_launcher import ContentManagerActuator, running_process_ids
+    from tools.ac_harness.entry_launcher import (
+        ContentManagerActuator,
+        EntryLaunchUnsupported,
+        running_process_ids,
+    )
     from tools.ac_harness.preset_utils import build_practice_preset
     from tools.ac_harness.rig_lock import (
         RigSessionBusy,
@@ -454,7 +458,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             if not _ensure_cm_running(ContentManagerActuator.DEFAULT_CM_EXE):
                 return LaunchVerdict.NEVER_LIVE
             minimize_foreground_window()
-            actuator.launch() if attempt == 1 else actuator.relaunch()
+            try:
+                actuator.launch() if attempt == 1 else actuator.relaunch()
+            except (OSError, EntryLaunchUnsupported) as exc:
+                _log(f"attempt {attempt}: Content Manager launch failed: {exc}")
+                return LaunchVerdict.NEVER_LIVE
             verdict = _watch_live(
                 read_state,
                 acs_alive,

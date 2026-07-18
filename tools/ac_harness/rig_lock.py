@@ -189,61 +189,28 @@ class RigSessionLock:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
-def _process_id_is_alive(pid: int) -> bool:
-    """Check owner liveness without taking the rig lock byte used by launchers."""
-    if pid <= 0:
-        return False
-    if sys.platform == "win32":
-        import ctypes
-        from ctypes import wintypes
-
-        synchronize = 0x00100000
-        wait_timeout = 0x00000102
-        error_access_denied = 5
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel32.OpenProcess.restype = wintypes.HANDLE
-        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-        kernel32.WaitForSingleObject.restype = wintypes.DWORD
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel32.CloseHandle.restype = wintypes.BOOL
-        handle = kernel32.OpenProcess(synchronize, False, wintypes.DWORD(pid))
-        if not handle:
-            return ctypes.get_last_error() == error_access_denied
-        try:
-            return kernel32.WaitForSingleObject(handle, 0) == wait_timeout
-        finally:
-            kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
 def read_rig_session_owner(path: str | Path) -> dict[str, Any] | None:
-    """Return owner metadata only while its PID is live, without touching the lock byte.
+    """Return metadata only when the authoritative OS lock byte is currently owned.
 
-    Game Point polls this on a five-second cadence while launchers commonly use a zero-second
-    lock timeout. Taking the exclusive byte merely to read status creates false busy failures, so
-    the status path reads the metadata and validates its PID instead. The lock itself remains the
-    authority for mutation; this function is display/preflight evidence only.
+    PID liveness is insufficient: an unclean exit leaves JSON behind and the PID can be reused by
+    an unrelated process. Probe the byte non-blockingly; successfully taking it proves idleness and
+    stale metadata is ignored. Real launchers allow a short acquisition grace so this microsecond
+    status probe cannot create a false busy failure.
     """
     lock_path = Path(path)
     try:
-        lock_file = lock_path.open("rb")
+        lock_file = lock_path.open("r+b")
     except FileNotFoundError:
         return None
     try:
-        owner = RigSessionLock._read_owner(lock_file)
+        try:
+            RigSessionLock._lock_byte(lock_file)
+        except OSError as exc:
+            if RigSessionLock._is_lock_contention(exc):
+                return RigSessionLock._read_owner(lock_file)
+            raise
+        else:
+            RigSessionLock._unlock_byte(lock_file)
+            return None
     finally:
         lock_file.close()
-    if not owner:
-        return None
-    try:
-        pid = int(owner.get("pid"))
-    except (TypeError, ValueError):
-        return None
-    return owner if _process_id_is_alive(pid) else None

@@ -97,19 +97,12 @@ def test_lock_is_released_for_next_owner(tmp_path: Path) -> None:
         assert path.exists()
 
 
-def test_owner_status_read_never_takes_the_exclusive_lock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_stale_metadata_with_reused_live_pid_is_not_authoritative(tmp_path: Path) -> None:
     path = tmp_path / "rig-session.lock"
-    expected = _owner(os.getpid()).to_dict()
-    path.write_bytes(b"\0" + json.dumps(expected).encode("utf-8"))
+    stale = _owner(os.getpid()).to_dict()
+    path.write_bytes(b"\0" + json.dumps(stale).encode("utf-8"))
 
-    def fail_lock(_lock_file) -> None:
-        raise AssertionError("status reads must not contend with zero-timeout launch acquisition")
-
-    monkeypatch.setattr(RigSessionLock, "_lock_byte", fail_lock)
-
-    assert read_rig_session_owner(path) == expected
+    assert read_rig_session_owner(path) is None
 
 
 def test_lock_validates_timing(tmp_path: Path) -> None:

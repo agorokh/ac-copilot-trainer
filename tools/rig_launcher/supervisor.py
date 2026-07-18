@@ -340,6 +340,9 @@ class GamePointSupervisor:
             args.extend(["--track", self.config.resilient_track])
         if self.config.resilient_layout:
             args.extend(["--layout", self.config.resilient_layout])
+        # Game Point polls the authoritative lock byte for status. Give a real launcher enough
+        # grace to outwait that microsecond probe rather than false-failing on a zero-timeout race.
+        args.extend(["--rig-lock-timeout", "1.0"])
         return args
 
     def _launcher_path_base(self) -> Path:
@@ -581,6 +584,19 @@ class GamePointSupervisor:
                     True,
                     "running",
                     f"pid={self._resilient_process.pid}",
+                )
+            owner = self._rig_session_owner()
+            if owner is not None:
+                detail = " ".join(
+                    f"{key}={owner[key]}"
+                    for key in ("pid", "car", "track", "started_at")
+                    if owner.get(key) not in (None, "")
+                )
+                return ProbeResult(
+                    "ac_session",
+                    True,
+                    "running",
+                    f"owned by another launcher{(': ' + detail) if detail else ''}",
                 )
             return ProbeResult(
                 "ac_session",

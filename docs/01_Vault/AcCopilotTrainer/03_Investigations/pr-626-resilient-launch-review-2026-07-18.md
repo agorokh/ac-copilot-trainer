@@ -32,15 +32,18 @@ The resolve loop is active; merge and Windows-rig proof remain separate future s
   process tree and wait for a killed CM to leave before reusing its IPC name; finite
   positive/non-negative CLI types reject NaN and infinity. A CM shutdown timeout aborts separately
   rather than consuming a fake launch attempt, and an exhausted failure budget removes any wedged
-  `acs.exe` before releasing ownership.
+  `acs.exe` before releasing ownership. CM actuator launch exceptions become `never_live` retry
+  verdicts instead of unwinding the loop.
 - Shared preset and foreground-window helpers remove the `auto_drive` layering dependency.
 - The driver-facing path now follows the Game Point invariant: non-secret car/track/layout settings,
   a Stable AC action, an AC Session status row, dedicated logs, source/frozen child dispatch, and
   PyInstaller coverage. Restarted Game Point instances read the live machine lock rather than
   claiming an owned rig is idle; AC-session failures remain visible without poisoning sidecar
-  readiness. The status read validates owner-PID liveness without briefly taking the exclusive lock
-  byte. PID-scoped generated presets are removed when ownership ends, and transient readiness
-  flicker uses the same consecutive-sample threshold as render stalls.
+  readiness. Status uses the OS lock byte as authority (not reusable PID metadata), while real
+  launch acquisition has a one-second grace around the brief status probe. After a local child
+  exits, external lock ownership supersedes the stale exit row. PID-scoped generated presets are
+  removed when ownership ends, and transient readiness flicker uses the same consecutive-sample
+  threshold as render stalls.
 
 ## Verification contract
 

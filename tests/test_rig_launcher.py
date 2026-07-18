@@ -202,6 +202,8 @@ def test_resilient_command_routes_source_and_frozen_launcher(tmp_path: Path) -> 
         "spa",
         "--layout",
         "gp",
+        "--rig-lock-timeout",
+        "1.0",
     ]
     assert frozen.resilient_command()[:2] == [
         "AC-Copilot-Game-Point.exe",
@@ -235,7 +237,14 @@ def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> N
 
     assert started.state == "starting"
     assert running.state == "running"
-    assert calls[0][0][-4:] == ["--car", "car", "--track", "track"]
+    assert calls[0][0][-6:] == [
+        "--car",
+        "car",
+        "--track",
+        "track",
+        "--rig-lock-timeout",
+        "1.0",
+    ]
     assert calls[0][1]["cwd"] == str(_repo_root())
     assert (tmp_path / "logs" / "resilient-launch.log").exists()
     assert proc.terminated is False
@@ -266,7 +275,7 @@ def test_resilient_status_adopts_machine_wide_lock_owner(tmp_path: Path) -> None
 
     sup = GamePointSupervisor(cfg, environ={}, popen=fail_popen)
     owner = RigSessionOwner(
-        pid=777,
+        pid=os.getpid(),
         cwd="other-game-point",
         car="live-car",
         track="live-track",
@@ -278,7 +287,7 @@ def test_resilient_status_adopts_machine_wide_lock_owner(tmp_path: Path) -> None
 
     assert status.ok is True
     assert status.state == "running"
-    assert "pid=777" in status.detail
+    assert f"pid={os.getpid()}" in status.detail
     assert "live-car" in status.detail
     assert started == status
 
