@@ -21,6 +21,8 @@ from tools.ac_harness.resilient_launch import (
     _non_negative_float,
     _positive_float,
     _positive_int,
+    _probe_car0_drivable,
+    _run_with_safe_release,
     _wait_process_exit,
     _watch_live,
     classify,
@@ -146,6 +148,22 @@ def test_unfinished_live_trace_is_pending_not_a_terminal_failure():
 def test_advancing_pre_drive_menu_is_not_accepted_as_stable():
     samples = [
         Sample(t=float(t), gfx_packet=100 + t, acs_alive=True, entry_ready=False)
+        for t in range(0, 61)
+    ]
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=20.0) is LaunchVerdict.NEVER_LIVE
+    )
+
+
+def test_live_not_in_pit_overlay_without_car0_is_not_accepted_as_stable():
+    samples = [
+        Sample(
+            t=float(t),
+            gfx_packet=100 + t,
+            acs_alive=True,
+            entry_ready=True,
+            drivable=False,
+        )
         for t in range(0, 61)
     ]
     assert (
@@ -392,6 +410,57 @@ def test_cleanup_hold_allows_only_explicit_operator_release(monkeypatch):
     )
 
     _hold_rig_until_acs_gone(lambda: True, retry_cleanup=interrupt)
+
+
+def test_abnormal_retry_exit_makes_rig_safe_before_propagating(monkeypatch):
+    calls: list[str] = []
+
+    def fail() -> object:
+        calls.append("run")
+        raise RuntimeError("watch failed")
+
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch._make_rig_safe",
+        lambda _acs_alive: calls.append("safe"),
+    )
+
+    with pytest.raises(RuntimeError, match="watch failed"):
+        _run_with_safe_release(fail, lambda: True)
+
+    assert calls == ["run", "safe"]
+
+
+def test_car0_probe_closes_controller_after_handshake(monkeypatch):
+    reads = iter([None, {"packet_id": 1}])
+    closed: list[bool] = []
+    now = 0.0
+
+    class Controller:
+        def read_car_data(self):
+            return next(reads)
+
+        def close(self):
+            closed.append(True)
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+
+    assert (
+        _probe_car0_drivable(
+            timeout=1.0,
+            poll=0.1,
+            controller_factory=Controller,
+        )
+        is True
+    )
+    assert closed == [True]
 
 
 def test_ensure_cm_running_fails_fast_when_executable_is_missing(tmp_path):

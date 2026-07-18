@@ -71,14 +71,16 @@ class Sample:
 
     ``gfx_packet`` is ``acpmf_graphics.packetId`` — it advances once per rendered frame, so a
     frozen render loop pins it while the process stays alive. ``entry_ready`` preserves the
-    graphics page's LIVE + not-in-pit predicate so an advancing pre-drive menu cannot pass as a
-    drivable session. ``None`` means that field could not be read yet.
+    graphics page's LIVE + not-in-pit predicate. ``drivable`` is the stronger, rig-proven Car0
+    handshake: the CSP pre-drive overlay can report LIVE + not-in-pit while remaining non-drivable.
+    ``None`` means that field could not be read yet.
     """
 
     t: float
     gfx_packet: int | None
     acs_alive: bool
     entry_ready: bool | None = True
+    drivable: bool | None = True
 
 
 def classify(
@@ -117,6 +119,8 @@ def classify(
     not_ready_run = 0
 
     for sample in samples:
+        ready = sample.entry_ready is True and sample.drivable is True
+        not_ready = sample.entry_ready is False or sample.drivable is False
         advanced = (
             sample.acs_alive
             and sample.gfx_packet is not None
@@ -126,16 +130,16 @@ def classify(
         if live_since is None:
             if sample.t - t0 >= go_live_timeout:
                 return LaunchVerdict.NEVER_LIVE
-            if advanced and sample.entry_ready is True:
+            if advanced and ready:
                 live_since = sample.t
         else:
             if not sample.acs_alive:
                 return LaunchVerdict.FROZE
-            if sample.entry_ready is False:
+            if not_ready:
                 not_ready_run += 1
                 if not_ready_run >= stall_samples:
                     return LaunchVerdict.FROZE
-            elif sample.entry_ready is True:
+            elif ready:
                 not_ready_run = 0
             else:
                 # An unavailable graphics observation cannot extend a consecutive run.
@@ -149,11 +153,7 @@ def classify(
             else:
                 # Missing shared memory is unknown, not another observation of the same packet.
                 stall_run = 0
-            if (
-                advanced
-                and sample.entry_ready is True
-                and sample.t - live_since >= stability_window
-            ):
+            if advanced and ready and sample.t - live_since >= stability_window:
                 return LaunchVerdict.STABLE
         if sample.gfx_packet is not None:
             prev_packet = sample.gfx_packet
@@ -242,14 +242,24 @@ def _log(msg: str) -> None:  # pragma: no cover - rig-only progress trace
 
 
 def _sample_now(
-    read_state: Callable[[], tuple[int | None, bool | None]], acs_alive: Callable[[], bool]
+    read_state: Callable[
+        [],
+        tuple[int | None, bool | None] | tuple[int | None, bool | None, bool | None],
+    ],
+    acs_alive: Callable[[], bool],
 ) -> Sample:  # pragma: no cover - rig-only
-    packet, entry_ready = read_state()
+    state = read_state()
+    if len(state) == 2:
+        packet, entry_ready = state
+        drivable = entry_ready
+    else:
+        packet, entry_ready, drivable = state
     return Sample(
         t=time.monotonic(),
         gfx_packet=packet,
         acs_alive=acs_alive(),
         entry_ready=entry_ready,
+        drivable=drivable,
     )
 
 
@@ -362,8 +372,58 @@ def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
             return
 
 
+def _make_rig_safe(acs_alive: Callable[[], bool]) -> None:  # pragma: no cover - rig-only
+    """Confirm no live sim can outlast machine-wide ownership."""
+    if acs_alive() and not _ensure_acs_gone(acs_alive):
+        _hold_rig_until_acs_gone(acs_alive)
+
+
+def _run_with_safe_release(
+    run: Callable[[], LaunchReport], acs_alive: Callable[[], bool]
+) -> LaunchReport:
+    """Run the retry engine and make the rig safe before propagating any abnormal exit."""
+    try:
+        return run()
+    except BaseException:
+        _make_rig_safe(acs_alive)
+        raise
+
+
+def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
+    *,
+    timeout: float = 1.0,
+    poll: float = 0.1,
+    controller_factory: Callable[[], object] | None = None,
+) -> bool:
+    """Briefly handshake CSP Car0, the established oracle for a drivable session (#466).
+
+    Creating ``CarControls0`` asks CSP to expose ``Car0``. The known pre-drive overlay never does,
+    despite LIVE/not-in-pit and advancing packets. Close immediately after the probe so control is
+    returned to the human driver before the stability window continues.
+    """
+    if controller_factory is None:
+        from tools.ac_harness.custom_ai import CustomAIController
+
+        def controller_factory() -> object:
+            return CustomAIController(0)
+
+    controller = controller_factory()
+    try:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if controller.read_car_data() is not None:  # type: ignore[attr-defined]
+                return True
+            time.sleep(poll)
+        return controller.read_car_data() is not None  # type: ignore[attr-defined]
+    finally:
+        controller.close()  # type: ignore[attr-defined]
+
+
 def _watch_live(  # pragma: no cover - rig-only
-    read_state: Callable[[], tuple[int | None, bool | None]],
+    read_state: Callable[
+        [],
+        tuple[int | None, bool | None] | tuple[int | None, bool | None, bool | None],
+    ],
     acs_alive: Callable[[], bool],
     *,
     go_live_timeout: float,
@@ -423,6 +483,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         default=1.0,
         help="seconds to wait for the machine-wide rig lock (default: 1.0)",
     )
+    parser.add_argument("--rig-lock-path", type=Path, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     from tools.ac_harness.entry_launcher import (
@@ -457,7 +518,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     def acs_alive() -> bool:
         return bool(running_process_ids("acs.exe"))
 
-    lock_path = default_rig_session_lock_path()
+    lock_path = args.rig_lock_path or default_rig_session_lock_path()
     rig_lock = RigSessionLock(
         lock_path,
         owner=RigSessionOwner(
@@ -507,8 +568,17 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             except (OSError, EntryLaunchUnsupported) as exc:
                 _log(f"attempt {attempt}: Content Manager launch failed: {exc}")
                 return LaunchVerdict.NEVER_LIVE
+            car0_ready = False
+
+            def read_attempt_state() -> tuple[int | None, bool | None, bool | None]:
+                nonlocal car0_ready
+                packet, entry_ready = read_state()
+                if entry_ready is True and not car0_ready:
+                    car0_ready = _probe_car0_drivable()
+                return packet, entry_ready, car0_ready if entry_ready is True else None
+
             verdict = _watch_live(
-                read_state,
+                read_attempt_state,
                 acs_alive,
                 go_live_timeout=args.go_live_timeout,
                 stability_window=args.stability_window,
@@ -525,27 +595,26 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 )
 
         try:
-            report = run_retry_loop(
-                watch_attempt,
-                max_attempts=args.max_attempts,
-                on_never_live_streak=cold_restart_cm,
+            report = _run_with_safe_release(
+                lambda: run_retry_loop(
+                    watch_attempt,
+                    max_attempts=args.max_attempts,
+                    on_never_live_streak=cold_restart_cm,
+                ),
+                acs_alive,
             )
         except _AcsCleanupTimeout as exc:
             _log(f"launch aborted: {exc}")
-            _hold_rig_until_acs_gone(acs_alive)
             return 1
         except _ContentManagerRestartTimeout as exc:
             _log(f"restart aborted: {exc}")
-            if not _ensure_acs_gone(acs_alive):
-                _hold_rig_until_acs_gone(acs_alive)
             return 1
         _log(report.summary())
         if not report.succeeded:
             # A FROZE terminal verdict deliberately leaves acs.exe alive so the watcher can
             # diagnose it. Once the attempt budget is exhausted, kill that corpse while the
             # machine-wide lock is still held; peers must never inherit a wedged sim.
-            if not _ensure_acs_gone(acs_alive):
-                _hold_rig_until_acs_gone(acs_alive)
+            _make_rig_safe(acs_alive)
             return 1
 
         # The stable session belongs to this operator-facing launcher until AC exits. Releasing

@@ -146,16 +146,16 @@ def test_summary_for_falls_back_to_state_word_without_detail() -> None:
     assert theme.summary_for(status) == ("PRESS START", "brake", "DISABLED")
 
 
-def test_failed_optional_ac_session_does_not_poison_sidecar_readiness() -> None:
+def test_failed_ac_session_is_visible_without_misdirecting_to_start() -> None:
     status = _status(
         resilient=ProbeResult("ac_session", False, "exited", "exit=1; press STABLE AC")
     )
 
-    assert status.ok is True
+    assert status.ok is False
     assert theme.summary_for(status) == (
-        "READY TO DRIVE",
-        "clear",
-        "sidecar · screen live",
+        "PRESS STABLE AC",
+        "brake",
+        "exit=1; press STABLE AC",
     )
 
 

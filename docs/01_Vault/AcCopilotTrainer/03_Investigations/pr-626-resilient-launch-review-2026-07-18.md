@@ -38,16 +38,19 @@ The resolve loop is active; merge and Windows-rig proof remain separate future s
 - The driver-facing path now follows the Game Point invariant: non-secret car/track/layout settings,
   a Stable AC action, an AC Session status row, dedicated logs, source/frozen child dispatch, and
   PyInstaller coverage. Restarted Game Point instances read the live machine lock rather than
-  claiming an owned rig is idle; AC-session failures remain visible without poisoning sidecar
-  readiness. Status uses the OS lock byte as authority (not reusable PID metadata); on Windows it
-  queries ownership with a locked-byte read that never acquires the exclusive byte, and contention
-  with in-flight metadata reports an explicit unknown owner rather than idle. After a local child
-  exits, external lock ownership supersedes the stale exit row. PID-scoped generated presets are
-  removed when ownership ends. Transient readiness flicker uses the same consecutive-sample
-  threshold as render stalls, unknown shared-memory observations break both consecutive runs, and
-  a surviving `acs.exe` after bounded cleanup now aborts relaunch and holds machine-wide ownership
-  while retrying teardown rather than exposing the wedged sim as idle. Ctrl-C is the explicit
-  operator release hatch.
+  claiming an owned rig is idle; AC-session failures make aggregate status non-green and point the
+  operator to **Stable AC**, not the unrelated START action. Status uses the OS lock byte as
+  authority (not reusable PID metadata); on Windows it queries ownership with a locked-byte read
+  that never acquires the exclusive byte, and lock I/O failures report an explicit unknown owner
+  rather than crash the GUI or claim idle. Game Point passes any configured lock-path override to
+  its child. After a local child exits, external lock ownership supersedes the stale exit row.
+  PID-scoped generated presets are removed when ownership ends. Transient readiness flicker uses
+  the same consecutive-sample threshold as render stalls, unknown shared-memory observations break
+  both consecutive runs, and STABLE additionally requires the rig-proven Car0 drivability
+  handshake (#466), not only LIVE + not-in-pit. A surviving `acs.exe` after bounded cleanup aborts
+  relaunch and holds machine-wide ownership while retrying teardown rather than exposing the
+  wedged sim as idle; abnormal retry exits run the same safety path before propagating. Ctrl-C is
+  the explicit operator release hatch.
 
 ## Verification contract
 

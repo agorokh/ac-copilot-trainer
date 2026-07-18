@@ -181,6 +181,7 @@ def test_resilient_command_routes_source_and_frozen_launcher(tmp_path: Path) -> 
         resilient_car="ks_porsche_911_gt3_r_2016",
         resilient_track="spa",
         resilient_layout="gp",
+        rig_lock_path=tmp_path / "rig-session.lock",
         paths=LauncherPaths(tmp_path),
     )
 
@@ -202,6 +203,8 @@ def test_resilient_command_routes_source_and_frozen_launcher(tmp_path: Path) -> 
         "spa",
         "--layout",
         "gp",
+        "--rig-lock-path",
+        str(tmp_path / "rig-session.lock"),
         "--rig-lock-timeout",
         "1.0",
     ]

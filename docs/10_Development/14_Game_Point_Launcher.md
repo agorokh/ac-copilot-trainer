@@ -98,9 +98,12 @@ of `AC_COPILOT_VOICE_BANK` as proof that audio initialized.
 The **Stable AC** button is the operator-facing entrypoint for the resilient
 Content Manager launch loop from issue #624. It retries the stochastic CSP
 session-init livelock, proves continuous render progress for the configured
-stability window, and then leaves the successful session live for the driver.
+stability window plus the CSP Car0 drivability handshake, and then leaves the
+successful session live for the driver.
 The `AC Session` row reports `unconfigured`, `idle`, `running`, or the child
-exit code; progress is appended to `logs/resilient-launch.log`.
+exit code; progress is appended to `logs/resilient-launch.log`. A failed child
+makes the aggregate status non-green and the summary says **Press Stable AC**,
+so the recovery action is unambiguous without conflating it with sidecar START.
 
 Configure the non-secret car and circuit identifiers in the per-user
 `settings.json`:
@@ -118,7 +121,9 @@ Environment variables `AC_COPILOT_RESILIENT_CAR`,
 values. For a one-shot command, use `--resilient-launch` with optional
 `--resilient-car`, `--resilient-track`, and `--resilient-layout` CLI overrides.
 The packaged executable dispatches the same child workflow, and closing Game
-Point does not terminate a stable operator session.
+Point does not terminate a stable operator session. Embedders and tests that set
+`GamePointConfig.rig_lock_path` pass that exact ownership path to the child; the
+production launcher continues to use the machine-wide Harness LocalAppData path.
 
 ## SimHub auto-start
 

@@ -255,7 +255,15 @@ class GamePointStatus:
 
     @property
     def ok(self) -> bool:
-        rows = (self.sidecar, self.screen, self.voice, self.simhub, self.tablet, *self.checks)
+        rows = (
+            self.sidecar,
+            self.screen,
+            self.voice,
+            self.simhub,
+            self.tablet,
+            self.resilient,
+            *self.checks,
+        )
         return all(row.ok for row in rows if row.state not in {"skipped", "absent"})
 
     def to_dict(self) -> dict[str, object]:
@@ -340,6 +348,8 @@ class GamePointSupervisor:
             args.extend(["--track", self.config.resilient_track])
         if self.config.resilient_layout:
             args.extend(["--layout", self.config.resilient_layout])
+        if self.config.rig_lock_path is not None:
+            args.extend(["--rig-lock-path", str(self.config.rig_lock_path)])
         # Game Point polls the authoritative lock byte for status. Give a real launcher enough
         # grace to outwait that microsecond probe rather than false-failing on a zero-timeout race.
         args.extend(["--rig-lock-timeout", "1.0"])

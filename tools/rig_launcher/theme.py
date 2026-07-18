@@ -163,6 +163,12 @@ def summary_for(status: GamePointStatus, port: int = 8765) -> tuple[str, str, st
         return ("PRESS START", "brake", blocker.detail or blocker.state)
     if (status.sidecar.state or "").strip().lower() in _SIDECAR_DOWN_STATES:
         return ("PRESS START", "brake", f"nothing on port {port} yet")
+    if not status.resilient.ok:
+        return (
+            "PRESS STABLE AC",
+            "brake",
+            status.resilient.detail or status.resilient.state or "AC session needs attention",
+        )
     rows = (status.sidecar, status.screen, status.voice, status.simhub, status.tablet)
     caption = next(
         (row.detail or row.state for row in rows if not row.ok and (row.detail or row.state)),

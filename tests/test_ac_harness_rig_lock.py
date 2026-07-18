@@ -136,6 +136,33 @@ def test_contended_lock_without_metadata_returns_unknown_owner(tmp_path: Path) -
         lock.release()
 
 
+def test_status_probe_reports_unknown_when_lock_file_cannot_be_opened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "rig-session.lock"
+
+    def fail_open(_path: Path, *_args, **_kwargs):
+        raise PermissionError("sharing violation")
+
+    monkeypatch.setattr(Path, "open", fail_open)
+
+    assert read_rig_session_owner(path) == {"cwd": "unknown"}
+
+
+def test_status_probe_reports_unknown_on_non_contention_os_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "rig-session.lock"
+    path.write_bytes(b"\0")
+
+    def fail_lock(_lock_file) -> None:
+        raise OSError(errno.EIO, "device failure")
+
+    monkeypatch.setattr(RigSessionLock, "_lock_byte", fail_lock)
+
+    assert read_rig_session_owner(path) == {"cwd": "unknown"}
+
+
 def test_lock_validates_timing(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="timeout"):
         RigSessionLock(tmp_path / "lock", owner=_owner(1), timeout=-1)
