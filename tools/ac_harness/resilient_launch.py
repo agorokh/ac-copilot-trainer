@@ -201,6 +201,44 @@ def _sample_now(
     return Sample(t=time.monotonic(), gfx_packet=read_packet(), acs_alive=acs_alive())
 
 
+def _process_running(image: str) -> bool:  # pragma: no cover - rig-only
+    import subprocess
+
+    out = subprocess.run(
+        ["tasklist", "/fi", f"imagename eq {image}"], capture_output=True, text=True
+    ).stdout.lower()
+    return image.lower() in out
+
+
+def _ensure_cm_running(  # pragma: no cover - rig-only
+    cm_exe: Path, *, timeout: float = 45.0, settle: float = 8.0, poll: float = 1.0
+) -> bool:
+    """Make sure Content Manager is up **before** an ``acmanager://`` URL is sent to it.
+
+    CM processes the quick-drive URL through **single-instance IPC** — it is handed to an
+    ALREADY-RUNNING CM. Firing the URL at a cold/absent CM merely opens CM's window and never
+    starts a session, so every attempt reports ``never_live`` and ``acs.exe`` never appears.
+
+    This bit us for real: the ``never_live`` cold-restart path killed CM and then immediately sent
+    the next URL into the void, so the launcher spent whole runs shooting at nothing. Any A/B
+    measured through that state is invalid, not just slow.
+    """
+    import subprocess
+
+    if _process_running("Content Manager.exe"):
+        return True
+    _log("Content Manager not running — starting it before sending the quick-drive URL")
+    subprocess.Popen([str(cm_exe)])
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _process_running("Content Manager.exe"):
+            time.sleep(settle)  # let CM finish initializing its IPC listener
+            return True
+        time.sleep(poll)
+    _log("WARNING: Content Manager did not start; the launch URL will not be honored")
+    return False
+
+
 def _ensure_acs_gone(  # pragma: no cover - rig-only
     acs_alive: Callable[[], bool], *, timeout: float = 15.0, poll: float = 1.0
 ) -> None:
@@ -317,6 +355,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         # reports a spurious never_live — observed live as an alternating froze/never_live cadence
         # that halved the effective attempt rate.
         _ensure_acs_gone(acs_alive)
+        # The quick-drive URL is IPC to a RUNNING CM — a dead CM silently swallows every launch.
+        _ensure_cm_running(ContentManagerActuator.DEFAULT_CM_EXE)
         _minimize_foreground_window()  # CM's auto-start race loses if a window holds foreground
         actuator.launch() if attempt == 1 else actuator.relaunch()
         verdict = _watch_live(
