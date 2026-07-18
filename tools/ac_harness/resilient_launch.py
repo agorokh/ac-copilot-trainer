@@ -201,6 +201,28 @@ def _sample_now(
     return Sample(t=time.monotonic(), gfx_packet=read_packet(), acs_alive=acs_alive())
 
 
+def _ensure_acs_gone(  # pragma: no cover - rig-only
+    acs_alive: Callable[[], bool], *, timeout: float = 15.0, poll: float = 1.0
+) -> None:
+    """Kill any surviving ``acs.exe`` and wait until it has really left the process table.
+
+    A wedged sim keeps its window and shared-memory section, so launching on top of it makes
+    Content Manager's next start fail to reach LIVE. ``taskkill`` returning is not sufficient —
+    the process can linger — so poll (bounded) until it is actually gone.
+    """
+    import subprocess
+
+    if not acs_alive():
+        return
+    subprocess.run(["taskkill", "/im", "acs.exe", "/f"], capture_output=True)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not acs_alive():
+            return
+        time.sleep(poll)
+    _log("WARNING: acs.exe still present after kill+wait; launching anyway")
+
+
 def _watch_live(  # pragma: no cover - rig-only
     read_packet: Callable[[], int | None],
     acs_alive: Callable[[], bool],
@@ -290,6 +312,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
     def watch_attempt(attempt: int) -> LaunchVerdict:
         _log(f"attempt {attempt}/{args.max_attempts}: launching via Content Manager")
+        # A wedged acs from the previous attempt must be GONE before relaunching. Without this
+        # the next attempt burns its whole go-live budget failing to start against the corpse and
+        # reports a spurious never_live — observed live as an alternating froze/never_live cadence
+        # that halved the effective attempt rate.
+        _ensure_acs_gone(acs_alive)
         _minimize_foreground_window()  # CM's auto-start race loses if a window holds foreground
         actuator.launch() if attempt == 1 else actuator.relaunch()
         verdict = _watch_live(
