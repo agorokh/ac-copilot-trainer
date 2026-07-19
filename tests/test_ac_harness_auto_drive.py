@@ -1219,7 +1219,42 @@ def test_track_mismatch_telemetry_cleanup_uses_remaining_relaunch_budget():
     assert report.ok is True
     assert launches == [True, True]
     assert report.cleanup_holds == (retained,)
+    assert report.notes and "read-only telemetry mapping retained" in report.notes[0]
     assert landed.closed is True
+
+
+def test_retained_cleanup_note_survives_later_hijack_early_exit():
+    from tools.ac_harness.custom_ai import ControllerTelemetryCloseError
+
+    class TelemetryOnlyFailure(FakeController):
+        def close(self) -> None:
+            raise ControllerTelemetryCloseError("CarControls already released")
+
+    hijack_results: list[FakeController | RuntimeError] = [
+        TelemetryOnlyFailure(),
+        RuntimeError("second hijack failed"),
+    ]
+
+    def hijack(_config):  # noqa: ANN001, ANN202
+        result = hijack_results.pop(0)
+        if isinstance(result, RuntimeError):
+            raise result
+        return result
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", max_launches=2),
+            launch=_ok_launch,
+            hijack=hijack,
+            drive=lambda *_args: pytest.fail("must not drive"),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda _config: ("spa", "ks_porsche_911_gt3_r_2016"),
+        )
+    )
+
+    assert report.stage == "hijack"
+    assert report.notes and "read-only telemetry mapping retained" in report.notes[0]
+    assert len(report.cleanup_holds) == 1
 
 
 def test_persistent_close_failure_without_safety_proof_aborts_and_retains_controller():

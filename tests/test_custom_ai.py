@@ -304,6 +304,9 @@ def test_mapped_section_close_surfaces_handle_failure(monkeypatch, section_type)
     if section_type is _WritableSection:
         with pytest.raises(SharedMemoryUnavailable, match="view is no longer available"):
             section.write(b"safety brake")
+    else:
+        with pytest.raises(SharedMemoryUnavailable, match="view is no longer available"):
+            section.read(1)
 
 
 def test_controller_close_attempts_controls_after_car_data_failure() -> None:

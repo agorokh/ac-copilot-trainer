@@ -886,6 +886,8 @@ async def run_auto_drive(
     telemetry_cleanup_holds: list[Controller] = []
 
     def finish(report: AutoDriveReport) -> AutoDriveReport:
+        prior_notes = [note for note in launch_notes if note not in report.notes]
+        report.notes[:0] = prior_notes
         for retained_controller in telemetry_cleanup_holds:
             report.retain_cleanup_controller(retained_controller)
         return report

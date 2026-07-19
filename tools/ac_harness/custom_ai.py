@@ -460,6 +460,8 @@ class _ReadableSection:  # pragma: no cover - Windows ctypes view; validated on 
     def read(self, n: int) -> bytes:
         import ctypes
 
+        if self._address is None:
+            raise SharedMemoryUnavailable("readable mapping view is no longer available")
         if n > self._length:
             raise ValueError(f"read {n} > mapped {self._length} bytes")
         return ctypes.string_at(self._address, n)
