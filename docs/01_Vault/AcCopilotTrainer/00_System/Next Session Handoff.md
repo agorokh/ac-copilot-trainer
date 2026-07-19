@@ -110,10 +110,10 @@ PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) routes issue #
 CSP-init retry and stable-session handoff through the canonical Game Point launcher. Review
 hardening now covers streaming verdict semantics, LIVE/not-in-pit readiness, cross-worktree rig
 ownership, approved preset storage, Content Manager failure handling, finite CLI inputs, process
-tree cleanup, source/frozen Game Point dispatch, cancellation-aware waits, one Car0 probe per
-attempt, and nonblocking Game Point ownership status (`c1ca003`). Required checks are green, all 25
-GraphQL threads are resolved, and the enforce resolve gate is clean. The PR remains open and
-unmerged; Windows-rig proof is the remaining separate state. Detail:
+tree cleanup, source/frozen Game Point dispatch, finite lock timing, one-shot Car0 failure, and
+Stable-AC-specific release signaling (`c33c6b7`). Required checks are green, all 25 GraphQL threads
+are resolved, and the enforce resolve gate is clean. The PR remains open and unmerged; Windows-rig
+proof is the remaining separate state. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].
 
 ## Delivered (2026-07-16) — #531 Part F MERGED (PR #618, 12 review rounds)

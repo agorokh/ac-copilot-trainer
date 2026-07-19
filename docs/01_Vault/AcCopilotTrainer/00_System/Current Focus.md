@@ -45,11 +45,11 @@ relates_to:
 **Review-resolved (2026-07-18):** PR
 [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
 operator session launcher through Game Point, with a machine-wide lock held across the live session.
-Final code commit `c1ca003` makes Release AC cancel every bounded cleanup/Content Manager wait,
-limits the temporary Car0 handshake to one probe per attempt, and keeps rig-lock I/O outside Game
-Point's process mutex. Required checks are green, all 25 review threads are resolved, and the
-enforce resolve gate is clean. The PR remains open and unmerged; Windows-rig verification is still
-pending. Detail:
+Final code commit `c33c6b7` adds finite timing enforcement at the shared rig-lock boundary,
+immediate failed-Car0 attempt termination, and durable Stable AC ownership metadata so **Release
+AC** refuses unrelated harness owners. Required checks are green, all 25 review threads are
+resolved, and the enforce resolve gate is clean. The PR remains open and unmerged; Windows-rig
+verification is still pending. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].
 
 **Active (2026-07-16, autonomous run):** [#531](https://github.com/agorokh/ac-copilot-trainer/issues/531)
