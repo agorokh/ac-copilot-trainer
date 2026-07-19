@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `a594e0d`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `8be4e0e`; the following vault SAVE records its handoff.
 All required GitHub checks are green, all 25 GraphQL review threads are resolved, and the
 enforce-mode resolve gate reports no substantive findings. The PR remains open and unmerged;
 Windows-rig proof remains a separate future state.
@@ -93,12 +93,16 @@ Windows-rig proof remains a separate future state.
   releasing the lock. Invalid configured CM paths are surfaced as unconfigured and never fall back
   silently to the default install. The blocking Car0 handshake checks Release AC throughout and
   closes its controller on cancellation; a post-LIVE Car0 miss is a failed rendered attempt, not a
-  never-live result that can trigger an unrelated CM cold restart.
+  never-live result that can trigger an unrelated CM cold restart. Windows
+  `UnmapViewOfFile`/`CloseHandle` failures now propagate through the existing fatal Car0-cleanup
+  path, while controller cleanup still attempts the control section after a read-section failure.
+  Game Point reports explicit non-resilient lock owners as `busy_other_session`, not a healthy
+  Stable AC session.
 
 ## Verification contract
 
-Final code commit `a594e0d` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3156 passed`, `77 skipped`, `86.75%` coverage), followed by the mandatory reviewer cooldown and
+Final code commit `8be4e0e` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3162 passed`, `77 skipped`, `86.75%` coverage), followed by the mandatory reviewer cooldown and
 current-head re-audit. GitHub reports the build, canonical-docs, and conformance checks green;
 GraphQL reports 25/25 threads resolved; the enforce-mode resolve gate is clean. `/resolve-pr` did
 not merge the PR or substitute macOS tests for the pending Windows-rig proof.
