@@ -327,9 +327,10 @@ def _make_process_liveness_probe(
 
         list_process_ids = strict_process_ids
     absent_run = 0
+    seen_present = False
 
     def is_alive() -> bool:
-        nonlocal absent_run
+        nonlocal absent_run, seen_present
         try:
             found = list_process_ids(image)
         except OSError as exc:
@@ -338,7 +339,12 @@ def _make_process_liveness_probe(
             return True
         if found:
             absent_run = 0
+            seen_present = True
             return True
+        if not seen_present:
+            # Before the process has appeared, absence is ordinary launch startup—not a synthetic
+            # one-sample "alive" grace that classify() could mistake for an early process exit.
+            return False
         absent_run += 1
         return absent_run < absent_confirmations
 
