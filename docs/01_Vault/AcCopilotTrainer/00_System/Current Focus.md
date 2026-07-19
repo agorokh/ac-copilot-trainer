@@ -45,7 +45,7 @@ relates_to:
 **Review-resolved (2026-07-18):** PR
 [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
 operator session launcher through Game Point, with a machine-wide lock held across the live session.
-Final code commit `f6ec10c` adds finite timing enforcement at the shared rig-lock boundary,
+Final code commit `a54db2c` adds finite timing enforcement at the shared rig-lock boundary,
 immediate failed-Car0 attempt termination, mandatory AC teardown before a pre-stability release can
 escape the unsafe-hold loop, early configured-CM path validation, and durable Stable AC ownership
 metadata. **Release AC** refuses known unrelated harness owners while preserving the recovery
@@ -118,11 +118,14 @@ against the settings-file value.
 Telemetry-only close failures no longer consume the remaining native hijack-probe or cached-session
 relaunch budget. The rig CLI retains those read-only owners in a scoped hold list, and composed
 auto-drive transfers every retained owner into its final structured report across all return paths.
+Every structured return also preserves accumulated cleanup notes, including an earlier retained
+telemetry-mapping warning when a later hijack attempt exits early. Readable mappings now match the
+writable guard by rejecting an already-unmapped null view with `SharedMemoryUnavailable`.
 Fatal cleanup ignores the release sentinel before taskkill, sleeps between retries, and has a
 bounded hold before atomic process exit. Content Manager must be positively enumerated and survive
 its startup settle before the Quick Drive URL is issued. The existing `resilient_layout` settings
 template key now has an explicit regression assertion.
-Local repository parity is green at `3221 passed`, `77 skipped`, and `86.75%` coverage. The updated
+Local repository parity is green at `3222 passed`, `77 skipped`, and `86.77%` coverage. The updated
 head still requires its mandatory reviewer cooldown and exhaustive GitHub current-head audit. The
 PR remains open and unmerged; Windows-rig verification is still pending. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].
