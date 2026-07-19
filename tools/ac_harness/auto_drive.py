@@ -563,6 +563,14 @@ class ControllerCleanupAbort(SystemExit):
     def __init__(self, error: ControllerCleanupError, controller: Controller) -> None:
         super().__init__(f"fatal controller cleanup failure: {error}")
         self.controller = controller
+        self.cleanup_hold: ExitStack | None = None
+
+
+# A fatal CLI abort must retain both the controller mapping AND the machine-wide rig-lock file
+# descriptor until process teardown. The ordinary ExitStack callback is intentionally detached in
+# _main and held here so even a programmatic caller that catches SystemExit cannot let a peer
+# acquire the rig while this process still owns a live Custom-AI mapping.
+_FATAL_CLEANUP_HOLDS: list[ExitStack] = []
 
 
 CleanupFailureFn = Callable[[Controller, ControllerCleanupError], bool]
@@ -616,10 +624,11 @@ def _close_controller(
     try:
         controller.close()
     except (OSError, SharedMemoryUnavailable) as exc:
-        raise ControllerCleanupError(
+        final_error = ControllerCleanupError(
             f"{error}; AC safety shutdown confirmed, but final local release failed: "
             f"{type(exc).__name__}: {exc}"
-        ) from exc
+        )
+        raise ControllerCleanupAbort(final_error, controller) from exc
     raise ControllerCleanupError(f"{error}; AC safety shutdown confirmed")
 
 
@@ -655,13 +664,18 @@ def rig_force_safe_after_cleanup_failure(
         return False
     _log(f"controller cleanup safety action: {kill_detail}")
     deadline = time.monotonic() + 3.0
+    absent_run = 0
     while True:
         try:
             remaining = running_process_ids("acs.exe", strict=True)
         except OSError as exc:
             _log(f"FATAL cannot confirm acs.exe safety shutdown: {exc}")
             return False
-        if not remaining:
+        if remaining:
+            absent_run = 0
+        else:
+            absent_run += 1
+        if absent_run >= 2:
             _log("controller cleanup safety action confirmed: acs.exe is absent")
             return True
         if time.monotonic() >= deadline:
@@ -4511,8 +4525,19 @@ def _main_impl(
 def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only CLI wiring
     # ExitStack makes the machine-global rig lock exception-safe for both the CLI and programmatic
     # callers, including failures during HUD/archive/report capture after the drive has stopped.
-    with ExitStack() as cleanup:
+    # ControllerCleanupAbort is the one deliberate exception: the process still owns a native
+    # control mapping, so detach and retain the stack instead of running rig_lock.release. The OS
+    # releases both mapping and byte lock together when this fatal CLI process exits.
+    cleanup = ExitStack()
+    try:
         return _main_impl(argv, cleanup)
+    except ControllerCleanupAbort as exc:
+        hold = cleanup.pop_all()
+        exc.cleanup_hold = hold
+        _FATAL_CLEANUP_HOLDS.append(hold)
+        raise
+    finally:
+        cleanup.close()
 
 
 if __name__ == "__main__":  # pragma: no cover - rig-only CLI wiring
@@ -4522,4 +4547,12 @@ if __name__ == "__main__":  # pragma: no cover - rig-only CLI wiring
     _repo_root = str(_Path(__file__).resolve().parents[2])
     if _repo_root not in sys.path:
         sys.path.insert(0, _repo_root)
-    raise SystemExit(_main())
+    try:
+        _exit_code = _main()
+    except ControllerCleanupAbort as _cleanup_abort:
+        # Do not run normal interpreter unwinding after a fatal native cleanup failure: the OS
+        # closes the retained Custom-AI mapping and rig-lock descriptor together at process exit,
+        # leaving no window where a peer can acquire the rig while this process still controls it.
+        print(f"auto-drive: {_cleanup_abort}", file=sys.stderr, flush=True)
+        os._exit(1)
+    raise SystemExit(_exit_code)

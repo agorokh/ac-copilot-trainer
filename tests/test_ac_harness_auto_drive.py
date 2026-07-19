@@ -120,6 +120,18 @@ class FailingCloseController(FakeController):
         raise OSError("native close failed")
 
 
+class CloseAfterSafetyController(FakeController):
+    def __init__(self) -> None:
+        super().__init__()
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+        if self.close_calls <= 3:
+            raise OSError("native close failed")
+        self.closed = True
+
+
 class _Clock:
     def __init__(self) -> None:
         self.now = 0.0
@@ -297,7 +309,7 @@ def test_happy_path_window_mode_passes_and_tears_down():
 
 
 def test_final_controller_close_failure_is_structured_cleanup_failure():
-    ctrl = FailingCloseController()
+    ctrl = CloseAfterSafetyController()
 
     report = asyncio.run(
         run_auto_drive(
@@ -337,18 +349,7 @@ def test_controller_close_retries_only_the_retained_native_resources():
 
 
 def test_safety_shutdown_after_persistent_close_failure_still_fails_the_run():
-    class CloseAfterShutdownController(FakeController):
-        def __init__(self) -> None:
-            super().__init__()
-            self.close_calls = 0
-
-        def close(self) -> None:
-            self.close_calls += 1
-            if self.close_calls <= 3:
-                raise OSError("native close failed")
-            self.closed = True
-
-    ctrl = CloseAfterShutdownController()
+    ctrl = CloseAfterSafetyController()
     report = asyncio.run(
         run_auto_drive(
             _cfg(),
@@ -379,13 +380,16 @@ def test_rig_cleanup_safety_brakes_kills_and_confirms_absence(monkeypatch):
             self.controls.append((args, kwargs))
 
     ctrl = RecordingController()
-    snapshots = iter((frozenset({42}), frozenset()))
+    snapshots = iter((frozenset({42}), frozenset(), frozenset()))
+    process_snapshots: list[frozenset[int]] = []
+
+    def process_ids(image, *, strict):  # noqa: ANN001, ANN201
+        snapshot = next(snapshots)
+        process_snapshots.append(snapshot)
+        return snapshot
+
     monkeypatch.setattr(entry_launcher, "_taskkill", lambda image, runner: "killed acs.exe")
-    monkeypatch.setattr(
-        entry_launcher,
-        "running_process_ids",
-        lambda image, *, strict: next(snapshots),
-    )
+    monkeypatch.setattr(entry_launcher, "running_process_ids", process_ids)
     monkeypatch.setattr("tools.ac_harness.auto_drive.time.sleep", lambda seconds: None)
 
     safe = rig_force_safe_after_cleanup_failure(
@@ -395,10 +399,11 @@ def test_rig_cleanup_safety_brakes_kills_and_confirms_absence(monkeypatch):
 
     assert safe is True
     assert ctrl.controls == [((0.0, 1.0, 0.0), {"handbrake": 1.0})]
+    assert process_snapshots == [frozenset({42}), frozenset(), frozenset()]
 
 
 def test_controller_close_failure_preserves_prior_pipeline_failure():
-    ctrl = FailingCloseController()
+    ctrl = CloseAfterSafetyController()
 
     async def broken_tap(*args, **kwargs):  # noqa: ANN002, ANN003
         raise RuntimeError("tap failed first")
@@ -1080,7 +1085,7 @@ def test_run_auto_drive_fails_fast_on_track_mismatch():
 
 
 def test_track_mismatch_close_failure_preserves_primary_mismatch():
-    ctrl = FailingCloseController()
+    ctrl = CloseAfterSafetyController()
 
     report = asyncio.run(
         run_auto_drive(
@@ -2023,7 +2028,7 @@ def test_rig_hijack_normalizes_probe_close_failure(monkeypatch):
     monkeypatch.setattr(ad.time, "monotonic", clock.monotonic)
     monkeypatch.setattr(ad.time, "sleep", clock.sleep)
 
-    with pytest.raises(ControllerCleanupError, match="hijack probe 1/1 cleanup"):
+    with pytest.raises(ControllerCleanupAbort, match="hijack probe 1/1 cleanup"):
         rig_hijack(_cfg(hijack_attempts=1, hijack_probe_seconds=0.5))
 
 
@@ -2307,6 +2312,30 @@ def test_main_releases_registered_rig_cleanup_on_exception(monkeypatch):
     monkeypatch.setattr(auto_drive_module, "_main_impl", fail_after_lock)
     with pytest.raises(RuntimeError, match="evidence capture failed"):
         auto_drive_module._main([])
+    assert released == [True]
+
+
+def test_main_retains_registered_rig_cleanup_on_controller_abort(monkeypatch):
+    import tools.ac_harness.auto_drive as auto_drive_module
+
+    released: list[bool] = []
+    ctrl = FailingCloseController()
+    abort = ControllerCleanupAbort(ControllerCleanupError("unsafe mapping"), ctrl)
+
+    def abort_after_lock(_argv, cleanup):
+        cleanup.callback(released.append, True)
+        raise abort
+
+    monkeypatch.setattr(auto_drive_module, "_main_impl", abort_after_lock)
+    with pytest.raises(ControllerCleanupAbort) as caught:
+        auto_drive_module._main([])
+
+    assert released == []
+    assert caught.value.controller is ctrl
+    assert caught.value.cleanup_hold is not None
+    hold = auto_drive_module._FATAL_CLEANUP_HOLDS.pop()
+    assert hold is caught.value.cleanup_hold
+    hold.close()
     assert released == [True]
 
 
