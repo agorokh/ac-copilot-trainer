@@ -102,7 +102,13 @@ class RigSessionLock:
         if self._file is not None:
             raise RuntimeError("rig session lock is already acquired")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        lock_file = self.path.open("a+b")
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0)
+        descriptor = os.open(self.path, flags, 0o600)
+        try:
+            lock_file = os.fdopen(descriptor, "r+b")
+        except BaseException:
+            os.close(descriptor)
+            raise
         if lock_file.seek(0, os.SEEK_END) == 0:
             lock_file.write(b"\0")
             lock_file.flush()
@@ -123,7 +129,22 @@ class RigSessionLock:
                 time.sleep(min(self.poll_interval, max(0.0, deadline - time.monotonic())))
 
         self._file = lock_file
-        self._write_owner()
+        try:
+            self._write_owner()
+        except BaseException as exc:
+            # Metadata publication is part of acquisition. Roll back the authoritative byte lock
+            # on every abnormal exit so one disk/sharing error cannot wedge the physical rig until
+            # this process happens to terminate.
+            self._file = None
+            try:
+                self._unlock_byte(lock_file)
+            except OSError as cleanup_exc:
+                exc.add_note(f"additional rig-lock rollback failure: {cleanup_exc}")
+            try:
+                lock_file.close()
+            except OSError as cleanup_exc:
+                exc.add_note(f"additional rig-lock close failure: {cleanup_exc}")
+            raise
 
     def set_phase(self, phase: str) -> None:
         """Publish a durable owner phase while retaining the authoritative byte lock."""
@@ -139,9 +160,18 @@ class RigSessionLock:
         if lock_file is None:
             raise RuntimeError("rig session lock is not acquired")
         payload = json.dumps(self.owner.to_dict(), sort_keys=True).encode("utf-8")
+        lock_file.seek(0, os.SEEK_END)
+        previous_size = lock_file.tell()
+        payload_end = 1 + len(payload)
+        replacement = payload + (b" " * max(0, previous_size - payload_end))
         lock_file.seek(1)
-        lock_file.truncate()
-        lock_file.write(payload)
+        lock_file.write(replacement)
+        lock_file.flush()
+        # Truncate only after the replacement payload has been written. Status probes read bytes
+        # after the separately locked byte zero. Padding a shorter replacement with JSON-legal
+        # whitespace keeps the pre-truncate record valid too, so readers see old or new metadata,
+        # never an empty/partial JSON record while set_phase("stable") publishes the handoff.
+        lock_file.truncate(payload_end)
         lock_file.flush()
 
     def release(self) -> None:

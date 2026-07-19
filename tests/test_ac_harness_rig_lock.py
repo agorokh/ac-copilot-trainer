@@ -118,6 +118,28 @@ def test_owner_phase_update_is_visible_while_lock_remains_held(tmp_path: Path) -
         assert read_rig_session_owner(path)["phase"] == "stable"  # type: ignore[index]
 
 
+def test_owner_write_failure_rolls_back_machine_wide_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "rig-session.lock"
+    failing_lock = RigSessionLock(path, owner=_owner(1))
+    original_write = RigSessionLock._write_owner
+
+    def fail_first_owner_write(lock: RigSessionLock) -> None:
+        if lock is failing_lock:
+            raise OSError("disk full")
+        original_write(lock)
+
+    monkeypatch.setattr(RigSessionLock, "_write_owner", fail_first_owner_write)
+
+    with pytest.raises(OSError, match="disk full"):
+        failing_lock.acquire()
+
+    assert failing_lock._file is None
+    with RigSessionLock(path, owner=_owner(2)):
+        assert read_rig_session_owner(path)["pid"] == 2  # type: ignore[index]
+
+
 def test_stale_metadata_with_reused_live_pid_is_not_authoritative(tmp_path: Path) -> None:
     path = tmp_path / "rig-session.lock"
     stale = _owner(os.getpid()).to_dict()

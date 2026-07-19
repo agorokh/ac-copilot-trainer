@@ -18,6 +18,7 @@ from tools.rig_launcher.supervisor import (
     GamePointConfig,
     GamePointStatus,
     GamePointSupervisor,
+    ProbeResult,
     build_pyinstaller_args,
     default_paths,
     render_status_lines,
@@ -26,6 +27,12 @@ from tools.rig_launcher.supervisor import (
 #: GUI auto-refresh cadence (ms). Drives the periodic re-poll so the tablet tunnel keeper
 #: and every status probe self-heal while the launcher window is open (issue #567).
 _GUI_POLL_INTERVAL_MS = 5000
+_RESILIENT_START_ACCEPTED_STATES = frozenset({"starting", "stabilizing", "running"})
+
+
+def _resilient_start_accepted(result: ProbeResult) -> bool:
+    """Whether a Stable AC request was accepted, independent of readiness/aggregate health."""
+    return result.ok or result.state.strip().lower() in _RESILIENT_START_ACCEPTED_STATES
 
 
 def _open_path(path: Path) -> None:
@@ -250,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
             result = supervisor.start_resilient_session()
             detail = f" - {result.detail}" if result.detail else ""
             print(f"{result.name}: {result.state}{detail}")
-            return 0 if result.ok else 1
+            return 0 if _resilient_start_accepted(result) else 1
         if args.self_test:
             # The self-test owns the sidecar it starts: stop it as soon as the checks finish so
             # a release-gate run never leaves an orphaned sidecar for the next launch to adopt
@@ -374,7 +381,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
 
     def start_resilient() -> None:
         result = supervisor.start_resilient_session()
-        if not result.ok:
+        if not _resilient_start_accepted(result):
             from tkinter import messagebox
 
             messagebox.showwarning(

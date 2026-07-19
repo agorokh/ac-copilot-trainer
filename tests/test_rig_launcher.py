@@ -15,6 +15,7 @@ import tools.rig_launcher.supervisor as supervisor_module
 from tools.ac_harness.rig_lock import RigSessionLock, RigSessionOwner
 from tools.rig_launcher.app import (
     _open_path,
+    _resilient_start_accepted,
     config_from_args,
     main,
     render_setup_diff_lines,
@@ -305,6 +306,20 @@ def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> N
     assert calls[0][1]["cwd"] == str(_repo_root())
     assert (tmp_path / "logs" / "resilient-launch.log").exists()
     assert proc.terminated is False
+
+
+@pytest.mark.parametrize("state", ["starting", "stabilizing", "running"])
+def test_resilient_start_acceptance_is_distinct_from_readiness(state: str) -> None:
+    result = ProbeResult("ac_session", False, state, "phase is not stable yet")
+
+    assert _resilient_start_accepted(result) is True
+
+
+@pytest.mark.parametrize("state", ["unconfigured", "start_failed", "busy_other_session", "unknown"])
+def test_resilient_start_hard_failures_are_not_accepted(state: str) -> None:
+    result = ProbeResult("ac_session", False, state, "hard failure")
+
+    assert _resilient_start_accepted(result) is False
 
 
 def test_start_resilient_session_requires_car_and_track(tmp_path: Path) -> None:
