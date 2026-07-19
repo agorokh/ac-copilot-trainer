@@ -111,7 +111,7 @@ CSP-init retry and stable-session handoff through the canonical Game Point launc
 hardening now covers streaming verdict semantics, LIVE/not-in-pit readiness, cross-worktree rig
 ownership, approved preset storage, Content Manager failure handling, finite CLI inputs, process
 tree cleanup, source/frozen Game Point dispatch, finite lock timing, one-shot Car0 failure, and
-Stable-AC-specific release signaling (`58eba0f`). The final review rounds also validate the
+Stable-AC-specific release signaling (`e5a13f0`). The final review rounds also validate the
 configured Content Manager path before process shortcuts, require one real AC teardown attempt
 before pre-stability release can escape a subsequent unsafe hold, reject known unrelated release
 targets, and preserve recovery for unknown/legacy lock metadata. Bounded waits now clamp to their
@@ -166,15 +166,16 @@ handles/views three times before their persistent-failure AC safety boundary. Th
 distinguishes a retained CarControls mapping from a read-only telemetry mapping: only control
 ownership can trigger taskkill. Emergency braking uses the verified brake/steer fields and keeps
 the unverified handbrake offset zero. Resilient launch retains telemetry-only mappings and retries
-them during subsequent watcher samples instead of dropping their owning references; a standalone
-probe carries its retained controller on the cleanup exception. Auto-drive similarly carries the
-controller on its atomic-abort exception, allowing process teardown to release the mapping and lock
-together without killing a healthy AC session. Fatal cleanup
+them throughout stabilization and the stable operator hold instead of dropping their owning
+references; a standalone probe carries its retained controller on the cleanup exception.
+Auto-drive returns a structured cleanup report whose non-serialized hold keeps the controller
+reachable for process-lifetime cleanup, without entering the retained-controls AC-kill or
+atomic-abort path. Fatal cleanup
 suppresses release before taskkill, backs off, and exits after a bounded hold if enumeration stays
 unknown. Content Manager unknown state fails closed, and a newly started CM must survive the settle
 interval before the launch URL is sent. The already-present `resilient_layout` template key is
-pinned by an explicit settings-file test. Repository parity is `3214 passed`, `77 skipped`,
-`86.75%` coverage.
+pinned by an explicit settings-file test. Repository parity is `3216 passed`, `77 skipped`,
+`86.73%` coverage.
 The updated head still requires its mandatory reviewer cooldown and exhaustive GitHub current-head
 audit. The PR remains open and unmerged; Windows-rig proof is the remaining separate state. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].

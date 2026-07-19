@@ -45,7 +45,7 @@ relates_to:
 **Review-resolved (2026-07-18):** PR
 [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
 operator session launcher through Game Point, with a machine-wide lock held across the live session.
-Final code commit `58eba0f` adds finite timing enforcement at the shared rig-lock boundary,
+Final code commit `e5a13f0` adds finite timing enforcement at the shared rig-lock boundary,
 immediate failed-Car0 attempt termination, mandatory AC teardown before a pre-stability release can
 escape the unsafe-hold loop, early configured-CM path validation, and durable Stable AC ownership
 metadata. **Release AC** refuses known unrelated harness owners while preserving the recovery
@@ -103,15 +103,15 @@ ownership from a read-only telemetry mapping: only a retained control mapping ca
 safety shutdown. The emergency safety command writes verified brake/steer fields and leaves the
 explicitly unverified handbrake offset at zero.
 Telemetry-only failures no longer lose their final owning reference: resilient launch retains each
-read-only mapping and retries it on subsequent watcher samples, while standalone probes carry the
-controller on their cleanup exception. Auto-drive retains the controller on its atomic-abort
-exception so process teardown releases the remaining mapping and rig lock together, without
-terminating a healthy AC session.
+read-only mapping and retries it throughout stabilization and the stable operator hold, while
+standalone probes carry the controller on their cleanup exception. Auto-drive returns a structured
+cleanup failure whose non-serialized report hold keeps the controller reachable for process-lifetime
+cleanup, without invoking the retained-controls AC safety shutdown or atomic-abort path.
 Fatal cleanup ignores the release sentinel before taskkill, sleeps between retries, and has a
 bounded hold before atomic process exit. Content Manager must be positively enumerated and survive
 its startup settle before the Quick Drive URL is issued. The existing `resilient_layout` settings
 template key now has an explicit regression assertion.
-Local repository parity is green at `3214 passed`, `77 skipped`, and `86.75%` coverage. The updated
+Local repository parity is green at `3216 passed`, `77 skipped`, and `86.73%` coverage. The updated
 head still requires its mandatory reviewer cooldown and exhaustive GitHub current-head audit. The
 PR remains open and unmerged; Windows-rig verification is still pending. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].

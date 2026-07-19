@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `58eba0f`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `e5a13f0`; the following vault SAVE records its handoff.
 Local repository parity is green; the updated head still requires its mandatory reviewer cooldown
 and exhaustive GitHub current-head audit. The PR remains open and unmerged; Windows-rig proof
 remains a separate future state.
@@ -168,14 +168,15 @@ remains a separate future state.
   surfaced separately without destroying a healthy session. Emergency braking uses verified
   brake/steer fields and leaves the unverified handbrake offset at zero.
 - Telemetry-only cleanup failures retain a live owning reference instead of becoming unrecoverable
-  leaks. Resilient launch keeps failed read-only mappings in a retry list sampled by the watcher;
-  standalone probes preserve the controller on their cleanup exception. Auto-drive preserves its
-  controller on `ControllerCleanupAbort`, so atomic process teardown releases the mapping and rig
-  lock together without invoking the retained-controls AC safety shutdown.
+  leaks. Resilient launch keeps failed read-only mappings in a retry list sampled during
+  stabilization and the stable operator hold; standalone probes preserve the controller on their
+  cleanup exception. Auto-drive emits a structured cleanup failure whose non-serialized report hold
+  retains the controller for process-lifetime cleanup without invoking the control-retention AC
+  safety shutdown or atomic-abort path.
 
 ## Verification contract
 
-Final code commit `58eba0f` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3214 passed`, `77 skipped`, `86.75%` coverage). The mandatory reviewer cooldown and exhaustive
+Final code commit `e5a13f0` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3216 passed`, `77 skipped`, `86.73%` coverage). The mandatory reviewer cooldown and exhaustive
 current-head re-audit follow this vault snapshot. `/resolve-pr` does not merge the PR or substitute
 macOS tests for the pending Windows-rig proof.
