@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `c7e3d74`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `f6ec10c`; the following vault SAVE records its handoff.
 Local repository parity is green; the updated head still requires its mandatory reviewer cooldown
 and exhaustive GitHub current-head audit. The PR remains open and unmerged; Windows-rig proof
 remains a separate future state.
@@ -184,10 +184,14 @@ remains a separate future state.
   retained-controller fatal path: auto-drive raises `ControllerCleanupAbort`, while resilient Car0
   cleanup raises `_Car0ProbeCleanupError`. The documented `AC_COPILOT_RESILIENT_LAYOUT` environment
   override is directly covered against a conflicting settings-file value.
+- Telemetry-only cleanup faults between native hijack probes or cached-session mismatch relaunches
+  retain their read-only controller owners while continuing the remaining bounded recovery budget.
+  Rig CLI probes use an explicit scoped retention callback; composed auto-drive transfers all
+  accumulated owners into the final report on every structured return path.
 
 ## Verification contract
 
-Final code commit `c7e3d74` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3219 passed`, `77 skipped`, `86.74%` coverage). The mandatory reviewer cooldown and exhaustive
+Final code commit `f6ec10c` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3221 passed`, `77 skipped`, `86.75%` coverage). The mandatory reviewer cooldown and exhaustive
 current-head re-audit follow this vault snapshot. `/resolve-pr` does not merge the PR or substitute
 macOS tests for the pending Windows-rig proof.

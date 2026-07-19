@@ -111,7 +111,7 @@ CSP-init retry and stable-session handoff through the canonical Game Point launc
 hardening now covers streaming verdict semantics, LIVE/not-in-pit readiness, cross-worktree rig
 ownership, approved preset storage, Content Manager failure handling, finite CLI inputs, process
 tree cleanup, source/frozen Game Point dispatch, finite lock timing, one-shot Car0 failure, and
-Stable-AC-specific release signaling (`c7e3d74`). The final review rounds also validate the
+Stable-AC-specific release signaling (`f6ec10c`). The final review rounds also validate the
 configured Content Manager path before process shortcuts, require one real AC teardown attempt
 before pre-stability release can escape a subsequent unsafe hold, reject known unrelated release
 targets, and preserve recovery for unknown/legacy lock metadata. Bounded waits now clamp to their
@@ -178,11 +178,15 @@ its safety callback into the launcher-specific retained-controller fatal path. A
 the rig-lock cleanup stack across taskkill, while resilient Car0 cleanup retains its controller
 until fatal AC teardown. `AC_COPILOT_RESILIENT_LAYOUT` is directly tested as an environment
 override over settings.
+Telemetry-only failures between native hijack probes and cached-session mismatch relaunches retain
+their read-only controller owners without consuming the remaining bounded recovery budget. The rig
+CLI owns probe holds explicitly, and every composed auto-drive return transfers accumulated holds
+into the non-serialized report lifecycle.
 suppresses release before taskkill, backs off, and exits after a bounded hold if enumeration stays
 unknown. Content Manager unknown state fails closed, and a newly started CM must survive the settle
 interval before the launch URL is sent. The already-present `resilient_layout` template key is
-pinned by an explicit settings-file test. Repository parity is `3219 passed`, `77 skipped`,
-`86.74%` coverage.
+pinned by an explicit settings-file test. Repository parity is `3221 passed`, `77 skipped`,
+`86.75%` coverage.
 The updated head still requires its mandatory reviewer cooldown and exhaustive GitHub current-head
 audit. The PR remains open and unmerged; Windows-rig proof is the remaining separate state. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].
