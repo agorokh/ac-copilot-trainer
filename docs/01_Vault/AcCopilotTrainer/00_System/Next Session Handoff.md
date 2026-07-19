@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-18T21:12:57Z
+last_updated: 2026-07-19T01:50:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
   - AcCopilotTrainer/03_Investigations/issue-531-partf-pages-2026-07-16.md
@@ -111,9 +111,12 @@ CSP-init retry and stable-session handoff through the canonical Game Point launc
 hardening now covers streaming verdict semantics, LIVE/not-in-pit readiness, cross-worktree rig
 ownership, approved preset storage, Content Manager failure handling, finite CLI inputs, process
 tree cleanup, source/frozen Game Point dispatch, finite lock timing, one-shot Car0 failure, and
-Stable-AC-specific release signaling (`c33c6b7`). Required checks are green, all 25 GraphQL threads
-are resolved, and the enforce resolve gate is clean. The PR remains open and unmerged; Windows-rig
-proof is the remaining separate state. Detail:
+Stable-AC-specific release signaling (`a644000`). The final review round also validates the
+configured Content Manager path before process shortcuts, observes cancellation during the first
+rig-safety cleanup, rejects known unrelated release targets, and preserves recovery for
+unknown/legacy lock metadata. Repository parity is `3146 passed`, `77 skipped`, `86.77%` coverage.
+Required checks are green, all 25 GraphQL threads are resolved, and the enforce resolve gate is
+clean. The PR remains open and unmerged; Windows-rig proof is the remaining separate state. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].
 
 ## Delivered (2026-07-16) — #531 Part F MERGED (PR #618, 12 review rounds)

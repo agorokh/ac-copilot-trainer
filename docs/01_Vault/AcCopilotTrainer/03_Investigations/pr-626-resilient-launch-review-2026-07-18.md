@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `c33c6b7`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `a644000`; the following vault SAVE records its handoff.
 All required GitHub checks are green, all 25 GraphQL review threads are resolved, and the
 enforce-mode resolve gate reports no substantive findings. The PR remains open and unmerged;
 Windows-rig proof remains a separate future state.
@@ -80,12 +80,16 @@ Windows-rig proof remains a separate future state.
   that mutex, keeping Tk-thread START/stop actions independent of filesystem latency. Rig-lock
   timing rejects NaN/infinity at the constructor boundary. A failed one-shot Car0 handshake ends
   its attempt immediately, and durable lock metadata marks Stable AC ownership so **Release AC**
-  refuses unrelated harness owners that do not consume the sentinel.
+  refuses known unrelated harness owners that do not consume the sentinel. Unknown or legacy owner
+  metadata can still receive the recovery sentinel, preserving the operator escape hatch when
+  status inspection is uncertain. Release cancellation reaches the first rig-safety cleanup, and
+  the configured Content Manager executable is validated before any process-name shortcut or
+  launch attempt.
 
 ## Verification contract
 
-Final code commit `c33c6b7` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3144 passed`, `77 skipped`, `86.78%` coverage), followed by the mandatory reviewer cooldown and
+Final code commit `a644000` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3146 passed`, `77 skipped`, `86.77%` coverage), followed by the mandatory reviewer cooldown and
 current-head re-audit. GitHub reports the build, canonical-docs, and conformance checks green;
 GraphQL reports 25/25 threads resolved; the enforce-mode resolve gate is clean. `/resolve-pr` did
 not merge the PR or substitute macOS tests for the pending Windows-rig proof.

@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-18T21:12:57Z
+last_updated: 2026-07-19T01:50:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
   - AcCopilotTrainer/03_Investigations/issue-602-portaudio-fixed-layout-2026-07-15.md
@@ -45,11 +45,12 @@ relates_to:
 **Review-resolved (2026-07-18):** PR
 [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
 operator session launcher through Game Point, with a machine-wide lock held across the live session.
-Final code commit `c33c6b7` adds finite timing enforcement at the shared rig-lock boundary,
-immediate failed-Car0 attempt termination, and durable Stable AC ownership metadata so **Release
-AC** refuses unrelated harness owners. Required checks are green, all 25 review threads are
-resolved, and the enforce resolve gate is clean. The PR remains open and unmerged; Windows-rig
-verification is still pending. Detail:
+Final code commit `a644000` adds finite timing enforcement at the shared rig-lock boundary,
+immediate failed-Car0 attempt termination, first-cleanup release cancellation, early configured-CM
+path validation, and durable Stable AC ownership metadata. **Release AC** refuses known unrelated
+harness owners while preserving the recovery sentinel for unknown or legacy metadata. Required
+checks are green, all 25 review threads are resolved, and the enforce resolve gate is clean. The PR
+remains open and unmerged; Windows-rig verification is still pending. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].
 
 **Active (2026-07-16, autonomous run):** [#531](https://github.com/agorokh/ac-copilot-trainer/issues/531)
