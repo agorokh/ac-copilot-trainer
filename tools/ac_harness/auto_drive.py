@@ -604,9 +604,10 @@ def _close_controller(
     )
     error.__cause__ = last_error
     if not controls_retained:
-        raise ControllerCleanupError(
+        telemetry_error = ControllerCleanupError(
             f"{error}; CarControls ownership released, read-only telemetry mapping retained"
-        ) from last_error
+        )
+        raise ControllerCleanupAbort(telemetry_error, controller) from last_error
     try:
         safety_confirmed = (
             cleanup_failure(controller, error) if cleanup_failure is not None else False

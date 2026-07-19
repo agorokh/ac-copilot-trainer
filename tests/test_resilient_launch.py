@@ -30,6 +30,7 @@ from tools.ac_harness.resilient_launch import (
     _probe_car0_drivable,
     _publish_stable_phase,
     _ResettableProcessLivenessProbe,
+    _retry_telemetry_cleanup_holds,
     _run_with_safe_release,
     _sample_now,
     _wait_process_exit,
@@ -992,8 +993,41 @@ def test_car0_probe_does_not_kill_session_for_read_only_mapping_leak(capsys) -> 
         def close(self):
             raise ControllerTelemetryCloseError("CarControls already released")
 
-    assert _probe_car0_drivable(controller_factory=Controller) is True
+    retained: list[object] = []
+
+    assert (
+        _probe_car0_drivable(
+            controller_factory=Controller,
+            retain_telemetry_controller=retained.append,
+        )
+        is True
+    )
+    assert len(retained) == 1
     assert "retained a read-only telemetry mapping" in capsys.readouterr().out
+
+
+def test_retained_read_only_mapping_is_retried_until_released() -> None:
+    class Controller:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+            if self.close_calls < 5:
+                from tools.ac_harness.custom_ai import ControllerTelemetryCloseError
+
+                raise ControllerTelemetryCloseError("read mapping still busy")
+
+    controller = Controller()
+    retained: list[object] = [controller]
+
+    _retry_telemetry_cleanup_holds(retained)
+    assert retained == [controller]
+    assert controller.close_calls == 3
+
+    _retry_telemetry_cleanup_holds(retained)
+    assert retained == []
+    assert controller.close_calls == 5
 
 
 def test_ensure_cm_running_fails_before_same_named_process_probe(tmp_path, monkeypatch):

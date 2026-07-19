@@ -357,14 +357,18 @@ def test_read_only_mapping_close_failure_does_not_trigger_ac_safety_shutdown():
         def close(self) -> None:
             raise ControllerTelemetryCloseError("CarControls already released")
 
-    with pytest.raises(ControllerCleanupError, match="read-only telemetry mapping retained"):
+    with pytest.raises(
+        ControllerCleanupAbort,
+        match="read-only telemetry mapping retained",
+    ) as caught:
         _close_controller(
-            TelemetryOnlyFailure(),
+            (controller := TelemetryOnlyFailure()),
             context="test cleanup",
             cleanup_failure=lambda _controller, _error: safety_calls.append(True) or True,
         )
 
     assert safety_calls == []
+    assert caught.value.controller is controller
 
 
 def test_safety_shutdown_after_persistent_close_failure_still_fails_the_run():

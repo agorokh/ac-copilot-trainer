@@ -73,6 +73,14 @@ class _Car0ProbeCleanupError(RuntimeError):
         self.controller = controller
 
 
+class _Car0ProbeTelemetryCleanupError(RuntimeError):
+    """CarControls released, but a read-only Car data mapping must remain retained for retry."""
+
+    def __init__(self, message: str, controller: object) -> None:
+        super().__init__(message)
+        self.controller = controller
+
+
 class _Car0NotDrivable(RuntimeError):
     """The one bounded Car0 handshake completed without a drivable car."""
 
@@ -686,6 +694,7 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
     poll: float = 0.1,
     controller_factory: Callable[[], object] | None = None,
     release_requested: Callable[[], bool] | None = None,
+    retain_telemetry_controller: Callable[[object], None] | None = None,
 ) -> bool:
     """Briefly handshake CSP Car0, the established oracle for a drivable session (#466).
 
@@ -739,11 +748,38 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
                         f"could not close Car0 drivability probe: {exc}",
                         controller,
                     ) from exc
+                if retain_telemetry_controller is None:
+                    raise _Car0ProbeTelemetryCleanupError(
+                        f"Car0 probe retained a read-only telemetry mapping: {exc}",
+                        controller,
+                    ) from exc
+                retain_telemetry_controller(controller)
                 _log(
                     "WARNING: Car0 probe released control ownership but retained a read-only "
                     f"telemetry mapping after retries: {exc}"
                 )
     return drivable
+
+
+def _retry_telemetry_cleanup_holds(controllers: list[object]) -> None:
+    """Retry retained read-only controller mappings without losing their owning references."""
+    from tools.ac_harness.custom_ai import (
+        ControllerCloseRetryError,
+        close_controller_with_retries,
+    )
+
+    retained: list[object] = []
+    for controller in controllers:
+        try:
+            close_controller_with_retries(controller)  # type: ignore[arg-type]
+        except ControllerCloseRetryError as exc:
+            if exc.controls_retained:
+                raise _Car0ProbeCleanupError(
+                    f"retained telemetry cleanup regained CarControls ownership: {exc}",
+                    controller,
+                ) from exc
+            retained.append(controller)
+    controllers[:] = retained
 
 
 def _watch_live(  # pragma: no cover - rig-only
@@ -866,6 +902,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             reader.close()
 
     acs_alive = _ResettableProcessLivenessProbe("acs.exe")
+    telemetry_cleanup_holds: list[object] = []
 
     def acs_present() -> bool:
         return _strict_process_running("acs.exe")
@@ -956,11 +993,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
             def read_attempt_state() -> tuple[int | None, bool | None, bool | None]:
                 nonlocal car0_ready
+                _retry_telemetry_cleanup_holds(telemetry_cleanup_holds)
                 if release_requested():
                     raise _OperatorRelease
                 packet, entry_ready = read_state()
                 if entry_ready is True and car0_ready is None:
-                    car0_ready = _probe_car0_drivable(release_requested=release_requested)
+                    car0_ready = _probe_car0_drivable(
+                        release_requested=release_requested,
+                        retain_telemetry_controller=telemetry_cleanup_holds.append,
+                    )
                     if not car0_ready:
                         raise _Car0NotDrivable
                 return packet, entry_ready, car0_ready if entry_ready is True else None
