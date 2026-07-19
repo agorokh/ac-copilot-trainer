@@ -227,6 +227,43 @@ def classify(
     return LaunchVerdict.PENDING
 
 
+class SectionOwnershipGate:
+    """Suppress shared-memory readings until the live ``acs.exe`` is proven to own the section.
+
+    ``acpmf_graphics`` outlives its creator and stays mapped for several seconds INTO the next
+    ``acs.exe``'s lifetime (#628). Every field is stale in that window — not just ``packet_id`` but
+    ``is_live`` / ``is_in_pit`` too — so a corpse reports the session as ready before AC has even
+    started. Acting on that fired the Car0 drivability handshake against a session that did not
+    exist yet; measured on the rig, the shipped launcher failed 6/6 attempts in ~7 s each that way.
+
+    A section is proven to belong to the running process only once its packet id **advances while
+    acs.exe is alive**. Process liveness alone is insufficient, precisely because the corpse
+    survives into the new process's lifetime.
+    """
+
+    def __init__(self) -> None:
+        self._prev_packet: int | None = None
+        self._publishing = False
+
+    @property
+    def publishing(self) -> bool:
+        return self._publishing
+
+    def observe(self, *, acs_alive: bool, packet: int | None) -> bool:
+        """Record one observation; return whether readings may now be trusted."""
+        if not acs_alive:
+            # No process means every field is a corpse. Drop the baseline so the next generation
+            # is never compared against a dead one.
+            self._prev_packet = None
+            self._publishing = False
+            return False
+        if packet is not None and self._prev_packet is not None and packet > self._prev_packet:
+            self._publishing = True
+        if packet is not None:
+            self._prev_packet = packet
+        return self._publishing
+
+
 @dataclass(frozen=True)
 class LaunchReport:
     """Summary of a full retry run."""
@@ -1019,13 +1056,25 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 _log(f"attempt {attempt}: Content Manager launch failed: {exc}")
                 return LaunchVerdict.NEVER_LIVE
             car0_ready: bool | None = None
+            ownership = SectionOwnershipGate()
 
             def read_attempt_state() -> tuple[int | None, bool | None, bool | None]:
+                """Report shared memory only once THIS attempt's acs.exe is proven to own it.
+
+                Readiness stays unknown (``None``) until :class:`SectionOwnershipGate` clears it,
+                which ``classify`` already treats as "no observation" rather than evidence either
+                way. See that class for why process liveness alone is not enough.
+                """
                 nonlocal car0_ready
                 _retry_telemetry_cleanup_holds(telemetry_cleanup_holds)
                 if release_requested():
                     raise _OperatorRelease
-                packet, entry_ready = read_state()
+
+                alive = acs_present()
+                packet, entry_ready = read_state() if alive else (None, None)
+                if not ownership.observe(acs_alive=alive, packet=packet):
+                    return packet, None, None
+
                 if entry_ready is True and car0_ready is None:
                     car0_ready = _probe_car0_drivable(
                         release_requested=release_requested,

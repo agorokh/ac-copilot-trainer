@@ -16,6 +16,7 @@ import pytest
 from tools.ac_harness.resilient_launch import (
     LaunchVerdict,
     Sample,
+    SectionOwnershipGate,
     _Car0ProbeCleanupError,
     _ensure_acs_gone,
     _ensure_cm_running,
@@ -276,6 +277,49 @@ def test_pre_go_live_regression_does_not_bypass_the_go_live_timeout() -> None:
     assert classify(samples, go_live_timeout=30.0, stability_window=45.0) is (
         LaunchVerdict.NEVER_LIVE
     )
+
+
+class TestSectionOwnershipGate:
+    """#628 — readings must be suppressed until the live acs.exe is proven to own the section.
+
+    The shipped launcher failed 6/6 attempts in ~7 s each because the corpse's ``is_live`` flag
+    fired the Car0 drivability handshake before AC existed.
+    """
+
+    def test_dead_process_is_never_trusted(self) -> None:
+        gate = SectionOwnershipGate()
+        for packet in (23_000, 23_000, 23_000):
+            assert gate.observe(acs_alive=False, packet=packet) is False
+
+    def test_alive_but_still_reading_the_corpse_is_not_trusted(self) -> None:
+        """The measured case: acs is ALIVE and loading, section still pinned at the dead value."""
+        gate = SectionOwnershipGate()
+        assert gate.observe(acs_alive=False, packet=16_983) is False
+        for _ in range(3):
+            assert gate.observe(acs_alive=True, packet=16_983) is False
+
+    def test_trusted_once_the_new_stream_advances(self) -> None:
+        gate = SectionOwnershipGate()
+        gate.observe(acs_alive=False, packet=16_983)
+        gate.observe(acs_alive=True, packet=16_983)
+        # The new session publishes its own stream, starting low.
+        assert gate.observe(acs_alive=True, packet=121) is False
+        assert gate.observe(acs_alive=True, packet=140) is True
+        assert gate.publishing is True
+
+    def test_process_death_revokes_trust(self) -> None:
+        gate = SectionOwnershipGate()
+        gate.observe(acs_alive=True, packet=100)
+        assert gate.observe(acs_alive=True, packet=200) is True
+        assert gate.observe(acs_alive=False, packet=200) is False
+        # ...and the dead generation's value cannot seed the next one.
+        assert gate.observe(acs_alive=True, packet=5) is False
+
+    def test_unreadable_section_neither_grants_nor_revokes_trust(self) -> None:
+        gate = SectionOwnershipGate()
+        gate.observe(acs_alive=True, packet=100)
+        assert gate.observe(acs_alive=True, packet=200) is True
+        assert gate.observe(acs_alive=True, packet=None) is True
 
 
 def test_empty_trace_is_pending():
