@@ -65,6 +65,10 @@ class _AcsCleanupTimeout(RuntimeError):
     """A killed Assetto Corsa process remained alive past the cleanup deadline."""
 
 
+class _Car0ProbeCleanupError(RuntimeError):
+    """The temporary Custom-AI drivability mapping could not be released safely."""
+
+
 class _OperatorRelease(RuntimeError):
     """Game Point explicitly requested release of resilient rig ownership."""
 
@@ -295,7 +299,8 @@ def _ensure_cm_running(  # pragma: no cover - rig-only
     """
     import subprocess
 
-    if _process_running("Content Manager.exe"):
+    process_name = cm_exe.name
+    if _process_running(process_name):
         return True
     if not cm_exe.is_file():
         _log(f"WARNING: Content Manager executable not found: {cm_exe}")
@@ -308,7 +313,7 @@ def _ensure_cm_running(  # pragma: no cover - rig-only
         return False
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if _process_running("Content Manager.exe"):
+        if _process_running(process_name):
             time.sleep(settle)  # let CM finish initializing its IPC listener
             return True
         time.sleep(poll)
@@ -427,6 +432,9 @@ def _run_with_safe_release(
     try:
         return run()
     except _OperatorRelease:
+        # Release is only a safe "leave AC live" operation after the stability gate. During
+        # retries, a partially launched or wedged sim must be gone before ownership is dropped.
+        _make_rig_safe(acs_alive)
         raise
     except BaseException:
         _make_rig_safe(acs_alive, release_requested=release_requested)
@@ -472,8 +480,9 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
             try:
                 controller.close()  # type: ignore[attr-defined]
             except (SharedMemoryUnavailable, OSError) as exc:
-                _log(f"WARNING: could not close Car0 drivability probe: {exc}")
-                drivable = False
+                raise _Car0ProbeCleanupError(
+                    f"could not close Car0 drivability probe: {exc}"
+                ) from exc
     return drivable
 
 
@@ -670,7 +679,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         def cold_restart_cm() -> None:
             _log("two consecutive never_live — cold-restarting Content Manager (stale preset IPC)")
             actuator.restart_content_manager()
-            if not _wait_process_exit("Content Manager.exe"):
+            if not _wait_process_exit(actuator.cm_exe.name):
                 raise _ContentManagerRestartTimeout(
                     "Content Manager remained alive after the bounded shutdown wait"
                 )
@@ -686,8 +695,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 release_requested=release_requested,
             )
         except _OperatorRelease:
-            _log("Game Point explicitly released rig ownership during launch")
-            return 0
+            _log("Game Point release interrupted launch; AC was made safe before ownership release")
+            return 1
+        except _Car0ProbeCleanupError as exc:
+            _log(f"launch aborted: {exc}")
+            return 1
         except _AcsCleanupTimeout as exc:
             _log(f"launch aborted: {exc}")
             return 1

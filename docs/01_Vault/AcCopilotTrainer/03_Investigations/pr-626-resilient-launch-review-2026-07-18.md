@@ -61,7 +61,11 @@ The resolve loop is active; merge and Windows-rig proof remain separate future s
   remains synchronized with the production buttons. A stable child that later loses `acs.exe`
   without an explicit operator release exits nonzero. Portable Content Manager installs are
   configurable through the Game Point settings/environment/CLI path rather than being forced to
-  the default Program Files location.
+  the default Program Files location, including readiness and restart probes keyed to the
+  configured executable name. A pre-stability release now cleans up AC and exits nonzero before
+  dropping the lock; a Car0 probe-close failure aborts through the same rig-safety path instead of
+  constructing another controller over a leaked mapping. Unknown lock state directs the operator
+  to inspect ownership rather than offering a Stable AC action that is guaranteed to be refused.
 
 ## Verification contract
 

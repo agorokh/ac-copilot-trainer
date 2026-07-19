@@ -159,6 +159,23 @@ def test_failed_ac_session_is_visible_without_misdirecting_to_start() -> None:
     )
 
 
+def test_unknown_ac_lock_does_not_prompt_an_action_that_will_be_refused() -> None:
+    status = _status(
+        resilient=ProbeResult(
+            "ac_session",
+            False,
+            "unknown",
+            "cannot probe machine-wide rig ownership",
+        )
+    )
+
+    assert theme.summary_for(status) == (
+        "CHECK AC LOCK",
+        "brake",
+        "cannot probe machine-wide rig ownership",
+    )
+
+
 def test_launcher_buttons_are_uppercase_with_start_emphasis() -> None:
     from tools.rig_launcher import view
     from tools.rig_launcher.preview import _NOOP_ACTIONS

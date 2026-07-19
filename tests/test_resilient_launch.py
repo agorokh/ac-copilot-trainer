@@ -15,11 +15,13 @@ import pytest
 from tools.ac_harness.resilient_launch import (
     LaunchVerdict,
     Sample,
+    _Car0ProbeCleanupError,
     _ensure_acs_gone,
     _ensure_cm_running,
     _hold_rig_until_acs_gone,
     _hold_stable_session,
     _non_negative_float,
+    _OperatorRelease,
     _positive_float,
     _positive_int,
     _probe_car0_drivable,
@@ -478,6 +480,25 @@ def test_abnormal_retry_exit_makes_rig_safe_before_propagating(monkeypatch):
     assert calls == ["run", "safe"]
 
 
+def test_pre_stable_operator_release_makes_rig_safe_before_propagating(monkeypatch):
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def release() -> object:
+        calls.append(("run", {}))
+        raise _OperatorRelease
+
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch._make_rig_safe",
+        lambda _acs_alive, **kwargs: calls.append(("safe", kwargs)),
+    )
+
+    with pytest.raises(_OperatorRelease):
+        _run_with_safe_release(release, lambda: True, release_requested=lambda: True)
+
+    # The asserted release signal must not bypass cleanup before stability is proven.
+    assert calls == [("run", {}), ("safe", {})]
+
+
 def test_car0_probe_closes_controller_after_handshake(monkeypatch):
     reads = iter([None] * 12 + [{"packet_id": 1}])
     closed: list[bool] = []
@@ -518,7 +539,7 @@ def test_car0_probe_mapping_failure_is_retryable() -> None:
     assert _probe_car0_drivable(controller_factory=fail_controller) is False
 
 
-def test_car0_probe_close_failure_invalidates_drivability() -> None:
+def test_car0_probe_close_failure_aborts_before_another_probe() -> None:
     class Controller:
         def read_car_data(self):
             return {"packet_id": 1}
@@ -526,8 +547,22 @@ def test_car0_probe_close_failure_invalidates_drivability() -> None:
         def close(self):
             raise OSError("unmap failed")
 
-    assert _probe_car0_drivable(controller_factory=Controller) is False
+    with pytest.raises(_Car0ProbeCleanupError, match="could not close"):
+        _probe_car0_drivable(controller_factory=Controller)
 
 
 def test_ensure_cm_running_fails_fast_when_executable_is_missing(tmp_path):
     assert _ensure_cm_running(tmp_path / "missing.exe") is False
+
+
+def test_ensure_cm_running_probes_the_configured_image_name(tmp_path, monkeypatch):
+    images: list[str] = []
+
+    def running(image: str) -> bool:
+        images.append(image)
+        return True
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch._process_running", running)
+
+    assert _ensure_cm_running(tmp_path / "PortableCM.exe") is True
+    assert images == ["PortableCM.exe"]

@@ -164,6 +164,12 @@ def summary_for(status: GamePointStatus, port: int = 8765) -> tuple[str, str, st
     if (status.sidecar.state or "").strip().lower() in _SIDECAR_DOWN_STATES:
         return ("PRESS START", "brake", f"nothing on port {port} yet")
     if not status.resilient.ok:
+        if (status.resilient.state or "").strip().lower() == "unknown":
+            return (
+                "CHECK AC LOCK",
+                "brake",
+                status.resilient.detail or "AC ownership cannot be determined",
+            )
         return (
             "PRESS STABLE AC",
             "brake",
