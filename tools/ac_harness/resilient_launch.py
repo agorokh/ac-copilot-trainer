@@ -761,6 +761,12 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
                     "WARNING: Car0 probe released control ownership but retained a read-only "
                     f"telemetry mapping after retries: {exc}"
                 )
+            except BaseException as exc:
+                raise _Car0ProbeCleanupError(
+                    "Car0 probe cleanup was interrupted with control ownership unknown: "
+                    f"{type(exc).__name__}: {exc}",
+                    controller,
+                ) from exc
     return drivable
 
 

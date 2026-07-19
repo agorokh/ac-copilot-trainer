@@ -1333,6 +1333,7 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
                 "start_simhub": False,
                 "resilient_car": "settings-car",
                 "resilient_track": "settings-track",
+                "resilient_layout": "settings-layout",
                 "resilient_cm_exe": "settings-cm.exe",
             }
         ),
@@ -1346,6 +1347,7 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
             "AC_COPILOT_START_SIMHUB": "1",
             "AC_COPILOT_RESILIENT_CAR": "env-car",
             "AC_COPILOT_RESILIENT_TRACK": "env-track",
+            "AC_COPILOT_RESILIENT_LAYOUT": "env-layout",
             "AC_COPILOT_RESILIENT_CM_EXE": "env-cm.exe",
         },
         paths=LauncherPaths(tmp_path),
@@ -1356,6 +1358,7 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
     assert cfg.start_simhub is True
     assert cfg.resilient_car == "env-car"
     assert cfg.resilient_track == "env-track"
+    assert cfg.resilient_layout == "env-layout"
     assert cfg.resilient_cm_exe == "env-cm.exe"
 
 

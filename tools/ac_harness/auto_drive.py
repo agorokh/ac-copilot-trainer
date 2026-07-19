@@ -619,6 +619,12 @@ def _close_controller(
         last_error = exc.last_error
         failed_attempts = exc.attempts
         controls_retained = exc.controls_retained
+    except BaseException as exc:
+        interrupted_error = ControllerCleanupError(
+            f"{context}: {type(exc).__name__}: {exc} "
+            "(interrupted during controller close; control ownership unknown)"
+        )
+        raise ControllerCleanupAbort(interrupted_error, controller) from exc
     error = ControllerCleanupError(
         f"{context}: {type(last_error).__name__}: {last_error} "
         f"(failed after {failed_attempts} close attempts)"

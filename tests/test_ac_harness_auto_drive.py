@@ -437,6 +437,21 @@ def test_cleanup_interrupt_converts_to_abort_and_retains_controller():
     assert isinstance(caught.value.__cause__, KeyboardInterrupt)
 
 
+def test_close_retry_interrupt_converts_to_abort_and_retains_controller():
+    class InterruptedCloseController(FakeController):
+        def close(self) -> None:
+            raise KeyboardInterrupt
+
+    controller = InterruptedCloseController()
+
+    with pytest.raises(ControllerCleanupAbort) as caught:
+        _close_controller(controller, context="interrupted native close")
+
+    assert caught.value.controller is controller
+    assert isinstance(caught.value.__cause__, KeyboardInterrupt)
+    assert "control ownership unknown" in str(caught.value)
+
+
 def test_rig_cleanup_safety_brakes_kills_and_confirms_absence(monkeypatch):
     import tools.ac_harness.entry_launcher as entry_launcher
 

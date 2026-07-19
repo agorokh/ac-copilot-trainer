@@ -993,6 +993,21 @@ def test_car0_probe_close_failure_aborts_before_another_probe() -> None:
     assert caught.value.controller.close_calls == 3
 
 
+def test_car0_probe_close_interrupt_retains_controller_for_fatal_cleanup() -> None:
+    class Controller:
+        def read_car_data(self):
+            return {"packet_id": 1}
+
+        def close(self):
+            raise KeyboardInterrupt
+
+    with pytest.raises(_Car0ProbeCleanupError, match="control ownership unknown") as caught:
+        _probe_car0_drivable(controller_factory=Controller)
+
+    assert isinstance(caught.value.controller, Controller)
+    assert isinstance(caught.value.__cause__, KeyboardInterrupt)
+
+
 def test_car0_probe_retries_transient_close_failure() -> None:
     class Controller:
         def __init__(self) -> None:
