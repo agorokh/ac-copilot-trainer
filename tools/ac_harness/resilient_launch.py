@@ -787,6 +787,19 @@ def _non_negative_float(value: str) -> float:
     return parsed
 
 
+def _publish_stable_phase(set_phase: Callable[[str], None]) -> bool:
+    """Publish READY metadata without destroying an already-proven live session on I/O failure."""
+    try:
+        set_phase("stable")
+    except OSError as exc:
+        _log(
+            "WARNING: could not publish stable rig phase; retaining the proven live session "
+            f"under stabilizing ownership: {exc}"
+        )
+        return False
+    return True
+
+
 def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-only entrypoint
     parser = argparse.ArgumentParser(
         description="Launch AC, retry past the CSP init livelock (#619), hold a stable session"
@@ -1011,19 +1024,14 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             _make_rig_safe(acs_present, release_requested=release_requested)
             return 1
 
-        try:
-            rig_lock.set_phase("stable")
-        except OSError as exc:
-            _log(f"stable handoff aborted: could not publish rig phase: {exc}")
-            _make_rig_safe(acs_present, release_requested=release_requested)
-            return 1
+        phase_published = _publish_stable_phase(rig_lock.set_phase)
 
         # The stable session belongs to this operator-facing launcher until AC exits. Releasing
         # the cross-worktree lock immediately after the gate would let a peer harness kill the
         # human driver's live session. Ctrl-C is an explicit ownership release and leaves AC up.
         _log(
             "stable session handed to operator; holding rig ownership until AC exits "
-            "(Ctrl-C releases)"
+            f"(Ctrl-C releases; phase={'stable' if phase_published else 'stabilizing'})"
         )
         return 0 if _hold_stable_session(acs_alive, release_requested) else 1
     finally:

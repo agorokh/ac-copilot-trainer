@@ -387,6 +387,25 @@ def test_running_process_ids_native_failure_is_only_suppressed_in_best_effort_mo
         running_process_ids("acs.exe", strict=True)
 
 
+def test_running_process_ids_preserves_partial_native_snapshot_for_best_effort_callers(
+    monkeypatch,
+):
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+
+    def fail_after_match(_name: str) -> frozenset[int]:
+        raise entry_launcher._PartialProcessEnumerationError(
+            5,
+            "Process32NextW failed",
+            {42},
+        )
+
+    monkeypatch.setattr(entry_launcher, "_toolhelp_process_ids", fail_after_match)
+
+    assert running_process_ids("acs.exe") == frozenset({42})
+    with pytest.raises(OSError, match="Process32NextW failed"):
+        running_process_ids("acs.exe", strict=True)
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Toolhelp32 is Windows-only")
 def test_running_process_ids_native_snapshot_finds_current_python():
     assert os.getpid() in running_process_ids(Path(sys.executable).name)

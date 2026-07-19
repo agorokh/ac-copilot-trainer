@@ -28,6 +28,7 @@ from tools.ac_harness.resilient_launch import (
     _positive_float,
     _positive_int,
     _probe_car0_drivable,
+    _publish_stable_phase,
     _ResettableProcessLivenessProbe,
     _run_with_safe_release,
     _sample_now,
@@ -749,6 +750,20 @@ def test_stable_session_exit_without_release_is_failure() -> None:
 
 def test_stable_session_release_is_success() -> None:
     assert _hold_stable_session(lambda: True, lambda: True) is True
+
+
+def test_stable_phase_publication_failure_keeps_proven_session_available(capsys) -> None:
+    phases: list[str] = []
+
+    def fail_publish(phase: str) -> None:
+        phases.append(phase)
+        raise OSError("owner metadata unavailable")
+
+    assert _publish_stable_phase(fail_publish) is False
+    assert phases == ["stable"]
+    assert (
+        "retaining the proven live session under stabilizing ownership" in capsys.readouterr().out
+    )
 
 
 def test_abnormal_retry_exit_makes_rig_safe_before_propagating(monkeypatch):

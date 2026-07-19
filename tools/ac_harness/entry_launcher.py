@@ -243,6 +243,10 @@ def running_process_ids(
     if runner is None:
         try:
             return _toolhelp_process_ids(process_name)
+        except _PartialProcessEnumerationError as exc:
+            if strict:
+                raise
+            return exc.partial_process_ids
         except OSError:
             if strict:
                 raise
@@ -267,6 +271,19 @@ def running_process_ids(
         except ValueError:
             continue
     return frozenset(found)
+
+
+class _PartialProcessEnumerationError(OSError):
+    """A native process snapshot failed after yielding some useful matching PIDs."""
+
+    def __init__(
+        self,
+        error: int,
+        message: str,
+        partial_process_ids: set[int],
+    ) -> None:
+        super().__init__(error, message)
+        self.partial_process_ids = frozenset(partial_process_ids)
 
 
 def terminate_process_tree_confirmed_absent(
@@ -382,7 +399,11 @@ def _toolhelp_process_ids(process_name: str) -> frozenset[int]:
             if not ok:
                 error = ctypes.get_last_error()
                 if error not in (0, 18):  # ERROR_NO_MORE_FILES is normal enumeration completion.
-                    raise OSError(error, "Process32NextW failed")
+                    raise _PartialProcessEnumerationError(
+                        error,
+                        "Process32NextW failed",
+                        found,
+                    )
                 break
     finally:
         kernel32.CloseHandle(snapshot)
