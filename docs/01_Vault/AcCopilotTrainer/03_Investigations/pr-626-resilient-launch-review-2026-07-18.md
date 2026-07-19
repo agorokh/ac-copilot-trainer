@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `c3f938c`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `bd7cbe2`; the following vault SAVE records its handoff.
 All required GitHub checks are green, all 25 GraphQL review threads are resolved, and the
 enforce-mode resolve gate reports no substantive findings. The PR remains open and unmerged;
 Windows-rig proof remains a separate future state.
@@ -104,12 +104,18 @@ Windows-rig proof remains a separate future state.
   report and retains an earlier pipeline/drive failure as the primary error. The post-handshake
   timestamp plus pre-probe launch anchor prevents the Car0 wait from stretching go-live or
   shortening stability. Game Point's aggregate summary labels an unrelated owner busy instead of
-  directing the operator to a Stable AC action that ownership rules will refuse.
+  directing the operator to a Stable AC action that ownership rules will refuse. The resilient
+  owner now publishes a durable `stabilizing` phase at lock acquisition and rewrites it to `stable`
+  only after the sustained proof succeeds; both the local-child and reopened-Game-Point paths stay
+  non-green before that transition. A regressed graphics packet terminates the attempt so a
+  recycled `acs.exe` cannot inherit its predecessor's stability time. The Car0 loop reaches its
+  intended final read at the timeout boundary, and `release_unsupported` renders as busy rather
+  than suggesting a Stable AC action that the owner gate refuses.
 
 ## Verification contract
 
-Final code commit `c3f938c` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3168 passed`, `77 skipped`, `86.75%` coverage), followed by the mandatory reviewer cooldown and
+Final code commit `bd7cbe2` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3175 passed`, `77 skipped`, `86.74%` coverage), followed by the mandatory reviewer cooldown and
 current-head re-audit. GitHub reports the build, canonical-docs, and conformance checks green;
 GraphQL reports 25/25 threads resolved; the enforce-mode resolve gate is clean. `/resolve-pr` did
 not merge the PR or substitute macOS tests for the pending Windows-rig proof.

@@ -45,7 +45,7 @@ relates_to:
 **Review-resolved (2026-07-18):** PR
 [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
 operator session launcher through Game Point, with a machine-wide lock held across the live session.
-Final code commit `c3f938c` adds finite timing enforcement at the shared rig-lock boundary,
+Final code commit `bd7cbe2` adds finite timing enforcement at the shared rig-lock boundary,
 immediate failed-Car0 attempt termination, mandatory AC teardown before a pre-stability release can
 escape the unsafe-hold loop, early configured-CM path validation, and durable Stable AC ownership
 metadata. **Release AC** refuses known unrelated harness owners while preserving the recovery
@@ -61,9 +61,12 @@ view/handle teardown now has one shared lifecycle helper; auto-drive converts te
 structured `cleanup` failures without hiding an earlier run failure. Car0 readiness is timestamped
 only after its blocking handshake and measured against the pre-probe watch start, so it cannot
 stretch go-live or shorten stability. The launcher summary reports a busy unrelated owner without
-offering the refused Stable AC action. Required checks are green, all 25 review threads are
-resolved, and the enforce resolve gate is clean. The PR remains open and unmerged; Windows-rig
-verification is still pending. Detail:
+offering the refused Stable AC action. Durable lock metadata now advances from `stabilizing` to
+`stable` only after the sustained proof, so Game Point cannot report READY during retries. Packet
+regressions fail the attempt instead of inheriting stability across an `acs.exe` recycle, and the
+Car0 timeout boundary performs its intended final read. Required checks are green, all 25 review
+threads are resolved, and the enforce resolve gate is clean. The PR remains open and unmerged;
+Windows-rig verification is still pending. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].
 
 **Active (2026-07-16, autonomous run):** [#531](https://github.com/agorokh/ac-copilot-trainer/issues/531)
