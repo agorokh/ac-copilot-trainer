@@ -2364,8 +2364,7 @@ def test_main_retains_registered_rig_cleanup_on_controller_abort(monkeypatch):
     assert released == []
     assert caught.value.controller is ctrl
     assert caught.value.cleanup_hold is not None
-    hold = auto_drive_module._FATAL_CLEANUP_HOLDS.pop()
-    assert hold is caught.value.cleanup_hold
+    hold = caught.value.cleanup_hold
     hold.close()
     assert released == [True]
 

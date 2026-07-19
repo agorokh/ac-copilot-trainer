@@ -514,6 +514,7 @@ def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
     retry_cleanup: Callable[[Callable[[], bool]], bool] | None = None,
     release_requested: Callable[[], bool] | None = None,
     poll: float = 1.0,
+    allow_operator_release: bool = True,
 ) -> None:
     """Keep machine-wide ownership after cleanup fails until the unsafe sim is gone.
 
@@ -532,7 +533,7 @@ def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
         return _ensure_acs_gone(acs_alive, release_requested=release_requested)
 
     while acs_alive():
-        if release_requested is not None and release_requested():
+        if allow_operator_release and release_requested is not None and release_requested():
             _log("Game Point explicitly released unsafe rig ownership; acs.exe may still be alive")
             return
         try:
@@ -540,11 +541,20 @@ def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
                 return
             time.sleep(poll)
         except _OperatorRelease:
-            _log("Game Point explicitly released unsafe rig ownership; acs.exe may still be alive")
-            return
+            if allow_operator_release:
+                _log(
+                    "Game Point explicitly released unsafe rig ownership; "
+                    "acs.exe may still be alive"
+                )
+                return
+            _log("ignoring release during fatal controller cleanup; acs.exe must exit first")
         except KeyboardInterrupt:
-            _log("operator explicitly released unsafe rig ownership; acs.exe may still be alive")
-            return
+            if allow_operator_release:
+                _log(
+                    "operator explicitly released unsafe rig ownership; acs.exe may still be alive"
+                )
+                return
+            _log("ignoring Ctrl-C during fatal controller cleanup; acs.exe must exit first")
 
 
 def _hold_stable_session(  # pragma: no cover - rig-only
@@ -571,14 +581,28 @@ def _make_rig_safe(  # pragma: no cover - rig-only
     acs_alive: Callable[[], bool],
     *,
     release_requested: Callable[[], bool] | None = None,
+    allow_operator_release: bool = True,
 ) -> None:
     """Attempt cleanup before allowing a release to drop machine-wide ownership."""
     # A pre-stability release reaches this path with its durable sentinel still present. Do not
     # pass that callback into the first cleanup: _ensure_acs_gone would raise before taskkill and
     # let a live/wedged acs.exe outlast the rig lock. Only the subsequent unsafe-hold loop treats
     # the sentinel as the operator's explicit escape hatch after one real teardown attempt.
-    if acs_alive() and not _ensure_acs_gone(acs_alive):
-        _hold_rig_until_acs_gone(acs_alive, release_requested=release_requested)
+    if not acs_alive():
+        return
+    try:
+        safe = _ensure_acs_gone(acs_alive)
+    except (KeyboardInterrupt, _OperatorRelease):
+        if allow_operator_release:
+            raise
+        _log("ignoring operator interrupt during fatal controller cleanup")
+        safe = False
+    if not safe:
+        _hold_rig_until_acs_gone(
+            acs_alive,
+            release_requested=release_requested,
+            allow_operator_release=allow_operator_release,
+        )
 
 
 def _run_with_safe_release(
@@ -906,6 +930,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # close() retained a native CarControls mapping. Normal return would run the finally
             # block and release the machine lock first; terminate the process so Windows closes
             # mapping and lock together. The exception retains the controller until that boundary.
+            # Re-confirm AC teardown here even though _run_with_safe_release already attempted it:
+            # this fatal boundary ignores both Game Point release and Ctrl-C, and cannot make
+            # ownership available while a surviving acs.exe could inherit the stale mapping.
+            _make_rig_safe(acs_alive, allow_operator_release=False)
             os._exit(1)
         except _AcsCleanupTimeout as exc:
             _log(f"launch aborted: {exc}")

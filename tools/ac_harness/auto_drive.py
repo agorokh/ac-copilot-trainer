@@ -566,13 +566,6 @@ class ControllerCleanupAbort(SystemExit):
         self.cleanup_hold: ExitStack | None = None
 
 
-# A fatal CLI abort must retain both the controller mapping AND the machine-wide rig-lock file
-# descriptor until process teardown. The ordinary ExitStack callback is intentionally detached in
-# _main and held here so even a programmatic caller that catches SystemExit cannot let a peer
-# acquire the rig while this process still owns a live Custom-AI mapping.
-_FATAL_CLEANUP_HOLDS: list[ExitStack] = []
-
-
 CleanupFailureFn = Callable[[Controller, ControllerCleanupError], bool]
 
 
@@ -4549,7 +4542,6 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
     except ControllerCleanupAbort as exc:
         hold = cleanup.pop_all()
         exc.cleanup_hold = hold
-        _FATAL_CLEANUP_HOLDS.append(hold)
         raise
     finally:
         cleanup.close()

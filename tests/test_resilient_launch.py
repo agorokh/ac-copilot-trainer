@@ -602,6 +602,25 @@ def test_cleanup_hold_allows_only_explicit_operator_release(monkeypatch):
     _hold_rig_until_acs_gone(lambda: True, retry_cleanup=interrupt)
 
 
+def test_fatal_cleanup_hold_ignores_interrupt_until_acs_is_gone(monkeypatch):
+    cleanup_calls = iter([KeyboardInterrupt(), True])
+    alive_results = iter([True, True, False])
+
+    def cleanup(_acs_alive):
+        result = next(cleanup_calls)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", lambda _seconds: None)
+
+    _hold_rig_until_acs_gone(
+        lambda: next(alive_results),
+        retry_cleanup=cleanup,
+        allow_operator_release=False,
+    )
+
+
 def test_cleanup_hold_honors_game_point_release_signal() -> None:
     _hold_rig_until_acs_gone(
         lambda: True,
@@ -695,13 +714,15 @@ def test_make_rig_safe_attempts_cleanup_before_honoring_release(monkeypatch):
     monkeypatch.setattr("tools.ac_harness.resilient_launch._ensure_acs_gone", cleanup)
     monkeypatch.setattr(
         "tools.ac_harness.resilient_launch._hold_rig_until_acs_gone",
-        lambda _acs_alive, *, release_requested=None: held_with.append(release_requested),
+        lambda _acs_alive, *, release_requested=None, allow_operator_release=True: held_with.append(
+            (release_requested, allow_operator_release)
+        ),
     )
 
     _make_rig_safe(lambda: True, release_requested=release_requested)
 
     assert callbacks == [None]
-    assert held_with == [release_requested]
+    assert held_with == [(release_requested, True)]
 
 
 def test_car0_probe_closes_controller_after_handshake(monkeypatch):
