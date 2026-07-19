@@ -178,6 +178,39 @@ def test_unknown_ac_lock_does_not_prompt_an_action_that_will_be_refused() -> Non
     )
 
 
+@pytest.mark.parametrize(
+    ("resilient", "expected"),
+    [
+        (
+            ProbeResult("ac_session", False, "unknown", "cannot probe lock"),
+            ("CHECK AC LOCK", "brake", "cannot probe lock"),
+        ),
+        (
+            ProbeResult("ac_session", False, "busy_other_session", "auto_drive owns rig"),
+            ("AC SESSION BUSY", "brake", "auto_drive owns rig"),
+        ),
+        (
+            ProbeResult("ac_session", False, "stabilizing", "proving stability"),
+            ("STABILIZING AC", "brake", "proving stability"),
+        ),
+        (
+            ProbeResult("ac_session", False, "exited", "exit=1"),
+            ("PRESS STABLE AC", "brake", "exit=1"),
+        ),
+    ],
+)
+def test_ac_session_recovery_outranks_sidecar_down_copy(
+    resilient: ProbeResult,
+    expected: tuple[str, str, str],
+) -> None:
+    status = _status(
+        sidecar=ProbeResult("sidecar", False, "stopped", "nothing listening"),
+        resilient=resilient,
+    )
+
+    assert theme.summary_for(status) == expected
+
+
 def test_busy_non_resilient_owner_does_not_prompt_refused_stable_ac_action() -> None:
     status = _status(
         resilient=ProbeResult(

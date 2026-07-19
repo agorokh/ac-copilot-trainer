@@ -18,6 +18,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, BinaryIO
 
+MAX_OWNER_BYTES = 4096
+
 
 def default_rig_session_lock_path(*, local_app_data: str | Path | None = None) -> Path:
     """Return the cross-worktree lock path in the app's per-user data folder."""
@@ -160,10 +162,16 @@ class RigSessionLock:
         if lock_file is None:
             raise RuntimeError("rig session lock is not acquired")
         payload = json.dumps(self.owner.to_dict(), sort_keys=True).encode("utf-8")
+        if len(payload) > MAX_OWNER_BYTES:
+            raise ValueError(f"rig owner metadata exceeds {MAX_OWNER_BYTES} bytes")
         lock_file.seek(0, os.SEEK_END)
-        previous_size = lock_file.tell()
+        previous_payload_size = max(0, lock_file.tell() - 1)
         payload_end = 1 + len(payload)
-        replacement = payload + (b" " * max(0, previous_size - payload_end))
+        padding = min(
+            max(0, previous_payload_size - len(payload)),
+            MAX_OWNER_BYTES - len(payload),
+        )
+        replacement = payload + (b" " * padding)
         lock_file.seek(1)
         lock_file.write(replacement)
         lock_file.flush()
@@ -208,7 +216,10 @@ class RigSessionLock:
     def _read_owner(lock_file: BinaryIO) -> dict[str, Any] | None:
         try:
             lock_file.seek(1)
-            payload = lock_file.read().decode("utf-8").strip()
+            raw = lock_file.read(MAX_OWNER_BYTES + 1)
+            if len(raw) > MAX_OWNER_BYTES:
+                return None
+            payload = raw.decode("utf-8").strip()
             parsed = json.loads(payload) if payload else None
             return parsed if isinstance(parsed, dict) else None
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):

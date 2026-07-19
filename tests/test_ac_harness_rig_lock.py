@@ -14,6 +14,7 @@ import pytest
 
 import tools.ac_harness.rig_lock as rig_lock_module
 from tools.ac_harness.rig_lock import (
+    MAX_OWNER_BYTES,
     RigSessionBusy,
     RigSessionLock,
     RigSessionOwner,
@@ -138,6 +139,18 @@ def test_owner_write_failure_rolls_back_machine_wide_lock(
     assert failing_lock._file is None
     with RigSessionLock(path, owner=_owner(2)):
         assert read_rig_session_owner(path)["pid"] == 2  # type: ignore[index]
+
+
+def test_oversized_corrupt_owner_record_is_replaced_with_bounded_metadata(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "rig-session.lock"
+    path.write_bytes(b"\0" + (b"x" * (MAX_OWNER_BYTES * 4)))
+
+    with RigSessionLock(path, owner=_owner(7)):
+        owner = read_rig_session_owner(path)
+        assert owner is not None and owner["pid"] == 7
+        assert path.stat().st_size <= 1 + MAX_OWNER_BYTES
 
 
 def test_stale_metadata_with_reused_live_pid_is_not_authoritative(tmp_path: Path) -> None:
