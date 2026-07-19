@@ -42,6 +42,18 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
+**Delivered (2026-07-19):** PR [#629](https://github.com/agorokh/ac-copilot-trainer/pull/629) MERGED
+`c5c7b75` (issue #628 CLOSED). The merged resilient launcher (#626) was discarding **healthy** AC
+sessions as `never_live`/`froze` because the `acpmf_*` shared section outlives `acs.exe` and hands
+over into the next process's lifetime. Fixed by making section trust purely packet-based (a packet
+advances only if a live process wrote it), live-verified on the unmodified `python -m
+tools.ac_harness.resilient_launch` path — stable drivable handoffs, and a run that retried past 4
+real CSP freezes to stable on attempt 5. The underlying CSP freeze (#619/#625) is unchanged and still
+third-party; what changed is the harness can now measure and survive it. **Next:** catch a real wedge
+with `.scratch/soak.py` + `freeze_forensics.py` (freezes reproduce at ~2.7 h uptime) to settle #627
+§6.1. Follow-ups #630 (other launcher false-verdict paths) and #631 (venv-shim pid test) filed.
+Detail: [[issue-628-acpmf-corpse-classify-2026-07-19]].
+
 **Review-resolved (2026-07-18):** PR
 [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
 operator session launcher through Game Point, with a machine-wide lock held across the live session.
