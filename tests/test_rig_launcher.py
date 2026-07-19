@@ -306,13 +306,46 @@ def test_reopened_game_point_can_signal_detached_lock_owner(tmp_path: Path) -> N
         paths=LauncherPaths(tmp_path / "game-point"),
     )
     sup = GamePointSupervisor(cfg, environ={})
-    owner = RigSessionOwner(pid=os.getpid(), cwd="detached-game-point", car="car", track="track")
+    owner = RigSessionOwner(
+        pid=os.getpid(),
+        cwd="detached-game-point",
+        car="car",
+        track="track",
+        session_kind="resilient_launch",
+    )
 
     with RigSessionLock(lock_path, owner=owner):
         released = sup.release_resilient_session()
 
     assert released.state == "release_requested"
     assert (tmp_path / "rig-session.release").exists()
+
+
+def test_release_ac_refuses_unrelated_machine_wide_owner(tmp_path: Path) -> None:
+    lock_path = tmp_path / "rig-session.lock"
+    sup = GamePointSupervisor(
+        GamePointConfig(
+            resilient_car="car",
+            resilient_track="track",
+            rig_lock_path=lock_path,
+            paths=LauncherPaths(tmp_path / "game-point"),
+        ),
+        environ={},
+    )
+    owner = RigSessionOwner(
+        pid=os.getpid(),
+        cwd="auto-drive-worktree",
+        car="car",
+        track="track",
+        session_kind="auto_drive",
+    )
+
+    with RigSessionLock(lock_path, owner=owner):
+        released = sup.release_resilient_session()
+
+    assert released.ok is False
+    assert released.state == "release_unsupported"
+    assert not (tmp_path / "rig-session.release").exists()
 
 
 def test_unknown_rig_lock_status_is_visible_and_blocks_spawn(

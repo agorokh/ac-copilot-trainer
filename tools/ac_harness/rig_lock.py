@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import errno
 import json
+import math
 import os
 import sys
 import time
@@ -38,6 +39,7 @@ class RigSessionOwner:
     car: str | None = None
     track: str | None = None
     started_at: str | None = None
+    session_kind: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -46,6 +48,7 @@ class RigSessionOwner:
             "car": self.car,
             "track": self.track,
             "started_at": self.started_at,
+            "session_kind": self.session_kind,
         }
 
 
@@ -76,10 +79,10 @@ class RigSessionLock:
         timeout: float = 0.0,
         poll_interval: float = 0.1,
     ) -> None:
-        if timeout < 0:
-            raise ValueError("rig lock timeout must be >= 0")
-        if poll_interval <= 0:
-            raise ValueError("rig lock poll interval must be > 0")
+        if not math.isfinite(timeout) or timeout < 0:
+            raise ValueError("rig lock timeout must be finite and >= 0")
+        if not math.isfinite(poll_interval) or poll_interval <= 0:
+            raise ValueError("rig lock poll interval must be finite and > 0")
         self.path = Path(path)
         self.owner = owner
         self.timeout = timeout

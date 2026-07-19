@@ -69,6 +69,10 @@ class _Car0ProbeCleanupError(RuntimeError):
     """The temporary Custom-AI drivability mapping could not be released safely."""
 
 
+class _Car0NotDrivable(RuntimeError):
+    """The one bounded Car0 handshake completed without a drivable car."""
+
+
 class _OperatorRelease(RuntimeError):
     """Game Point explicitly requested release of resilient rig ownership."""
 
@@ -652,6 +656,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             car=args.car,
             track=args.track,
             started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            session_kind="resilient_launch",
         ),
         timeout=args.rig_lock_timeout,
     )
@@ -720,14 +725,19 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 packet, entry_ready = read_state()
                 if entry_ready is True and car0_ready is None:
                     car0_ready = _probe_car0_drivable()
+                    if not car0_ready:
+                        raise _Car0NotDrivable
                 return packet, entry_ready, car0_ready if entry_ready is True else None
 
-            verdict = _watch_live(
-                read_attempt_state,
-                acs_alive,
-                go_live_timeout=args.go_live_timeout,
-                stability_window=args.stability_window,
-            )
+            try:
+                verdict = _watch_live(
+                    read_attempt_state,
+                    acs_alive,
+                    go_live_timeout=args.go_live_timeout,
+                    stability_window=args.stability_window,
+                )
+            except _Car0NotDrivable:
+                verdict = LaunchVerdict.NEVER_LIVE
             _log(f"attempt {attempt}: {verdict}")
             return verdict
 

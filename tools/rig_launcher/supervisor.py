@@ -573,6 +573,13 @@ class GamePointSupervisor:
         owner = self._rig_session_owner()
         if not local_running and owner is None:
             return ProbeResult("ac_session", True, "idle", "no resilient session owns the rig")
+        if not local_running and owner.get("session_kind") != "resilient_launch":
+            return ProbeResult(
+                "ac_session",
+                False,
+                "release_unsupported",
+                "rig owner is not a Stable AC session and does not honor Release AC",
+            )
         release_path = self._rig_release_path()
         try:
             release_path.parent.mkdir(parents=True, exist_ok=True)
