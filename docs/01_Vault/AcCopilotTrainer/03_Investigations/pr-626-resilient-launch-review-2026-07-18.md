@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `b703973`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `c1ca003`; the following vault SAVE records its handoff.
 All required GitHub checks are green, all 25 GraphQL review threads are resolved, and the
 enforce-mode resolve gate reports no substantive findings. The PR remains open and unmerged;
 Windows-rig proof remains a separate future state.
@@ -72,12 +72,17 @@ Windows-rig proof remains a separate future state.
   Unknown lock state directs the operator to inspect ownership rather than offering a Stable AC
   action that is guaranteed to be refused. Release AC is also checked throughout bounded
   `acs.exe` cleanup and Content Manager startup/settle waits, then again immediately before the
-  actuator call, so an operator release cannot race into a new AC launch.
+  actuator call, so an operator release cannot race into a new AC launch. Retry attempts call
+  `launch()` after the already-completed cleanup instead of entering a second taskkill window;
+  CM-shutdown and unsafe-hold retries remain cancellation-aware. Each attempt performs at most one
+  bounded Car0 probe, so a failed handshake cannot repeatedly reassert Custom-AI control. Game
+  Point snapshots its local child under `_proc_lock` but performs machine-lock I/O after releasing
+  that mutex, keeping Tk-thread START/stop actions independent of filesystem latency.
 
 ## Verification contract
 
-Final code commit `b703973` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3140 passed`, `77 skipped`, `86.76%` coverage), followed by the mandatory reviewer cooldown and
+Final code commit `c1ca003` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3143 passed`, `77 skipped`, `86.77%` coverage), followed by the mandatory reviewer cooldown and
 current-head re-audit. GitHub reports the build, canonical-docs, and conformance checks green;
 GraphQL reports 25/25 threads resolved; the enforce-mode resolve gate is clean. `/resolve-pr` did
 not merge the PR or substitute macOS tests for the pending Windows-rig proof.
