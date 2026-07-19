@@ -118,14 +118,17 @@ Configure the non-secret car and circuit identifiers in the per-user
 {
   "resilient_car": "ks_porsche_911_gt3_r_2016",
   "resilient_track": "spa",
-  "resilient_layout": ""
+  "resilient_layout": "",
+  "resilient_cm_exe": "D:\\Portable CM\\Content Manager.exe"
 }
 ```
 
 Environment variables `AC_COPILOT_RESILIENT_CAR`,
-`AC_COPILOT_RESILIENT_TRACK`, and `AC_COPILOT_RESILIENT_LAYOUT` override those
-values. For a one-shot command, use `--resilient-launch` with optional
-`--resilient-car`, `--resilient-track`, and `--resilient-layout` CLI overrides.
+`AC_COPILOT_RESILIENT_TRACK`, `AC_COPILOT_RESILIENT_LAYOUT`, and
+`AC_COPILOT_RESILIENT_CM_EXE` override those values. Leave `resilient_cm_exe`
+blank for the standard Program Files install. For a one-shot command, use
+`--resilient-launch` with optional `--resilient-car`, `--resilient-track`,
+`--resilient-layout`, and `--resilient-cm-exe` CLI overrides.
 The packaged executable dispatches the same child workflow, and closing Game
 Point does not terminate a stable operator session. Embedders and tests that set
 `GamePointConfig.rig_lock_path` pass that exact ownership path to the child; the

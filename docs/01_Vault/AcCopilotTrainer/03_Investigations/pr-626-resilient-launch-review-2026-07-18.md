@@ -58,7 +58,10 @@ The resolve loop is active; merge and Windows-rig proof remain separate future s
   reopened. Lock-probe I/O uncertainty is visibly fail-closed (`AC Session: UNKNOWN`) rather than
   silently reported as a healthy owner. An `acs.exe` that appears and then exits before go-live
   fails immediately instead of burning the full timeout, and the developer preview action map
-  remains synchronized with the production buttons.
+  remains synchronized with the production buttons. A stable child that later loses `acs.exe`
+  without an explicit operator release exits nonzero. Portable Content Manager installs are
+  configurable through the Game Point settings/environment/CLI path rather than being forced to
+  the default Program Files location.
 
 ## Verification contract
 

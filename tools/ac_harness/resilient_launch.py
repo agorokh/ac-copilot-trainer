@@ -387,6 +387,26 @@ def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
             return
 
 
+def _hold_stable_session(  # pragma: no cover - rig-only
+    acs_alive: Callable[[], bool],
+    release_requested: Callable[[], bool],
+    *,
+    poll: float = 1.0,
+) -> bool:
+    """Hold rig ownership for a stable session and report whether release was intentional."""
+    try:
+        while acs_alive() and not release_requested():
+            time.sleep(poll)
+    except KeyboardInterrupt:
+        _log("operator released rig ownership; AC left LIVE")
+        return True
+    if release_requested():
+        _log("Game Point explicitly released rig ownership; AC left LIVE")
+        return True
+    _log("ERROR: stable AC session exited without an operator release")
+    return False
+
+
 def _make_rig_safe(  # pragma: no cover - rig-only
     acs_alive: Callable[[], bool],
     *,
@@ -511,6 +531,12 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     parser.add_argument("--track", required=True, help="track id, e.g. spa")
     parser.add_argument("--layout", default=None, help="track layout for multi-layout circuits")
     parser.add_argument(
+        "--cm-exe",
+        type=Path,
+        default=None,
+        help="Content Manager.exe path (default: standard Program Files install)",
+    )
+    parser.add_argument(
         "--stability-window", type=_positive_float, default=DEFAULT_STABILITY_WINDOW
     )
     parser.add_argument("--go-live-timeout", type=_positive_float, default=DEFAULT_GO_LIVE_TIMEOUT)
@@ -601,8 +627,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         )
         _log(f"preset -> {preset}")
 
-        # cm_exe=None -> ContentManagerActuator.DEFAULT_CM_EXE (standard install path).
-        actuator = ContentManagerActuator(preset=preset, cm_exe=None)
+        cm_exe = args.cm_exe or ContentManagerActuator.DEFAULT_CM_EXE
+        actuator = ContentManagerActuator(preset=preset, cm_exe=cm_exe)
 
         def watch_attempt(attempt: int) -> LaunchVerdict:
             if release_requested():
@@ -613,7 +639,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 raise _AcsCleanupTimeout("acs.exe remained alive after the bounded cleanup wait")
             # The quick-drive URL is IPC to a RUNNING CM. Do not spend a full attempt when its
             # executable is absent or startup failed.
-            if not _ensure_cm_running(ContentManagerActuator.DEFAULT_CM_EXE):
+            if not _ensure_cm_running(actuator.cm_exe):
                 return LaunchVerdict.NEVER_LIVE
             minimize_foreground_window()
             try:
@@ -683,14 +709,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             "stable session handed to operator; holding rig ownership until AC exits "
             "(Ctrl-C releases)"
         )
-        try:
-            while acs_alive() and not release_requested():
-                time.sleep(1.0)
-            if release_requested():
-                _log("Game Point explicitly released rig ownership; AC left LIVE")
-        except KeyboardInterrupt:
-            _log("operator released rig ownership; AC left LIVE")
-        return 0
+        return 0 if _hold_stable_session(acs_alive, release_requested) else 1
     finally:
         if preset is not None:
             try:

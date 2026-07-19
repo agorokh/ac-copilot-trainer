@@ -181,6 +181,7 @@ def test_resilient_command_routes_source_and_frozen_launcher(tmp_path: Path) -> 
         resilient_car="ks_porsche_911_gt3_r_2016",
         resilient_track="spa",
         resilient_layout="gp",
+        resilient_cm_exe=r"D:\Portable CM\Content Manager.exe",
         rig_lock_path=tmp_path / "rig-session.lock",
         paths=LauncherPaths(tmp_path),
     )
@@ -203,6 +204,8 @@ def test_resilient_command_routes_source_and_frozen_launcher(tmp_path: Path) -> 
         "spa",
         "--layout",
         "gp",
+        "--cm-exe",
+        r"D:\Portable CM\Content Manager.exe",
         "--rig-lock-path",
         str(tmp_path / "rig-session.lock"),
         "--rig-release-path",
@@ -1098,6 +1101,7 @@ def test_config_from_settings_file_supplies_non_secret_defaults(tmp_path: Path) 
                 "resilient_car": "ks_porsche_911_gt3_r_2016",
                 "resilient_track": "spa",
                 "resilient_layout": "gp",
+                "resilient_cm_exe": r"D:\Portable CM\Content Manager.exe",
                 "voice_bank": "bank",
                 "voice_tts": True,
             }
@@ -1118,6 +1122,7 @@ def test_config_from_settings_file_supplies_non_secret_defaults(tmp_path: Path) 
     assert cfg.resilient_car == "ks_porsche_911_gt3_r_2016"
     assert cfg.resilient_track == "spa"
     assert cfg.resilient_layout == "gp"
+    assert cfg.resilient_cm_exe == r"D:\Portable CM\Content Manager.exe"
     assert cfg.token is None
 
 
@@ -1130,6 +1135,7 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
                 "start_simhub": False,
                 "resilient_car": "settings-car",
                 "resilient_track": "settings-track",
+                "resilient_cm_exe": "settings-cm.exe",
             }
         ),
         encoding="utf-8",
@@ -1142,6 +1148,7 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
             "AC_COPILOT_START_SIMHUB": "1",
             "AC_COPILOT_RESILIENT_CAR": "env-car",
             "AC_COPILOT_RESILIENT_TRACK": "env-track",
+            "AC_COPILOT_RESILIENT_CM_EXE": "env-cm.exe",
         },
         paths=LauncherPaths(tmp_path),
     )
@@ -1151,6 +1158,7 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
     assert cfg.start_simhub is True
     assert cfg.resilient_car == "env-car"
     assert cfg.resilient_track == "env-track"
+    assert cfg.resilient_cm_exe == "env-cm.exe"
 
 
 def test_ensure_settings_file_writes_non_secret_template(tmp_path: Path) -> None:
@@ -1163,6 +1171,7 @@ def test_ensure_settings_file_writes_non_secret_template(tmp_path: Path) -> None
     assert payload["external_bind"] == ""
     assert payload["resilient_car"] == ""
     assert payload["resilient_track"] == ""
+    assert payload["resilient_cm_exe"] == ""
     assert "token" not in json.dumps(payload).lower()
 
 

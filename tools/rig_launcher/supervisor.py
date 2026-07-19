@@ -153,6 +153,7 @@ class GamePointConfig:
     resilient_car: str | None = None
     resilient_track: str | None = None
     resilient_layout: str | None = None
+    resilient_cm_exe: str | None = None
     #: Manage the tablet dashboard's ``adb reverse`` USB tunnel (issue #567). Opt-in
     #: (house pattern, cf. ``start_simhub``): off by default so CI / non-rig hosts never
     #: shell out to adb; the rig sets ``AC_COPILOT_MANAGE_TABLET_TUNNEL=1``.
@@ -228,6 +229,10 @@ class GamePointConfig:
             resilient_layout=_configured_text(
                 env_map.get("AC_COPILOT_RESILIENT_LAYOUT"),
                 settings.resilient_layout,
+            ),
+            resilient_cm_exe=_configured_text(
+                env_map.get("AC_COPILOT_RESILIENT_CM_EXE"),
+                settings.resilient_cm_exe,
             ),
             manage_tablet_tunnel=manage_tablet_tunnel,
             paths=resolved_paths,
@@ -348,6 +353,8 @@ class GamePointSupervisor:
             args.extend(["--track", self.config.resilient_track])
         if self.config.resilient_layout:
             args.extend(["--layout", self.config.resilient_layout])
+        if self.config.resilient_cm_exe:
+            args.extend(["--cm-exe", self.config.resilient_cm_exe])
         if self.config.rig_lock_path is not None:
             args.extend(["--rig-lock-path", str(self.config.rig_lock_path)])
         args.extend(["--rig-release-path", str(self._rig_release_path())])

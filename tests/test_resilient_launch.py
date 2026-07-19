@@ -18,6 +18,7 @@ from tools.ac_harness.resilient_launch import (
     _ensure_acs_gone,
     _ensure_cm_running,
     _hold_rig_until_acs_gone,
+    _hold_stable_session,
     _non_negative_float,
     _positive_float,
     _positive_int,
@@ -449,6 +450,14 @@ def test_cleanup_hold_honors_game_point_release_signal() -> None:
         retry_cleanup=lambda _acs_alive: pytest.fail("release must precede another cleanup"),
         release_requested=lambda: True,
     )
+
+
+def test_stable_session_exit_without_release_is_failure() -> None:
+    assert _hold_stable_session(lambda: False, lambda: False) is False
+
+
+def test_stable_session_release_is_success() -> None:
+    assert _hold_stable_session(lambda: True, lambda: True) is True
 
 
 def test_abnormal_retry_exit_makes_rig_safe_before_propagating(monkeypatch):

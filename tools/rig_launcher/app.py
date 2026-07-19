@@ -76,6 +76,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional AC track layout for the stable session.",
     )
     parser.add_argument(
+        "--resilient-cm-exe",
+        default=None,
+        help="Optional Content Manager.exe path for the stable session.",
+    )
+    parser.add_argument(
         "--build-exe",
         action="store_true",
         help="Run PyInstaller to build the windowed launcher executable.",
@@ -123,6 +128,7 @@ def config_from_args(args: argparse.Namespace) -> GamePointConfig:
         resilient_layout=args.resilient_layout
         if args.resilient_layout is not None
         else config.resilient_layout,
+        resilient_cm_exe=args.resilient_cm_exe or config.resilient_cm_exe,
         manage_tablet_tunnel=config.manage_tablet_tunnel,
         adb_path=config.adb_path,
         adb_serial=config.adb_serial,

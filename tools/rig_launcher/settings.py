@@ -30,6 +30,7 @@ class LauncherSettings:
     resilient_car: str | None = None
     resilient_track: str | None = None
     resilient_layout: str | None = None
+    resilient_cm_exe: str | None = None
 
     @classmethod
     def load(cls, path: Path) -> LauncherSettings:
@@ -53,6 +54,7 @@ class LauncherSettings:
             resilient_car=_optional_text(payload.get("resilient_car")),
             resilient_track=_optional_text(payload.get("resilient_track")),
             resilient_layout=_optional_text(payload.get("resilient_layout")),
+            resilient_cm_exe=_optional_text(payload.get("resilient_cm_exe")),
         )
 
 
@@ -139,6 +141,7 @@ def default_settings_payload() -> dict[str, object]:
         "external_bind": "",
         "reference_archive": "",
         "resilient_car": "",
+        "resilient_cm_exe": "",
         "resilient_layout": "",
         "resilient_track": "",
         "setup_store": "",
