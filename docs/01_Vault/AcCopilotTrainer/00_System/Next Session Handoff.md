@@ -111,7 +111,7 @@ CSP-init retry and stable-session handoff through the canonical Game Point launc
 hardening now covers streaming verdict semantics, LIVE/not-in-pit readiness, cross-worktree rig
 ownership, approved preset storage, Content Manager failure handling, finite CLI inputs, process
 tree cleanup, source/frozen Game Point dispatch, finite lock timing, one-shot Car0 failure, and
-Stable-AC-specific release signaling (`629e3a2`). The final review rounds also validate the
+Stable-AC-specific release signaling (`0b26821`). The final review rounds also validate the
 configured Content Manager path before process shortcuts, require one real AC teardown attempt
 before pre-stability release can escape a subsequent unsafe hold, reject known unrelated release
 targets, and preserve recovery for unknown/legacy lock metadata. Bounded waits now clamp to their
@@ -152,12 +152,14 @@ running the normal lock-release `finally`; before exit it reconfirms `acs.exe` t
 ignoring operator interrupts. Auto-drive's detached cleanup stack remains attached only to its
 fatal abort exception, avoiding a module-global resource leak. Cleanup now uses strict process
 enumeration independently from the attempt watcher; unknown AC state triggers teardown rather than
-false absence. Fatal cleanup
+false absence. Resilient launch and auto-drive share
+`entry_launcher.terminate_process_tree_confirmed_absent`, keeping taskkill, bounded strict polling,
+and consecutive absence confirmation at one safety boundary. Fatal cleanup
 suppresses release before taskkill, backs off, and exits after a bounded hold if enumeration stays
 unknown. Content Manager unknown state fails closed, and a newly started CM must survive the settle
 interval before the launch URL is sent. The already-present `resilient_layout` template key is
-pinned by an explicit settings-file test. Repository parity is `3203 passed`, `77 skipped`,
-`86.73%` coverage.
+pinned by an explicit settings-file test. Repository parity is `3205 passed`, `77 skipped`,
+`86.74%` coverage.
 Required checks are green, all GraphQL threads are resolved, and the enforce resolve gate is
 clean. The PR remains open and unmerged; Windows-rig proof is the remaining separate state. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].

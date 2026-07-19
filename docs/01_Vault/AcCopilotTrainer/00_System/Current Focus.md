@@ -45,7 +45,7 @@ relates_to:
 **Review-resolved (2026-07-18):** PR
 [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
 operator session launcher through Game Point, with a machine-wide lock held across the live session.
-Final code commit `629e3a2` adds finite timing enforcement at the shared rig-lock boundary,
+Final code commit `0b26821` adds finite timing enforcement at the shared rig-lock boundary,
 immediate failed-Car0 attempt termination, mandatory AC teardown before a pre-stability release can
 escape the unsafe-hold loop, early configured-CM path validation, and durable Stable AC ownership
 metadata. **Release AC** refuses known unrelated harness owners while preserving the recovery
@@ -86,6 +86,9 @@ operator interrupts disabled before that exit. Programmatic auto-drive abort own
 exception's detached cleanup stack rather than an unbounded module-global resource list.
 Cleanup uses a separate strict process oracle: enumeration uncertainty triggers taskkill/retry and
 cannot masquerade as prior-AC absence, while the launch watcher keeps its attempt-scoped semantics.
+Both resilient-launch cleanup and auto-drive's fatal controller-cleanup path now use the shared
+`entry_launcher.terminate_process_tree_confirmed_absent` boundary, so taskkill, strict unknown-state
+handling, bounded polling, and consecutive absence confirmation cannot drift between launchers.
 Fatal cleanup ignores the release sentinel before taskkill, sleeps between retries, and has a
 bounded hold before atomic process exit. Content Manager must be positively enumerated and survive
 its startup settle before the Quick Drive URL is issued. The existing `resilient_layout` settings
