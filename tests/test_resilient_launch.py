@@ -14,8 +14,11 @@ import subprocess
 import pytest
 
 from tools.ac_harness.resilient_launch import (
+    AttemptReadiness,
     LaunchVerdict,
     Sample,
+    SectionOwnershipGate,
+    _Car0NotDrivable,
     _Car0ProbeCleanupError,
     _ensure_acs_gone,
     _ensure_cm_running,
@@ -212,6 +215,164 @@ def test_packet_reset_during_stability_cannot_inherit_prior_session_progress() -
     samples += steady(22.0, 70.0, first_packet=2)
 
     assert classify(samples, go_live_timeout=30.0, stability_window=45.0) is LaunchVerdict.FROZE
+
+
+def test_surviving_shared_memory_corpse_does_not_fail_a_healthy_launch() -> None:
+    """#628 — a dead session's ``acpmf_*`` section outlives it and must not poison the next verdict.
+
+    Measured on the rig: after ``taskkill /IM acs.exe /F`` the graphics section is still PRESENT
+    14 s later, holding the previous session's high packet id. The next launch renders its own
+    stream from ~0. Before the fix that read as a regression and a perfectly healthy session was
+    discarded as ``never_live`` — burning every retry after the first.
+    """
+    corpse = trace([(0.0, 23_000, False), (2.0, 23_000, False), (4.0, 23_000, False)])
+    fresh = steady(6.0, 60.0, first_packet=5)
+
+    assert classify(corpse + fresh, go_live_timeout=30.0, stability_window=45.0) is (
+        LaunchVerdict.STABLE
+    )
+
+
+def test_corpse_reading_does_not_mask_a_genuinely_dead_launch() -> None:
+    """The corpse must not manufacture liveness either: no live acs means NEVER_LIVE."""
+    corpse = trace([(float(t), 23_000, False) for t in range(0, 40, 2)])
+
+    assert classify(corpse, go_live_timeout=30.0, stability_window=45.0) is (
+        LaunchVerdict.NEVER_LIVE
+    )
+
+
+def test_corpse_persisting_into_the_new_acs_lifetime_does_not_fail_the_launch() -> None:
+    """#628 — the exact trace measured on the rig, which the ``acs_alive`` guard alone misses.
+
+    The dead session's section stays mapped for ~6 s AFTER the new acs.exe starts: the process is
+    alive and loading but has not published its own stream yet, so readings in that window are
+    live-correlated *and* stale. Verbatim from ``.scratch/trial_verbose.py``::
+
+        t=0.0  acs=None   gfx=16983   <- corpse
+        t=2.0  acs=14020  gfx=16983   <- new acs ALIVE, section still the corpse
+        t=4.0  acs=14020  gfx=16983
+        t=6.0  acs=14020  gfx=16983
+        t=8.0  acs=14020  gfx=121     <- new session finally publishes
+
+    Before the fix this was ``never_live`` at t=8.0 s — a normal, healthy load discarded.
+    """
+    samples = [Sample(t=0.0, gfx_packet=16_983, acs_alive=False, entry_ready=True, drivable=True)]
+    samples += [
+        Sample(t=t, gfx_packet=16_983, acs_alive=True, entry_ready=True, drivable=True)
+        for t in (2.0, 4.0, 6.0)
+    ]
+    samples += [Sample(t=8.0, gfx_packet=121, acs_alive=True, entry_ready=True, drivable=True)]
+    samples += steady(10.0, 70.0, first_packet=200)
+
+    assert classify(samples, go_live_timeout=80.0, stability_window=45.0) is LaunchVerdict.STABLE
+
+
+def test_pre_go_live_regression_does_not_bypass_the_go_live_timeout() -> None:
+    """Rebasing before go-live must not become an infinite grace period."""
+    # A stream that keeps resetting and never advances-while-ready must still time out.
+    samples = [
+        Sample(t=float(t), gfx_packet=1_000 - t, acs_alive=True, entry_ready=False, drivable=False)
+        for t in range(0, 40, 2)
+    ]
+
+    assert classify(samples, go_live_timeout=30.0, stability_window=45.0) is (
+        LaunchVerdict.NEVER_LIVE
+    )
+
+
+class TestSectionOwnershipGate:
+    """#628 — readings are trusted only once the packet proves a LIVE writer.
+
+    The shipped launcher failed 6/6 attempts in ~7 s each because the corpse's ``is_live`` flag
+    fired the Car0 drivability handshake before AC existed. A corpse packet never advances, so the
+    gate needs nothing but the packet stream to tell a corpse from a live owner.
+    """
+
+    def test_pinned_corpse_is_never_trusted(self) -> None:
+        """A corpse holds one value forever — no advance, no trust."""
+        gate = SectionOwnershipGate()
+        for _ in range(4):
+            assert gate.observe(16_983) is False
+        assert gate.publishing is False
+
+    def test_trusted_once_the_new_stream_advances(self) -> None:
+        gate = SectionOwnershipGate()
+        # Corpse pinned, then the new session publishes its own low, ADVANCING stream.
+        gate.observe(16_983)
+        gate.observe(16_983)
+        assert gate.observe(121) is False  # regression off the corpse
+        assert gate.observe(140) is True  # first advance = proven live writer
+        assert gate.publishing is True
+
+    def test_packet_regression_revokes_trust(self) -> None:
+        """A restart fast enough that no absence was observed must still re-earn trust."""
+        gate = SectionOwnershipGate()
+        gate.observe(100)
+        assert gate.observe(200) is True
+        # Session replaced: the new stream restarts low.
+        assert gate.observe(5) is False
+        assert gate.publishing is False
+        # ...and the new generation re-earns trust on its own strictly-increasing stream.
+        assert gate.observe(9) is True
+
+    def test_unreadable_sample_neither_grants_nor_revokes_trust(self) -> None:
+        gate = SectionOwnershipGate()
+        gate.observe(100)
+        assert gate.observe(200) is True
+        assert gate.observe(None) is True  # a momentary unreadable section does not revoke
+
+
+class TestAttemptReadiness:
+    """#628 — the Car0 cache must be revoked with section ownership, not outlive it."""
+
+    @staticmethod
+    def _earn_ownership(readiness: AttemptReadiness) -> None:
+        readiness.observe(packet=100, entry_ready=False)
+        readiness.observe(packet=200, entry_ready=False)
+        assert readiness.publishing is True
+
+    def test_car0_probe_runs_once_per_attempt(self) -> None:
+        calls = []
+        readiness = AttemptReadiness(lambda: (calls.append(1), True)[1])
+        self._earn_ownership(readiness)
+
+        for packet in (300, 400, 500):
+            ready, drivable = readiness.observe(packet=packet, entry_ready=True)
+            assert (ready, drivable) == (True, True)
+        assert len(calls) == 1
+
+    def test_probe_is_not_run_before_ownership_is_earned(self) -> None:
+        calls = []
+        readiness = AttemptReadiness(lambda: (calls.append(1), True)[1])
+
+        # The corpse reports READY on a pinned packet before AC publishes — the 6/6 froze case.
+        assert readiness.observe(packet=16_983, entry_ready=True) == (None, None)
+        assert readiness.observe(packet=16_983, entry_ready=True) == (None, None)
+        assert calls == []
+
+    def test_packet_regression_revokes_the_car0_cache(self) -> None:
+        """A fast restart (packet regression) must re-run the handshake, not inherit the verdict."""
+        calls = []
+        readiness = AttemptReadiness(lambda: (calls.append(1), True)[1])
+        self._earn_ownership(readiness)
+        readiness.observe(packet=300, entry_ready=True)
+        assert readiness.car0_ready is True
+        assert len(calls) == 1
+
+        # Session replaced: the new low stream revokes trust and the cached verdict.
+        assert readiness.observe(packet=5, entry_ready=True) == (None, None)
+        assert readiness.car0_ready is None
+
+        readiness.observe(packet=9, entry_ready=True)
+        assert len(calls) == 2
+
+    def test_not_drivable_raises(self) -> None:
+        readiness = AttemptReadiness(lambda: False)
+        self._earn_ownership(readiness)
+
+        with pytest.raises(_Car0NotDrivable):
+            readiness.observe(packet=300, entry_ready=True)
 
 
 def test_empty_trace_is_pending():

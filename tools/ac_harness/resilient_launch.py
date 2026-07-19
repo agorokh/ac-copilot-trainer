@@ -166,8 +166,21 @@ def classify(
             seen_acs_alive = seen_acs_alive or sample.acs_alive
             if sample.t - t0 >= go_live_timeout:
                 return LaunchVerdict.NEVER_LIVE
-            if regressed:
-                return LaunchVerdict.NEVER_LIVE
+            # A regression BEFORE go-live is a hand-over, not a failure — there is no accumulated
+            # stability to protect yet, so it is deliberately not checked here. Measured on the
+            # rig, the previous session's acpmf_graphics section stays mapped for ~6 s INTO the new
+            # acs.exe's lifetime: the process exists and is loading but has not yet published its
+            # own stream, so the reader still sees the dead session's high packet id.
+            #
+            #   t=0.0  acs=None   gfx=16983   <- corpse
+            #   t=2.0  acs=14020  gfx=16983   <- new acs alive, section STILL the corpse
+            #   t=8.0  acs=14020  gfx=121     <- new session finally publishes
+            #
+            # Failing on that threw away a launch that was loading perfectly normally. Rebasing is
+            # implicit: ``prev_packet`` is reassigned at the end of this iteration, and a regressed
+            # sample can never also be ``advanced``. The go-live timeout above remains the only
+            # pre-live failure. The post-go-live guard is deliberately left as-is — a regression
+            # THERE really does mean a replacement session must not inherit its progress. See #628.
             if advanced and ready:
                 live_since = sample.t
         else:
@@ -197,7 +210,14 @@ def classify(
                 stall_run = 0
             if advanced and ready and sample.t - live_since >= stability_window:
                 return LaunchVerdict.STABLE
-        if sample.gfx_packet is not None:
+        # Only a reading correlated with a LIVE acs.exe may seed the comparison baseline.
+        # ``acpmf_*`` is a shared section that survives its creator: a hard kill leaves it mapped
+        # by whatever else has it open (measured on the rig: still PRESENT 14 s after taskkill),
+        # still holding the dead session's high packet id. Seeding ``prev_packet`` from that corpse
+        # makes the NEXT acs.exe — rendering its own stream from ~0 — look like a regression, and a
+        # perfectly healthy launch is thrown away as NEVER_LIVE. That is trap §7.1 of the #627
+        # brief reaching the shipped verdict logic, not just the ad-hoc probes. See #628.
+        if sample.gfx_packet is not None and sample.acs_alive:
             prev_packet = sample.gfx_packet
 
     if live_since is None:
@@ -205,6 +225,90 @@ def classify(
     # The trace ended before either terminal threshold. A short hitch is not a freeze, and an
     # advancing live session is not a never-live failure merely because its window is unfinished.
     return LaunchVerdict.PENDING
+
+
+class SectionOwnershipGate:
+    """Trust shared-memory readings only once the render packet proves a LIVE writer owns them.
+
+    ``acpmf_graphics`` outlives its creator and stays mapped for several seconds INTO the next
+    ``acs.exe``'s lifetime (#628). Every field is stale in that window — not just ``packet_id`` but
+    ``is_live`` / ``is_in_pit`` too — so a corpse reports the session as ready before AC has even
+    started. Acting on that fired the Car0 drivability handshake against a session that did not
+    exist yet; measured on the rig, the shipped launcher failed 6/6 attempts in ~7 s each that way.
+
+    The load-bearing insight: **a packet id can only advance if a live process wrote it.** A corpse
+    is a frozen snapshot; it never advances on its own. So packet advancement is itself the proof
+    of a live owner — no separate process-liveness probe is needed, and earlier revisions that
+    consulted one only introduced strict-vs-debounced disagreement (a raw enumeration miss wrongly
+    revoking trust on a healthy session). This gate consults ONLY the packet stream:
+
+    * an **advance** proves a live writer  -> trust the section;
+    * a **regression** is a new generation (``classify`` treats a post-go-live regression the same
+      way) -> revoke, so a fast restart re-earns trust and ``AttemptReadiness`` re-runs the Car0
+      handshake rather than inheriting the dead generation's verdict.
+
+    Real process death is handled where it belongs — ``classify`` ends the attempt on the debounced
+    ``Sample.acs_alive`` — so this gate never needs to observe liveness directly.
+    """
+
+    def __init__(self) -> None:
+        self._prev_packet: int | None = None
+        self._publishing = False
+
+    @property
+    def publishing(self) -> bool:
+        return self._publishing
+
+    def observe(self, packet: int | None) -> bool:
+        """Record one packet observation; return whether readings may now be trusted."""
+        if packet is not None and self._prev_packet is not None:
+            if packet > self._prev_packet:
+                self._publishing = True
+            elif packet < self._prev_packet:
+                self._publishing = False
+        if packet is not None:
+            self._prev_packet = packet
+        return self._publishing
+
+
+class AttemptReadiness:
+    """Per-attempt readiness: section ownership plus the one-shot Car0 handshake.
+
+    These two pieces of state are coupled and must be revoked together. The Car0 result is cached
+    for the attempt so the (expensive, blocking) handshake runs once, but that cache is only valid
+    for the generation it was probed against: if acs.exe dies and restarts inside one attempt, a
+    stale ``True`` would let a brand-new session skip the handshake and be treated as drivable.
+    Keeping the cache next to the gate that revokes ownership makes that invariant enforceable
+    instead of a comment.
+    """
+
+    def __init__(self, probe: Callable[[], bool]) -> None:
+        self._gate = SectionOwnershipGate()
+        self._probe = probe
+        self.car0_ready: bool | None = None
+
+    @property
+    def publishing(self) -> bool:
+        return self._gate.publishing
+
+    def observe(
+        self, *, packet: int | None, entry_ready: bool | None
+    ) -> tuple[bool | None, bool | None]:
+        """Return ``(entry_ready, drivable)`` for this sample, or ``(None, None)`` if unproven.
+
+        Raises :class:`_Car0NotDrivable` when the handshake runs and the car is not drivable.
+        """
+        if not self._gate.observe(packet):
+            # Ownership has not been earned yet, or it was revoked by a packet regression (a new
+            # generation). Either way a later generation must re-run the handshake rather than
+            # inherit this one's verdict.
+            self.car0_ready = None
+            return None, None
+        if entry_ready is True and self.car0_ready is None:
+            self.car0_ready = self._probe()
+            if not self.car0_ready:
+                raise _Car0NotDrivable
+        return entry_ready, (self.car0_ready if entry_ready is True else None)
 
 
 @dataclass(frozen=True)
@@ -998,22 +1102,30 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             except (OSError, EntryLaunchUnsupported) as exc:
                 _log(f"attempt {attempt}: Content Manager launch failed: {exc}")
                 return LaunchVerdict.NEVER_LIVE
-            car0_ready: bool | None = None
+            readiness = AttemptReadiness(
+                lambda: _probe_car0_drivable(
+                    release_requested=release_requested,
+                    retain_telemetry_controller=telemetry_cleanup_holds.append,
+                )
+            )
 
             def read_attempt_state() -> tuple[int | None, bool | None, bool | None]:
-                nonlocal car0_ready
+                """Report shared memory; trust readiness only once the packet proves a live owner.
+
+                No process-liveness probe is consulted here on purpose (see
+                :class:`SectionOwnershipGate`): a corpse's fields — including ``is_live`` — are
+                trusted only after the render packet ADVANCES, which only a live process can do.
+                ``read_state`` already degrades a shared-memory failure to ``(None, None)``, which
+                ``classify`` treats as "no observation"; process death is ended by ``classify`` via
+                the debounced ``Sample.acs_alive``.
+                """
                 _retry_telemetry_cleanup_holds(telemetry_cleanup_holds)
                 if release_requested():
                     raise _OperatorRelease
+
                 packet, entry_ready = read_state()
-                if entry_ready is True and car0_ready is None:
-                    car0_ready = _probe_car0_drivable(
-                        release_requested=release_requested,
-                        retain_telemetry_controller=telemetry_cleanup_holds.append,
-                    )
-                    if not car0_ready:
-                        raise _Car0NotDrivable
-                return packet, entry_ready, car0_ready if entry_ready is True else None
+                ready, drivable = readiness.observe(packet=packet, entry_ready=entry_ready)
+                return packet, ready, drivable
 
             try:
                 verdict = _watch_live(

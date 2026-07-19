@@ -236,13 +236,55 @@ def test_status_probe_reports_unknown_when_lock_file_cannot_be_opened(
 def test_status_probe_reports_unknown_on_non_contention_os_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """POSIX branch: a non-contention lock error is reported as an unknown owner.
+
+    The platform must be pinned. ``read_rig_session_owner`` only calls ``_lock_byte`` on POSIX —
+    on win32 it uses a contend-only byte read instead — so without this the patched ``_lock_byte``
+    is never reached on a Windows host, the read succeeds, and the probe returns ``None``. That
+    made this test pass in CI and fail permanently on the Windows rig, where it blocked
+    ``make ci-fast``. Pinned the same way as
+    ``test_windows_status_probe_never_acquires_the_exclusive_byte`` pins win32.
+    """
     path = tmp_path / "rig-session.lock"
     path.write_bytes(b"\0")
 
     def fail_lock(_lock_file) -> None:
         raise OSError(errno.EIO, "device failure")
 
+    monkeypatch.setattr(rig_lock_module.sys, "platform", "linux")
     monkeypatch.setattr(RigSessionLock, "_lock_byte", fail_lock)
+
+    assert read_rig_session_owner(path) == {"cwd": "unknown"}
+
+
+def test_windows_status_probe_reports_unknown_on_non_contention_read_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """win32 branch of the same contract: a non-contention read error is an unknown owner.
+
+    The POSIX test above cannot cover this path because win32 never calls ``_lock_byte``.
+    """
+    path = tmp_path / "rig-session.lock"
+    path.write_bytes(b"\0")
+
+    monkeypatch.setattr(rig_lock_module.sys, "platform", "win32")
+    monkeypatch.setattr(RigSessionLock, "_is_lock_contention", staticmethod(lambda _exc: False))
+
+    real_open = Path.open
+
+    def open_with_failing_read(self: Path, *args: object, **kwargs: object) -> object:
+        handle = real_open(self, *args, **kwargs)
+
+        class _FailingRead:
+            def __getattr__(self, name: str) -> object:
+                return getattr(handle, name)
+
+            def read(self, *_a: object, **_k: object) -> bytes:
+                raise OSError(errno.EIO, "device failure")
+
+        return _FailingRead()
+
+    monkeypatch.setattr(Path, "open", open_with_failing_read)
 
     assert read_rig_session_owner(path) == {"cwd": "unknown"}
 
