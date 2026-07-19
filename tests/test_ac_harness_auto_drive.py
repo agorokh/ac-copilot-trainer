@@ -420,6 +420,23 @@ def test_safety_shutdown_after_persistent_close_failure_still_fails_the_run():
     assert ctrl.close_calls == 4
 
 
+def test_cleanup_interrupt_converts_to_abort_and_retains_controller():
+    ctrl = FailingCloseController()
+
+    def interrupted_safety(_controller, _error) -> bool:
+        raise KeyboardInterrupt
+
+    with pytest.raises(ControllerCleanupAbort) as caught:
+        _close_controller(
+            ctrl,
+            context="interrupted safety cleanup",
+            cleanup_failure=interrupted_safety,
+        )
+
+    assert caught.value.controller is ctrl
+    assert isinstance(caught.value.__cause__, KeyboardInterrupt)
+
+
 def test_rig_cleanup_safety_brakes_kills_and_confirms_absence(monkeypatch):
     import tools.ac_harness.entry_launcher as entry_launcher
 

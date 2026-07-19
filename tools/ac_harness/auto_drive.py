@@ -633,7 +633,9 @@ def _close_controller(
         safety_confirmed = (
             cleanup_failure(controller, error) if cleanup_failure is not None else False
         )
-    except Exception as exc:  # noqa: BLE001 - retain controller when the safety action itself fails
+    except ControllerCleanupAbort:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - interrupts must retain controller and rig lock
         error.add_note(f"cleanup safety action failed: {type(exc).__name__}: {exc}")
         raise ControllerCleanupAbort(error, controller) from exc
     if not safety_confirmed:
