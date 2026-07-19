@@ -432,6 +432,8 @@ class _WritableSection:  # pragma: no cover - Windows ctypes view; validated on 
     def write(self, data: bytes) -> None:
         import ctypes
 
+        if self._address is None:
+            raise SharedMemoryUnavailable("writable mapping view is no longer available")
         if len(data) > self._length:
             raise ValueError(f"write {len(data)} > mapped {self._length} bytes")
         ctypes.memmove(self._address, data, len(data))

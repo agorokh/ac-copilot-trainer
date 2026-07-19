@@ -55,6 +55,7 @@ from tools.ac_harness.custom_ai import (
     close_controller_with_retries,
     parse_car_data,
 )
+from tools.ac_harness.shared_memory import SharedMemoryUnavailable
 
 
 # --------------------------------------------------------------------------- helpers
@@ -300,6 +301,9 @@ def test_mapped_section_close_surfaces_handle_failure(monkeypatch, section_type)
 
     assert section._address is None
     assert section._handle == 11
+    if section_type is _WritableSection:
+        with pytest.raises(SharedMemoryUnavailable, match="view is no longer available"):
+            section.write(b"safety brake")
 
 
 def test_controller_close_attempts_controls_after_car_data_failure() -> None:
