@@ -17,6 +17,7 @@ import struct
 
 import pytest
 
+import tools.ac_harness.custom_ai as custom_ai
 from tools.ac_harness.custom_ai import (
     CAR_DATA_MIN_BYTES,
     CONTROLS_BUFFER_BYTES,
@@ -44,7 +45,10 @@ from tools.ac_harness.custom_ai import (
     TELEPORT_TO_PITS,
     CarControls,
     CarData,
+    CustomAIController,
     SimState,
+    _ReadableSection,
+    _WritableSection,
     car_controls_name,
     car_data_name,
     parse_car_data,
@@ -256,3 +260,63 @@ def test_section_name_rejects_negative_car_index():
             car_controls_name(bad)
         with pytest.raises(ValueError, match="car_index"):
             car_data_name(bad)
+
+
+@pytest.mark.parametrize("section_type", [_WritableSection, _ReadableSection])
+def test_mapped_section_close_surfaces_unmap_failure(monkeypatch, section_type):
+    class Kernel32:
+        def UnmapViewOfFile(self, _address) -> bool:
+            return False
+
+        def CloseHandle(self, _handle) -> bool:
+            return True
+
+    monkeypatch.setattr(custom_ai, "_kernel32", Kernel32)
+    section = section_type(handle=11, address=22, length=64)
+
+    with pytest.raises(OSError, match="UnmapViewOfFile failed"):
+        section.close()
+
+    assert section._address == 22
+    assert section._handle is None
+
+
+@pytest.mark.parametrize("section_type", [_WritableSection, _ReadableSection])
+def test_mapped_section_close_surfaces_handle_failure(monkeypatch, section_type):
+    class Kernel32:
+        def UnmapViewOfFile(self, _address) -> bool:
+            return True
+
+        def CloseHandle(self, _handle) -> bool:
+            return False
+
+    monkeypatch.setattr(custom_ai, "_kernel32", Kernel32)
+    section = section_type(handle=11, address=22, length=64)
+
+    with pytest.raises(OSError, match="CloseHandle failed"):
+        section.close()
+
+    assert section._address is None
+    assert section._handle == 11
+
+
+def test_controller_close_attempts_controls_after_car_data_failure() -> None:
+    closed: list[str] = []
+
+    class FailingCarData:
+        def close(self) -> None:
+            closed.append("car_data")
+            raise OSError("car-data close failed")
+
+    class Controls:
+        def close(self) -> None:
+            closed.append("controls")
+
+    controller = object.__new__(CustomAIController)
+    controller._car_data = FailingCarData()
+    controller._controls = Controls()
+
+    with pytest.raises(OSError, match="car-data close failed"):
+        controller.close()
+
+    assert closed == ["car_data", "controls"]

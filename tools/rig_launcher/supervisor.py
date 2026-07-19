@@ -680,6 +680,14 @@ class GamePointSupervisor:
                 "unknown",
                 "rig lock status unavailable; refusing Stable AC until the lock can be probed",
             )
+        session_kind = owner.get("session_kind")
+        if session_kind not in (None, "", "resilient_launch"):
+            return ProbeResult(
+                "ac_session",
+                False,
+                "busy_other_session",
+                f"rig owned by session_kind={session_kind}; Stable AC was not started",
+            )
         detail = " ".join(
             f"{key}={owner[key]}"
             for key in ("pid", "car", "track", "started_at")

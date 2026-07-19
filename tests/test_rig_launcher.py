@@ -387,6 +387,39 @@ def test_release_ac_refuses_unrelated_machine_wide_owner(tmp_path: Path) -> None
     assert not (tmp_path / "rig-session.release").exists()
 
 
+def test_non_resilient_owner_is_busy_not_healthy_stable_ac(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spawned: list[bool] = []
+    sup = GamePointSupervisor(
+        GamePointConfig(
+            resilient_car="car",
+            resilient_track="track",
+            paths=LauncherPaths(tmp_path / "game-point"),
+        ),
+        environ={},
+        popen=lambda *_args, **_kwargs: spawned.append(True),
+    )
+    monkeypatch.setattr(
+        sup,
+        "_rig_session_owner",
+        lambda: {
+            "pid": 123,
+            "cwd": "auto-drive-worktree",
+            "session_kind": "auto_drive",
+        },
+    )
+
+    status = sup._resilient_process_status()
+    started = sup.start_resilient_session()
+
+    assert status.ok is False
+    assert status.state == "busy_other_session"
+    assert "session_kind=auto_drive" in status.detail
+    assert started == status
+    assert spawned == []
+
+
 def test_release_ac_signals_unknown_lock_owner_for_no_console_recovery(
     tmp_path: Path, monkeypatch
 ) -> None:

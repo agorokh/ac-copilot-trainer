@@ -357,15 +357,29 @@ class _WritableSection:  # pragma: no cover - Windows ctypes view; validated on 
         ctypes.memmove(self._address, data, len(data))
 
     def close(self) -> None:
+        import ctypes
+
         if self._address is None and self._handle is None:
             return
         kernel32 = _kernel32()
+        errors: list[str] = []
         if self._address is not None:
-            kernel32.UnmapViewOfFile(self._address)
-            self._address = None
+            if kernel32.UnmapViewOfFile(self._address):
+                self._address = None
+            else:
+                errors.append(
+                    "UnmapViewOfFile failed: "
+                    f"WinError {getattr(ctypes, 'get_last_error', lambda: 0)()}"
+                )
         if self._handle is not None:
-            kernel32.CloseHandle(self._handle)
-            self._handle = None
+            if kernel32.CloseHandle(self._handle):
+                self._handle = None
+            else:
+                errors.append(
+                    f"CloseHandle failed: WinError {getattr(ctypes, 'get_last_error', lambda: 0)()}"
+                )
+        if errors:
+            raise OSError("; ".join(errors))
 
 
 class _ReadableSection:  # pragma: no cover - Windows ctypes view; validated on the rig
@@ -384,15 +398,29 @@ class _ReadableSection:  # pragma: no cover - Windows ctypes view; validated on 
         return ctypes.string_at(self._address, n)
 
     def close(self) -> None:
+        import ctypes
+
         if self._address is None and self._handle is None:
             return
         kernel32 = _kernel32()
+        errors: list[str] = []
         if self._address is not None:
-            kernel32.UnmapViewOfFile(self._address)
-            self._address = None
+            if kernel32.UnmapViewOfFile(self._address):
+                self._address = None
+            else:
+                errors.append(
+                    "UnmapViewOfFile failed: "
+                    f"WinError {getattr(ctypes, 'get_last_error', lambda: 0)()}"
+                )
         if self._handle is not None:
-            kernel32.CloseHandle(self._handle)
-            self._handle = None
+            if kernel32.CloseHandle(self._handle):
+                self._handle = None
+            else:
+                errors.append(
+                    f"CloseHandle failed: WinError {getattr(ctypes, 'get_last_error', lambda: 0)()}"
+                )
+        if errors:
+            raise OSError("; ".join(errors))
 
 
 def _create_writable_section(name: str, length: int) -> _WritableSection:  # pragma: no cover - rig
@@ -550,10 +578,23 @@ class CustomAIController:  # pragma: no cover - Windows/rig-only; validated agai
 
     def close(self) -> None:
         """Release both sections — releasing ``CarControls<N>`` hands the car back to AC."""
+        errors: list[BaseException] = []
         if self._car_data is not None:
-            self._car_data.close()
-            self._car_data = None
-        self._controls.close()
+            try:
+                self._car_data.close()
+            except BaseException as exc:
+                errors.append(exc)
+            else:
+                self._car_data = None
+        try:
+            self._controls.close()
+        except BaseException as exc:
+            errors.append(exc)
+        if errors:
+            primary = errors[0]
+            for secondary in errors[1:]:
+                primary.add_note(f"additional close failure: {secondary}")
+            raise primary
 
     def __enter__(self) -> CustomAIController:
         return self
