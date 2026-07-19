@@ -45,7 +45,7 @@ relates_to:
 **Review-resolved (2026-07-18):** PR
 [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
 operator session launcher through Game Point, with a machine-wide lock held across the live session.
-Final code commit `8be4e0e` adds finite timing enforcement at the shared rig-lock boundary,
+Final code commit `c3f938c` adds finite timing enforcement at the shared rig-lock boundary,
 immediate failed-Car0 attempt termination, mandatory AC teardown before a pre-stability release can
 escape the unsafe-hold loop, early configured-CM path validation, and durable Stable AC ownership
 metadata. **Release AC** refuses known unrelated harness owners while preserving the recovery
@@ -56,9 +56,14 @@ two confirmed absence snapshots before releasing ownership, and blocks invalid c
 without default-install fallback. Car0 probing now observes Release AC throughout, and a post-LIVE
 handshake miss cannot advance the stale-CM restart streak. Windows mapping-close failures are fatal
 and cleanup still attempts CarControls release after a read-section error; explicit non-resilient
-lock owners are visible as non-green `busy_other_session` rather than healthy Stable AC. Required
-checks are green, all 25 review threads are resolved, and the enforce resolve gate is clean. The PR
-remains open and unmerged; Windows-rig verification is still pending. Detail:
+lock owners are visible as non-green `busy_other_session` rather than healthy Stable AC. Mapped
+view/handle teardown now has one shared lifecycle helper; auto-drive converts teardown faults into
+structured `cleanup` failures without hiding an earlier run failure. Car0 readiness is timestamped
+only after its blocking handshake and measured against the pre-probe watch start, so it cannot
+stretch go-live or shorten stability. The launcher summary reports a busy unrelated owner without
+offering the refused Stable AC action. Required checks are green, all 25 review threads are
+resolved, and the enforce resolve gate is clean. The PR remains open and unmerged; Windows-rig
+verification is still pending. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].
 
 **Active (2026-07-16, autonomous run):** [#531](https://github.com/agorokh/ac-copilot-trainer/issues/531)

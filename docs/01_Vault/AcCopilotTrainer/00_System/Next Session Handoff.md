@@ -111,7 +111,7 @@ CSP-init retry and stable-session handoff through the canonical Game Point launc
 hardening now covers streaming verdict semantics, LIVE/not-in-pit readiness, cross-worktree rig
 ownership, approved preset storage, Content Manager failure handling, finite CLI inputs, process
 tree cleanup, source/frozen Game Point dispatch, finite lock timing, one-shot Car0 failure, and
-Stable-AC-specific release signaling (`8be4e0e`). The final review rounds also validate the
+Stable-AC-specific release signaling (`c3f938c`). The final review rounds also validate the
 configured Content Manager path before process shortcuts, require one real AC teardown attempt
 before pre-stability release can escape a subsequent unsafe hold, reject known unrelated release
 targets, and preserve recovery for unknown/legacy lock metadata. Bounded waits now clamp to their
@@ -122,8 +122,12 @@ confirmed snapshots, and invalid configured CM paths block the start instead of 
 the default install. The five-second Car0 handshake is cancellation-aware and closes on Release AC;
 post-LIVE Car0 misses no longer count toward the stale-CM restart streak. Windows mapping-close
 failures abort the handoff, CarControls cleanup is attempted even after read-section cleanup errors,
-and explicit non-resilient owners report `busy_other_session`. Repository parity is `3162 passed`,
-`77 skipped`, `86.75%` coverage.
+and explicit non-resilient owners report `busy_other_session`. Native mapped-resource cleanup is
+shared by both section types; auto-drive reports cleanup failures at a structured boundary while
+preserving any earlier pipeline/drive error. Readiness is stamped after the Car0 handshake and
+go-live remains anchored before that blocking probe. The launcher summary labels an unrelated
+owner busy without directing the operator to a refused Stable AC action. Repository parity is
+`3168 passed`, `77 skipped`, `86.75%` coverage.
 Required checks are green, all 25 GraphQL threads are resolved, and the enforce resolve gate is
 clean. The PR remains open and unmerged; Windows-rig proof is the remaining separate state. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].

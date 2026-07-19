@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `8be4e0e`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `c3f938c`; the following vault SAVE records its handoff.
 All required GitHub checks are green, all 25 GraphQL review threads are resolved, and the
 enforce-mode resolve gate reports no substantive findings. The PR remains open and unmerged;
 Windows-rig proof remains a separate future state.
@@ -51,7 +51,8 @@ Windows-rig proof remains a separate future state.
   the same consecutive-sample threshold as render stalls, unknown shared-memory observations break
   both consecutive runs, and STABLE additionally requires the rig-proven Car0 drivability
   handshake (#466), not only LIVE + not-in-pit. The handshake uses the proven five-second window;
-  samples are timestamped before that blocking work, mapping failures stay retryable, and a failed
+  samples are timestamped after that blocking work while go-live remains anchored to the pre-probe
+  watch start, mapping failures stay retryable, and a failed
   controller close invalidates the handshake so Custom-AI ownership cannot leak into the human
   handoff. Its lazy dependency is included in the frozen package. A surviving `acs.exe` after
   bounded cleanup aborts relaunch and holds machine-wide ownership while retrying teardown rather
@@ -97,12 +98,18 @@ Windows-rig proof remains a separate future state.
   `UnmapViewOfFile`/`CloseHandle` failures now propagate through the existing fatal Car0-cleanup
   path, while controller cleanup still attempts the control section after a read-section failure.
   Game Point reports explicit non-resilient lock owners as `busy_other_session`, not a healthy
-  Stable AC session.
+  Stable AC session. Writable and readable mapped sections now share the same resource-release
+  helper, preserving failed native resources for retry while clearing resources that released
+  successfully. Auto-drive normalizes controller teardown faults into a structured `cleanup`
+  report and retains an earlier pipeline/drive failure as the primary error. The post-handshake
+  timestamp plus pre-probe launch anchor prevents the Car0 wait from stretching go-live or
+  shortening stability. Game Point's aggregate summary labels an unrelated owner busy instead of
+  directing the operator to a Stable AC action that ownership rules will refuse.
 
 ## Verification contract
 
-Final code commit `8be4e0e` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3162 passed`, `77 skipped`, `86.75%` coverage), followed by the mandatory reviewer cooldown and
+Final code commit `c3f938c` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3168 passed`, `77 skipped`, `86.75%` coverage), followed by the mandatory reviewer cooldown and
 current-head re-audit. GitHub reports the build, canonical-docs, and conformance checks green;
 GraphQL reports 25/25 threads resolved; the enforce-mode resolve gate is clean. `/resolve-pr` did
 not merge the PR or substitute macOS tests for the pending Windows-rig proof.
