@@ -433,8 +433,9 @@ def _run_with_safe_release(
         return run()
     except _OperatorRelease:
         # Release is only a safe "leave AC live" operation after the stability gate. During
-        # retries, a partially launched or wedged sim must be gone before ownership is dropped.
-        _make_rig_safe(acs_alive)
+        # retries, attempt cleanup first. The durable callback remains the no-console operator's
+        # explicit escape hatch if taskkill cannot remove a wedged process.
+        _make_rig_safe(acs_alive, release_requested=release_requested)
         raise
     except BaseException:
         _make_rig_safe(acs_alive, release_requested=release_requested)

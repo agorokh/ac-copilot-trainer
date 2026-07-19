@@ -483,6 +483,9 @@ def test_abnormal_retry_exit_makes_rig_safe_before_propagating(monkeypatch):
 def test_pre_stable_operator_release_makes_rig_safe_before_propagating(monkeypatch):
     calls: list[tuple[str, dict[str, object]]] = []
 
+    def release_requested() -> bool:
+        return True
+
     def release() -> object:
         calls.append(("run", {}))
         raise _OperatorRelease
@@ -493,10 +496,13 @@ def test_pre_stable_operator_release_makes_rig_safe_before_propagating(monkeypat
     )
 
     with pytest.raises(_OperatorRelease):
-        _run_with_safe_release(release, lambda: True, release_requested=lambda: True)
+        _run_with_safe_release(release, lambda: True, release_requested=release_requested)
 
-    # The asserted release signal must not bypass cleanup before stability is proven.
-    assert calls == [("run", {}), ("safe", {})]
+    # Cleanup is attempted first; the durable signal remains Game Point's no-console escape hatch.
+    assert calls == [
+        ("run", {}),
+        ("safe", {"release_requested": release_requested}),
+    ]
 
 
 def test_car0_probe_closes_controller_after_handshake(monkeypatch):
