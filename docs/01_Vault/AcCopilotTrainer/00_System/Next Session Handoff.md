@@ -111,7 +111,7 @@ CSP-init retry and stable-session handoff through the canonical Game Point launc
 hardening now covers streaming verdict semantics, LIVE/not-in-pit readiness, cross-worktree rig
 ownership, approved preset storage, Content Manager failure handling, finite CLI inputs, process
 tree cleanup, source/frozen Game Point dispatch, finite lock timing, one-shot Car0 failure, and
-Stable-AC-specific release signaling (`81708b3`). The final review rounds also validate the
+Stable-AC-specific release signaling (`8ffdc4d`). The final review rounds also validate the
 configured Content Manager path before process shortcuts, require one real AC teardown attempt
 before pre-stability release can escape a subsequent unsafe hold, reject known unrelated release
 targets, and preserve recovery for unknown/legacy lock metadata. Bounded waits now clamp to their
@@ -156,11 +156,15 @@ false absence. Resilient launch and auto-drive share
 `entry_launcher.terminate_process_tree_confirmed_absent`, keeping taskkill, bounded strict polling,
 and consecutive absence confirmation at one safety boundary. The helper returns fail-closed on
 unsupported platforms, and auto-drive flushes a chained native-cleanup traceback before its atomic
-OS exit so the mapping/lock safety boundary does not erase diagnostic evidence. Fatal cleanup
+OS exit so the mapping/lock safety boundary does not erase diagnostic evidence. Late Toolhelp
+errors preserve PIDs already found for best-effort drive monitoring while remaining errors for
+strict safety callers. If `phase=stable` metadata publication fails after the stability proof, the
+launcher keeps holding the live session under `stabilizing` metadata instead of killing AC; status
+stays non-READY without discarding the operator's proven drive. Fatal cleanup
 suppresses release before taskkill, backs off, and exits after a bounded hold if enumeration stays
 unknown. Content Manager unknown state fails closed, and a newly started CM must survive the settle
 interval before the launch URL is sent. The already-present `resilient_layout` template key is
-pinned by an explicit settings-file test. Repository parity is `3207 passed`, `77 skipped`,
+pinned by an explicit settings-file test. Repository parity is `3209 passed`, `77 skipped`,
 `86.74%` coverage.
 Required checks are green, all GraphQL threads are resolved, and the enforce resolve gate is
 clean. The PR remains open and unmerged; Windows-rig proof is the remaining separate state. Detail:
