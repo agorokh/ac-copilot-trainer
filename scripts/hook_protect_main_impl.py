@@ -4,8 +4,11 @@
 This file is installed into a spoke repo's ``scripts/<hook_name>.py`` IN PLACE of
 the vendored hook logic. It carries NO guard logic itself: it resolves the
 canonical implementation in the fleet governance hub (by its own filename) and
-delegates, running it with the spoke repo as ``CLAUDE_PROJECT_DIR``. A fix lands
-ONCE in the hub and every spoke picks it up; security scanners see one copy.
+delegates. Before ``runpy`` delegation it establishes ``CLAUDE_PROJECT_DIR`` as
+the spoke repository root derived from *this* installed shim path, unless a
+trusted harness already supplied a non-empty ``CLAUDE_PROJECT_DIR`` (sandbox /
+worktree) — that explicit value remains authoritative (#268). A fix lands ONCE
+in the hub and every spoke picks it up; security scanners see one copy.
 
 Resolution order for the hub (TRUSTED, configured locations only):
   1. ``$FLEET_GOVERNANCE_ROOT`` (explicit operator config)
@@ -187,11 +190,54 @@ def _recovery_command_from_stdin() -> str | None:
     return None
 
 
+def _spoke_project_root() -> Path:
+    """Spoke repository root derived from the *installed* shim path.
+
+    Install layout (``install.sh shim``): ``<spoke>/scripts/<hook_name>.py`` is a byte-copy of
+    this file. Root selection must NOT use ambient cwd (foreign launches) or the canonical hub
+    hook path (``runpy`` would otherwise make hub hooks audit ``~/.fleet-governance`` — #268).
+
+    Derived from the *logical* installed path (``os.path.abspath``: absolutize + normalize ``..``
+    LEXICALLY), never ``Path.resolve()`` — resolving FOLLOWS SYMLINKS, and an unsupported
+    symlinked install (``<spoke>/scripts/<hook>.py -> <hub>/scripts/<hook>.py``) would then land on
+    the hub's own ``scripts/`` dir and hand back the HUB root as the spoke — reintroducing the exact
+    mis-binding #268 exists to prevent (governance-hub#281). ``install.sh``/``install.ps1`` refuse
+    to write through a symlinked hook path, so this layout is not installable; the shim
+    nonetheless fails SAFE (spoke, not hub) if one ever appears by hand.
+    """
+    here = Path(os.path.abspath(__file__))
+    if here.parent.name == "scripts":
+        return here.parent.parent
+    # Defensive fallback for non-standard placements (unit fixtures that drop the shim flat).
+    for parent in (here.parent, *here.parent.parents):
+        if (parent / ".git").exists():
+            return parent
+    return here.parent
+
+
+def _ensure_project_dir() -> None:
+    """Establish ``CLAUDE_PROJECT_DIR`` before canonical-hook delegation (#268).
+
+    Contract (must match the module docstring):
+      * Trusted harness / host-supplied ``CLAUDE_PROJECT_DIR`` (sandbox, worktree) remains
+        authoritative when set to a non-empty value.
+      * Otherwise set it to the spoke root derived from the installed shim path so hub hooks
+        that fall back to ``__file__`` (or honor the env) read/write spoke state, not the hub.
+    """
+    if os.environ.get("CLAUDE_PROJECT_DIR", "").strip():
+        return
+    os.environ["CLAUDE_PROJECT_DIR"] = str(_spoke_project_root())
+
+
 def _delegate(canonical: Path, name: str) -> None:
     """Run the canonical hook. Propagate its intended exit code (SystemExit). On a NON-SystemExit
     runtime error (hub present but the hook is buggy/incompatible), restore the fail posture:
     HARD gates fail closed (exit 2), ADVISORY hooks fail open (exit 0). Always audited — never a
-    silent bypass, never a silent block."""
+    silent bypass, never a silent block.
+
+    Sets ``CLAUDE_PROJECT_DIR`` to the spoke root when absent so the delegated hook operates on
+    the spoke, not the hub install path (#268)."""
+    _ensure_project_dir()
     try:
         runpy.run_path(str(canonical), run_name="__main__")
     except SystemExit:
