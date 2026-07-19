@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `596527b`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `a594e0d`; the following vault SAVE records its handoff.
 All required GitHub checks are green, all 25 GraphQL review threads are resolved, and the
 enforce-mode resolve gate reports no substantive findings. The PR remains open and unmerged;
 Windows-rig proof remains a separate future state.
@@ -91,12 +91,14 @@ Windows-rig proof remains a separate future state.
   is verified with a real peer process. Native process-enumeration failures are explicit; Stable AC
   treats them as still-owned, and requires two consecutive successful absence snapshots before
   releasing the lock. Invalid configured CM paths are surfaced as unconfigured and never fall back
-  silently to the default install.
+  silently to the default install. The blocking Car0 handshake checks Release AC throughout and
+  closes its controller on cancellation; a post-LIVE Car0 miss is a failed rendered attempt, not a
+  never-live result that can trigger an unrelated CM cold restart.
 
 ## Verification contract
 
-Final code commit `596527b` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3154 passed`, `77 skipped`, `86.75%` coverage), followed by the mandatory reviewer cooldown and
+Final code commit `a594e0d` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3156 passed`, `77 skipped`, `86.75%` coverage), followed by the mandatory reviewer cooldown and
 current-head re-audit. GitHub reports the build, canonical-docs, and conformance checks green;
 GraphQL reports 25/25 threads resolved; the enforce-mode resolve gate is clean. `/resolve-pr` did
 not merge the PR or substitute macOS tests for the pending Windows-rig proof.
