@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `8ffdc4d`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `1b4809a`; the following vault SAVE records its handoff.
 All required GitHub checks are green, all GraphQL review threads are resolved, and the
 enforce-mode resolve gate reports no substantive findings. The PR remains open and unmerged;
 Windows-rig proof remains a separate future state.
@@ -160,11 +160,14 @@ Windows-rig proof remains a separate future state.
 - A post-proof failure to publish `phase=stable` leaves the proven AC session live while retaining
   the rig lock and prior `stabilizing` metadata. Game Point remains non-READY, but the operator's
   usable session is not destroyed by a diagnostic metadata failure.
+- `custom_ai.close_controller_with_retries` is the shared native teardown retry boundary for
+  auto-drive and the resilient Car0 probe. Both now retry retained handles/views three times before
+  their launcher-specific persistent-failure path performs the shared AC safety shutdown.
 
 ## Verification contract
 
-Final code commit `8ffdc4d` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3209 passed`, `77 skipped`, `86.74%` coverage), followed by the mandatory reviewer cooldown and
+Final code commit `1b4809a` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3211 passed`, `77 skipped`, `86.75%` coverage), followed by the mandatory reviewer cooldown and
 current-head re-audit. GitHub reports the build, canonical-docs, and conformance checks green;
 GraphQL reports all threads resolved; the enforce-mode resolve gate is clean. `/resolve-pr` did
 not merge the PR or substitute macOS tests for the pending Windows-rig proof.
