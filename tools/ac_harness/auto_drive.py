@@ -1048,6 +1048,15 @@ async def run_auto_drive(
             )
             return finish(report)
         except ControllerCleanupError as exc:
+            cleanup_detail = str(exc)
+            if attempt_idx < attempts - 1 and not config.skip_launch:
+                launch_notes.append(cleanup_detail)
+                restart_cm_next = True
+                _log(
+                    "hijack cleanup made AC safe; retrying a fresh launch "
+                    f"(attempt {attempt_idx + 2}/{attempts})"
+                )
+                continue
             return finish(
                 AutoDriveReport(
                     ok=False,
@@ -1056,7 +1065,7 @@ async def run_auto_drive(
                     setup_requested=setup_requested,
                     setup_applied=setup_applied,
                     setup_ack=setup_ack,
-                    error=str(exc),
+                    error=cleanup_detail,
                     **identity,
                 )
             )

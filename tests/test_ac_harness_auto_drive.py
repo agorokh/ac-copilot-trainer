@@ -288,6 +288,37 @@ def test_hijack_failure_relaunches_until_control_lands():
     assert report.hijacked is True
 
 
+def test_safety_confirmed_hijack_cleanup_uses_remaining_launch_budget():
+    launches: list[bool] = []
+    restarts: list[bool] = []
+    hijacks: list[FakeController | ControllerCleanupError] = [
+        ControllerCleanupError("AC safety shutdown confirmed"),
+        FakeController(),
+    ]
+
+    def _hijack(_config):  # noqa: ANN001, ANN202
+        result = hijacks.pop(0)
+        if isinstance(result, ControllerCleanupError):
+            raise result
+        return result
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(max_launches=2),
+            launch=lambda _config: launches.append(True) or (True, "live"),
+            hijack=_hijack,
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            restart_launcher=lambda _config: restarts.append(True),
+        )
+    )
+
+    assert report.ok is True
+    assert launches == [True, True]
+    assert restarts == [True]
+    assert report.notes[0] == "AC safety shutdown confirmed"
+
+
 def test_happy_path_window_mode_passes_and_tears_down():
     record: dict = {}
     ctrl = FakeController()
