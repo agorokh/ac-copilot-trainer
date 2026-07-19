@@ -264,6 +264,46 @@ class SectionOwnershipGate:
         return self._publishing
 
 
+class AttemptReadiness:
+    """Per-attempt readiness: section ownership plus the one-shot Car0 handshake.
+
+    These two pieces of state are coupled and must be revoked together. The Car0 result is cached
+    for the attempt so the (expensive, blocking) handshake runs once, but that cache is only valid
+    for the generation it was probed against: if acs.exe dies and restarts inside one attempt, a
+    stale ``True`` would let a brand-new session skip the handshake and be treated as drivable.
+    Keeping the cache next to the gate that revokes ownership makes that invariant enforceable
+    instead of a comment.
+    """
+
+    def __init__(self, probe: Callable[[], bool]) -> None:
+        self._gate = SectionOwnershipGate()
+        self._probe = probe
+        self.car0_ready: bool | None = None
+
+    @property
+    def publishing(self) -> bool:
+        return self._gate.publishing
+
+    def observe(
+        self, *, acs_alive: bool, packet: int | None, entry_ready: bool | None
+    ) -> tuple[bool | None, bool | None]:
+        """Return ``(entry_ready, drivable)`` for this sample, or ``(None, None)`` if unproven.
+
+        Raises :class:`_Car0NotDrivable` when the handshake runs and the car is not drivable.
+        """
+        if not self._gate.observe(acs_alive=acs_alive, packet=packet):
+            # Either ownership has not been earned yet, or it was revoked because the process
+            # died. Both mean a later generation must re-run the handshake rather than inherit
+            # this one's verdict.
+            self.car0_ready = None
+            return None, None
+        if entry_ready is True and self.car0_ready is None:
+            self.car0_ready = self._probe()
+            if not self.car0_ready:
+                raise _Car0NotDrivable
+        return entry_ready, (self.car0_ready if entry_ready is True else None)
+
+
 @dataclass(frozen=True)
 class LaunchReport:
     """Summary of a full retry run."""
@@ -1055,17 +1095,20 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             except (OSError, EntryLaunchUnsupported) as exc:
                 _log(f"attempt {attempt}: Content Manager launch failed: {exc}")
                 return LaunchVerdict.NEVER_LIVE
-            car0_ready: bool | None = None
-            ownership = SectionOwnershipGate()
+            readiness = AttemptReadiness(
+                lambda: _probe_car0_drivable(
+                    release_requested=release_requested,
+                    retain_telemetry_controller=telemetry_cleanup_holds.append,
+                )
+            )
 
             def read_attempt_state() -> tuple[int | None, bool | None, bool | None]:
                 """Report shared memory only once THIS attempt's acs.exe is proven to own it.
 
-                Readiness stays unknown (``None``) until :class:`SectionOwnershipGate` clears it,
+                Readiness stays unknown (``None``) until :class:`AttemptReadiness` clears it,
                 which ``classify`` already treats as "no observation" rather than evidence either
-                way. See that class for why process liveness alone is not enough.
+                way. See :class:`SectionOwnershipGate` for why process liveness is not enough.
                 """
-                nonlocal car0_ready
                 _retry_telemetry_cleanup_holds(telemetry_cleanup_holds)
                 if release_requested():
                     raise _OperatorRelease
@@ -1074,7 +1117,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     alive = acs_present()
                 except OSError as exc:
                     # A transient process-enumeration failure is UNKNOWN liveness, not death.
-                    # Report the sample as unobserved and leave the ownership gate untouched:
+                    # Report the sample as unobserved and leave the readiness state untouched:
                     # feeding it acs_alive=False would REVOKE proven ownership over a hiccup and
                     # re-arm the Car0 handshake mid-session. ``classify`` already treats a
                     # None packet / None readiness as "no observation" rather than as evidence.
@@ -1082,17 +1125,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     return None, None, None
 
                 packet, entry_ready = read_state() if alive else (None, None)
-                if not ownership.observe(acs_alive=alive, packet=packet):
-                    return packet, None, None
-
-                if entry_ready is True and car0_ready is None:
-                    car0_ready = _probe_car0_drivable(
-                        release_requested=release_requested,
-                        retain_telemetry_controller=telemetry_cleanup_holds.append,
-                    )
-                    if not car0_ready:
-                        raise _Car0NotDrivable
-                return packet, entry_ready, car0_ready if entry_ready is True else None
+                ready, drivable = readiness.observe(
+                    acs_alive=alive, packet=packet, entry_ready=entry_ready
+                )
+                return packet, ready, drivable
 
             try:
                 verdict = _watch_live(

@@ -14,9 +14,11 @@ import subprocess
 import pytest
 
 from tools.ac_harness.resilient_launch import (
+    AttemptReadiness,
     LaunchVerdict,
     Sample,
     SectionOwnershipGate,
+    _Car0NotDrivable,
     _Car0ProbeCleanupError,
     _ensure_acs_gone,
     _ensure_cm_running,
@@ -320,6 +322,60 @@ class TestSectionOwnershipGate:
         gate.observe(acs_alive=True, packet=100)
         assert gate.observe(acs_alive=True, packet=200) is True
         assert gate.observe(acs_alive=True, packet=None) is True
+
+
+class TestAttemptReadiness:
+    """#628 — the Car0 cache must be revoked with section ownership, not outlive it."""
+
+    @staticmethod
+    def _earn_ownership(readiness: AttemptReadiness) -> None:
+        readiness.observe(acs_alive=True, packet=100, entry_ready=False)
+        readiness.observe(acs_alive=True, packet=200, entry_ready=False)
+        assert readiness.publishing is True
+
+    def test_car0_probe_runs_once_per_attempt(self) -> None:
+        calls = []
+        readiness = AttemptReadiness(lambda: (calls.append(1), True)[1])
+        self._earn_ownership(readiness)
+
+        for packet in (300, 400, 500):
+            ready, drivable = readiness.observe(acs_alive=True, packet=packet, entry_ready=True)
+            assert (ready, drivable) == (True, True)
+        assert len(calls) == 1
+
+    def test_probe_is_not_run_before_ownership_is_earned(self) -> None:
+        calls = []
+        readiness = AttemptReadiness(lambda: (calls.append(1), True)[1])
+
+        # The corpse reports READY before acs even exists — this is the 6/6 froze case.
+        assert readiness.observe(acs_alive=False, packet=16_983, entry_ready=True) == (None, None)
+        assert readiness.observe(acs_alive=True, packet=16_983, entry_ready=True) == (None, None)
+        assert calls == []
+
+    def test_process_death_revokes_the_car0_cache(self) -> None:
+        """A fast crash/restart inside one attempt must not inherit the old drivability verdict."""
+        calls = []
+        readiness = AttemptReadiness(lambda: (calls.append(1), True)[1])
+        self._earn_ownership(readiness)
+        readiness.observe(acs_alive=True, packet=300, entry_ready=True)
+        assert readiness.car0_ready is True
+        assert len(calls) == 1
+
+        # acs dies -> ownership and the Car0 verdict are both revoked.
+        assert readiness.observe(acs_alive=False, packet=None, entry_ready=True) == (None, None)
+        assert readiness.car0_ready is None
+
+        # A new generation must re-earn ownership AND re-run the handshake.
+        readiness.observe(acs_alive=True, packet=5, entry_ready=True)
+        readiness.observe(acs_alive=True, packet=9, entry_ready=True)
+        assert len(calls) == 2
+
+    def test_not_drivable_raises(self) -> None:
+        readiness = AttemptReadiness(lambda: False)
+        self._earn_ownership(readiness)
+
+        with pytest.raises(_Car0NotDrivable):
+            readiness.observe(acs_alive=True, packet=300, entry_ready=True)
 
 
 def test_empty_trace_is_pending():
