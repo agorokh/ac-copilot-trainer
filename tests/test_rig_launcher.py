@@ -12,12 +12,15 @@ from typing import Any
 import pytest
 
 import tools.rig_launcher.supervisor as supervisor_module
+from tools.ac_harness.rig_lock import RigSessionLock, RigSessionOwner
 from tools.rig_launcher.app import (
     _open_path,
+    _resilient_start_accepted,
     config_from_args,
     main,
     render_setup_diff_lines,
     run_gui,
+    run_resilient_launch_child,
     run_setup_diff_gui,
     run_sidecar_child,
 )
@@ -172,6 +175,400 @@ def test_frozen_sidecar_command_uses_bundled_child_mode(tmp_path: Path) -> None:
     assert command[:2] == ["AC-Copilot-Game-Point.exe", "--sidecar-child"]
     assert "-m" not in command
     assert "tools.ai_sidecar" not in command
+
+
+def test_resilient_command_routes_source_and_frozen_launcher(tmp_path: Path) -> None:
+    cfg = GamePointConfig(
+        resilient_car="ks_porsche_911_gt3_r_2016",
+        resilient_track="spa",
+        resilient_layout="gp",
+        resilient_cm_exe=r"D:\Portable CM\Content Manager.exe",
+        rig_lock_path=tmp_path / "rig-session.lock",
+        paths=LauncherPaths(tmp_path),
+    )
+
+    source = GamePointSupervisor(cfg, environ={}, python_executable="python")
+    frozen = GamePointSupervisor(
+        cfg,
+        environ={},
+        python_executable="AC-Copilot-Game-Point.exe",
+        frozen=True,
+    )
+
+    assert source.resilient_command() == [
+        "python",
+        "-m",
+        "tools.ac_harness.resilient_launch",
+        "--car",
+        "ks_porsche_911_gt3_r_2016",
+        "--track",
+        "spa",
+        "--layout",
+        "gp",
+        "--cm-exe",
+        r"D:\Portable CM\Content Manager.exe",
+        "--rig-lock-path",
+        str(tmp_path / "rig-session.lock"),
+        "--rig-release-path",
+        str(tmp_path / "rig-session.release"),
+        "--rig-lock-timeout",
+        "1.0",
+    ]
+    assert frozen.resilient_command()[:2] == [
+        "AC-Copilot-Game-Point.exe",
+        "--resilient-launch-child",
+    ]
+
+
+def test_resilient_command_resolves_relative_cm_path_from_launcher_root(tmp_path: Path) -> None:
+    cfg = GamePointConfig(
+        resilient_cm_exe="portable/Content Manager.exe",
+        paths=LauncherPaths(tmp_path),
+    )
+
+    command = GamePointSupervisor(cfg, environ={}, python_executable="python").resilient_command()
+
+    cm_flag = command.index("--cm-exe")
+    assert command[cm_flag + 1] == str((tmp_path / "portable/Content Manager.exe").resolve())
+
+
+def test_invalid_relative_cm_path_blocks_resilient_start(tmp_path: Path) -> None:
+    spawned: list[bool] = []
+    cfg = GamePointConfig(
+        resilient_car="ks_porsche_911_gt3_r_2016",
+        resilient_track="spa",
+        resilient_cm_exe="../outside/Content Manager.exe",
+        paths=LauncherPaths(tmp_path),
+    )
+    sup = GamePointSupervisor(
+        cfg,
+        environ={},
+        popen=lambda *_args, **_kwargs: spawned.append(True),
+        python_executable="python",
+    )
+
+    result = sup.start_resilient_session()
+    status = sup._resilient_process_status()
+
+    assert result.ok is False
+    assert result.state == "unconfigured"
+    assert "resilient_cm_exe" in result.detail
+    assert status == result
+    assert spawned == []
+    with pytest.raises(ValueError, match="resilient_cm_exe"):
+        sup.resilient_command()
+
+
+def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> None:
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+    proc = _Proc()
+
+    def fake_popen(command: list[str], **kwargs: Any) -> _Proc:
+        calls.append((command, kwargs))
+        return proc
+
+    cfg = GamePointConfig(
+        resilient_car="car",
+        resilient_track="track",
+        rig_lock_path=tmp_path / "rig-session.lock",
+        paths=LauncherPaths(tmp_path),
+    )
+    sup = GamePointSupervisor(
+        cfg,
+        environ={},
+        popen=fake_popen,
+        python_executable="python",
+    )
+
+    release_path = tmp_path / "rig-session.release"
+    release_path.touch()
+    started = sup.start_resilient_session()
+    running = sup._resilient_process_status()
+    sup.close()
+
+    assert started.state == "starting"
+    assert started.ok is False
+    assert running.state == "stabilizing"
+    assert running.ok is False
+    assert calls[0][0][-10:] == [
+        "--car",
+        "car",
+        "--track",
+        "track",
+        "--rig-lock-path",
+        str(tmp_path / "rig-session.lock"),
+        "--rig-release-path",
+        str(release_path),
+        "--rig-lock-timeout",
+        "1.0",
+    ]
+    assert not release_path.exists()
+    assert calls[0][1]["cwd"] == str(_repo_root())
+    assert (tmp_path / "logs" / "resilient-launch.log").exists()
+    assert proc.terminated is False
+
+
+@pytest.mark.parametrize("state", ["starting", "stabilizing", "running"])
+def test_resilient_start_acceptance_is_distinct_from_readiness(state: str) -> None:
+    result = ProbeResult("ac_session", False, state, "phase is not stable yet")
+
+    assert _resilient_start_accepted(result) is True
+
+
+@pytest.mark.parametrize("state", ["unconfigured", "start_failed", "busy_other_session", "unknown"])
+def test_resilient_start_hard_failures_are_not_accepted(state: str) -> None:
+    result = ProbeResult("ac_session", False, state, "hard failure")
+
+    assert _resilient_start_accepted(result) is False
+
+
+def test_start_resilient_session_requires_car_and_track(tmp_path: Path) -> None:
+    sup = GamePointSupervisor(GamePointConfig(paths=LauncherPaths(tmp_path)), environ={})
+
+    result = sup.start_resilient_session()
+
+    assert result.ok is False
+    assert result.state == "unconfigured"
+    assert "resilient_car" in result.detail
+    assert "resilient_track" in result.detail
+
+
+def test_release_resilient_session_signals_detached_child(tmp_path: Path) -> None:
+    lock_path = tmp_path / "rig-session.lock"
+    proc = _Proc()
+    cfg = GamePointConfig(
+        resilient_car="car",
+        resilient_track="track",
+        rig_lock_path=lock_path,
+        paths=LauncherPaths(tmp_path / "game-point"),
+    )
+    sup = GamePointSupervisor(cfg, environ={}, popen=lambda *_args, **_kwargs: proc)
+
+    assert sup.start_resilient_session().state == "starting"
+    released = sup.release_resilient_session()
+
+    assert released.ok is True
+    assert released.state == "release_requested"
+    assert (tmp_path / "rig-session.release").exists()
+    assert proc.terminated is False
+
+
+def test_reopened_game_point_can_signal_detached_lock_owner(tmp_path: Path) -> None:
+    lock_path = tmp_path / "rig-session.lock"
+    cfg = GamePointConfig(
+        resilient_car="car",
+        resilient_track="track",
+        rig_lock_path=lock_path,
+        paths=LauncherPaths(tmp_path / "game-point"),
+    )
+    sup = GamePointSupervisor(cfg, environ={})
+    owner = RigSessionOwner(
+        pid=os.getpid(),
+        cwd="detached-game-point",
+        car="car",
+        track="track",
+        session_kind="resilient_launch",
+    )
+
+    with RigSessionLock(lock_path, owner=owner):
+        released = sup.release_resilient_session()
+
+    assert released.state == "release_requested"
+    assert (tmp_path / "rig-session.release").exists()
+
+
+def test_release_ac_refuses_unrelated_machine_wide_owner(tmp_path: Path) -> None:
+    lock_path = tmp_path / "rig-session.lock"
+    sup = GamePointSupervisor(
+        GamePointConfig(
+            resilient_car="car",
+            resilient_track="track",
+            rig_lock_path=lock_path,
+            paths=LauncherPaths(tmp_path / "game-point"),
+        ),
+        environ={},
+    )
+    owner = RigSessionOwner(
+        pid=os.getpid(),
+        cwd="auto-drive-worktree",
+        car="car",
+        track="track",
+        session_kind="auto_drive",
+    )
+
+    with RigSessionLock(lock_path, owner=owner):
+        released = sup.release_resilient_session()
+
+    assert released.ok is False
+    assert released.state == "release_unsupported"
+    assert not (tmp_path / "rig-session.release").exists()
+
+
+def test_non_resilient_owner_is_busy_not_healthy_stable_ac(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spawned: list[bool] = []
+    sup = GamePointSupervisor(
+        GamePointConfig(
+            resilient_car="car",
+            resilient_track="track",
+            paths=LauncherPaths(tmp_path / "game-point"),
+        ),
+        environ={},
+        popen=lambda *_args, **_kwargs: spawned.append(True),
+    )
+    monkeypatch.setattr(
+        sup,
+        "_rig_session_owner",
+        lambda: {
+            "pid": 123,
+            "cwd": "auto-drive-worktree",
+            "session_kind": "auto_drive",
+        },
+    )
+
+    status = sup._resilient_process_status()
+    started = sup.start_resilient_session()
+
+    assert status.ok is False
+    assert status.state == "busy_other_session"
+    assert "session_kind=auto_drive" in status.detail
+    assert started == status
+    assert spawned == []
+
+
+def test_release_ac_signals_unknown_lock_owner_for_no_console_recovery(
+    tmp_path: Path, monkeypatch
+) -> None:
+    sup = GamePointSupervisor(
+        GamePointConfig(
+            resilient_car="car",
+            resilient_track="track",
+            rig_lock_path=tmp_path / "rig-session.lock",
+            paths=LauncherPaths(tmp_path / "game-point"),
+        ),
+        environ={},
+    )
+    monkeypatch.setattr(sup, "_rig_session_owner", lambda: {"cwd": "unknown"})
+
+    released = sup.release_resilient_session()
+
+    assert released.ok is True
+    assert released.state == "release_requested"
+    assert (tmp_path / "rig-session.release").exists()
+
+
+def test_unknown_rig_lock_status_is_visible_and_blocks_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spawned: list[bool] = []
+    cfg = GamePointConfig(
+        resilient_car="car",
+        resilient_track="track",
+        rig_lock_path=tmp_path / "rig-session.lock",
+        paths=LauncherPaths(tmp_path / "game-point"),
+    )
+    sup = GamePointSupervisor(
+        cfg,
+        environ={},
+        popen=lambda *_args, **_kwargs: spawned.append(True),
+    )
+    monkeypatch.setattr(sup, "_rig_session_owner", lambda: {"cwd": "unknown"})
+
+    status = sup._resilient_process_status()
+    started = sup.start_resilient_session()
+
+    assert status.ok is False
+    assert status.state == "unknown"
+    assert "lock status unavailable" in status.detail
+    assert started == status
+    assert spawned == []
+
+
+def test_resilient_status_adopts_machine_wide_lock_owner(tmp_path: Path) -> None:
+    lock_path = tmp_path / "rig-session.lock"
+    cfg = GamePointConfig(
+        resilient_car="configured-car",
+        resilient_track="configured-track",
+        rig_lock_path=lock_path,
+        paths=LauncherPaths(tmp_path / "game-point"),
+    )
+
+    def fail_popen(*_args: Any, **_kwargs: Any) -> _Proc:
+        raise AssertionError("an owned rig must not spawn a second resilient child")
+
+    sup = GamePointSupervisor(cfg, environ={}, popen=fail_popen)
+    owner = RigSessionOwner(
+        pid=os.getpid(),
+        cwd="other-game-point",
+        car="live-car",
+        track="live-track",
+        started_at="2026-07-18T21:00:00Z",
+        session_kind="resilient_launch",
+        phase="stable",
+    )
+    with RigSessionLock(lock_path, owner=owner):
+        status = sup._resilient_process_status()
+        started = sup.start_resilient_session()
+
+    assert status.ok is True
+    assert status.state == "running"
+    assert f"pid={os.getpid()}" in status.detail
+    assert "live-car" in status.detail
+    assert started == status
+
+
+def test_resilient_status_stays_non_green_until_owner_publishes_stable(
+    tmp_path: Path,
+) -> None:
+    lock_path = tmp_path / "rig-session.lock"
+    sup = GamePointSupervisor(
+        GamePointConfig(
+            resilient_car="car",
+            resilient_track="track",
+            rig_lock_path=lock_path,
+            paths=LauncherPaths(tmp_path / "game-point"),
+        ),
+        environ={},
+    )
+    lock = RigSessionLock(
+        lock_path,
+        owner=RigSessionOwner(
+            pid=os.getpid(),
+            cwd="game-point",
+            car="car",
+            track="track",
+            session_kind="resilient_launch",
+            phase="stabilizing",
+        ),
+    )
+
+    with lock:
+        stabilizing = sup._resilient_process_status()
+        lock.set_phase("stable")
+        stable = sup._resilient_process_status()
+
+    assert stabilizing.ok is False
+    assert stabilizing.state == "stabilizing"
+    assert stable.ok is True
+    assert stable.state == "running"
+
+
+def test_resilient_status_probes_rig_owner_outside_process_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    sup = GamePointSupervisor(
+        GamePointConfig(paths=LauncherPaths(tmp_path)),
+        environ={},
+    )
+
+    def owner() -> None:
+        assert not sup._proc_lock._is_owned()  # type: ignore[attr-defined]
+        return None
+
+    monkeypatch.setattr(sup, "_rig_session_owner", owner)
+
+    assert sup._resilient_process_status().state == "unconfigured"
 
 
 def test_preflight_blocks_external_bind_without_token(tmp_path: Path) -> None:
@@ -899,6 +1296,10 @@ def test_config_from_settings_file_supplies_non_secret_defaults(tmp_path: Path) 
                 "sidecar_port": 9999,
                 "simhub_exe": "SimHubWPF.exe",
                 "start_simhub": True,
+                "resilient_car": "ks_porsche_911_gt3_r_2016",
+                "resilient_track": "spa",
+                "resilient_layout": "gp",
+                "resilient_cm_exe": r"D:\Portable CM\Content Manager.exe",
                 "voice_bank": "bank",
                 "voice_tts": True,
             }
@@ -916,12 +1317,26 @@ def test_config_from_settings_file_supplies_non_secret_defaults(tmp_path: Path) 
     assert cfg.setup_store == "setup.jsonl"
     assert cfg.simhub_exe == "SimHubWPF.exe"
     assert cfg.start_simhub is True
+    assert cfg.resilient_car == "ks_porsche_911_gt3_r_2016"
+    assert cfg.resilient_track == "spa"
+    assert cfg.resilient_layout == "gp"
+    assert cfg.resilient_cm_exe == r"D:\Portable CM\Content Manager.exe"
     assert cfg.token is None
 
 
 def test_env_overrides_settings_file(tmp_path: Path) -> None:
     (tmp_path / "settings.json").write_text(
-        json.dumps({"sidecar_port": 9999, "voice_tts": False, "start_simhub": False}),
+        json.dumps(
+            {
+                "sidecar_port": 9999,
+                "voice_tts": False,
+                "start_simhub": False,
+                "resilient_car": "settings-car",
+                "resilient_track": "settings-track",
+                "resilient_layout": "settings-layout",
+                "resilient_cm_exe": "settings-cm.exe",
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -930,6 +1345,10 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
             "AC_COPILOT_SIDECAR_PORT": "8766",
             "AC_COPILOT_VOICE_TTS": "1",
             "AC_COPILOT_START_SIMHUB": "1",
+            "AC_COPILOT_RESILIENT_CAR": "env-car",
+            "AC_COPILOT_RESILIENT_TRACK": "env-track",
+            "AC_COPILOT_RESILIENT_LAYOUT": "env-layout",
+            "AC_COPILOT_RESILIENT_CM_EXE": "env-cm.exe",
         },
         paths=LauncherPaths(tmp_path),
     )
@@ -937,6 +1356,10 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
     assert cfg.port == 8766
     assert cfg.voice_tts is True
     assert cfg.start_simhub is True
+    assert cfg.resilient_car == "env-car"
+    assert cfg.resilient_track == "env-track"
+    assert cfg.resilient_layout == "env-layout"
+    assert cfg.resilient_cm_exe == "env-cm.exe"
 
 
 def test_ensure_settings_file_writes_non_secret_template(tmp_path: Path) -> None:
@@ -947,6 +1370,10 @@ def test_ensure_settings_file_writes_non_secret_template(tmp_path: Path) -> None
     assert path == tmp_path / "settings.json"
     assert payload["sidecar_port"] == 8765
     assert payload["external_bind"] == ""
+    assert payload["resilient_car"] == ""
+    assert payload["resilient_track"] == ""
+    assert payload["resilient_layout"] == ""
+    assert payload["resilient_cm_exe"] == ""
     assert "token" not in json.dumps(payload).lower()
 
 
@@ -1068,6 +1495,21 @@ def test_build_pyinstaller_args_bundles_pyserial_for_serial_transport(tmp_path: 
 
     assert _has_option_value(args, "--hidden-import", "serial")
     assert _has_option_value(args, "--hidden-import", "serial.tools.list_ports")
+
+
+def test_build_pyinstaller_args_bundles_resilient_child(tmp_path: Path) -> None:
+    args = build_pyinstaller_args(tmp_path, onefile=True, windowed=True)
+
+    for module in (
+        "tools.ac_harness.resilient_launch",
+        "tools.ac_harness.entry_launcher",
+        "tools.ac_harness.custom_ai",
+        "tools.ac_harness.preset_utils",
+        "tools.ac_harness.rig_lock",
+        "tools.ac_harness.shared_memory",
+        "tools.ac_harness.window_utils",
+    ):
+        assert _has_option_value(args, "--hidden-import", module)
 
 
 def test_build_pyinstaller_args_collects_optional_rtmixer_when_installed(
@@ -1204,6 +1646,21 @@ def test_sidecar_child_entrypoint_rewrites_sys_argv(monkeypatch) -> None:
 
     assert run_sidecar_child(["--port", "8765"]) == 0
     assert seen["argv"] == ["ai_sidecar", "--port", "8765"]
+
+
+def test_resilient_child_entrypoint_forwards_arguments(monkeypatch) -> None:
+    from tools.ac_harness import resilient_launch
+
+    seen: list[list[str]] = []
+
+    def fake_main(argv: list[str]) -> int:
+        seen.append(argv)
+        return 7
+
+    monkeypatch.setattr(resilient_launch, "main", fake_main)
+
+    assert run_resilient_launch_child(["--car", "car", "--track", "track"]) == 7
+    assert seen == [["--car", "car", "--track", "track"]]
 
 
 def test_run_gui_falls_back_when_tk_init_fails(monkeypatch, capsys) -> None:

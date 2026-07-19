@@ -21,11 +21,15 @@ from tools.ac_harness.auto_drive import (
     AppInstallProvenance,
     AutoDriveConfig,
     AutoDriveReport,
+    ControllerCleanupAbort,
+    ControllerCleanupError,
+    ControllerTelemetryCleanupPending,
     DriveStats,
     ProgressWatchdog,
     SimProcessIdentityMonitor,
     _build_arg_parser,
     _build_driver,
+    _close_controller,
     _config_from_args,
     _main,
     _wait_live,
@@ -52,6 +56,7 @@ from tools.ac_harness.auto_drive import (
     resolve_ac_user_dir,
     resolve_fast_lane,
     resolve_setup_ini,
+    rig_force_safe_after_cleanup_failure,
     rig_hijack,
     rig_launch,
     run_auto_drive,
@@ -107,6 +112,24 @@ class FakeController:
         pass
 
     def close(self) -> None:
+        self.closed = True
+
+
+class FailingCloseController(FakeController):
+    def close(self) -> None:
+        self.closed = True
+        raise OSError("native close failed")
+
+
+class CloseAfterSafetyController(FakeController):
+    def __init__(self) -> None:
+        super().__init__()
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+        if self.close_calls <= 3:
+            raise OSError("native close failed")
         self.closed = True
 
 
@@ -265,6 +288,37 @@ def test_hijack_failure_relaunches_until_control_lands():
     assert report.hijacked is True
 
 
+def test_safety_confirmed_hijack_cleanup_uses_remaining_launch_budget():
+    launches: list[bool] = []
+    restarts: list[bool] = []
+    hijacks: list[FakeController | ControllerCleanupError] = [
+        ControllerCleanupError("AC safety shutdown confirmed"),
+        FakeController(),
+    ]
+
+    def _hijack(_config):  # noqa: ANN001, ANN202
+        result = hijacks.pop(0)
+        if isinstance(result, ControllerCleanupError):
+            raise result
+        return result
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(max_launches=2),
+            launch=lambda _config: launches.append(True) or (True, "live"),
+            hijack=_hijack,
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            restart_launcher=lambda _config: restarts.append(True),
+        )
+    )
+
+    assert report.ok is True
+    assert launches == [True, True]
+    assert restarts == [True]
+    assert report.notes[0] == "AC safety shutdown confirmed"
+
+
 def test_happy_path_window_mode_passes_and_tears_down():
     record: dict = {}
     ctrl = FakeController()
@@ -284,6 +338,233 @@ def test_happy_path_window_mode_passes_and_tears_down():
     # Orchestrator must always stop the drive and release the controller.
     assert record["stop_set"] is True
     assert ctrl.closed is True
+
+
+def test_final_controller_close_failure_is_structured_cleanup_failure():
+    ctrl = CloseAfterSafetyController()
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: ctrl,
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            cleanup_failure=lambda controller, error: True,
+        )
+    )
+
+    assert report.ok is False
+    assert report.stage == "cleanup"
+    assert report.error is not None and "final controller cleanup" in report.error
+    assert ctrl.closed is True
+
+
+def test_controller_close_retries_only_the_retained_native_resources():
+    class FlakyCloseController(FakeController):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls < 3:
+                raise OSError("native close temporarily failed")
+            self.closed = True
+
+    ctrl = FlakyCloseController()
+
+    _close_controller(ctrl, context="test cleanup")
+
+    assert ctrl.closed is True
+    assert ctrl.close_calls == 3
+
+
+def test_read_only_mapping_close_failure_does_not_trigger_ac_safety_shutdown():
+    from tools.ac_harness.custom_ai import ControllerTelemetryCloseError
+
+    safety_calls: list[bool] = []
+
+    class TelemetryOnlyFailure(FakeController):
+        def close(self) -> None:
+            raise ControllerTelemetryCloseError("CarControls already released")
+
+    with pytest.raises(
+        ControllerTelemetryCleanupPending,
+        match="read-only telemetry mapping retained",
+    ) as caught:
+        _close_controller(
+            (controller := TelemetryOnlyFailure()),
+            context="test cleanup",
+            cleanup_failure=lambda _controller, _error: safety_calls.append(True) or True,
+        )
+
+    assert safety_calls == []
+    assert caught.value.controller is controller
+
+
+def test_read_only_mapping_close_failure_returns_structured_report_with_retained_owner():
+    from tools.ac_harness.custom_ai import ControllerTelemetryCloseError
+
+    safety_calls: list[bool] = []
+
+    class TelemetryOnlyFailure(FakeController):
+        def close(self) -> None:
+            raise ControllerTelemetryCloseError("CarControls already released")
+
+    controller = TelemetryOnlyFailure()
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda _config: controller,
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            cleanup_failure=lambda _controller, _error: safety_calls.append(True) or True,
+        )
+    )
+
+    assert report.ok is False
+    assert report.stage == "cleanup"
+    assert report.cleanup_holds == (controller,)
+    assert safety_calls == []
+    assert "_cleanup_holds" not in report.to_dict()
+
+
+def test_safety_shutdown_after_persistent_close_failure_still_fails_the_run():
+    ctrl = CloseAfterSafetyController()
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: ctrl,
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            cleanup_failure=lambda controller, error: True,
+        )
+    )
+
+    assert report.ok is False
+    assert report.stage == "cleanup"
+    assert report.error is not None and "AC safety shutdown confirmed" in report.error
+    assert ctrl.closed is True
+    assert ctrl.close_calls == 4
+
+
+def test_cleanup_interrupt_converts_to_abort_and_retains_controller():
+    ctrl = FailingCloseController()
+
+    def interrupted_safety(_controller, _error) -> bool:
+        raise KeyboardInterrupt
+
+    with pytest.raises(ControllerCleanupAbort) as caught:
+        _close_controller(
+            ctrl,
+            context="interrupted safety cleanup",
+            cleanup_failure=interrupted_safety,
+        )
+
+    assert caught.value.controller is ctrl
+    assert isinstance(caught.value.__cause__, KeyboardInterrupt)
+
+
+def test_close_retry_interrupt_converts_to_abort_and_retains_controller():
+    class InterruptedCloseController(FakeController):
+        def close(self) -> None:
+            raise KeyboardInterrupt
+
+    controller = InterruptedCloseController()
+
+    with pytest.raises(ControllerCleanupAbort) as caught:
+        _close_controller(controller, context="interrupted native close")
+
+    assert caught.value.controller is controller
+    assert isinstance(caught.value.__cause__, KeyboardInterrupt)
+    assert "control ownership unknown" in str(caught.value)
+
+
+def test_post_safety_final_close_interrupt_retains_controller():
+    class InterruptedFinalCloseController(FakeController):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls <= 3:
+                raise OSError("native close failed")
+            raise KeyboardInterrupt
+
+    controller = InterruptedFinalCloseController()
+
+    with pytest.raises(ControllerCleanupAbort) as caught:
+        _close_controller(
+            controller,
+            context="post-safety interrupted close",
+            cleanup_failure=lambda _controller, _error: True,
+        )
+
+    assert caught.value.controller is controller
+    assert caught.value.cleanup_holds == (controller,)
+    assert isinstance(caught.value.__cause__, KeyboardInterrupt)
+    assert "AC safety shutdown confirmed, but final local release failed" in str(caught.value)
+
+
+def test_rig_cleanup_safety_brakes_kills_and_confirms_absence(monkeypatch):
+    import tools.ac_harness.entry_launcher as entry_launcher
+
+    class RecordingController(FakeController):
+        def __init__(self) -> None:
+            super().__init__()
+            self.controls: list[tuple[tuple, dict]] = []
+
+        def write_controls(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            self.controls.append((args, kwargs))
+
+    ctrl = RecordingController()
+    snapshots = iter((frozenset({42}), frozenset(), frozenset()))
+    process_snapshots: list[frozenset[int]] = []
+
+    def process_ids(image, *, strict):  # noqa: ANN001, ANN201
+        snapshot = next(snapshots)
+        process_snapshots.append(snapshot)
+        return snapshot
+
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+    monkeypatch.setattr(entry_launcher, "_taskkill", lambda image, runner: "killed acs.exe")
+    monkeypatch.setattr(entry_launcher, "running_process_ids", process_ids)
+    monkeypatch.setattr("tools.ac_harness.auto_drive.time.sleep", lambda seconds: None)
+
+    safe = rig_force_safe_after_cleanup_failure(
+        ctrl,
+        ControllerCleanupError("final cleanup failed"),
+    )
+
+    assert safe is True
+    assert ctrl.controls == [((0.0, 1.0, 0.0), {"handbrake": 0.0})]
+    assert process_snapshots == [frozenset({42}), frozenset(), frozenset()]
+
+
+def test_controller_close_failure_preserves_prior_pipeline_failure():
+    ctrl = CloseAfterSafetyController()
+
+    async def broken_tap(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise RuntimeError("tap failed first")
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: ctrl,
+            drive=_drive_returning(DriveStats(drove=True), {}),
+            tap=broken_tap,
+            cleanup_failure=lambda controller, error: True,
+        )
+    )
+
+    assert report.stage == "pipeline"
+    assert report.error is not None and "tap failed first" in report.error
+    assert any("final controller cleanup" in note for note in report.notes)
 
 
 def test_pipeline_failure_when_continuous_topic_missing():
@@ -617,6 +898,42 @@ def test_sim_death_retries_full_launch_and_preserves_failed_attempt():
     assert all(controller.closed for controller in controllers)
 
 
+def test_sim_death_retry_transfers_prior_cleanup_holds_to_later_abort(monkeypatch):
+    from tools.ac_harness import auto_drive
+
+    telemetry_owner = FakeController()
+    fatal_owner = FailingCloseController()
+    attempts = 0
+
+    async def _attempt(config, **kwargs):  # noqa: ANN001
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            report = AutoDriveReport(
+                ok=False,
+                stage="drive",
+                drive=DriveStats(drove=True, sim_dead=True),
+            )
+            report.retain_cleanup_controller(telemetry_owner)
+            return report
+        raise ControllerCleanupAbort(ControllerCleanupError("unsafe mapping"), fatal_owner)
+
+    monkeypatch.setattr(auto_drive, "run_auto_drive", _attempt)
+
+    with pytest.raises(ControllerCleanupAbort) as caught:
+        asyncio.run(
+            auto_drive.run_auto_drive_with_sim_retries(
+                _cfg(sim_death_retries=1),
+                launch=_ok_launch,
+                hijack=lambda c: FakeController(),
+                drive=_drive_returning(DriveStats(drove=True), {}),
+                tap=_tap_returning(CONTINUOUS),
+            )
+        )
+
+    assert caught.value.cleanup_holds == (fatal_owner, telemetry_owner)
+
+
 @pytest.mark.parametrize(
     "config_kwargs,stats",
     [
@@ -946,6 +1263,145 @@ def test_run_auto_drive_fails_fast_on_track_mismatch():
     assert ctrl.closed is True  # controller released before bailing
 
 
+def test_track_mismatch_close_failure_preserves_primary_mismatch():
+    ctrl = CloseAfterSafetyController()
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", skip_launch=True),
+            launch=_ok_launch,
+            hijack=lambda c: ctrl,
+            drive=lambda controller, config, stop: pytest.fail("must not drive the wrong track"),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda c: ("spa", "ks_porsche_911_gt3_r_2016"),
+            cleanup_failure=lambda controller, error: True,
+        )
+    )
+
+    assert report.stage == "launch"
+    assert report.error is not None and "loaded track" in report.error
+    assert report.notes and "native close failed" in report.notes[0]
+
+
+def test_track_mismatch_telemetry_cleanup_uses_remaining_relaunch_budget():
+    from tools.ac_harness.custom_ai import ControllerTelemetryCloseError
+
+    class TelemetryOnlyFailure(FakeController):
+        def close(self) -> None:
+            raise ControllerTelemetryCloseError("CarControls already released")
+
+    retained = TelemetryOnlyFailure()
+    landed = FakeController()
+    controllers: list[FakeController] = [retained, landed]
+    loaded_tracks = iter(("spa", "magione"))
+    launches: list[bool] = []
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", max_launches=2),
+            launch=lambda _config: launches.append(True) or (True, "live"),
+            hijack=lambda _config: controllers.pop(0),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda _config: (
+                next(loaded_tracks),
+                "ks_porsche_911_gt3_r_2016",
+            ),
+        )
+    )
+
+    assert report.ok is True
+    assert launches == [True, True]
+    assert report.cleanup_holds == (retained,)
+    assert report.notes and "read-only telemetry mapping retained" in report.notes[0]
+    assert landed.closed is True
+
+
+def test_retained_cleanup_note_survives_later_hijack_early_exit():
+    from tools.ac_harness.custom_ai import ControllerTelemetryCloseError
+
+    class TelemetryOnlyFailure(FakeController):
+        def close(self) -> None:
+            raise ControllerTelemetryCloseError("CarControls already released")
+
+    hijack_results: list[FakeController | RuntimeError] = [
+        TelemetryOnlyFailure(),
+        RuntimeError("second hijack failed"),
+    ]
+
+    def hijack(_config):  # noqa: ANN001, ANN202
+        result = hijack_results.pop(0)
+        if isinstance(result, RuntimeError):
+            raise result
+        return result
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", max_launches=2),
+            launch=_ok_launch,
+            hijack=hijack,
+            drive=lambda *_args: pytest.fail("must not drive"),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda _config: ("spa", "ks_porsche_911_gt3_r_2016"),
+        )
+    )
+
+    assert report.stage == "hijack"
+    assert report.notes and "read-only telemetry mapping retained" in report.notes[0]
+    assert len(report.cleanup_holds) == 1
+
+
+def test_prior_telemetry_cleanup_hold_survives_later_fatal_abort():
+    from tools.ac_harness.custom_ai import ControllerTelemetryCloseError
+
+    class TelemetryOnlyFailure(FakeController):
+        def close(self) -> None:
+            raise ControllerTelemetryCloseError("CarControls already released")
+
+    telemetry_owner = TelemetryOnlyFailure()
+    fatal_owner = FailingCloseController()
+    controllers = iter((telemetry_owner, fatal_owner))
+    loaded_combos = iter(
+        (
+            ("spa", "ks_porsche_911_gt3_r_2016"),
+            ("imola", "ks_porsche_911_gt3_r_2016"),
+        )
+    )
+
+    with pytest.raises(ControllerCleanupAbort) as caught:
+        asyncio.run(
+            run_auto_drive(
+                _cfg(max_launches=2),
+                launch=_ok_launch,
+                hijack=lambda _config: next(controllers),
+                drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+                tap=_tap_returning(CONTINUOUS),
+                verify_track=lambda _config: next(loaded_combos),
+            )
+        )
+
+    assert caught.value.controller is fatal_owner
+    assert caught.value.cleanup_holds == (fatal_owner, telemetry_owner)
+
+
+def test_persistent_close_failure_without_safety_proof_aborts_and_retains_controller():
+    ctrl = FailingCloseController()
+
+    with pytest.raises(ControllerCleanupAbort) as caught:
+        asyncio.run(
+            run_auto_drive(
+                _cfg(),
+                launch=_ok_launch,
+                hijack=lambda c: ctrl,
+                drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+                tap=_tap_returning(CONTINUOUS),
+            )
+        )
+
+    assert caught.value.controller is ctrl
+    assert "failed after 3 close attempts" in str(caught.value)
+
+
 def test_handshake_outcome_gate_preserves_any_prior_failure():
     # #532 daemon HIGH + Codex: ANY run-level failure stays authoritative. The _main gate is
     # `if report.ok`, so a NOT-ok report — a raised error OR an error-less veto (seq_ok False /
@@ -1043,6 +1499,37 @@ def test_run_auto_drive_relaunches_on_track_mismatch_then_drives():
     assert len(restarts) == 1  # #558: CM restarted once, before the recovery relaunch
     assert c_bad.closed is True  # the mismatched controller was released before relaunch
     assert record["controller"] is c_good  # drove on the correct-track session
+
+
+def test_run_auto_drive_retries_after_safe_mismatch_cleanup_failure():
+    record: dict = {}
+    c_bad = CloseAfterSafetyController()
+    c_good = FakeController()
+    controllers: list[FakeController] = [c_bad, c_good]
+    loaded_tracks = ["spa", "magione"]
+    launches: list[int] = []
+    restarts: list[int] = []
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", car_id="ks_porsche_911_gt3_r_2016", max_launches=3),
+            launch=lambda c: (launches.append(1) or True, "live"),
+            hijack=lambda c: controllers.pop(0),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), record),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda c: (loaded_tracks.pop(0), "ks_porsche_911_gt3_r_2016"),
+            restart_launcher=lambda c: restarts.append(1),
+            cleanup_failure=lambda controller, error: True,
+        )
+    )
+
+    assert report.ok is True
+    assert launches == [1, 1]
+    assert restarts == [1]
+    assert c_bad.closed is True
+    assert c_bad.close_calls == 4
+    assert record["controller"] is c_good
+    assert any("AC safety shutdown confirmed" in note for note in report.notes)
 
 
 def test_run_auto_drive_restart_launcher_failure_does_not_crash_recovery():
@@ -1832,6 +2319,62 @@ def test_rig_hijack_fast_fails_to_none_and_bounds_dead_time(monkeypatch):
     assert clock.now <= 3 * (0.5 + 0.1) + 1e-6
 
 
+def test_rig_hijack_normalizes_probe_close_failure(monkeypatch):
+    import tools.ac_harness.auto_drive as ad
+
+    clock = _Clock()
+
+    class FailingProbe:
+        def __init__(self, index: int = 0) -> None:
+            self.index = index
+
+        def read_car_data(self):  # noqa: ANN201
+            return None
+
+        def close(self) -> None:
+            raise OSError("unmap failed")
+
+    monkeypatch.setattr("tools.ac_harness.custom_ai.CustomAIController", FailingProbe)
+    monkeypatch.setattr(ad, "rig_force_safe_after_cleanup_failure", lambda ctrl, error: True)
+    monkeypatch.setattr(ad.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(ad.time, "sleep", clock.sleep)
+
+    with pytest.raises(ControllerCleanupAbort, match="hijack probe 1/1 cleanup"):
+        rig_hijack(_cfg(hijack_attempts=1, hijack_probe_seconds=0.5))
+
+
+def test_rig_hijack_retains_telemetry_only_failure_and_uses_next_probe(monkeypatch):
+    import tools.ac_harness.auto_drive as ad
+    from tools.ac_harness.custom_ai import ControllerTelemetryCloseError
+
+    clock = _Clock()
+    created: list[object] = []
+
+    class Probe:
+        def __init__(self, index: int = 0) -> None:
+            self.index = index
+            created.append(self)
+
+        def read_car_data(self):  # noqa: ANN201
+            return {"packet_id": 1} if len(created) >= 2 else None
+
+        def close(self) -> None:
+            raise ControllerTelemetryCloseError("CarControls already released")
+
+    retained: list[object] = []
+    monkeypatch.setattr("tools.ac_harness.custom_ai.CustomAIController", Probe)
+    monkeypatch.setattr(ad.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(ad.time, "sleep", clock.sleep)
+
+    controller = rig_hijack(
+        _cfg(hijack_attempts=2, hijack_probe_seconds=0.5),
+        retain_telemetry_controller=retained.append,
+    )
+
+    assert controller is created[1]
+    assert retained == [created[0]]
+
+
 def test_parse_setup_fuel_reads_value_and_tolerates_missing():
     assert parse_setup_fuel("[FUEL]\nVALUE=45\nMIN=2\nMAX=120\n") == 45.0
     assert parse_setup_fuel("[FUEL]\nVALUE=63.5 ; litres\n") == 63.5
@@ -2113,6 +2656,60 @@ def test_main_releases_registered_rig_cleanup_on_exception(monkeypatch):
     with pytest.raises(RuntimeError, match="evidence capture failed"):
         auto_drive_module._main([])
     assert released == [True]
+
+
+def test_main_retains_registered_rig_cleanup_on_controller_abort(monkeypatch):
+    import tools.ac_harness.auto_drive as auto_drive_module
+
+    released: list[bool] = []
+    ctrl = FailingCloseController()
+    abort = ControllerCleanupAbort(ControllerCleanupError("unsafe mapping"), ctrl)
+
+    def abort_after_lock(_argv, cleanup):
+        cleanup.callback(released.append, True)
+        raise abort
+
+    monkeypatch.setattr(auto_drive_module, "_main_impl", abort_after_lock)
+    with pytest.raises(ControllerCleanupAbort) as caught:
+        auto_drive_module._main([])
+
+    assert released == []
+    assert caught.value.controller is ctrl
+    assert caught.value.cleanup_hold is not None
+    hold = caught.value.cleanup_hold
+    hold.close()
+    assert released == [True]
+
+
+def test_fatal_cleanup_exit_emits_chained_traceback_before_os_exit(monkeypatch, capsys):
+    import tools.ac_harness.auto_drive as auto_drive_module
+
+    class ImmediateExit(BaseException):
+        pass
+
+    def exit_process(code):
+        raise ImmediateExit(code)
+
+    ctrl = FailingCloseController()
+    try:
+        try:
+            raise OSError("CloseHandle failed")
+        except OSError as exc:
+            raise ControllerCleanupAbort(
+                ControllerCleanupError("unsafe mapping retained"),
+                ctrl,
+            ) from exc
+    except ControllerCleanupAbort as abort:
+        monkeypatch.setattr(auto_drive_module.os, "_exit", exit_process)
+        with pytest.raises(ImmediateExit) as caught:
+            auto_drive_module._exit_after_controller_cleanup_abort(abort)
+
+    stderr = capsys.readouterr().err
+    assert caught.value.args == (1,)
+    assert "immediate OS process exit" in stderr
+    assert "Traceback (most recent call last)" in stderr
+    assert "OSError: CloseHandle failed" in stderr
+    assert "ControllerCleanupAbort: fatal controller cleanup failure" in stderr
 
 
 def test_rig_drive_synchronously_checks_pid_before_clean_stop(monkeypatch):

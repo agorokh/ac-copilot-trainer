@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-16T03:20:00Z
+last_updated: 2026-07-19T01:50:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
   - AcCopilotTrainer/03_Investigations/issue-602-portaudio-fixed-layout-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-603-car-content-preflight-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-pit-stall-sim-death-2026-07-15.md
@@ -40,6 +41,99 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Review-resolved (2026-07-18):** PR
+[#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
+operator session launcher through Game Point, with a machine-wide lock held across the live session.
+Final code commit `8c9d22d` adds finite timing enforcement at the shared rig-lock boundary,
+immediate failed-Car0 attempt termination, mandatory AC teardown before a pre-stability release can
+escape the unsafe-hold loop, early configured-CM path validation, and durable Stable AC ownership
+metadata. **Release AC** refuses known unrelated harness owners while preserving the recovery
+sentinel for unknown or legacy metadata. Final hardening clamps bounded waits, resolves relative CM
+paths from the Game Point root, atomically timestamps process liveness, rechecks cleanup success,
+proves unknown-owner contention cross-process, fails closed on native enumeration errors, requires
+two confirmed absence snapshots before releasing ownership, and blocks invalid configured CM paths
+without default-install fallback. Car0 probing now observes Release AC throughout, and a post-LIVE
+handshake miss cannot advance the stale-CM restart streak. Windows mapping-close failures are fatal
+and cleanup still attempts CarControls release after a read-section error; explicit non-resilient
+lock owners are visible as non-green `busy_other_session` rather than healthy Stable AC. Mapped
+view/handle teardown now has one shared lifecycle helper; auto-drive converts teardown faults into
+structured `cleanup` failures without hiding an earlier run failure. Car0 readiness is timestamped
+only after its blocking handshake and measured against the pre-probe watch start, so it cannot
+stretch go-live or shorten stability. The launcher summary reports a busy unrelated owner without
+offering the refused Stable AC action. Durable lock metadata now advances from `stabilizing` to
+`stable` only after the sustained proof, so Game Point cannot report READY during retries. Packet
+regressions fail the attempt instead of inheriting stability across an `acs.exe` recycle, and the
+Car0 timeout boundary performs its intended final read. Phase updates use a non-append descriptor
+and valid-record replacement; acquisition-time metadata errors roll back the OS byte lock.
+Starting/stabilizing remains non-green readiness while the accepted CLI/GUI start is not reported
+as a failure. Owner records are capped at 4 KiB for both reads and replacement padding, including
+recovery from an oversized corrupt file. AC-session ownership/recovery copy outranks the generic
+sidecar-down prompt. Process absence before the first real `acs.exe` sighting remains false, while
+enumeration uncertainty and post-sighting disappearance retain fail-closed/confirmed semantics;
+enumeration errors before the first real sighting no longer synthesize a false process-exit edge.
+Controller teardown retries the retained native resources, then brakes, terminates, and confirms
+`acs.exe` absent in two consecutive strict snapshots before a cleanup report may drop ownership.
+An unconfirmed safety shutdown or failed post-safety close aborts while retaining the controller
+and detaching the rig-lock ExitStack; the CLI uses immediate OS process exit so the mapping and
+machine lock close together. A track/car mismatch remains the primary launch error when its cleanup
+also fails; a safely completed emergency cleanup retains its existing relaunch budget and evidence.
+Each resilient-launch retry resets its liveness sighting history only after the previous `acs.exe`
+has been cleaned up, so normal pre-spawn absence cannot become a false exit from an earlier attempt.
+Resilient Car0 probe close failure retains the controller and terminates by OS process exit without
+running the normal rig-lock release `finally`; it explicitly reconfirms `acs.exe` teardown with
+operator interrupts disabled before that exit. Programmatic auto-drive abort ownership lives on the
+exception's detached cleanup stack rather than an unbounded module-global resource list.
+Cleanup uses a separate strict process oracle: enumeration uncertainty triggers taskkill/retry and
+cannot masquerade as prior-AC absence, while the launch watcher keeps its attempt-scoped semantics.
+Both resilient-launch cleanup and auto-drive's fatal controller-cleanup path now use the shared
+`entry_launcher.terminate_process_tree_confirmed_absent` boundary, so taskkill, strict unknown-state
+handling, bounded polling, and consecutive absence confirmation cannot drift between launchers.
+That helper fails closed off Windows instead of accepting an empty unsupported-platform snapshot.
+Auto-drive flushes the complete chained cleanup traceback before its required atomic OS exit, so
+native teardown failures retain postmortem evidence without releasing the mapping before the lock.
+Best-effort native enumeration now preserves matching PIDs already observed before a late Toolhelp
+failure, while strict cleanup callers still receive the error. A failed post-proof `stable` phase
+publication keeps the live AC session and lock under `stabilizing` ownership instead of destroying
+the session; Game Point therefore stays honestly non-READY while the operator retains the drive.
+Custom-AI native close retries now live in `custom_ai.close_controller_with_retries`; auto-drive
+and the resilient Car0 probe both exhaust the same retained-resource retry budget before invoking
+their persistent-failure AC safety paths. Close failures now distinguish retained CarControls
+ownership from a read-only telemetry mapping: only a retained control mapping can trigger the AC
+safety shutdown. The emergency safety command writes verified brake/steer fields and leaves the
+explicitly unverified handbrake offset at zero.
+Telemetry-only failures no longer lose their final owning reference: resilient launch retains each
+read-only mapping and retries it throughout stabilization and the stable operator hold, while
+standalone probes carry the controller on their cleanup exception. Auto-drive returns a structured
+cleanup failure whose non-serialized report hold keeps the controller reachable for process-lifetime
+cleanup, without invoking the retained-controls AC safety shutdown or atomic-abort path.
+Writable mapping operations now reject an already-unmapped null view with a Python
+`SharedMemoryUnavailable` error, so a handle-only partial close cannot crash the emergency-brake
+path before authoritative taskkill runs.
+Interrupts and other unexpected `BaseException` failures during native close attempts or the
+retained-controls safety callback are converted to the launcher-specific retained-controller fatal
+path. Auto-drive detaches the rig-lock cleanup stack; resilient Car0 cleanup retains its controller
+for fatal AC teardown. The `AC_COPILOT_RESILIENT_LAYOUT` environment override is explicitly pinned
+against the settings-file value.
+Telemetry-only close failures no longer consume the remaining native hijack-probe or cached-session
+relaunch budget. The rig CLI retains those read-only owners in a scoped hold list, and composed
+auto-drive transfers every retained owner into its final structured report across all return paths.
+Every structured return also preserves accumulated cleanup notes, including an earlier retained
+telemetry-mapping warning when a later hijack attempt exits early. Readable mappings now match the
+writable guard by rejecting an already-unmapped null view with `SharedMemoryUnavailable`.
+The final post-safety native close converts every `BaseException` into the fail-closed cleanup
+abort. That abort retains the fatal controller plus all earlier telemetry-only owners, including
+owners accumulated across sim-death retries and rig CLI hijack probes, until process teardown.
+A hijack cleanup that confirms AC absent and releases its native mapping consumes the remaining
+launch budget instead of ending the run; its cleanup detail stays in the final report.
+Fatal cleanup ignores the release sentinel before taskkill, sleeps between retries, and has a
+bounded hold before atomic process exit. Content Manager must be positively enumerated and survive
+its startup settle before the Quick Drive URL is issued. The existing `resilient_layout` settings
+template key now has an explicit regression assertion.
+Local repository parity is green at `3226 passed`, `77 skipped`, and `86.77%` coverage. The updated
+head still requires its mandatory reviewer cooldown and exhaustive GitHub current-head audit. The
+PR remains open and unmerged; Windows-rig verification is still pending. Detail:
+[[pr-626-resilient-launch-review-2026-07-18]].
 
 **Active (2026-07-16, autonomous run):** [#531](https://github.com/agorokh/ac-copilot-trainer/issues/531)
 Phase 2+ delivery. Parts **D-remainder + E** MERGED via PR

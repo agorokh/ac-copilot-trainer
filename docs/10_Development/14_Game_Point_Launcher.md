@@ -93,6 +93,48 @@ or failed audio backend reports `voice: DISABLED - <reason>` and makes the
 overall status `needs_attention`; the launcher does not treat the mere presence
 of `AC_COPILOT_VOICE_BANK` as proof that audio initialized.
 
+## Stable AC driver session
+
+The **Stable AC** button is the operator-facing entrypoint for the resilient
+Content Manager launch loop from issue #624. It retries the stochastic CSP
+session-init livelock, proves continuous render progress for the configured
+stability window plus the CSP Car0 drivability handshake, and then leaves the
+successful session live for the driver.
+The `AC Session` row reports `unconfigured`, `idle`, `running`, or the child
+exit code; progress is appended to `logs/resilient-launch.log`. A failed child
+makes the aggregate status non-green and the summary says **Press Stable AC**,
+so the recovery action is unambiguous without conflating it with sidecar START.
+Because the packaged child has no console, **Release AC** writes the shared
+ownership-release signal; the child then drops the rig lock while deliberately
+leaving AC live. The signal also works after Game Point is closed and reopened.
+If the ownership file cannot be read or probed, the AC Session row reports
+`unknown`, aggregate status stays non-green, and Stable AC refuses to spawn
+until ownership can be determined.
+
+Configure the non-secret car and circuit identifiers in the per-user
+`settings.json`:
+
+```json
+{
+  "resilient_car": "ks_porsche_911_gt3_r_2016",
+  "resilient_track": "spa",
+  "resilient_layout": "",
+  "resilient_cm_exe": "D:\\Portable CM\\Content Manager.exe"
+}
+```
+
+Environment variables `AC_COPILOT_RESILIENT_CAR`,
+`AC_COPILOT_RESILIENT_TRACK`, `AC_COPILOT_RESILIENT_LAYOUT`, and
+`AC_COPILOT_RESILIENT_CM_EXE` override those values. Leave `resilient_cm_exe`
+blank for the standard Program Files install. For a one-shot command, use
+`--resilient-launch` with optional `--resilient-car`, `--resilient-track`,
+`--resilient-layout`, and `--resilient-cm-exe` CLI overrides.
+The packaged executable dispatches the same child workflow, and closing Game
+Point does not terminate a stable operator session. Embedders and tests that set
+`GamePointConfig.rig_lock_path` pass that exact ownership path to the child; the
+production launcher continues to use the machine-wide Harness LocalAppData path.
+The matching release signal is stored beside that lock.
+
 ## SimHub auto-start
 
 SimHub is the operator's haptics/dashboard app (e.g. ShakeIt bass-shaker

@@ -17,6 +17,7 @@ import struct
 
 import pytest
 
+import tools.ac_harness.custom_ai as custom_ai
 from tools.ac_harness.custom_ai import (
     CAR_DATA_MIN_BYTES,
     CONTROLS_BUFFER_BYTES,
@@ -44,11 +45,17 @@ from tools.ac_harness.custom_ai import (
     TELEPORT_TO_PITS,
     CarControls,
     CarData,
+    ControllerTelemetryCloseError,
+    CustomAIController,
     SimState,
+    _ReadableSection,
+    _WritableSection,
     car_controls_name,
     car_data_name,
+    close_controller_with_retries,
     parse_car_data,
 )
+from tools.ac_harness.shared_memory import SharedMemoryUnavailable
 
 
 # --------------------------------------------------------------------------- helpers
@@ -256,3 +263,86 @@ def test_section_name_rejects_negative_car_index():
             car_controls_name(bad)
         with pytest.raises(ValueError, match="car_index"):
             car_data_name(bad)
+
+
+@pytest.mark.parametrize("section_type", [_WritableSection, _ReadableSection])
+def test_mapped_section_close_surfaces_unmap_failure(monkeypatch, section_type):
+    class Kernel32:
+        def UnmapViewOfFile(self, _address) -> bool:
+            return False
+
+        def CloseHandle(self, _handle) -> bool:
+            return True
+
+    monkeypatch.setattr(custom_ai, "_kernel32", Kernel32)
+    section = section_type(handle=11, address=22, length=64)
+
+    with pytest.raises(OSError, match="UnmapViewOfFile failed"):
+        section.close()
+
+    assert section._address == 22
+    assert section._handle is None
+
+
+@pytest.mark.parametrize("section_type", [_WritableSection, _ReadableSection])
+def test_mapped_section_close_surfaces_handle_failure(monkeypatch, section_type):
+    class Kernel32:
+        def UnmapViewOfFile(self, _address) -> bool:
+            return True
+
+        def CloseHandle(self, _handle) -> bool:
+            return False
+
+    monkeypatch.setattr(custom_ai, "_kernel32", Kernel32)
+    section = section_type(handle=11, address=22, length=64)
+
+    with pytest.raises(OSError, match="CloseHandle failed"):
+        section.close()
+
+    assert section._address is None
+    assert section._handle == 11
+    if section_type is _WritableSection:
+        with pytest.raises(SharedMemoryUnavailable, match="view is no longer available"):
+            section.write(b"safety brake")
+    else:
+        with pytest.raises(SharedMemoryUnavailable, match="view is no longer available"):
+            section.read(1)
+
+
+def test_controller_close_attempts_controls_after_car_data_failure() -> None:
+    closed: list[str] = []
+
+    class FailingCarData:
+        def close(self) -> None:
+            closed.append("car_data")
+            raise OSError("car-data close failed")
+
+    class Controls:
+        def close(self) -> None:
+            closed.append("controls")
+
+    controller = object.__new__(CustomAIController)
+    controller._car_data = FailingCarData()
+    controller._controls = Controls()
+
+    with pytest.raises(ControllerTelemetryCloseError, match="car-data close failed"):
+        controller.close()
+
+    assert closed == ["car_data", "controls"]
+
+
+def test_shared_controller_close_retries_retained_native_resources() -> None:
+    class FlakyController:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls < 3:
+                raise OSError("native close temporarily failed")
+
+    controller = FlakyController()
+
+    close_controller_with_retries(controller)
+
+    assert controller.close_calls == 3

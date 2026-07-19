@@ -161,6 +161,31 @@ def summary_for(status: GamePointStatus, port: int = 8765) -> tuple[str, str, st
     )
     if blocker is not None:
         return ("PRESS START", "brake", blocker.detail or blocker.state)
+    if not status.resilient.ok:
+        resilient_state = (status.resilient.state or "").strip().lower()
+        if resilient_state == "unknown":
+            return (
+                "CHECK AC LOCK",
+                "brake",
+                status.resilient.detail or "AC ownership cannot be determined",
+            )
+        if resilient_state in {"busy_other_session", "release_unsupported"}:
+            return (
+                "AC SESSION BUSY",
+                "brake",
+                status.resilient.detail or "another rig session owns Assetto Corsa",
+            )
+        if resilient_state in {"starting", "stabilizing"}:
+            return (
+                "STABILIZING AC",
+                "brake",
+                status.resilient.detail or "proving a stable Assetto Corsa session",
+            )
+        return (
+            "PRESS STABLE AC",
+            "brake",
+            status.resilient.detail or status.resilient.state or "AC session needs attention",
+        )
     if (status.sidecar.state or "").strip().lower() in _SIDECAR_DOWN_STATES:
         return ("PRESS START", "brake", f"nothing on port {port} yet")
     rows = (status.sidecar, status.screen, status.voice, status.simhub, status.tablet)

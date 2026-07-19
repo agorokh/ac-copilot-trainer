@@ -62,8 +62,10 @@ import math
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
+import traceback
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field, replace
@@ -72,12 +74,18 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Protocol
 
 from tools.ac_content import read_car_data_member
+from tools.ac_harness.custom_ai import (
+    ControllerCloseRetryError,
+    close_controller_with_retries,
+)
+from tools.ac_harness.preset_utils import build_practice_preset
 from tools.ac_harness.sequence_probe import (
     Check,
     evaluate_sequence,
     intervention_summary,
     tap_frames,
 )
+from tools.ac_harness.window_utils import minimize_foreground_window
 from tools.ai_sidecar.external_protocol import CLIENT_CLASS_OBSERVER
 
 if TYPE_CHECKING:
@@ -403,7 +411,7 @@ class AutoDriveReport:
     """Structured result of one composed autonomous self-test run."""
 
     ok: bool
-    stage: str  # preflight | launch | hijack | setup | pipeline | drive | done
+    stage: str  # preflight | launch | hijack | setup | pipeline | drive | cleanup | done
     launched: bool = False
     hijacked: bool = False
     drive: DriveStats | None = None
@@ -439,6 +447,20 @@ class AutoDriveReport:
     # final report stays at the top level for backward compatibility; this list makes a recovered
     # crash visible and preserves its control trace/checks instead of laundering it into PASS.
     attempts: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def cleanup_holds(self) -> tuple[Controller, ...]:
+        """Non-serialized telemetry mapping owners retained for process-lifetime cleanup."""
+        return tuple(getattr(self, "_cleanup_holds", ()))
+
+    def retain_cleanup_controller(self, controller: Controller) -> None:
+        """Keep a failed read-only mapping reachable without polluting JSON evidence."""
+        holds = getattr(self, "_cleanup_holds", None)
+        if holds is None:
+            holds = []
+            self._cleanup_holds = holds
+        if not any(retained is controller for retained in holds):
+            holds.append(controller)
 
     @property
     def reason(self) -> str:
@@ -550,6 +572,108 @@ class Controller(Protocol):
     def close(self) -> None: ...
 
 
+class ControllerCleanupError(RuntimeError):
+    """A Custom-AI controller could not release its native shared-memory resources."""
+
+
+class ControllerTelemetryCleanupPending(ControllerCleanupError):
+    """CarControls released, but a read-only mapping remains owned for later/process cleanup."""
+
+    def __init__(self, message: str, controller: Controller) -> None:
+        super().__init__(message)
+        self.controller = controller
+
+
+class ControllerCleanupAbort(SystemExit):
+    """Fail-closed abort that retains a controller until process teardown releases its mapping."""
+
+    def __init__(self, error: ControllerCleanupError, controller: Controller) -> None:
+        super().__init__(f"fatal controller cleanup failure: {error}")
+        self.controller = controller
+        self._cleanup_holds: list[Controller] = [controller]
+        self.cleanup_hold: ExitStack | None = None
+
+    @property
+    def cleanup_holds(self) -> tuple[Controller, ...]:
+        """All native mapping owners that must remain reachable until process teardown."""
+        return tuple(self._cleanup_holds)
+
+    def retain_cleanup_controller(self, controller: Controller) -> None:
+        """Attach an earlier telemetry-only owner to this fail-closed abort."""
+        if not any(retained is controller for retained in self._cleanup_holds):
+            self._cleanup_holds.append(controller)
+
+
+CleanupFailureFn = Callable[[Controller, ControllerCleanupError], bool]
+
+
+def _close_controller(
+    controller: Controller,
+    *,
+    context: str,
+    cleanup_failure: CleanupFailureFn | None = None,
+    attempts: int = 3,
+) -> None:
+    """Release a controller without ever abandoning a live Custom-AI control mapping.
+
+    ``CustomAIController.close`` preserves whichever native handle/view failed to release, so a
+    retry is meaningful: successfully released members remain cleared and only failed resources
+    are retried. If all attempts fail, the rig callback must make AC safe and return ``True`` only
+    after confirming ``acs.exe`` is gone. Without that proof, abort while retaining ``controller``
+    on the exception; process teardown then releases the mapping instead of a normal return
+    silently dropping the last owner.
+    """
+    try:
+        close_controller_with_retries(controller, attempts=attempts)
+        return
+    except ControllerCloseRetryError as exc:
+        last_error = exc.last_error
+        failed_attempts = exc.attempts
+        controls_retained = exc.controls_retained
+    except BaseException as exc:
+        interrupted_error = ControllerCleanupError(
+            f"{context}: {type(exc).__name__}: {exc} "
+            "(interrupted during controller close; control ownership unknown)"
+        )
+        raise ControllerCleanupAbort(interrupted_error, controller) from exc
+    error = ControllerCleanupError(
+        f"{context}: {type(last_error).__name__}: {last_error} "
+        f"(failed after {failed_attempts} close attempts)"
+    )
+    error.__cause__ = last_error
+    if not controls_retained:
+        raise ControllerTelemetryCleanupPending(
+            f"{error}; CarControls ownership released, read-only telemetry mapping retained",
+            controller,
+        ) from last_error
+    try:
+        safety_confirmed = (
+            cleanup_failure(controller, error) if cleanup_failure is not None else False
+        )
+    except ControllerCleanupAbort:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - interrupts must retain controller and rig lock
+        error.add_note(f"cleanup safety action failed: {type(exc).__name__}: {exc}")
+        raise ControllerCleanupAbort(error, controller) from exc
+    if not safety_confirmed:
+        raise ControllerCleanupAbort(error, controller)
+
+    # AC is confirmed absent, so the control mapping can no longer command a live car. Try once
+    # more to release the local native resources. The run still fails: needing to kill AC is never
+    # a successful cleanup, even when this last local close succeeds.
+    try:
+        controller.close()
+    except ControllerCleanupAbort:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - retain mapping and rig lock on every failure
+        final_error = ControllerCleanupError(
+            f"{error}; AC safety shutdown confirmed, but final local release failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        raise ControllerCleanupAbort(final_error, controller) from exc
+    raise ControllerCleanupError(f"{error}; AC safety shutdown confirmed")
+
+
 LaunchFn = Callable[[AutoDriveConfig], "tuple[bool, str]"]
 HijackFn = Callable[[AutoDriveConfig], "Controller | None"]
 ApplySetupFn = Callable[[AutoDriveConfig], Awaitable[dict]]
@@ -560,6 +684,33 @@ VerifyTrackFn = Callable[[AutoDriveConfig], "tuple[str | None, str | None] | Non
 # #558: called on a cached-session mismatch to RESTART the launcher (kill Content Manager) so the
 # next launch cold-starts a fresh CM — the recovery a plain URL re-issue cannot perform.
 RestartLauncherFn = Callable[[AutoDriveConfig], None]
+
+
+def rig_force_safe_after_cleanup_failure(
+    controller: Controller,
+    error: ControllerCleanupError,
+) -> bool:  # pragma: no cover - rig-only
+    """Brake, terminate AC, and confirm absence after persistent controller cleanup failure."""
+    from tools.ac_harness.entry_launcher import terminate_process_tree_confirmed_absent
+
+    try:
+        controller.write_controls(0.0, 1.0, 0.0, handbrake=0.0)
+    except Exception as exc:  # noqa: BLE001 - taskkill remains the authoritative safety action
+        _log(f"controller cleanup safety brake failed: {type(exc).__name__}: {exc}")
+
+    _log(f"FATAL {error}; terminating acs.exe before releasing controller ownership")
+    safe = terminate_process_tree_confirmed_absent(
+        "acs.exe",
+        timeout=3.0,
+        poll=0.1,
+        absent_confirmations=2,
+        log=lambda message: _log(f"controller cleanup safety action: {message}"),
+    )
+    if safe:
+        _log("controller cleanup safety action confirmed: acs.exe is absent")
+    else:
+        _log("FATAL could not confirm acs.exe safety shutdown")
+    return safe
 
 
 def rig_verify_track(
@@ -724,6 +875,7 @@ async def run_auto_drive(
     apply_setup: ApplySetupFn | None = None,
     verify_track: VerifyTrackFn | None = None,
     restart_launcher: RestartLauncherFn | None = None,
+    cleanup_failure: CleanupFailureFn | None = None,
 ) -> AutoDriveReport:
     """Compose launch → setup → hijack → (background drive) → WS assert → teardown into one report.
 
@@ -744,10 +896,24 @@ async def run_auto_drive(
     setup_ack: dict | None = None
     setup_applied: bool | None = None
     controller: Controller | None = None
+    telemetry_cleanup_holds: list[Controller] = []
+
+    def retain_abort_cleanup_holds(exc: ControllerCleanupAbort) -> None:
+        for retained_controller in telemetry_cleanup_holds:
+            exc.retain_cleanup_controller(retained_controller)
+
+    def finish(report: AutoDriveReport) -> AutoDriveReport:
+        prior_notes = [note for note in launch_notes if note not in report.notes]
+        report.notes[:0] = prior_notes
+        for retained_controller in telemetry_cleanup_holds:
+            report.retain_cleanup_controller(retained_controller)
+        return report
+
     attempts = 1 if config.skip_launch else max(1, config.max_launches)
     launch_config = replace(config, max_launches=1)
     launched_once = config.skip_launch
     last_launch_error = ""
+    launch_notes: list[str] = []
     # #558: cold-start a FRESH Content Manager before a relaunch when the previous attempt signalled
     # a stale CM. A stale CM keeps serving its cached session / stalling the pre-drive overlay no
     # matter how often the acmanager:// URL is re-issued, so the only real recovery is a CM restart.
@@ -786,26 +952,30 @@ async def run_auto_drive(
         # leg re-bakes, so this re-verifies each attempt.
         if config.setup:
             if apply_setup is None:
-                return AutoDriveReport(
-                    ok=False,
-                    stage="setup",
-                    launched=not config.skip_launch,
-                    setup_requested=setup_requested,
-                    setup_applied=False,
-                    error="setup requested but no apply_setup leg wired",
-                    **identity,
+                return finish(
+                    AutoDriveReport(
+                        ok=False,
+                        stage="setup",
+                        launched=not config.skip_launch,
+                        setup_requested=setup_requested,
+                        setup_applied=False,
+                        error="setup requested but no apply_setup leg wired",
+                        **identity,
+                    )
                 )
             try:
                 setup_ack = await apply_setup(config)
             except Exception as exc:  # noqa: BLE001 - a setup-leg crash is a run FAIL
-                return AutoDriveReport(
-                    ok=False,
-                    stage="setup",
-                    launched=not config.skip_launch,
-                    setup_requested=setup_requested,
-                    setup_applied=False,
-                    error=f"setup verify failed: {type(exc).__name__}: {exc}",
-                    **identity,
+                return finish(
+                    AutoDriveReport(
+                        ok=False,
+                        stage="setup",
+                        launched=not config.skip_launch,
+                        setup_requested=setup_requested,
+                        setup_applied=False,
+                        error=f"setup verify failed: {type(exc).__name__}: {exc}",
+                        **identity,
+                    )
                 )
             ok_setup, detail = verify_setup_ack(setup_ack, setup_requested)
             setup_applied = ok_setup
@@ -838,25 +1008,80 @@ async def run_auto_drive(
                         f"— relaunching (attempt {attempt_idx + 2}/{attempts})"
                     )
                     continue
-                return AutoDriveReport(
+                return finish(
+                    AutoDriveReport(
+                        ok=False,
+                        stage="setup",
+                        launched=not config.skip_launch,
+                        setup_requested=setup_requested,
+                        setup_applied=False,
+                        setup_ack=setup_ack,
+                        error=(
+                            f"setup not applied: {detail}"
+                            + (
+                                " (Content Manager served a cached session: "
+                                f"{combo_mismatch}; still "
+                                f"mismatched after {attempts} launch attempt(s))"
+                                if combo_mismatch is not None
+                                else ""
+                            )
+                        ),
+                        **identity,
+                    )
+                )
+        try:
+            controller = hijack(config)
+        except ControllerCleanupAbort as exc:
+            retain_abort_cleanup_holds(exc)
+            raise
+        except ControllerTelemetryCleanupPending as exc:
+            telemetry_cleanup_holds.append(exc.controller)
+            report = AutoDriveReport(
+                ok=False,
+                stage="cleanup",
+                launched=not config.skip_launch,
+                setup_requested=setup_requested,
+                setup_applied=setup_applied,
+                setup_ack=setup_ack,
+                error=str(exc),
+                **identity,
+            )
+            return finish(report)
+        except ControllerCleanupError as exc:
+            cleanup_detail = str(exc)
+            if attempt_idx < attempts - 1 and not config.skip_launch:
+                launch_notes.append(cleanup_detail)
+                restart_cm_next = True
+                _log(
+                    "hijack cleanup made AC safe; retrying a fresh launch "
+                    f"(attempt {attempt_idx + 2}/{attempts})"
+                )
+                continue
+            return finish(
+                AutoDriveReport(
                     ok=False,
-                    stage="setup",
+                    stage="cleanup",
                     launched=not config.skip_launch,
                     setup_requested=setup_requested,
-                    setup_applied=False,
+                    setup_applied=setup_applied,
                     setup_ack=setup_ack,
-                    error=(
-                        f"setup not applied: {detail}"
-                        + (
-                            f" (Content Manager served a cached session: {combo_mismatch}; still "
-                            f"mismatched after {attempts} launch attempt(s))"
-                            if combo_mismatch is not None
-                            else ""
-                        )
-                    ),
+                    error=cleanup_detail,
                     **identity,
                 )
-        controller = hijack(config)
+            )
+        except Exception as exc:  # noqa: BLE001 - a hijack-leg crash is a structured run failure
+            return finish(
+                AutoDriveReport(
+                    ok=False,
+                    stage="hijack",
+                    launched=not config.skip_launch,
+                    setup_requested=setup_requested,
+                    setup_applied=setup_applied,
+                    setup_ack=setup_ack,
+                    error=f"hijack failed: {type(exc).__name__}: {exc}",
+                    **identity,
+                )
+            )
         if controller is not None:
             # AUTHORITATIVE identity guard (#532/#535). CM sometimes launches its cached last
             # session instead of the requested preset; driving the requested line on a different
@@ -877,7 +1102,79 @@ async def run_auto_drive(
                 # the terminal attempt — or skip_launch, which has no launch leg to relaunch —
                 # FAILs fast at stage="launch", preserving the #535/#532 honest-failure guard so
                 # the harness never drives a mismatched combo or persists a mislabeled plant.
-                controller.close()
+                try:
+                    _close_controller(
+                        controller,
+                        context=f"cleanup after rejecting mismatched {mismatch}",
+                        cleanup_failure=cleanup_failure,
+                    )
+                except ControllerCleanupAbort as exc:
+                    retain_abort_cleanup_holds(exc)
+                    raise
+                except ControllerTelemetryCleanupPending as exc:
+                    cleanup_detail = str(exc)
+                    telemetry_cleanup_holds.append(exc.controller)
+                    controller = None
+                    last_launch_error = (
+                        f"loaded {mismatch} — Content Manager launched a cached session"
+                    )
+                    if attempt_idx < attempts - 1 and not config.skip_launch:
+                        launch_notes.append(cleanup_detail)
+                        restart_cm_next = True
+                        _log(
+                            f"track/car guard: {mismatch} (CM cached session; read-only cleanup "
+                            f"retained) — relaunching (attempt {attempt_idx + 2}/{attempts})"
+                        )
+                        continue
+                    return finish(
+                        AutoDriveReport(
+                            ok=False,
+                            stage="launch",
+                            launched=not config.skip_launch,
+                            hijacked=True,
+                            setup_requested=setup_requested,
+                            setup_applied=setup_applied,
+                            setup_ack=setup_ack,
+                            error=(
+                                f"loaded {mismatch} — Content Manager launched a cached session; "
+                                "the harness will not drive the requested line on a different combo"
+                            ),
+                            notes=[*launch_notes, cleanup_detail],
+                            **identity,
+                        )
+                    )
+                except ControllerCleanupError as exc:
+                    cleanup_detail = str(exc)
+                    controller = None
+                    last_launch_error = (
+                        f"loaded {mismatch} — Content Manager launched a cached session"
+                    )
+                    if attempt_idx < attempts - 1 and not config.skip_launch:
+                        launch_notes.append(cleanup_detail)
+                        restart_cm_next = True
+                        _log(
+                            f"track/car guard: {mismatch} (CM cached session; cleanup required "
+                            f"AC safety shutdown) — relaunching (attempt "
+                            f"{attempt_idx + 2}/{attempts})"
+                        )
+                        continue
+                    return finish(
+                        AutoDriveReport(
+                            ok=False,
+                            stage="launch",
+                            launched=not config.skip_launch,
+                            hijacked=True,
+                            setup_requested=setup_requested,
+                            setup_applied=setup_applied,
+                            setup_ack=setup_ack,
+                            error=(
+                                f"loaded {mismatch} — Content Manager launched a cached session; "
+                                "the harness will not drive the requested line on a different combo"
+                            ),
+                            notes=[*launch_notes, cleanup_detail],
+                            **identity,
+                        )
+                    )
                 controller = None
                 last_launch_error = f"loaded {mismatch} — Content Manager launched a cached session"
                 if attempt_idx < attempts - 1 and not config.skip_launch:
@@ -887,21 +1184,23 @@ async def run_auto_drive(
                         f"(attempt {attempt_idx + 2}/{attempts})"
                     )
                     continue
-                return AutoDriveReport(
-                    ok=False,
-                    stage="launch",
-                    launched=not config.skip_launch,
-                    hijacked=True,
-                    setup_requested=setup_requested,
-                    setup_applied=setup_applied,
-                    setup_ack=setup_ack,
-                    error=(
-                        f"loaded {mismatch} — Content Manager launched a cached session; "
-                        f"still mismatched after {attempts} launch attempt(s) (the harness "
-                        "will not drive the requested line on a different combo or persist a "
-                        "mislabeled plant)"
-                    ),
-                    **identity,
+                return finish(
+                    AutoDriveReport(
+                        ok=False,
+                        stage="launch",
+                        launched=not config.skip_launch,
+                        hijacked=True,
+                        setup_requested=setup_requested,
+                        setup_applied=setup_applied,
+                        setup_ack=setup_ack,
+                        error=(
+                            f"loaded {mismatch} — Content Manager launched a cached session; "
+                            f"still mismatched after {attempts} launch attempt(s) (the harness "
+                            "will not drive the requested line on a different combo or persist a "
+                            "mislabeled plant)"
+                        ),
+                        **identity,
+                    )
                 )
             break
         if config.skip_launch:
@@ -909,37 +1208,43 @@ async def run_auto_drive(
 
     if controller is None:
         if not launched_once:
-            return AutoDriveReport(
-                ok=False,
-                stage="launch",
-                launched=False,
-                error=last_launch_error or "sim never reached LIVE",
-                **identity,
+            return finish(
+                AutoDriveReport(
+                    ok=False,
+                    stage="launch",
+                    launched=False,
+                    error=last_launch_error or "sim never reached LIVE",
+                    **identity,
+                )
             )
         if last_launch_error:
             # The most recent attempt failed at launch (never reached LIVE) or re-served a cached
             # session — report that, not a generic hijack failure, so the evidence bundle points at
             # the real subsystem (#537 Codex P2). Cleared on every successful launch above, so a
             # true hijack failure (launch OK, no controller) still reads as stage="hijack" below.
-            return AutoDriveReport(
+            return finish(
+                AutoDriveReport(
+                    ok=False,
+                    stage="launch",
+                    launched=not config.skip_launch,
+                    setup_requested=setup_requested,
+                    setup_applied=setup_applied,
+                    setup_ack=setup_ack,
+                    error=last_launch_error,
+                    **identity,
+                )
+            )
+        return finish(
+            AutoDriveReport(
                 ok=False,
-                stage="launch",
+                stage="hijack",
                 launched=not config.skip_launch,
                 setup_requested=setup_requested,
                 setup_applied=setup_applied,
                 setup_ack=setup_ack,
-                error=last_launch_error,
+                error="CSP did not accept the carcsw hijack",
                 **identity,
             )
-        return AutoDriveReport(
-            ok=False,
-            stage="hijack",
-            launched=not config.skip_launch,
-            setup_requested=setup_requested,
-            setup_applied=setup_applied,
-            setup_ack=setup_ack,
-            error="CSP did not accept the carcsw hijack",
-            **identity,
         )
 
     stop = threading.Event()
@@ -967,7 +1272,7 @@ async def run_auto_drive(
     seq_ok: bool | None = None
     counts: dict[str, int] = {}
     checks: list[Check] = []
-    notes: list[str] = []
+    notes: list[str] = list(launch_notes)
     grace_applied = False
     # None until the tap actually returns frames — a tap that raised must not report "0 ticks"
     # (indistinguishable from a healthy tap on a silent producer). See AutoDriveReport.intervention.
@@ -1012,7 +1317,7 @@ async def run_auto_drive(
         seq_ok = result.ok
         counts = dict(result.counts)
         checks = list(result.checks)
-        notes = list(result.notes)
+        notes.extend(result.notes)
         # #577: the per-lap trajectory is report evidence whenever the lap machinery ran.
         if config.wait_lap:
             from tools.ac_harness.sequence_probe import timed_lap_times_ms
@@ -1079,7 +1384,28 @@ async def run_auto_drive(
                 # coherent and surface the drive crash in notes instead of dropping it.
                 notes.append(drive_error)
         finally:
-            controller.close()
+            try:
+                _close_controller(
+                    controller,
+                    context="final controller cleanup",
+                    cleanup_failure=cleanup_failure,
+                )
+            except ControllerCleanupAbort as exc:
+                retain_abort_cleanup_holds(exc)
+                raise
+            except ControllerTelemetryCleanupPending as exc:
+                telemetry_cleanup_holds.append(exc.controller)
+                cleanup_error = str(exc)
+                if error is None:
+                    stage, error = "cleanup", cleanup_error
+                else:
+                    notes.append(cleanup_error)
+            except ControllerCleanupError as exc:
+                cleanup_error = str(exc)
+                if error is None:
+                    stage, error = "cleanup", cleanup_error
+                else:
+                    notes.append(cleanup_error)
 
     # Success needs a clean pipeline AND a real drive that did not die mid-run or stall out. The
     # drive-leg vetoes (drove / sim_dead / recovery_capped) live in drive_leg_succeeded so this gate
@@ -1087,7 +1413,7 @@ async def run_auto_drive(
     ok = bool(seq_ok) and drive_leg_succeeded(stats) and error is None
     # #596 Part C: `reason` is computed from these same live inputs, so it cannot drift from the
     # `ok` gate computed just above — including after the handshake mutates the report.
-    return AutoDriveReport(
+    report = AutoDriveReport(
         ok=ok,
         stage=stage,
         launched=not config.skip_launch,
@@ -1107,6 +1433,7 @@ async def run_auto_drive(
         setup_ack=setup_ack,
         **identity,
     )
+    return finish(report)
 
 
 async def run_auto_drive_with_sim_retries(
@@ -1119,6 +1446,7 @@ async def run_auto_drive_with_sim_retries(
     apply_setup: ApplySetupFn | None = None,
     verify_track: VerifyTrackFn | None = None,
     restart_launcher: RestartLauncherFn | None = None,
+    cleanup_failure: CleanupFailureFn | None = None,
 ) -> AutoDriveReport:
     """Run the full attempt again after a detected ``acs.exe`` death, bounded and evidenced.
 
@@ -1137,17 +1465,27 @@ async def run_auto_drive_with_sim_retries(
     if retry_budget < 0:
         raise ValueError("sim_death_retries must be >= 0")
     attempt_reports: list[dict[str, Any]] = []
+    cleanup_holds: list[Controller] = []
     for attempt_idx in range(retry_budget + 1):
-        report = await run_auto_drive(
-            config,
-            launch=launch,
-            hijack=hijack,
-            drive=drive,
-            tap=tap,
-            apply_setup=apply_setup,
-            verify_track=verify_track,
-            restart_launcher=restart_launcher,
-        )
+        try:
+            report = await run_auto_drive(
+                config,
+                launch=launch,
+                hijack=hijack,
+                drive=drive,
+                tap=tap,
+                apply_setup=apply_setup,
+                verify_track=verify_track,
+                restart_launcher=restart_launcher,
+                cleanup_failure=cleanup_failure,
+            )
+        except ControllerCleanupAbort as exc:
+            for retained_controller in cleanup_holds:
+                exc.retain_cleanup_controller(retained_controller)
+            raise
+        for retained_controller in report.cleanup_holds:
+            if not any(retained is retained_controller for retained in cleanup_holds):
+                cleanup_holds.append(retained_controller)
         # Snapshot BEFORE assigning the aggregate list, so nested attempts do not recursively
         # contain themselves.  This is the full attempt (checks, trace, cause), not a lossy summary.
         attempt_reports.append(_attempt_snapshot(report))
@@ -1165,6 +1503,8 @@ async def run_auto_drive_with_sim_retries(
                 f"(attempt {attempt_idx + 2}/{retry_budget + 1})"
             )
             continue
+        for retained_controller in cleanup_holds:
+            report.retain_cleanup_controller(retained_controller)
         report.attempts = attempt_reports
         return report
 
@@ -1464,78 +1804,6 @@ def fuel_matches(expected_l: float | None, observed_l: float | None, tolerance_l
     if expected_l is None or observed_l is None:
         return False
     return abs(observed_l - expected_l) <= tolerance_l
-
-
-# ---------------------------------------------------------------------------
-# Deterministic Quick Drive preset generation (pure; #459 Part B — the #154 Part-G
-# determinism-lock preset).
-# ---------------------------------------------------------------------------
-def build_practice_preset(
-    car_id: str, track_id: str, *, start_type: str = "START", layout: str | None = None
-) -> str:
-    """Render a deterministic Content Manager Quick Drive practice preset (JSON string).
-
-    Field shapes mirror a CM-exported ``.cmpreset`` proven live on this rig (Imola/Mugello/Spa
-    runs, 2026-06-27): clear weather, 26 °C, 12:00, optimum static track state, no penalties, all
-    driving assists off except factory ABS/TC and tyre blankets. Every field is pinned so two runs
-    of the same combo launch the same session — the determinism-lock preset from #154 Part G.
-
-    ``start_type`` is CM's ``ModeData.StartType``: ``"START"`` spawns at the start line (proven
-    for plain drive runs), ``"PIT"`` in the pit box. ``layout`` (for multi-layout tracks) is folded
-    into CM's ``TrackId`` as ``<track>/<layout>`` so the launched circuit matches the racing line
-    ``rig_drive`` follows — else CM launches the base circuit while the driver steers a different
-    layout's ``fast_lane.ai`` (#460 review).
-    """
-    if start_type not in ("START", "PIT"):
-        raise ValueError(f"start_type must be 'START' or 'PIT', got {start_type!r}")
-    track_field = f"{track_id}/{layout}" if layout else track_id
-    mode_data = {
-        "StartType": start_type,
-        "Penalties": False,
-        "PlayerBallast": 0,
-        "PlayerRestrictor": 0,
-    }
-    assists = {
-        "IdealLine": False,
-        "AutoBlip": True,
-        "StabilityControl": 0.0,
-        "AutoBrake": False,
-        "AutoShifter": False,
-        "SlipSteam": 1.0,
-        "AutoClutch": False,
-        "Abs": 1,
-        "TractionControl": 1,
-        "VisualDamage": True,
-        "Damage": 0.0,
-        "TyreWear": 0.0,
-        "FuelConsumption": 0.0,
-        "TyreBlankets": True,
-    }
-    track_state = {
-        "s": 1.0,
-        "t": 1.0,
-        "r": 0.0,
-        "g": 1,
-        "d": "Perfect track for hotlapping.",
-        "w": False,
-    }
-    preset = {
-        "Mode": "/Pages/Drive/QuickDrive_Practice.xaml",
-        "ModeData": json.dumps(mode_data, separators=(",", ":")),
-        "CarId": car_id,
-        "TrackId": track_field,
-        "WeatherId": "3_clear",
-        "RealConditions": False,
-        "Temperature": 26.0,
-        "Time": 43200,
-        "TimeMultipler": 1,
-        "tpc": False,
-        "TrackPropertiesData": json.dumps(track_state, separators=(",", ":")),
-        "asc": False,
-        "AssistsData": json.dumps(assists, separators=(",", ":")),
-        "ico": True,
-    }
-    return json.dumps(preset, separators=(",", ":"))
 
 
 # ---------------------------------------------------------------------------
@@ -2427,31 +2695,6 @@ def _log(msg: str) -> None:  # pragma: no cover - rig-only progress trace
     print(f"[auto-drive {time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def _minimize_foreground_window() -> None:  # pragma: no cover - rig-only
-    """Best-effort: minimize whatever window holds the foreground before a CM launch.
-
-    Live-found on the rig (2026-06-22 vault note; re-confirmed 2026-07-02 with the agent's own
-    window in the attempt-3 HUD capture): a foreground window that is not CM/AC makes CM's
-    auto-start race lose almost every time — AC sits at the pre-drive screen with LIVE status and
-    advancing physics. Never minimizes AC or Content Manager themselves.
-    """
-    import ctypes
-
-    try:
-        user32 = ctypes.windll.user32
-        hwnd = user32.GetForegroundWindow()
-        if not hwnd:
-            return
-        buf = ctypes.create_unicode_buffer(256)
-        user32.GetWindowTextW(hwnd, buf, 255)
-        title = (buf.value or "").lower()
-        if "assetto corsa" in title or "content manager" in title:
-            return
-        user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
-    except Exception:  # noqa: BLE001 - purely best-effort; a launch retry covers a miss
-        return
-
-
 def _race_ini_path(config: AutoDriveConfig) -> Path:  # pragma: no cover - rig-only
     """``<AC user data>/cfg/race.ini`` — the file CM regenerates and acs reads at spawn."""
     return resolve_ac_user_dir(config.ac_user_dir) / "cfg" / "race.ini"
@@ -2478,7 +2721,7 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
             "launching AC via Content Manager"
             + (" (setup baked into race.ini)" if config.setup_ini is not None else "")
         )
-        _minimize_foreground_window()  # the CM auto-start race needs the desktop foreground free
+        minimize_foreground_window()  # the CM auto-start race needs the desktop foreground free
         if config.setup_ini is not None:
             race_ini = _race_ini_path(config)
             with race_ini_setup_bake_loop(
@@ -2581,7 +2824,11 @@ def _wait_live(timeout: float) -> bool:  # pragma: no cover - rig-only
     return False
 
 
-def rig_hijack(config: AutoDriveConfig) -> Controller | None:  # pragma: no cover - rig-only
+def rig_hijack(
+    config: AutoDriveConfig,
+    *,
+    retain_telemetry_controller: Callable[[Controller], None] | None = None,
+) -> Controller | None:  # pragma: no cover - rig-only
     """Create CarControls0 and briefly wait for CSP to create Car0 — the hijack landing.
 
     Two coupled problems this handles (#154, #466):
@@ -2610,7 +2857,20 @@ def rig_hijack(config: AutoDriveConfig) -> Controller | None:  # pragma: no cove
                 _log(f"hijack landed (Car0) on probe {attempt}/{attempts}")
                 return ctrl
             time.sleep(0.1)
-        ctrl.close()  # recreate the section next attempt to re-trigger the hijack
+        try:
+            _close_controller(
+                ctrl,
+                context=f"hijack probe {attempt}/{attempts} cleanup",
+                cleanup_failure=rig_force_safe_after_cleanup_failure,
+            )  # recreate the section next attempt to re-trigger the hijack
+        except ControllerTelemetryCleanupPending as exc:
+            if retain_telemetry_controller is None:
+                raise
+            retain_telemetry_controller(exc.controller)
+            _log(
+                f"hijack probe {attempt}/{attempts}: retained a read-only telemetry mapping; "
+                "continuing with a fresh CarControls section"
+            )
         # ASCII-only message: the harness prints to a Windows cp1252 console (cf. #475/#476).
         _log(
             f"hijack probe {attempt}/{attempts}: no Car0 in {probe:.1f}s "
@@ -4117,6 +4377,7 @@ def _main_impl(
             car=config.car_id,
             track=config.track_id,
             started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            session_kind="auto_drive",
         ),
         timeout=args.rig_lock_timeout,
     )
@@ -4228,18 +4489,30 @@ def _main_impl(
             return 2
 
         run_started_epoch = time.time()
-        report = asyncio.run(
-            run_auto_drive_with_sim_retries(
-                config,
-                launch=rig_launch,
-                hijack=rig_hijack,
-                drive=rig_drive,
-                tap=tap_frames,
-                apply_setup=rig_apply_setup,
-                verify_track=rig_verify_track,
-                restart_launcher=rig_restart_launcher,
+        rig_telemetry_cleanup_holds: list[Controller] = []
+        try:
+            report = asyncio.run(
+                run_auto_drive_with_sim_retries(
+                    config,
+                    launch=rig_launch,
+                    hijack=lambda run_config: rig_hijack(
+                        run_config,
+                        retain_telemetry_controller=rig_telemetry_cleanup_holds.append,
+                    ),
+                    drive=rig_drive,
+                    tap=tap_frames,
+                    apply_setup=rig_apply_setup,
+                    verify_track=rig_verify_track,
+                    restart_launcher=rig_restart_launcher,
+                    cleanup_failure=rig_force_safe_after_cleanup_failure,
+                )
             )
-        )
+        except ControllerCleanupAbort as exc:
+            for retained_controller in rig_telemetry_cleanup_holds:
+                exc.retain_cleanup_controller(retained_controller)
+            raise
+        for retained_controller in rig_telemetry_cleanup_holds:
+            report.retain_cleanup_controller(retained_controller)
     finally:
         if sidecar_proc is not None and not args.keep_sidecar:
             sidecar_proc.terminate()
@@ -4433,15 +4706,44 @@ def _main_impl(
 def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only CLI wiring
     # ExitStack makes the machine-global rig lock exception-safe for both the CLI and programmatic
     # callers, including failures during HUD/archive/report capture after the drive has stopped.
-    with ExitStack() as cleanup:
+    # ControllerCleanupAbort is the one deliberate exception: the process still owns a native
+    # control mapping, so detach and retain the stack instead of running rig_lock.release. The OS
+    # releases both mapping and byte lock together when this fatal CLI process exits.
+    cleanup = ExitStack()
+    try:
         return _main_impl(argv, cleanup)
+    except ControllerCleanupAbort as exc:
+        hold = cleanup.pop_all()
+        exc.cleanup_hold = hold
+        raise
+    finally:
+        cleanup.close()
+
+
+def _exit_after_controller_cleanup_abort(exc: ControllerCleanupAbort) -> None:
+    """Emit chained fatal-cleanup evidence, then atomically drop the mapping and rig lock."""
+    print(
+        "auto-drive: fatal controller cleanup abort; retained native resources will be released "
+        "by immediate OS process exit",
+        file=sys.stderr,
+    )
+    traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
+    sys.stderr.flush()
+    os._exit(1)
 
 
 if __name__ == "__main__":  # pragma: no cover - rig-only CLI wiring
-    import sys
     from pathlib import Path as _Path
 
     _repo_root = str(_Path(__file__).resolve().parents[2])
     if _repo_root not in sys.path:
         sys.path.insert(0, _repo_root)
-    raise SystemExit(_main())
+    try:
+        _exit_code = _main()
+    except ControllerCleanupAbort as _cleanup_abort:
+        # Do not run normal interpreter unwinding after a fatal native cleanup failure: the OS
+        # closes the retained Custom-AI mapping and rig-lock descriptor together at process exit,
+        # leaving no window where a peer can acquire the rig while this process still controls it.
+        # Emit and flush the chained exception first so the rare native failure remains diagnosable.
+        _exit_after_controller_cleanup_abort(_cleanup_abort)
+    raise SystemExit(_exit_code)

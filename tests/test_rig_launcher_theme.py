@@ -12,6 +12,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from tools.rig_launcher import theme
 from tools.rig_launcher.supervisor import GamePointStatus, ProbeResult
 
@@ -146,20 +148,147 @@ def test_summary_for_falls_back_to_state_word_without_detail() -> None:
     assert theme.summary_for(status) == ("PRESS START", "brake", "DISABLED")
 
 
+def test_failed_ac_session_is_visible_without_misdirecting_to_start() -> None:
+    status = _status(
+        resilient=ProbeResult("ac_session", False, "exited", "exit=1; press STABLE AC")
+    )
+
+    assert status.ok is False
+    assert theme.summary_for(status) == (
+        "PRESS STABLE AC",
+        "brake",
+        "exit=1; press STABLE AC",
+    )
+
+
+def test_unknown_ac_lock_does_not_prompt_an_action_that_will_be_refused() -> None:
+    status = _status(
+        resilient=ProbeResult(
+            "ac_session",
+            False,
+            "unknown",
+            "cannot probe machine-wide rig ownership",
+        )
+    )
+
+    assert theme.summary_for(status) == (
+        "CHECK AC LOCK",
+        "brake",
+        "cannot probe machine-wide rig ownership",
+    )
+
+
+@pytest.mark.parametrize(
+    ("resilient", "expected"),
+    [
+        (
+            ProbeResult("ac_session", False, "unknown", "cannot probe lock"),
+            ("CHECK AC LOCK", "brake", "cannot probe lock"),
+        ),
+        (
+            ProbeResult("ac_session", False, "busy_other_session", "auto_drive owns rig"),
+            ("AC SESSION BUSY", "brake", "auto_drive owns rig"),
+        ),
+        (
+            ProbeResult("ac_session", False, "stabilizing", "proving stability"),
+            ("STABILIZING AC", "brake", "proving stability"),
+        ),
+        (
+            ProbeResult("ac_session", False, "exited", "exit=1"),
+            ("PRESS STABLE AC", "brake", "exit=1"),
+        ),
+    ],
+)
+def test_ac_session_recovery_outranks_sidecar_down_copy(
+    resilient: ProbeResult,
+    expected: tuple[str, str, str],
+) -> None:
+    status = _status(
+        sidecar=ProbeResult("sidecar", False, "stopped", "nothing listening"),
+        resilient=resilient,
+    )
+
+    assert theme.summary_for(status) == expected
+
+
+def test_busy_non_resilient_owner_does_not_prompt_refused_stable_ac_action() -> None:
+    status = _status(
+        resilient=ProbeResult(
+            "ac_session",
+            False,
+            "busy_other_session",
+            "rig owned by session_kind=auto_drive; Stable AC was not started",
+        )
+    )
+
+    assert theme.summary_for(status) == (
+        "AC SESSION BUSY",
+        "brake",
+        "rig owned by session_kind=auto_drive; Stable AC was not started",
+    )
+
+
+def test_release_unsupported_does_not_prompt_refused_stable_ac_action() -> None:
+    status = _status(
+        resilient=ProbeResult(
+            "ac_session",
+            False,
+            "release_unsupported",
+            "rig owner is not a Stable AC session",
+        )
+    )
+
+    assert theme.summary_for(status) == (
+        "AC SESSION BUSY",
+        "brake",
+        "rig owner is not a Stable AC session",
+    )
+
+
+@pytest.mark.parametrize("state", ["starting", "stabilizing"])
+def test_in_progress_stable_ac_session_stays_non_green(state: str) -> None:
+    status = _status(
+        resilient=ProbeResult(
+            "ac_session",
+            False,
+            state,
+            "waiting for stable handoff",
+        )
+    )
+
+    assert theme.summary_for(status) == (
+        "STABILIZING AC",
+        "brake",
+        "waiting for stable handoff",
+    )
+
+
 def test_launcher_buttons_are_uppercase_with_start_emphasis() -> None:
     from tools.rig_launcher import view
+    from tools.rig_launcher.preview import _NOOP_ACTIONS
 
     labels = [label for label, _key, _primary in view._BUTTONS]
-    assert labels == ["▶ START", "REFRESH", "LOGS", "SETTINGS", "SETUP DIFF"]
+    assert labels == [
+        "▶ START",
+        "STABLE AC",
+        "RELEASE AC",
+        "REFRESH",
+        "LOGS",
+        "SETTINGS",
+        "SETUP DIFF",
+    ]
     assert [primary for _label, _key, primary in view._BUTTONS] == [
         True,
         False,
         False,
         False,
         False,
+        False,
+        False,
     ]
     # Start is 1.5x each secondary action (1.5fr vs 1fr in the design grid).
-    assert view._BUTTON_WEIGHTS == (3, 2, 2, 2, 2)
+    assert view._BUTTON_WEIGHTS == (3, 2, 2, 2, 2, 2, 2)
+    assert set(_NOOP_ACTIONS) == {key for _label, key, _primary in view._BUTTONS}
 
 
 def test_resolve_font_prefers_available_family() -> None:

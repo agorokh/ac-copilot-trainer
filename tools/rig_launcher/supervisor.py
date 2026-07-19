@@ -18,7 +18,7 @@ import urllib.request
 from collections.abc import Callable, Iterable, Mapping, MutableMapping
 from dataclasses import dataclass, field, replace
 from importlib.util import find_spec
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from tools.rig_launcher.build_info import BuildInfo, resolve_build_info, write_runtime_hook
@@ -77,6 +77,10 @@ def _resolve_launcher_path(value: str | None, *, base: Path) -> str | None:
         return None
     root = base.expanduser().resolve(strict=False)
     path = Path(text).expanduser()
+    # Preserve an absolute Windows drive/UNC path when tests or configuration are inspected from
+    # a non-Windows host; on the rig, Path already recognizes the same value as absolute.
+    if not path.is_absolute() and PureWindowsPath(text).is_absolute():
+        return str(PureWindowsPath(text))
     if not path.is_absolute():
         path = (root / path).resolve(strict=False)
         try:
@@ -109,6 +113,10 @@ class LauncherPaths:
     @property
     def sidecar_log_path(self) -> Path:
         return self.logs_dir / "sidecar.log"
+
+    @property
+    def resilient_log_path(self) -> Path:
+        return self.logs_dir / "resilient-launch.log"
 
 
 @dataclass(frozen=True)
@@ -146,6 +154,10 @@ class GamePointConfig:
     setup_store: str | None = None
     simhub_exe: str | None = None
     start_simhub: bool = False
+    resilient_car: str | None = None
+    resilient_track: str | None = None
+    resilient_layout: str | None = None
+    resilient_cm_exe: str | None = None
     #: Manage the tablet dashboard's ``adb reverse`` USB tunnel (issue #567). Opt-in
     #: (house pattern, cf. ``start_simhub``): off by default so CI / non-rig hosts never
     #: shell out to adb; the rig sets ``AC_COPILOT_MANAGE_TABLET_TUNNEL=1``.
@@ -155,6 +167,9 @@ class GamePointConfig:
     #: than one authorized device is attached.
     adb_path: str | None = None
     adb_serial: str | None = None
+    #: Test/embedding override for the machine-wide rig ownership file. Production uses the
+    #: Harness LocalAppData path from ``default_rig_session_lock_path``.
+    rig_lock_path: Path | None = None
     paths: LauncherPaths | None = None
 
     @classmethod
@@ -207,6 +222,22 @@ class GamePointConfig:
             ),
             simhub_exe=_configured_text(env_map.get("AC_COPILOT_SIMHUB_EXE"), settings.simhub_exe),
             start_simhub=start_simhub,
+            resilient_car=_configured_text(
+                env_map.get("AC_COPILOT_RESILIENT_CAR"),
+                settings.resilient_car,
+            ),
+            resilient_track=_configured_text(
+                env_map.get("AC_COPILOT_RESILIENT_TRACK"),
+                settings.resilient_track,
+            ),
+            resilient_layout=_configured_text(
+                env_map.get("AC_COPILOT_RESILIENT_LAYOUT"),
+                settings.resilient_layout,
+            ),
+            resilient_cm_exe=_configured_text(
+                env_map.get("AC_COPILOT_RESILIENT_CM_EXE"),
+                settings.resilient_cm_exe,
+            ),
             manage_tablet_tunnel=manage_tablet_tunnel,
             paths=resolved_paths,
         )
@@ -226,11 +257,22 @@ class GamePointStatus:
     #: Tablet dashboard ``adb reverse`` USB tunnel keeper (issue #567). Defaulted so
     #: direct constructions (and pre-#567 callers) stay valid; ``poll_status`` fills it.
     tablet: ProbeResult = field(default_factory=lambda: ProbeResult("tablet", True, "unmanaged"))
+    resilient: ProbeResult = field(
+        default_factory=lambda: ProbeResult("ac_session", True, "unconfigured")
+    )
     checks: tuple[ProbeResult, ...] = field(default_factory=tuple)
 
     @property
     def ok(self) -> bool:
-        rows = (self.sidecar, self.screen, self.voice, self.simhub, self.tablet, *self.checks)
+        rows = (
+            self.sidecar,
+            self.screen,
+            self.voice,
+            self.simhub,
+            self.tablet,
+            self.resilient,
+            *self.checks,
+        )
         return all(row.ok for row in rows if row.state not in {"skipped", "absent"})
 
     def to_dict(self) -> dict[str, object]:
@@ -242,6 +284,7 @@ class GamePointStatus:
             "voice": self.voice.to_dict(),
             "simhub": self.simhub.to_dict(),
             "tablet": self.tablet.to_dict(),
+            "resilient": self.resilient.to_dict(),
             "log_path": self.log_path,
             "status_path": self.status_path,
             "checks": [check.to_dict() for check in self.checks],
@@ -271,6 +314,8 @@ class GamePointSupervisor:
         self._python = python_executable or sys.executable
         self._frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
         self._sidecar_process: Any | None = None
+        self._resilient_process: Any | None = None
+        self._resilient_log_handle: Any | None = None
         self._log_handles: list[Any] = []
         # The GUI polls on a worker thread while START / toggle run on the Tk main thread, so the
         # sidecar process handle + log handles are touched from two threads. Serialize those
@@ -298,6 +343,36 @@ class GamePointSupervisor:
             )
             if setup_store:
                 args.extend(["--setup-store", setup_store])
+        return args
+
+    def resilient_command(self) -> list[str]:
+        """Build the canonical operator-session command for source or frozen launchers."""
+        if self._frozen:
+            args = [self._python, "--resilient-launch-child"]
+        else:
+            args = [self._python, "-m", "tools.ac_harness.resilient_launch"]
+        if self.config.resilient_car:
+            args.extend(["--car", self.config.resilient_car])
+        if self.config.resilient_track:
+            args.extend(["--track", self.config.resilient_track])
+        if self.config.resilient_layout:
+            args.extend(["--layout", self.config.resilient_layout])
+        if self.config.resilient_cm_exe:
+            cm_exe = _resolve_launcher_path(
+                self.config.resilient_cm_exe,
+                base=self._launcher_path_base(),
+            )
+            if cm_exe is None:
+                raise ValueError(
+                    "resilient_cm_exe must be absolute or stay within the Game Point folder"
+                )
+            args.extend(["--cm-exe", cm_exe])
+        if self.config.rig_lock_path is not None:
+            args.extend(["--rig-lock-path", str(self.config.rig_lock_path)])
+        args.extend(["--rig-release-path", str(self._rig_release_path())])
+        # Game Point polls the authoritative lock byte for status. Give a real launcher enough
+        # grace to outwait that microsecond probe rather than false-failing on a zero-timeout race.
+        args.extend(["--rig-lock-timeout", "1.0"])
         return args
 
     def _launcher_path_base(self) -> Path:
@@ -421,6 +496,252 @@ class GamePointSupervisor:
                 return ProbeResult("sidecar", False, "start_failed", str(exc))
             return ProbeResult("sidecar", True, "starting", f"pid={self._sidecar_process.pid}")
 
+    def start_resilient_session(self) -> ProbeResult:
+        """Start one detached resilient AC session from the canonical Game Point surface."""
+        missing = [
+            name
+            for name, value in (
+                ("resilient_car", self.config.resilient_car),
+                ("resilient_track", self.config.resilient_track),
+            )
+            if not value
+        ]
+        if missing:
+            return ProbeResult(
+                "ac_session",
+                False,
+                "unconfigured",
+                f"set {', '.join(missing)} in settings.json or the matching environment variables",
+            )
+        if (
+            self.config.resilient_cm_exe
+            and _resolve_launcher_path(
+                self.config.resilient_cm_exe,
+                base=self._launcher_path_base(),
+            )
+            is None
+        ):
+            return ProbeResult(
+                "ac_session",
+                False,
+                "unconfigured",
+                "resilient_cm_exe must be absolute or stay within the Game Point folder",
+            )
+        with self._proc_lock:
+            if self._resilient_process is not None and self._resilient_process.poll() is None:
+                local_pid = self._resilient_process.pid
+            else:
+                local_pid = None
+        if local_pid is not None:
+            owner = self._rig_session_owner()
+            if owner is not None:
+                return self._rig_owner_status(owner)
+            return ProbeResult(
+                "ac_session",
+                False,
+                "stabilizing",
+                f"pid={local_pid}; waiting for stable handoff",
+            )
+        owner = self._rig_session_owner()
+        if owner is not None:
+            return self._rig_owner_status(owner)
+        with self._proc_lock:
+            if self._resilient_process is not None and self._resilient_process.poll() is None:
+                return ProbeResult(
+                    "ac_session",
+                    False,
+                    "stabilizing",
+                    f"pid={self._resilient_process.pid}; waiting for stable handoff",
+                )
+            if self._resilient_log_handle is not None:
+                try:
+                    self._resilient_log_handle.close()
+                except OSError:
+                    pass
+                self._resilient_log_handle = None
+            try:
+                try:
+                    self._rig_release_path().unlink()
+                except FileNotFoundError:
+                    pass
+                self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
+                log = self.paths.resilient_log_path.open("a", encoding="utf-8")
+                self._resilient_log_handle = log
+                self._resilient_process = self._popen(
+                    self.resilient_command(),
+                    **_subprocess_kwargs(
+                        cwd=self._sidecar_working_directory(),
+                        env=dict(self._environ),
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                    ),
+                )
+            except (OSError, FileNotFoundError) as exc:
+                self._resilient_process = None
+                if self._resilient_log_handle is not None:
+                    try:
+                        self._resilient_log_handle.close()
+                    except OSError:
+                        pass
+                    self._resilient_log_handle = None
+                return ProbeResult("ac_session", False, "start_failed", str(exc))
+            return ProbeResult(
+                "ac_session",
+                False,
+                "starting",
+                f"pid={self._resilient_process.pid}; log={self.paths.resilient_log_path}",
+            )
+
+    def release_resilient_session(self) -> ProbeResult:
+        """Signal the no-console resilient child to release machine-wide ownership.
+
+        The child may outlive Game Point, so this uses a shared sentinel next to the authoritative
+        lock rather than a transient process handle. AC itself is deliberately left running.
+        """
+        with self._proc_lock:
+            local_running = (
+                self._resilient_process is not None and self._resilient_process.poll() is None
+            )
+        owner = self._rig_session_owner()
+        if not local_running and owner is None:
+            return ProbeResult("ac_session", True, "idle", "no resilient session owns the rig")
+        known_kind = (
+            owner.get("session_kind")
+            if owner is not None and owner.get("cwd") != "unknown"
+            else None
+        )
+        if not local_running and known_kind not in {None, "resilient_launch"}:
+            return ProbeResult(
+                "ac_session",
+                False,
+                "release_unsupported",
+                "rig owner is not a Stable AC session and does not honor Release AC",
+            )
+        release_path = self._rig_release_path()
+        try:
+            release_path.parent.mkdir(parents=True, exist_ok=True)
+            release_path.touch()
+        except OSError as exc:
+            return ProbeResult("ac_session", False, "release_failed", str(exc))
+        return ProbeResult(
+            "ac_session",
+            True,
+            "release_requested",
+            f"ownership release requested; AC left live; signal={release_path}",
+        )
+
+    def _resilient_process_status(self) -> ProbeResult:
+        with self._proc_lock:
+            process = self._resilient_process
+            rc = process.poll() if process is not None else None
+            pid = process.pid if process is not None else None
+        if process is not None and rc is None:
+            owner = self._rig_session_owner()
+            if owner is not None:
+                return self._rig_owner_status(owner)
+            return ProbeResult(
+                "ac_session",
+                False,
+                "stabilizing",
+                f"pid={pid}; waiting for stable handoff",
+            )
+        # Lock-file I/O can block on Windows sharing violations. Keep it outside _proc_lock,
+        # which also serializes START/stop mutations on the Tk thread.
+        owner = self._rig_session_owner()
+        if owner is not None:
+            return self._rig_owner_status(owner)
+        if process is None:
+            if not self.config.resilient_car or not self.config.resilient_track:
+                return ProbeResult(
+                    "ac_session",
+                    True,
+                    "unconfigured",
+                    "set resilient_car and resilient_track in settings",
+                )
+            if (
+                self.config.resilient_cm_exe
+                and _resolve_launcher_path(
+                    self.config.resilient_cm_exe,
+                    base=self._launcher_path_base(),
+                )
+                is None
+            ):
+                return ProbeResult(
+                    "ac_session",
+                    False,
+                    "unconfigured",
+                    "resilient_cm_exe must be absolute or stay within the Game Point folder",
+                )
+            return ProbeResult(
+                "ac_session",
+                True,
+                "idle",
+                "press STABLE AC to start a driver session",
+            )
+        return ProbeResult(
+            "ac_session",
+            rc == 0,
+            "exited",
+            f"exit={rc}; log={self.paths.resilient_log_path}",
+        )
+
+    @staticmethod
+    def _rig_owner_status(owner: Mapping[str, Any]) -> ProbeResult:
+        if owner.get("cwd") == "unknown":
+            return ProbeResult(
+                "ac_session",
+                False,
+                "unknown",
+                "rig lock status unavailable; refusing Stable AC until the lock can be probed",
+            )
+        session_kind = owner.get("session_kind")
+        if session_kind not in (None, "", "resilient_launch"):
+            return ProbeResult(
+                "ac_session",
+                False,
+                "busy_other_session",
+                f"rig owned by session_kind={session_kind}; Stable AC was not started",
+            )
+        phase = str(owner.get("phase") or "").strip().lower()
+        detail = " ".join(
+            f"{key}={owner[key]}"
+            for key in ("pid", "car", "track", "started_at", "phase")
+            if owner.get(key) not in (None, "")
+        )
+        if phase != "stable":
+            return ProbeResult(
+                "ac_session",
+                False,
+                "stabilizing",
+                "resilient owner has not completed stability proof"
+                + (f": {detail}" if detail else ""),
+            )
+        return ProbeResult(
+            "ac_session",
+            True,
+            "running",
+            f"stable session{(': ' + detail) if detail else ''}",
+        )
+
+    def _rig_session_owner(self) -> dict[str, Any] | None:
+        """Read machine-wide ownership so restarted Game Point instances adopt status truth."""
+        if self.config.rig_lock_path is None and sys.platform != "win32":
+            return None
+        from tools.ac_harness.rig_lock import read_rig_session_owner
+
+        return read_rig_session_owner(self._rig_lock_path())
+
+    def _rig_lock_path(self) -> Path:
+        from tools.ac_harness.rig_lock import default_rig_session_lock_path
+
+        return self.config.rig_lock_path or default_rig_session_lock_path(
+            local_app_data=self._environ.get("LOCALAPPDATA")
+        )
+
+    def _rig_release_path(self) -> Path:
+        return self._rig_lock_path().parent / "rig-session.release"
+
     def stop_sidecar(self, *, timeout: float = 5.0) -> ProbeResult:
         with self._proc_lock:
             proc = self._sidecar_process
@@ -465,6 +786,7 @@ class GamePointSupervisor:
             voice=self.probe_voice(health_payload),
             simhub=self.probe_simhub(start=start_sim),
             tablet=self.probe_tablet(health_payload),
+            resilient=self._resilient_process_status(),
             log_path=str(self.paths.sidecar_log_path),
             status_path=str(self.paths.status_path),
             checks=checks,
@@ -687,6 +1009,14 @@ class GamePointSupervisor:
         with self._proc_lock:
             self.stop_sidecar()
             self._close_log_handles()
+            # The resilient child owns the machine-wide rig lock and the live AC session.
+            # Closing Game Point must not kill that operator session; only release our log handle.
+            if self._resilient_log_handle is not None:
+                try:
+                    self._resilient_log_handle.close()
+                except OSError:
+                    pass
+                self._resilient_log_handle = None
 
     def _read_health(self) -> ProbeResult:
         return self._read_health_payload()[0]
@@ -832,6 +1162,23 @@ def build_pyinstaller_args(
         "serial",
         "--hidden-import",
         "serial.tools.list_ports",
+        # The packaged launcher dispatches this operator-facing AC workflow through a child
+        # mode. Its rig imports are deliberately lazy so pure logic tests run off-Windows,
+        # therefore name the complete frozen child surface explicitly.
+        "--hidden-import",
+        "tools.ac_harness.resilient_launch",
+        "--hidden-import",
+        "tools.ac_harness.entry_launcher",
+        "--hidden-import",
+        "tools.ac_harness.custom_ai",
+        "--hidden-import",
+        "tools.ac_harness.preset_utils",
+        "--hidden-import",
+        "tools.ac_harness.rig_lock",
+        "--hidden-import",
+        "tools.ac_harness.shared_memory",
+        "--hidden-import",
+        "tools.ac_harness.window_utils",
         "--runtime-hook",
         str(runtime_hook),
     ]
@@ -1023,6 +1370,7 @@ def render_status_lines(status: GamePointStatus) -> list[str]:
         status.voice,
         status.simhub,
         status.tablet,
+        status.resilient,
         *status.checks,
     ]
     return [f"{row.name}: {row.state}{(' - ' + row.detail) if row.detail else ''}" for row in rows]

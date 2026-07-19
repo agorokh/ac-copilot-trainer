@@ -51,12 +51,65 @@ from __future__ import annotations
 import struct
 import sys
 from dataclasses import dataclass
+from typing import Protocol
 
 # Reuse the canonical exception from the read-side oracle rather than defining a second,
 # distinct class: a caller catching ``SharedMemoryUnavailable`` around either the reader or
 # this writer then catches both. (Two same-named classes from two modules silently fail to
 # match across an ``except`` boundary — the #175 footgun in a different guise.)
 from tools.ac_harness.shared_memory import SharedMemoryUnavailable
+
+
+class CloseableController(Protocol):
+    """Native controller surface required by the shared teardown retry boundary."""
+
+    def close(self) -> None: ...
+
+
+class ControllerCloseRetryError(RuntimeError):
+    """A controller retained native resources through every bounded close attempt."""
+
+    def __init__(self, last_error: BaseException, attempts: int) -> None:
+        super().__init__(
+            f"{type(last_error).__name__}: {last_error} (failed after {attempts} close attempts)"
+        )
+        self.last_error = last_error
+        self.attempts = attempts
+        self.controls_retained = not isinstance(last_error, ControllerTelemetryCloseError)
+
+
+class ControllerControlsCloseError(OSError):
+    """The CarControls mapping is still retained, so the process may still control the car."""
+
+
+class ControllerTelemetryCloseError(OSError):
+    """Only the read-only Car data mapping remains; CarControls ownership was released."""
+
+
+def close_controller_with_retries(
+    controller: CloseableController,
+    *,
+    attempts: int = 3,
+) -> None:
+    """Retry retained native resources, then require the caller's rig-safety fallback.
+
+    ``CustomAIController.close`` clears resources that released successfully and retains only
+    failed native handles/views, so retrying is both safe and meaningful. If the bounded attempts
+    are exhausted, the caller must keep ``controller`` alive and make AC safe before ownership can
+    be released.
+    """
+    if attempts < 1:
+        raise ValueError("controller cleanup attempts must be >= 1")
+    last_error: BaseException | None = None
+    for _ in range(attempts):
+        try:
+            controller.close()
+            return
+        except (OSError, SharedMemoryUnavailable) as exc:
+            last_error = exc
+    assert last_error is not None
+    raise ControllerCloseRetryError(last_error, attempts) from last_error
+
 
 # ---------------------------------------------------------------------------
 # Section-name templates. ``<N>`` is the car index; 0 == the player car. The external app
@@ -341,6 +394,33 @@ def _kernel32():  # pragma: no cover - rig-only
     return k
 
 
+def _release_mapping_resources(
+    *,
+    address: object | None,
+    handle: object | None,
+) -> tuple[object | None, object | None, list[str]]:
+    """Release one mapped view and handle while preserving any failed resource for retry."""
+    import ctypes
+
+    kernel32 = _kernel32()
+    errors: list[str] = []
+    if address is not None:
+        if kernel32.UnmapViewOfFile(address):
+            address = None
+        else:
+            errors.append(
+                f"UnmapViewOfFile failed: WinError {getattr(ctypes, 'get_last_error', lambda: 0)()}"
+            )
+    if handle is not None:
+        if kernel32.CloseHandle(handle):
+            handle = None
+        else:
+            errors.append(
+                f"CloseHandle failed: WinError {getattr(ctypes, 'get_last_error', lambda: 0)()}"
+            )
+    return address, handle, errors
+
+
 class _WritableSection:  # pragma: no cover - Windows ctypes view; validated on the rig
     """A read/write view of a Windows named section we CREATED (held until :meth:`close`)."""
 
@@ -352,6 +432,8 @@ class _WritableSection:  # pragma: no cover - Windows ctypes view; validated on 
     def write(self, data: bytes) -> None:
         import ctypes
 
+        if self._address is None:
+            raise SharedMemoryUnavailable("writable mapping view is no longer available")
         if len(data) > self._length:
             raise ValueError(f"write {len(data)} > mapped {self._length} bytes")
         ctypes.memmove(self._address, data, len(data))
@@ -359,13 +441,12 @@ class _WritableSection:  # pragma: no cover - Windows ctypes view; validated on 
     def close(self) -> None:
         if self._address is None and self._handle is None:
             return
-        kernel32 = _kernel32()
-        if self._address is not None:
-            kernel32.UnmapViewOfFile(self._address)
-            self._address = None
-        if self._handle is not None:
-            kernel32.CloseHandle(self._handle)
-            self._handle = None
+        self._address, self._handle, errors = _release_mapping_resources(
+            address=self._address,
+            handle=self._handle,
+        )
+        if errors:
+            raise OSError("; ".join(errors))
 
 
 class _ReadableSection:  # pragma: no cover - Windows ctypes view; validated on the rig
@@ -379,6 +460,8 @@ class _ReadableSection:  # pragma: no cover - Windows ctypes view; validated on 
     def read(self, n: int) -> bytes:
         import ctypes
 
+        if self._address is None:
+            raise SharedMemoryUnavailable("readable mapping view is no longer available")
         if n > self._length:
             raise ValueError(f"read {n} > mapped {self._length} bytes")
         return ctypes.string_at(self._address, n)
@@ -386,13 +469,12 @@ class _ReadableSection:  # pragma: no cover - Windows ctypes view; validated on 
     def close(self) -> None:
         if self._address is None and self._handle is None:
             return
-        kernel32 = _kernel32()
-        if self._address is not None:
-            kernel32.UnmapViewOfFile(self._address)
-            self._address = None
-        if self._handle is not None:
-            kernel32.CloseHandle(self._handle)
-            self._handle = None
+        self._address, self._handle, errors = _release_mapping_resources(
+            address=self._address,
+            handle=self._handle,
+        )
+        if errors:
+            raise OSError("; ".join(errors))
 
 
 def _create_writable_section(name: str, length: int) -> _WritableSection:  # pragma: no cover - rig
@@ -550,10 +632,34 @@ class CustomAIController:  # pragma: no cover - Windows/rig-only; validated agai
 
     def close(self) -> None:
         """Release both sections — releasing ``CarControls<N>`` hands the car back to AC."""
+        telemetry_error: Exception | None = None
+        controls_error: Exception | None = None
         if self._car_data is not None:
-            self._car_data.close()
-            self._car_data = None
-        self._controls.close()
+            try:
+                self._car_data.close()
+            except Exception as exc:
+                telemetry_error = exc
+            else:
+                self._car_data = None
+        try:
+            self._controls.close()
+        except Exception as exc:
+            controls_error = exc
+        if controls_error is not None:
+            error = ControllerControlsCloseError(
+                f"CarControls release failed: {type(controls_error).__name__}: {controls_error}"
+            )
+            if telemetry_error is not None:
+                error.add_note(
+                    "additional Car data release failure: "
+                    f"{type(telemetry_error).__name__}: {telemetry_error}"
+                )
+            raise error from controls_error
+        if telemetry_error is not None:
+            raise ControllerTelemetryCloseError(
+                f"Car data release failed after CarControls released: "
+                f"{type(telemetry_error).__name__}: {telemetry_error}"
+            ) from telemetry_error
 
     def __enter__(self) -> CustomAIController:
         return self

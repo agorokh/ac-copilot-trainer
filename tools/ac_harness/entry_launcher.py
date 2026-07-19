@@ -228,6 +228,8 @@ def _taskkill(
 def running_process_ids(
     process_name: str,
     runner: Callable[..., subprocess.CompletedProcess] | None = None,
+    *,
+    strict: bool = False,
 ) -> frozenset[int]:
     """Return PIDs for a Windows image name without adding a runtime dependency.
 
@@ -239,7 +241,16 @@ def running_process_ids(
     if sys.platform != "win32":
         return frozenset()
     if runner is None:
-        return _toolhelp_process_ids(process_name)
+        try:
+            return _toolhelp_process_ids(process_name)
+        except _PartialProcessEnumerationError as exc:
+            if strict:
+                raise
+            return exc.partial_process_ids
+        except OSError:
+            if strict:
+                raise
+            return frozenset()
     result = runner(
         ["tasklist", "/FI", f"IMAGENAME eq {process_name}", "/FO", "CSV", "/NH"],
         check=False,
@@ -247,6 +258,9 @@ def running_process_ids(
         text=True,
     )
     if result.returncode != 0:
+        if strict:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise OSError(f"tasklist exited {result.returncode}: {detail or 'unknown error'}")
         return frozenset()
     found: set[int] = set()
     for row in csv.reader(io.StringIO(result.stdout or "")):
@@ -257,6 +271,81 @@ def running_process_ids(
         except ValueError:
             continue
     return frozenset(found)
+
+
+class _PartialProcessEnumerationError(OSError):
+    """A native process snapshot failed after yielding some useful matching PIDs."""
+
+    def __init__(
+        self,
+        error: int,
+        message: str,
+        partial_process_ids: set[int],
+    ) -> None:
+        super().__init__(error, message)
+        self.partial_process_ids = frozenset(partial_process_ids)
+
+
+def terminate_process_tree_confirmed_absent(
+    process_name: str,
+    *,
+    is_running: Callable[[], bool] | None = None,
+    timeout: float = 15.0,
+    poll: float = 1.0,
+    absent_confirmations: int = 2,
+    runner: Callable[..., subprocess.CompletedProcess] | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    log: Callable[[str], None] | None = None,
+) -> bool:
+    """Kill one process tree and require consecutive strict absence observations.
+
+    This is the shared rig-safety boundary for both human and autonomous launchers. Enumeration
+    failure is unknown—not absence—and triggers the same best-effort taskkill as positive presence.
+    A process already absent is not killed, but still needs ``absent_confirmations`` observations.
+    """
+    if timeout <= 0:
+        raise ValueError("process termination timeout must be > 0")
+    if poll <= 0:
+        raise ValueError("process termination poll must be > 0")
+    if absent_confirmations < 1:
+        raise ValueError("absent_confirmations must be >= 1")
+    emit = log or (lambda _message: None)
+    if sys.platform != "win32":
+        emit(f"cannot confirm {process_name} termination on unsupported platform {sys.platform}")
+        return False
+    check_running = is_running
+    if check_running is None:
+
+        def check_running() -> bool:
+            return bool(running_process_ids(process_name, strict=True))
+
+    run = runner or subprocess.run
+    deadline = clock() + timeout
+    absent_run = 0
+    kill_attempted = False
+    while True:
+        try:
+            present: bool | None = check_running()
+        except OSError as exc:
+            present = None
+            emit(f"process enumeration failed for {process_name}: {exc}")
+        if present is False:
+            absent_run += 1
+            if absent_run >= absent_confirmations:
+                return True
+        else:
+            absent_run = 0
+            if not kill_attempted:
+                try:
+                    emit(_taskkill(process_name, run))
+                except OSError as exc:
+                    emit(f"failed to invoke taskkill for {process_name}: {exc}")
+                kill_attempted = True
+        remaining = deadline - clock()
+        if remaining <= 0:
+            return False
+        sleep(min(poll, remaining))
 
 
 def _toolhelp_process_ids(process_name: str) -> frozenset[int]:
@@ -291,16 +380,31 @@ def _toolhelp_process_ids(process_name: str) -> frozenset[int]:
 
     snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
     if snapshot == wintypes.HANDLE(-1).value:
-        return frozenset()
+        error = ctypes.get_last_error()
+        raise OSError(error, "CreateToolhelp32Snapshot failed")
     found: set[int] = set()
     try:
         entry = ProcessEntry32W()
         entry.dwSize = ctypes.sizeof(entry)
+        ctypes.set_last_error(0)
         ok = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
-        while ok:
+        if not ok:
+            error = ctypes.get_last_error()
+            raise OSError(error, "Process32FirstW failed")
+        while True:
             if entry.szExeFile.casefold() == process_name.casefold():
                 found.add(int(entry.th32ProcessID))
+            ctypes.set_last_error(0)
             ok = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+            if not ok:
+                error = ctypes.get_last_error()
+                if error not in (0, 18):  # ERROR_NO_MORE_FILES is normal enumeration completion.
+                    raise _PartialProcessEnumerationError(
+                        error,
+                        "Process32NextW failed",
+                        found,
+                    )
+                break
     finally:
         kernel32.CloseHandle(snapshot)
     return frozenset(found)

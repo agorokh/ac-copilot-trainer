@@ -1814,7 +1814,13 @@ def persist_selfplay_refinement(
             "refined non-hash identity differs from the driven plant — refusing persist",
         )
 
-    owner = RigSessionOwner(pid=os.getpid(), cwd=str(Path.cwd()), car=car_id, track=track_id)
+    owner = RigSessionOwner(
+        pid=os.getpid(),
+        cwd=str(Path.cwd()),
+        car=car_id,
+        track=track_id,
+        session_kind="plant_id",
+    )
     with RigSessionLock(default_rig_session_lock_path(), owner=owner, timeout=lock_timeout):
         current_bytes = expected.read_bytes() if expected.exists() else None
         if current_bytes != expected_current_bytes:
@@ -1849,7 +1855,13 @@ def revert_plant_artifact(
     )
 
     artifact_path = Path(path)
-    owner = RigSessionOwner(pid=os.getpid(), cwd=str(Path.cwd()), car=car_id, track=track_id)
+    owner = RigSessionOwner(
+        pid=os.getpid(),
+        cwd=str(Path.cwd()),
+        car=car_id,
+        track=track_id,
+        session_kind="plant_id",
+    )
     with RigSessionLock(default_rig_session_lock_path(), owner=owner, timeout=lock_timeout):
         current_bytes = artifact_path.read_bytes() if artifact_path.exists() else b""
         if current_bytes != expected_current_bytes:
