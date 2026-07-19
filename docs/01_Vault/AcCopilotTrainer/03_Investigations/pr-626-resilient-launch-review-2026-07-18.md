@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `0b26821`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `81708b3`; the following vault SAVE records its handoff.
 All required GitHub checks are green, all GraphQL review threads are resolved, and the
 enforce-mode resolve gate reports no substantive findings. The PR remains open and unmerged;
 Windows-rig proof remains a separate future state.
@@ -150,11 +150,15 @@ Windows-rig proof remains a separate future state.
 - `entry_launcher.terminate_process_tree_confirmed_absent` is the single process-safety boundary
   used by resilient-launch cleanup and auto-drive's fatal controller-cleanup path. It centralizes
   taskkill, strict unknown-state handling, bounded polling, and consecutive absence confirmation.
+  Unsupported platforms return false instead of synthesizing success from an empty process set.
+- Auto-drive prints and flushes the full chained `ControllerCleanupAbort` traceback before its
+  immediate OS exit. This preserves postmortem evidence while retaining the atomic mapping and
+  machine-lock teardown that normal interpreter unwinding cannot guarantee.
 
 ## Verification contract
 
-Final code commit `0b26821` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3205 passed`, `77 skipped`, `86.74%` coverage), followed by the mandatory reviewer cooldown and
+Final code commit `81708b3` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3207 passed`, `77 skipped`, `86.74%` coverage), followed by the mandatory reviewer cooldown and
 current-head re-audit. GitHub reports the build, canonical-docs, and conformance checks green;
 GraphQL reports all threads resolved; the enforce-mode resolve gate is clean. `/resolve-pr` did
 not merge the PR or substitute macOS tests for the pending Windows-rig proof.
