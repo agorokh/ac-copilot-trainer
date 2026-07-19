@@ -1,6 +1,6 @@
 ---
 type: investigation
-status: active
+status: completed
 created: 2026-07-18
 updated: 2026-07-18
 relates_to:
@@ -18,7 +18,9 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-The resolve loop is active; merge and Windows-rig proof remain separate future states.
+Review resolution completed at `1ada927`: all required GitHub checks are green, all 25 GraphQL
+review threads are resolved, and the enforce-mode resolve gate reports no substantive findings.
+The PR remains open and unmerged; Windows-rig proof remains a separate future state.
 
 ## Review hardening
 
@@ -71,7 +73,8 @@ The resolve loop is active; merge and Windows-rig proof remain separate future s
 
 ## Verification contract
 
-Before declaring review convergence: run focused resilient-launch and rig-launcher tests, run the
-repository-venv `make ci-fast`, push once, observe the mandatory ten-minute reviewer cooldown, then
-re-audit current-head checks, GraphQL review threads, the self-hosted reviewer body, and the resolve
-gate. Do not merge as part of `/resolve-pr`.
+Converged at `1ada927` after focused launcher/theme tests and repository-venv `make ci-fast`
+(`3138 passed`, `77 skipped`, `86.76%` coverage), mandatory ten-minute reviewer cooldowns, and
+current-head re-audits. GitHub reports the build, canonical-docs, and conformance checks green;
+GraphQL reports 25/25 threads resolved; the enforce-mode resolve gate is clean. `/resolve-pr` did
+not merge the PR or substitute macOS tests for the pending Windows-rig proof.

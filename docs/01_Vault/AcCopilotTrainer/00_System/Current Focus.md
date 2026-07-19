@@ -42,11 +42,12 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Active review (2026-07-18):** PR
+**Review-resolved (2026-07-18):** PR
 [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
 operator session launcher through Game Point, with a machine-wide lock held across the live session.
-The resolve loop is converging current-head checks, review threads, and self-hosted findings; it is
-not a merge or Windows-rig verification step. Detail:
+At head `1ada927`, required checks are green, all 25 review threads are resolved, and the enforce
+resolve gate is clean. The PR remains open and unmerged; Windows-rig verification is still pending.
+Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].
 
 **Active (2026-07-16, autonomous run):** [#531](https://github.com/agorokh/ac-copilot-trainer/issues/531)
