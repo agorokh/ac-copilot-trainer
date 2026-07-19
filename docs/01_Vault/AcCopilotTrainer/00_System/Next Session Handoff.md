@@ -104,6 +104,45 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-07-19) — #628 launcher discarded HEALTHY sessions (PR #629 MERGED `c5c7b75`)
+
+**The rig was far less broken than #627 suggested — the launcher was throwing good sessions away.**
+Executing #627 §1 Step 1 (measure the freeze rate on the repaired rig) surfaced that
+`resilient_launch` classified healthy, normally-loading AC sessions as failures.
+
+Root cause: `acpmf_*` is a shared section that outlives `acs.exe` (measured PRESENT 14 s after
+`taskkill`) and stays mapped ~6 s INTO the next `acs.exe`'s lifetime. So a corpse reading is briefly
+both stale AND live-correlated — its `packet_id` looked like a regression (→ `never_live` in ~8 s)
+and its `is_live` flag fired the Car0 handshake before AC existed (→ 6/6 `froze` in ~7 s on the
+shipped path, which a bespoke driver that skipped the handshake never saw).
+
+Converged fix (6 review rounds, qodo + daemon): **a packet id can only advance if a live process
+wrote it**, so `SectionOwnershipGate` trusts readings only after the packet ADVANCES and revokes on
+regression (new generation) — no process-liveness probe in the sampling loop at all, which retired a
+string of strict-vs-debounced review findings. `AttemptReadiness` binds the gate to the one-shot
+Car0 cache so a replacement session re-probes.
+
+**Live-verified on the unmodified deliverable path** (`python -m tools.ac_harness.resilient_launch`):
+stable drivable handoffs at ~105 fps, AC left LIVE, screenshot inspected (live Spa cockpit + dash +
+coaching tiles). The final run at ~2.7 h uptime hit the **real** CSP freeze and the launcher **retried
+past 4 genuine `froze` attempts to stable on attempt 5** — its core purpose, proven end to end.
+
+Corrected #627 in-place (see the [investigation note](../03_Investigations/issue-628-acpmf-corpse-classify-2026-07-19.md)):
+§8 called PR #626 "draft" (it MERGED `37a0189`); §3.5 called `0x147B` a "hash" loop (it is div-by-100
+magic / base-100 bignum — number formatting). And I corrected **myself**: an early "CPU-bound spin
+confirmed" was wrong (the caught trial recovered, `gfx 23→4233`); §6.1 spin-vs-block stays OPEN.
+
+**Resume here / what remains:**
+- **#627 §6.1 is now catchable.** Freezes reproduce at ~2.7 h uptime, so `.scratch/soak.py` +
+  `.scratch/freeze_forensics.py` (validated `QueryThreadCycleTime` instrument) can finally catch a
+  REAL wedge and settle spin-vs-block vs long-computation. First task next rig session.
+- **#630** — remaining audited false-verdict paths in `resilient_launch` (blind-after-STABLE,
+  PAUSE≠freeze, init-wedge mis-bucketed, no per-trial JSON). Filed, not started.
+- **#631** — `test_second_process_fails_busy_with_owner_metadata` compares the venv launcher-shim
+  pid vs the interpreter pid (Windows). Filed, not started.
+- The naive "freeze rate 0/8 = 17%/89%" numbers are all contaminated by the #628 bug and/or reboot
+  proximity (§7.6) — do not quote them.
+
 ## Review-resolved (2026-07-18) — PR #626 resilient AC launcher
 
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) routes issue #624's bounded
