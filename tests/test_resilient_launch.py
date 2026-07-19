@@ -536,21 +536,27 @@ def test_pre_stable_operator_release_makes_rig_safe_before_propagating(monkeypat
     ]
 
 
-def test_make_rig_safe_forwards_release_to_first_cleanup(monkeypatch):
+def test_make_rig_safe_attempts_cleanup_before_honoring_release(monkeypatch):
     callbacks: list[object] = []
+    held_with: list[object] = []
 
     def release_requested() -> bool:
-        return False
+        return True
 
     def cleanup(_acs_alive, *, release_requested=None):
         callbacks.append(release_requested)
-        return True
+        return False
 
     monkeypatch.setattr("tools.ac_harness.resilient_launch._ensure_acs_gone", cleanup)
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch._hold_rig_until_acs_gone",
+        lambda _acs_alive, *, release_requested=None: held_with.append(release_requested),
+    )
 
     _make_rig_safe(lambda: True, release_requested=release_requested)
 
-    assert callbacks == [release_requested]
+    assert callbacks == [None]
+    assert held_with == [release_requested]
 
 
 def test_car0_probe_closes_controller_after_handshake(monkeypatch):

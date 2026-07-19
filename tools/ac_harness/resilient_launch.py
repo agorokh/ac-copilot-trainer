@@ -466,15 +466,13 @@ def _make_rig_safe(  # pragma: no cover - rig-only
     *,
     release_requested: Callable[[], bool] | None = None,
 ) -> None:
-    """Confirm no live sim can outlast machine-wide ownership."""
-    try:
-        if acs_alive() and not _ensure_acs_gone(
-            acs_alive,
-            release_requested=release_requested,
-        ):
-            _hold_rig_until_acs_gone(acs_alive, release_requested=release_requested)
-    except _OperatorRelease:
-        _log("Game Point explicitly released ownership during safety cleanup")
+    """Attempt cleanup before allowing a release to drop machine-wide ownership."""
+    # A pre-stability release reaches this path with its durable sentinel still present. Do not
+    # pass that callback into the first cleanup: _ensure_acs_gone would raise before taskkill and
+    # let a live/wedged acs.exe outlast the rig lock. Only the subsequent unsafe-hold loop treats
+    # the sentinel as the operator's explicit escape hatch after one real teardown attempt.
+    if acs_alive() and not _ensure_acs_gone(acs_alive):
+        _hold_rig_until_acs_gone(acs_alive, release_requested=release_requested)
 
 
 def _run_with_safe_release(
