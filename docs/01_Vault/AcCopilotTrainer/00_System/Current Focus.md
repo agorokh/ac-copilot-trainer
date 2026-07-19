@@ -45,7 +45,7 @@ relates_to:
 **Review-resolved (2026-07-18):** PR
 [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
 operator session launcher through Game Point, with a machine-wide lock held across the live session.
-Final code commit `1b4809a` adds finite timing enforcement at the shared rig-lock boundary,
+Final code commit `9bd5560` adds finite timing enforcement at the shared rig-lock boundary,
 immediate failed-Car0 attempt termination, mandatory AC teardown before a pre-stability release can
 escape the unsafe-hold loop, early configured-CM path validation, and durable Stable AC ownership
 metadata. **Release AC** refuses known unrelated harness owners while preserving the recovery
@@ -98,7 +98,10 @@ publication keeps the live AC session and lock under `stabilizing` ownership ins
 the session; Game Point therefore stays honestly non-READY while the operator retains the drive.
 Custom-AI native close retries now live in `custom_ai.close_controller_with_retries`; auto-drive
 and the resilient Car0 probe both exhaust the same retained-resource retry budget before invoking
-their persistent-failure AC safety paths.
+their persistent-failure AC safety paths. Close failures now distinguish retained CarControls
+ownership from a read-only telemetry mapping: only a retained control mapping can trigger the AC
+safety shutdown. The emergency safety command writes verified brake/steer fields and leaves the
+explicitly unverified handbrake offset at zero.
 Fatal cleanup ignores the release sentinel before taskkill, sleeps between retries, and has a
 bounded hold before atomic process exit. Content Manager must be positively enumerated and survive
 its startup settle before the Quick Drive URL is issued. The existing `resilient_layout` settings
