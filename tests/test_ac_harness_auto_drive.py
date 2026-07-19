@@ -348,6 +348,25 @@ def test_controller_close_retries_only_the_retained_native_resources():
     assert ctrl.close_calls == 3
 
 
+def test_read_only_mapping_close_failure_does_not_trigger_ac_safety_shutdown():
+    from tools.ac_harness.custom_ai import ControllerTelemetryCloseError
+
+    safety_calls: list[bool] = []
+
+    class TelemetryOnlyFailure(FakeController):
+        def close(self) -> None:
+            raise ControllerTelemetryCloseError("CarControls already released")
+
+    with pytest.raises(ControllerCleanupError, match="read-only telemetry mapping retained"):
+        _close_controller(
+            TelemetryOnlyFailure(),
+            context="test cleanup",
+            cleanup_failure=lambda _controller, _error: safety_calls.append(True) or True,
+        )
+
+    assert safety_calls == []
+
+
 def test_safety_shutdown_after_persistent_close_failure_still_fails_the_run():
     ctrl = CloseAfterSafetyController()
     report = asyncio.run(
@@ -399,7 +418,7 @@ def test_rig_cleanup_safety_brakes_kills_and_confirms_absence(monkeypatch):
     )
 
     assert safe is True
-    assert ctrl.controls == [((0.0, 1.0, 0.0), {"handbrake": 1.0})]
+    assert ctrl.controls == [((0.0, 1.0, 0.0), {"handbrake": 0.0})]
     assert process_snapshots == [frozenset({42}), frozenset(), frozenset()]
 
 

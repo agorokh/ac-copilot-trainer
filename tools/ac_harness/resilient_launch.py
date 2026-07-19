@@ -734,10 +734,15 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
             try:
                 close_controller_with_retries(controller)  # type: ignore[arg-type]
             except ControllerCloseRetryError as exc:
-                raise _Car0ProbeCleanupError(
-                    f"could not close Car0 drivability probe: {exc}",
-                    controller,
-                ) from exc
+                if exc.controls_retained:
+                    raise _Car0ProbeCleanupError(
+                        f"could not close Car0 drivability probe: {exc}",
+                        controller,
+                    ) from exc
+                _log(
+                    "WARNING: Car0 probe released control ownership but retained a read-only "
+                    f"telemetry mapping after retries: {exc}"
+                )
     return drivable
 
 

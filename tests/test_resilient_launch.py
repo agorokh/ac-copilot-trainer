@@ -982,6 +982,20 @@ def test_car0_probe_retries_transient_close_failure() -> None:
     assert controller.close_calls == 3
 
 
+def test_car0_probe_does_not_kill_session_for_read_only_mapping_leak(capsys) -> None:
+    from tools.ac_harness.custom_ai import ControllerTelemetryCloseError
+
+    class Controller:
+        def read_car_data(self):
+            return {"packet_id": 1}
+
+        def close(self):
+            raise ControllerTelemetryCloseError("CarControls already released")
+
+    assert _probe_car0_drivable(controller_factory=Controller) is True
+    assert "retained a read-only telemetry mapping" in capsys.readouterr().out
+
+
 def test_ensure_cm_running_fails_before_same_named_process_probe(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "tools.ac_harness.resilient_launch._strict_process_running",

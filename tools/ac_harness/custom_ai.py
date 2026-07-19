@@ -75,6 +75,15 @@ class ControllerCloseRetryError(RuntimeError):
         )
         self.last_error = last_error
         self.attempts = attempts
+        self.controls_retained = not isinstance(last_error, ControllerTelemetryCloseError)
+
+
+class ControllerControlsCloseError(OSError):
+    """The CarControls mapping is still retained, so the process may still control the car."""
+
+
+class ControllerTelemetryCloseError(OSError):
+    """Only the read-only Car data mapping remains; CarControls ownership was released."""
 
 
 def close_controller_with_retries(
@@ -619,23 +628,34 @@ class CustomAIController:  # pragma: no cover - Windows/rig-only; validated agai
 
     def close(self) -> None:
         """Release both sections — releasing ``CarControls<N>`` hands the car back to AC."""
-        errors: list[Exception] = []
+        telemetry_error: Exception | None = None
+        controls_error: Exception | None = None
         if self._car_data is not None:
             try:
                 self._car_data.close()
             except Exception as exc:
-                errors.append(exc)
+                telemetry_error = exc
             else:
                 self._car_data = None
         try:
             self._controls.close()
         except Exception as exc:
-            errors.append(exc)
-        if errors:
-            primary = errors[0]
-            for secondary in errors[1:]:
-                primary.add_note(f"additional close failure: {secondary}")
-            raise primary
+            controls_error = exc
+        if controls_error is not None:
+            error = ControllerControlsCloseError(
+                f"CarControls release failed: {type(controls_error).__name__}: {controls_error}"
+            )
+            if telemetry_error is not None:
+                error.add_note(
+                    "additional Car data release failure: "
+                    f"{type(telemetry_error).__name__}: {telemetry_error}"
+                )
+            raise error from controls_error
+        if telemetry_error is not None:
+            raise ControllerTelemetryCloseError(
+                f"Car data release failed after CarControls released: "
+                f"{type(telemetry_error).__name__}: {telemetry_error}"
+            ) from telemetry_error
 
     def __enter__(self) -> CustomAIController:
         return self

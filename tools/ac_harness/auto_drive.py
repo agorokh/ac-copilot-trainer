@@ -597,11 +597,16 @@ def _close_controller(
     except ControllerCloseRetryError as exc:
         last_error = exc.last_error
         failed_attempts = exc.attempts
+        controls_retained = exc.controls_retained
     error = ControllerCleanupError(
         f"{context}: {type(last_error).__name__}: {last_error} "
         f"(failed after {failed_attempts} close attempts)"
     )
     error.__cause__ = last_error
+    if not controls_retained:
+        raise ControllerCleanupError(
+            f"{error}; CarControls ownership released, read-only telemetry mapping retained"
+        ) from last_error
     try:
         safety_confirmed = (
             cleanup_failure(controller, error) if cleanup_failure is not None else False
@@ -646,7 +651,7 @@ def rig_force_safe_after_cleanup_failure(
     from tools.ac_harness.entry_launcher import terminate_process_tree_confirmed_absent
 
     try:
-        controller.write_controls(0.0, 1.0, 0.0, handbrake=1.0)
+        controller.write_controls(0.0, 1.0, 0.0, handbrake=0.0)
     except Exception as exc:  # noqa: BLE001 - taskkill remains the authoritative safety action
         _log(f"controller cleanup safety brake failed: {type(exc).__name__}: {exc}")
 

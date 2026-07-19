@@ -45,6 +45,7 @@ from tools.ac_harness.custom_ai import (
     TELEPORT_TO_PITS,
     CarControls,
     CarData,
+    ControllerTelemetryCloseError,
     CustomAIController,
     SimState,
     _ReadableSection,
@@ -317,7 +318,7 @@ def test_controller_close_attempts_controls_after_car_data_failure() -> None:
     controller._car_data = FailingCarData()
     controller._controls = Controls()
 
-    with pytest.raises(OSError, match="car-data close failed"):
+    with pytest.raises(ControllerTelemetryCloseError, match="car-data close failed"):
         controller.close()
 
     assert closed == ["car_data", "controls"]
