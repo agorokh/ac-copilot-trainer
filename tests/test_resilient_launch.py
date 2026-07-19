@@ -282,58 +282,45 @@ def test_pre_go_live_regression_does_not_bypass_the_go_live_timeout() -> None:
 
 
 class TestSectionOwnershipGate:
-    """#628 — readings must be suppressed until the live acs.exe is proven to own the section.
+    """#628 — readings are trusted only once the packet proves a LIVE writer.
 
     The shipped launcher failed 6/6 attempts in ~7 s each because the corpse's ``is_live`` flag
-    fired the Car0 drivability handshake before AC existed.
+    fired the Car0 drivability handshake before AC existed. A corpse packet never advances, so the
+    gate needs nothing but the packet stream to tell a corpse from a live owner.
     """
 
-    def test_dead_process_is_never_trusted(self) -> None:
+    def test_pinned_corpse_is_never_trusted(self) -> None:
+        """A corpse holds one value forever — no advance, no trust."""
         gate = SectionOwnershipGate()
-        for packet in (23_000, 23_000, 23_000):
-            assert gate.observe(acs_alive=False, packet=packet) is False
-
-    def test_alive_but_still_reading_the_corpse_is_not_trusted(self) -> None:
-        """The measured case: acs is ALIVE and loading, section still pinned at the dead value."""
-        gate = SectionOwnershipGate()
-        assert gate.observe(acs_alive=False, packet=16_983) is False
-        for _ in range(3):
-            assert gate.observe(acs_alive=True, packet=16_983) is False
+        for _ in range(4):
+            assert gate.observe(16_983) is False
+        assert gate.publishing is False
 
     def test_trusted_once_the_new_stream_advances(self) -> None:
         gate = SectionOwnershipGate()
-        gate.observe(acs_alive=False, packet=16_983)
-        gate.observe(acs_alive=True, packet=16_983)
-        # The new session publishes its own stream, starting low.
-        assert gate.observe(acs_alive=True, packet=121) is False
-        assert gate.observe(acs_alive=True, packet=140) is True
+        # Corpse pinned, then the new session publishes its own low, ADVANCING stream.
+        gate.observe(16_983)
+        gate.observe(16_983)
+        assert gate.observe(121) is False  # regression off the corpse
+        assert gate.observe(140) is True  # first advance = proven live writer
         assert gate.publishing is True
 
-    def test_process_death_revokes_trust(self) -> None:
+    def test_packet_regression_revokes_trust(self) -> None:
+        """A restart fast enough that no absence was observed must still re-earn trust."""
         gate = SectionOwnershipGate()
-        gate.observe(acs_alive=True, packet=100)
-        assert gate.observe(acs_alive=True, packet=200) is True
-        assert gate.observe(acs_alive=False, packet=200) is False
-        # ...and the dead generation's value cannot seed the next one.
-        assert gate.observe(acs_alive=True, packet=5) is False
-
-    def test_packet_regression_while_alive_revokes_trust(self) -> None:
-        """A restart fast enough that absence was never observed must still re-earn trust."""
-        gate = SectionOwnershipGate()
-        gate.observe(acs_alive=True, packet=100)
-        assert gate.observe(acs_alive=True, packet=200) is True
-
-        # Session replaced; the new stream restarts low while acs.exe never appeared absent.
-        assert gate.observe(acs_alive=True, packet=5) is False
+        gate.observe(100)
+        assert gate.observe(200) is True
+        # Session replaced: the new stream restarts low.
+        assert gate.observe(5) is False
         assert gate.publishing is False
         # ...and the new generation re-earns trust on its own strictly-increasing stream.
-        assert gate.observe(acs_alive=True, packet=9) is True
+        assert gate.observe(9) is True
 
-    def test_unreadable_section_neither_grants_nor_revokes_trust(self) -> None:
+    def test_unreadable_sample_neither_grants_nor_revokes_trust(self) -> None:
         gate = SectionOwnershipGate()
-        gate.observe(acs_alive=True, packet=100)
-        assert gate.observe(acs_alive=True, packet=200) is True
-        assert gate.observe(acs_alive=True, packet=None) is True
+        gate.observe(100)
+        assert gate.observe(200) is True
+        assert gate.observe(None) is True  # a momentary unreadable section does not revoke
 
 
 class TestAttemptReadiness:
@@ -341,8 +328,8 @@ class TestAttemptReadiness:
 
     @staticmethod
     def _earn_ownership(readiness: AttemptReadiness) -> None:
-        readiness.observe(acs_alive=True, packet=100, entry_ready=False)
-        readiness.observe(acs_alive=True, packet=200, entry_ready=False)
+        readiness.observe(packet=100, entry_ready=False)
+        readiness.observe(packet=200, entry_ready=False)
         assert readiness.publishing is True
 
     def test_car0_probe_runs_once_per_attempt(self) -> None:
@@ -351,7 +338,7 @@ class TestAttemptReadiness:
         self._earn_ownership(readiness)
 
         for packet in (300, 400, 500):
-            ready, drivable = readiness.observe(acs_alive=True, packet=packet, entry_ready=True)
+            ready, drivable = readiness.observe(packet=packet, entry_ready=True)
             assert (ready, drivable) == (True, True)
         assert len(calls) == 1
 
@@ -359,42 +346,25 @@ class TestAttemptReadiness:
         calls = []
         readiness = AttemptReadiness(lambda: (calls.append(1), True)[1])
 
-        # The corpse reports READY before acs even exists — this is the 6/6 froze case.
-        assert readiness.observe(acs_alive=False, packet=16_983, entry_ready=True) == (None, None)
-        assert readiness.observe(acs_alive=True, packet=16_983, entry_ready=True) == (None, None)
+        # The corpse reports READY on a pinned packet before AC publishes — the 6/6 froze case.
+        assert readiness.observe(packet=16_983, entry_ready=True) == (None, None)
+        assert readiness.observe(packet=16_983, entry_ready=True) == (None, None)
         assert calls == []
 
-    def test_process_death_revokes_the_car0_cache(self) -> None:
-        """A fast crash/restart inside one attempt must not inherit the old drivability verdict."""
+    def test_packet_regression_revokes_the_car0_cache(self) -> None:
+        """A fast restart (packet regression) must re-run the handshake, not inherit the verdict."""
         calls = []
         readiness = AttemptReadiness(lambda: (calls.append(1), True)[1])
         self._earn_ownership(readiness)
-        readiness.observe(acs_alive=True, packet=300, entry_ready=True)
+        readiness.observe(packet=300, entry_ready=True)
         assert readiness.car0_ready is True
         assert len(calls) == 1
 
-        # acs dies -> ownership and the Car0 verdict are both revoked.
-        assert readiness.observe(acs_alive=False, packet=None, entry_ready=True) == (None, None)
+        # Session replaced: the new low stream revokes trust and the cached verdict.
+        assert readiness.observe(packet=5, entry_ready=True) == (None, None)
         assert readiness.car0_ready is None
 
-        # A new generation must re-earn ownership AND re-run the handshake.
-        readiness.observe(acs_alive=True, packet=5, entry_ready=True)
-        readiness.observe(acs_alive=True, packet=9, entry_ready=True)
-        assert len(calls) == 2
-
-    def test_packet_regression_revokes_the_car0_cache(self) -> None:
-        """The revocation must propagate: a replacement session re-runs the handshake."""
-        calls = []
-        readiness = AttemptReadiness(lambda: (calls.append(1), True)[1])
-        self._earn_ownership(readiness)
-        readiness.observe(acs_alive=True, packet=300, entry_ready=True)
-        assert len(calls) == 1
-
-        # Session replaced without an observed absence.
-        assert readiness.observe(acs_alive=True, packet=5, entry_ready=True) == (None, None)
-        assert readiness.car0_ready is None
-
-        readiness.observe(acs_alive=True, packet=9, entry_ready=True)
+        readiness.observe(packet=9, entry_ready=True)
         assert len(calls) == 2
 
     def test_not_drivable_raises(self) -> None:
@@ -402,7 +372,7 @@ class TestAttemptReadiness:
         self._earn_ownership(readiness)
 
         with pytest.raises(_Car0NotDrivable):
-            readiness.observe(acs_alive=True, packet=300, entry_ready=True)
+            readiness.observe(packet=300, entry_ready=True)
 
 
 def test_empty_trace_is_pending():
