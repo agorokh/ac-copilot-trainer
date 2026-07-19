@@ -202,6 +202,14 @@ def test_acs_exit_after_go_live_is_froze_not_stable():
     assert classify(samples, go_live_timeout=30.0, stability_window=45.0) is LaunchVerdict.FROZE
 
 
+def test_packet_reset_during_stability_cannot_inherit_prior_session_progress() -> None:
+    samples = steady(0.0, 20.0, first_packet=100)
+    samples.append(Sample(t=21.0, gfx_packet=1, acs_alive=True))
+    samples += steady(22.0, 70.0, first_packet=2)
+
+    assert classify(samples, go_live_timeout=30.0, stability_window=45.0) is LaunchVerdict.FROZE
+
+
 def test_empty_trace_is_pending():
     assert classify([]) is LaunchVerdict.PENDING
 
@@ -690,6 +698,37 @@ def test_car0_probe_closes_controller_after_handshake(monkeypatch):
     )
     assert closed == [True]
     assert now > 1.0
+
+
+def test_car0_probe_performs_final_read_at_timeout_boundary(monkeypatch) -> None:
+    now = 0.0
+    reads = iter([None, {"packet_id": 1}])
+
+    class Controller:
+        def read_car_data(self):
+            return next(reads)
+
+        def close(self) -> None:
+            pass
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch.time.monotonic",
+        lambda: now,
+    )
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+
+    assert (
+        _probe_car0_drivable(
+            timeout=0.1,
+            poll=0.1,
+            controller_factory=Controller,
+        )
+        is True
+    )
 
 
 def test_car0_probe_mapping_failure_is_retryable() -> None:

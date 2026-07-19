@@ -171,11 +171,17 @@ def summary_for(status: GamePointStatus, port: int = 8765) -> tuple[str, str, st
                 "brake",
                 status.resilient.detail or "AC ownership cannot be determined",
             )
-        if resilient_state == "busy_other_session":
+        if resilient_state in {"busy_other_session", "release_unsupported"}:
             return (
                 "AC SESSION BUSY",
                 "brake",
                 status.resilient.detail or "another rig session owns Assetto Corsa",
+            )
+        if resilient_state in {"starting", "stabilizing"}:
+            return (
+                "STABILIZING AC",
+                "brake",
+                status.resilient.detail or "proving a stable Assetto Corsa session",
             )
         return (
             "PRESS STABLE AC",

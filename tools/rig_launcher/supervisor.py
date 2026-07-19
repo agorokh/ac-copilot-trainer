@@ -529,12 +529,19 @@ class GamePointSupervisor:
             )
         with self._proc_lock:
             if self._resilient_process is not None and self._resilient_process.poll() is None:
-                return ProbeResult(
-                    "ac_session",
-                    True,
-                    "running",
-                    f"pid={self._resilient_process.pid}",
-                )
+                local_pid = self._resilient_process.pid
+            else:
+                local_pid = None
+        if local_pid is not None:
+            owner = self._rig_session_owner()
+            if owner is not None:
+                return self._rig_owner_status(owner)
+            return ProbeResult(
+                "ac_session",
+                False,
+                "stabilizing",
+                f"pid={local_pid}; waiting for stable handoff",
+            )
         owner = self._rig_session_owner()
         if owner is not None:
             return self._rig_owner_status(owner)
@@ -542,9 +549,9 @@ class GamePointSupervisor:
             if self._resilient_process is not None and self._resilient_process.poll() is None:
                 return ProbeResult(
                     "ac_session",
-                    True,
-                    "running",
-                    f"pid={self._resilient_process.pid}",
+                    False,
+                    "stabilizing",
+                    f"pid={self._resilient_process.pid}; waiting for stable handoff",
                 )
             if self._resilient_log_handle is not None:
                 try:
@@ -581,7 +588,7 @@ class GamePointSupervisor:
                 return ProbeResult("ac_session", False, "start_failed", str(exc))
             return ProbeResult(
                 "ac_session",
-                True,
+                False,
                 "starting",
                 f"pid={self._resilient_process.pid}; log={self.paths.resilient_log_path}",
             )
@@ -630,7 +637,15 @@ class GamePointSupervisor:
             rc = process.poll() if process is not None else None
             pid = process.pid if process is not None else None
         if process is not None and rc is None:
-            return ProbeResult("ac_session", True, "running", f"pid={pid}")
+            owner = self._rig_session_owner()
+            if owner is not None:
+                return self._rig_owner_status(owner)
+            return ProbeResult(
+                "ac_session",
+                False,
+                "stabilizing",
+                f"pid={pid}; waiting for stable handoff",
+            )
         # Lock-file I/O can block on Windows sharing violations. Keep it outside _proc_lock,
         # which also serializes START/stop mutations on the Tk thread.
         owner = self._rig_session_owner()
@@ -688,16 +703,25 @@ class GamePointSupervisor:
                 "busy_other_session",
                 f"rig owned by session_kind={session_kind}; Stable AC was not started",
             )
+        phase = str(owner.get("phase") or "").strip().lower()
         detail = " ".join(
             f"{key}={owner[key]}"
-            for key in ("pid", "car", "track", "started_at")
+            for key in ("pid", "car", "track", "started_at", "phase")
             if owner.get(key) not in (None, "")
         )
+        if phase != "stable":
+            return ProbeResult(
+                "ac_session",
+                False,
+                "stabilizing",
+                "resilient owner has not completed stability proof"
+                + (f": {detail}" if detail else ""),
+            )
         return ProbeResult(
             "ac_session",
             True,
             "running",
-            f"owned by another launcher{(': ' + detail) if detail else ''}",
+            f"stable session{(': ' + detail) if detail else ''}",
         )
 
     def _rig_session_owner(self) -> dict[str, Any] | None:

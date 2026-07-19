@@ -14,7 +14,7 @@ import math
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -40,6 +40,7 @@ class RigSessionOwner:
     track: str | None = None
     started_at: str | None = None
     session_kind: str | None = None
+    phase: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -49,6 +50,7 @@ class RigSessionOwner:
             "track": self.track,
             "started_at": self.started_at,
             "session_kind": self.session_kind,
+            "phase": self.phase,
         }
 
 
@@ -121,6 +123,21 @@ class RigSessionLock:
                 time.sleep(min(self.poll_interval, max(0.0, deadline - time.monotonic())))
 
         self._file = lock_file
+        self._write_owner()
+
+    def set_phase(self, phase: str) -> None:
+        """Publish a durable owner phase while retaining the authoritative byte lock."""
+        if not phase.strip():
+            raise ValueError("rig session phase must not be empty")
+        if self._file is None:
+            raise RuntimeError("rig session lock is not acquired")
+        self.owner = replace(self.owner, phase=phase)
+        self._write_owner()
+
+    def _write_owner(self) -> None:
+        lock_file = self._file
+        if lock_file is None:
+            raise RuntimeError("rig session lock is not acquired")
         payload = json.dumps(self.owner.to_dict(), sort_keys=True).encode("utf-8")
         lock_file.seek(1)
         lock_file.truncate()

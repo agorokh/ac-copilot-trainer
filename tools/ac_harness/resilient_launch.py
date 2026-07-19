@@ -141,7 +141,12 @@ def classify(
             sample.acs_alive
             and sample.gfx_packet is not None
             and prev_packet is not None
-            and sample.gfx_packet != prev_packet
+            and sample.gfx_packet > prev_packet
+        )
+        regressed = (
+            sample.gfx_packet is not None
+            and prev_packet is not None
+            and sample.gfx_packet < prev_packet
         )
         if live_since is None:
             if seen_acs_alive and not sample.acs_alive:
@@ -149,10 +154,16 @@ def classify(
             seen_acs_alive = seen_acs_alive or sample.acs_alive
             if sample.t - t0 >= go_live_timeout:
                 return LaunchVerdict.NEVER_LIVE
+            if regressed:
+                return LaunchVerdict.NEVER_LIVE
             if advanced and ready:
                 live_since = sample.t
         else:
             if not sample.acs_alive:
+                return LaunchVerdict.FROZE
+            if regressed:
+                # packetId reset means the render stream/session was replaced; never let a new
+                # acs.exe inherit stability time accumulated by its predecessor.
                 return LaunchVerdict.FROZE
             if not_ready:
                 not_ready_run += 1
@@ -586,9 +597,8 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
             if release_requested is not None and release_requested():
                 raise _OperatorRelease
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            time.sleep(min(poll, remaining))
+            if remaining > 0:
+                time.sleep(min(poll, remaining))
         else:
             if release_requested is not None and release_requested():
                 raise _OperatorRelease
@@ -730,6 +740,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             track=args.track,
             started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             session_kind="resilient_launch",
+            phase="stabilizing",
         ),
         timeout=args.rig_lock_timeout,
     )
@@ -859,6 +870,13 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # A FROZE terminal verdict deliberately leaves acs.exe alive so the watcher can
             # diagnose it. Once the attempt budget is exhausted, kill that corpse while the
             # machine-wide lock is still held; peers must never inherit a wedged sim.
+            _make_rig_safe(acs_alive, release_requested=release_requested)
+            return 1
+
+        try:
+            rig_lock.set_phase("stable")
+        except OSError as exc:
+            _log(f"stable handoff aborted: could not publish rig phase: {exc}")
             _make_rig_safe(acs_alive, release_requested=release_requested)
             return 1
 

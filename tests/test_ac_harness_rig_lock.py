@@ -84,6 +84,7 @@ with RigSessionLock(path, owner=owner):
             "track": "peer-track",
             "started_at": None,
             "session_kind": None,
+            "phase": None,
         }
     finally:
         release.touch()
@@ -97,6 +98,24 @@ def test_lock_is_released_for_next_owner(tmp_path: Path) -> None:
         pass
     with RigSessionLock(path, owner=_owner(2)):
         assert path.exists()
+
+
+def test_owner_phase_update_is_visible_while_lock_remains_held(tmp_path: Path) -> None:
+    path = tmp_path / "rig-session.lock"
+    lock = RigSessionLock(
+        path,
+        owner=RigSessionOwner(
+            pid=os.getpid(),
+            cwd="game-point",
+            session_kind="resilient_launch",
+            phase="stabilizing",
+        ),
+    )
+
+    with lock:
+        assert read_rig_session_owner(path)["phase"] == "stabilizing"  # type: ignore[index]
+        lock.set_phase("stable")
+        assert read_rig_session_owner(path)["phase"] == "stable"  # type: ignore[index]
 
 
 def test_stale_metadata_with_reused_live_pid_is_not_authoritative(tmp_path: Path) -> None:

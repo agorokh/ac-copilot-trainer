@@ -286,7 +286,9 @@ def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> N
     sup.close()
 
     assert started.state == "starting"
-    assert running.state == "running"
+    assert started.ok is False
+    assert running.state == "stabilizing"
+    assert running.ok is False
     assert calls[0][0][-10:] == [
         "--car",
         "car",
@@ -487,6 +489,8 @@ def test_resilient_status_adopts_machine_wide_lock_owner(tmp_path: Path) -> None
         car="live-car",
         track="live-track",
         started_at="2026-07-18T21:00:00Z",
+        session_kind="resilient_launch",
+        phase="stable",
     )
     with RigSessionLock(lock_path, owner=owner):
         status = sup._resilient_process_status()
@@ -497,6 +501,42 @@ def test_resilient_status_adopts_machine_wide_lock_owner(tmp_path: Path) -> None
     assert f"pid={os.getpid()}" in status.detail
     assert "live-car" in status.detail
     assert started == status
+
+
+def test_resilient_status_stays_non_green_until_owner_publishes_stable(
+    tmp_path: Path,
+) -> None:
+    lock_path = tmp_path / "rig-session.lock"
+    sup = GamePointSupervisor(
+        GamePointConfig(
+            resilient_car="car",
+            resilient_track="track",
+            rig_lock_path=lock_path,
+            paths=LauncherPaths(tmp_path / "game-point"),
+        ),
+        environ={},
+    )
+    lock = RigSessionLock(
+        lock_path,
+        owner=RigSessionOwner(
+            pid=os.getpid(),
+            cwd="game-point",
+            car="car",
+            track="track",
+            session_kind="resilient_launch",
+            phase="stabilizing",
+        ),
+    )
+
+    with lock:
+        stabilizing = sup._resilient_process_status()
+        lock.set_phase("stable")
+        stable = sup._resilient_process_status()
+
+    assert stabilizing.ok is False
+    assert stabilizing.state == "stabilizing"
+    assert stable.ok is True
+    assert stable.state == "running"
 
 
 def test_resilient_status_probes_rig_owner_outside_process_lock(

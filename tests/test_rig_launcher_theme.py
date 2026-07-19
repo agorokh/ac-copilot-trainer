@@ -12,6 +12,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from tools.rig_launcher import theme
 from tools.rig_launcher.supervisor import GamePointStatus, ProbeResult
 
@@ -190,6 +192,41 @@ def test_busy_non_resilient_owner_does_not_prompt_refused_stable_ac_action() -> 
         "AC SESSION BUSY",
         "brake",
         "rig owned by session_kind=auto_drive; Stable AC was not started",
+    )
+
+
+def test_release_unsupported_does_not_prompt_refused_stable_ac_action() -> None:
+    status = _status(
+        resilient=ProbeResult(
+            "ac_session",
+            False,
+            "release_unsupported",
+            "rig owner is not a Stable AC session",
+        )
+    )
+
+    assert theme.summary_for(status) == (
+        "AC SESSION BUSY",
+        "brake",
+        "rig owner is not a Stable AC session",
+    )
+
+
+@pytest.mark.parametrize("state", ["starting", "stabilizing"])
+def test_in_progress_stable_ac_session_stays_non_green(state: str) -> None:
+    status = _status(
+        resilient=ProbeResult(
+            "ac_session",
+            False,
+            state,
+            "waiting for stable handoff",
+        )
+    )
+
+    assert theme.summary_for(status) == (
+        "STABILIZING AC",
+        "brake",
+        "waiting for stable handoff",
     )
 
 
