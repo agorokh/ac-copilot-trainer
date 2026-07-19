@@ -572,3 +572,21 @@ def test_ensure_cm_running_probes_the_configured_image_name(tmp_path, monkeypatc
 
     assert _ensure_cm_running(tmp_path / "PortableCM.exe") is True
     assert images == ["PortableCM.exe"]
+
+
+def test_ensure_cm_running_honors_release_before_process_probe(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch._process_running",
+        lambda _image: pytest.fail("release must be checked before probing or starting CM"),
+    )
+
+    with pytest.raises(_OperatorRelease):
+        _ensure_cm_running(tmp_path / "Content Manager.exe", release_requested=lambda: True)
+
+
+def test_ensure_acs_gone_honors_release_before_process_probe() -> None:
+    with pytest.raises(_OperatorRelease):
+        _ensure_acs_gone(
+            lambda: pytest.fail("release must be checked before probing or killing acs.exe"),
+            release_requested=lambda: True,
+        )

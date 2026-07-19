@@ -285,7 +285,12 @@ def _process_running(image: str) -> bool:  # pragma: no cover - rig-only
 
 
 def _ensure_cm_running(  # pragma: no cover - rig-only
-    cm_exe: Path, *, timeout: float = 45.0, settle: float = 8.0, poll: float = 1.0
+    cm_exe: Path,
+    *,
+    timeout: float = 45.0,
+    settle: float = 8.0,
+    poll: float = 1.0,
+    release_requested: Callable[[], bool] | None = None,
 ) -> bool:
     """Make sure Content Manager is up **before** an ``acmanager://`` URL is sent to it.
 
@@ -299,6 +304,8 @@ def _ensure_cm_running(  # pragma: no cover - rig-only
     """
     import subprocess
 
+    if release_requested is not None and release_requested():
+        raise _OperatorRelease
     process_name = cm_exe.name
     if _process_running(process_name):
         return True
@@ -306,6 +313,8 @@ def _ensure_cm_running(  # pragma: no cover - rig-only
         _log(f"WARNING: Content Manager executable not found: {cm_exe}")
         return False
     _log("Content Manager not running — starting it before sending the quick-drive URL")
+    if release_requested is not None and release_requested():
+        raise _OperatorRelease
     try:
         subprocess.Popen([str(cm_exe)])
     except OSError as exc:
@@ -313,8 +322,17 @@ def _ensure_cm_running(  # pragma: no cover - rig-only
         return False
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if release_requested is not None and release_requested():
+            raise _OperatorRelease
         if _process_running(process_name):
-            time.sleep(settle)  # let CM finish initializing its IPC listener
+            settle_deadline = time.monotonic() + settle
+            while time.monotonic() < settle_deadline:
+                if release_requested is not None and release_requested():
+                    raise _OperatorRelease
+                remaining = settle_deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(poll, remaining))
             return True
         time.sleep(poll)
     _log("WARNING: Content Manager did not start; the launch URL will not be honored")
@@ -334,7 +352,11 @@ def _wait_process_exit(  # pragma: no cover - rig-only
 
 
 def _ensure_acs_gone(  # pragma: no cover - rig-only
-    acs_alive: Callable[[], bool], *, timeout: float = 15.0, poll: float = 1.0
+    acs_alive: Callable[[], bool],
+    *,
+    timeout: float = 15.0,
+    poll: float = 1.0,
+    release_requested: Callable[[], bool] | None = None,
 ) -> bool:
     """Kill any surviving ``acs.exe`` and wait until it has really left the process table.
 
@@ -345,14 +367,20 @@ def _ensure_acs_gone(  # pragma: no cover - rig-only
     """
     import subprocess
 
+    if release_requested is not None and release_requested():
+        raise _OperatorRelease
     if not acs_alive():
         return True
+    if release_requested is not None and release_requested():
+        raise _OperatorRelease
     try:
         subprocess.run(["taskkill", "/im", "acs.exe", "/f", "/t"], capture_output=True)
     except OSError as exc:
         _log(f"ERROR: failed to invoke taskkill for acs.exe: {exc}")
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if release_requested is not None and release_requested():
+            raise _OperatorRelease
         if not acs_alive():
             return True
         time.sleep(poll)
@@ -645,13 +673,20 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 raise _OperatorRelease
             _log(f"attempt {attempt}/{args.max_attempts}: launching via Content Manager")
             # A wedged acs from the previous attempt must be GONE before relaunching.
-            if not _ensure_acs_gone(acs_alive):
+            if not _ensure_acs_gone(acs_alive, release_requested=release_requested):
                 raise _AcsCleanupTimeout("acs.exe remained alive after the bounded cleanup wait")
             # The quick-drive URL is IPC to a RUNNING CM. Do not spend a full attempt when its
             # executable is absent or startup failed.
-            if not _ensure_cm_running(actuator.cm_exe):
+            if not _ensure_cm_running(
+                actuator.cm_exe,
+                release_requested=release_requested,
+            ):
                 return LaunchVerdict.NEVER_LIVE
+            if release_requested():
+                raise _OperatorRelease
             minimize_foreground_window()
+            if release_requested():
+                raise _OperatorRelease
             try:
                 actuator.launch() if attempt == 1 else actuator.relaunch()
             except (OSError, EntryLaunchUnsupported) as exc:
