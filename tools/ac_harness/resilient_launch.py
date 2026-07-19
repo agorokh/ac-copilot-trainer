@@ -336,7 +336,10 @@ def _make_process_liveness_probe(
         except OSError as exc:
             absent_run = 0
             _log(f"WARNING: process enumeration failed for {image}; retaining ownership: {exc}")
-            return True
+            # Fail closed only after this probe has observed the process. Before the first real
+            # sighting, inventing presence turns the next ordinary startup absence into a false
+            # process-exit edge and makes classify() report NEVER_LIVE immediately.
+            return seen_present
         if found:
             absent_run = 0
             seen_present = True

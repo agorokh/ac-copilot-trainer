@@ -557,12 +557,70 @@ class ControllerCleanupError(RuntimeError):
     """A Custom-AI controller could not release its native shared-memory resources."""
 
 
-def _close_controller(controller: Controller, *, context: str) -> None:
-    """Close a controller at one observable boundary and normalize native teardown failures."""
+class ControllerCleanupAbort(SystemExit):
+    """Fail-closed abort that retains a controller until process teardown releases its mapping."""
+
+    def __init__(self, error: ControllerCleanupError, controller: Controller) -> None:
+        super().__init__(f"fatal controller cleanup failure: {error}")
+        self.controller = controller
+
+
+CleanupFailureFn = Callable[[Controller, ControllerCleanupError], bool]
+
+
+def _close_controller(
+    controller: Controller,
+    *,
+    context: str,
+    cleanup_failure: CleanupFailureFn | None = None,
+    attempts: int = 3,
+) -> None:
+    """Release a controller without ever abandoning a live Custom-AI control mapping.
+
+    ``CustomAIController.close`` preserves whichever native handle/view failed to release, so a
+    retry is meaningful: successfully released members remain cleared and only failed resources
+    are retried. If all attempts fail, the rig callback must make AC safe and return ``True`` only
+    after confirming ``acs.exe`` is gone. Without that proof, abort while retaining ``controller``
+    on the exception; process teardown then releases the mapping instead of a normal return
+    silently dropping the last owner.
+    """
+    if attempts < 1:
+        raise ValueError("controller cleanup attempts must be >= 1")
+    last_error: BaseException | None = None
+    for _ in range(attempts):
+        try:
+            controller.close()
+            return
+        except (OSError, SharedMemoryUnavailable) as exc:
+            last_error = exc
+
+    assert last_error is not None
+    error = ControllerCleanupError(
+        f"{context}: {type(last_error).__name__}: {last_error} "
+        f"(failed after {attempts} close attempts)"
+    )
+    error.__cause__ = last_error
+    try:
+        safety_confirmed = (
+            cleanup_failure(controller, error) if cleanup_failure is not None else False
+        )
+    except Exception as exc:  # noqa: BLE001 - retain controller when the safety action itself fails
+        error.add_note(f"cleanup safety action failed: {type(exc).__name__}: {exc}")
+        raise ControllerCleanupAbort(error, controller) from exc
+    if not safety_confirmed:
+        raise ControllerCleanupAbort(error, controller)
+
+    # AC is confirmed absent, so the control mapping can no longer command a live car. Try once
+    # more to release the local native resources. The run still fails: needing to kill AC is never
+    # a successful cleanup, even when this last local close succeeds.
     try:
         controller.close()
     except (OSError, SharedMemoryUnavailable) as exc:
-        raise ControllerCleanupError(f"{context}: {type(exc).__name__}: {exc}") from exc
+        raise ControllerCleanupError(
+            f"{error}; AC safety shutdown confirmed, but final local release failed: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    raise ControllerCleanupError(f"{error}; AC safety shutdown confirmed")
 
 
 LaunchFn = Callable[[AutoDriveConfig], "tuple[bool, str]"]
@@ -575,6 +633,44 @@ VerifyTrackFn = Callable[[AutoDriveConfig], "tuple[str | None, str | None] | Non
 # #558: called on a cached-session mismatch to RESTART the launcher (kill Content Manager) so the
 # next launch cold-starts a fresh CM — the recovery a plain URL re-issue cannot perform.
 RestartLauncherFn = Callable[[AutoDriveConfig], None]
+
+
+def rig_force_safe_after_cleanup_failure(
+    controller: Controller,
+    error: ControllerCleanupError,
+) -> bool:  # pragma: no cover - rig-only
+    """Brake, terminate AC, and confirm absence after persistent controller cleanup failure."""
+    from tools.ac_harness.entry_launcher import _taskkill, running_process_ids
+
+    try:
+        controller.write_controls(0.0, 1.0, 0.0, handbrake=1.0)
+    except Exception as exc:  # noqa: BLE001 - taskkill remains the authoritative safety action
+        _log(f"controller cleanup safety brake failed: {type(exc).__name__}: {exc}")
+
+    _log(f"FATAL {error}; terminating acs.exe before releasing controller ownership")
+    try:
+        kill_detail = _taskkill("acs.exe", subprocess.run)
+    except OSError as exc:
+        _log(f"FATAL could not execute acs.exe safety shutdown: {exc}")
+        return False
+    _log(f"controller cleanup safety action: {kill_detail}")
+    deadline = time.monotonic() + 3.0
+    while True:
+        try:
+            remaining = running_process_ids("acs.exe", strict=True)
+        except OSError as exc:
+            _log(f"FATAL cannot confirm acs.exe safety shutdown: {exc}")
+            return False
+        if not remaining:
+            _log("controller cleanup safety action confirmed: acs.exe is absent")
+            return True
+        if time.monotonic() >= deadline:
+            _log(
+                "FATAL acs.exe remained alive after controller cleanup safety shutdown: "
+                + ", ".join(str(pid) for pid in sorted(remaining))
+            )
+            return False
+        time.sleep(0.1)
 
 
 def rig_verify_track(
@@ -739,6 +835,7 @@ async def run_auto_drive(
     apply_setup: ApplySetupFn | None = None,
     verify_track: VerifyTrackFn | None = None,
     restart_launcher: RestartLauncherFn | None = None,
+    cleanup_failure: CleanupFailureFn | None = None,
 ) -> AutoDriveReport:
     """Compose launch → setup → hijack → (background drive) → WS assert → teardown into one report.
 
@@ -919,18 +1016,22 @@ async def run_auto_drive(
                     _close_controller(
                         controller,
                         context=f"cleanup after rejecting mismatched {mismatch}",
+                        cleanup_failure=cleanup_failure,
                     )
                 except ControllerCleanupError as exc:
                     return AutoDriveReport(
                         ok=False,
-                        stage="cleanup",
+                        stage="launch",
                         launched=not config.skip_launch,
                         hijacked=True,
                         setup_requested=setup_requested,
                         setup_applied=setup_applied,
                         setup_ack=setup_ack,
-                        error=str(exc),
-                        notes=[f"original launch failure: loaded {mismatch}"],
+                        error=(
+                            f"loaded {mismatch} — Content Manager launched a cached session; "
+                            "the harness will not drive the requested line on a different combo"
+                        ),
+                        notes=[str(exc)],
                         **identity,
                     )
                 controller = None
@@ -1135,7 +1236,11 @@ async def run_auto_drive(
                 notes.append(drive_error)
         finally:
             try:
-                _close_controller(controller, context="final controller cleanup")
+                _close_controller(
+                    controller,
+                    context="final controller cleanup",
+                    cleanup_failure=cleanup_failure,
+                )
             except ControllerCleanupError as exc:
                 cleanup_error = str(exc)
                 if error is None:
@@ -1181,6 +1286,7 @@ async def run_auto_drive_with_sim_retries(
     apply_setup: ApplySetupFn | None = None,
     verify_track: VerifyTrackFn | None = None,
     restart_launcher: RestartLauncherFn | None = None,
+    cleanup_failure: CleanupFailureFn | None = None,
 ) -> AutoDriveReport:
     """Run the full attempt again after a detected ``acs.exe`` death, bounded and evidenced.
 
@@ -1209,6 +1315,7 @@ async def run_auto_drive_with_sim_retries(
             apply_setup=apply_setup,
             verify_track=verify_track,
             restart_launcher=restart_launcher,
+            cleanup_failure=cleanup_failure,
         )
         # Snapshot BEFORE assigning the aggregate list, so nested attempts do not recursively
         # contain themselves.  This is the full attempt (checks, trace, cause), not a lossy summary.
@@ -2578,6 +2685,7 @@ def rig_hijack(config: AutoDriveConfig) -> Controller | None:  # pragma: no cove
         _close_controller(
             ctrl,
             context=f"hijack probe {attempt}/{attempts} cleanup",
+            cleanup_failure=rig_force_safe_after_cleanup_failure,
         )  # recreate the section next attempt to re-trigger the hijack
         # ASCII-only message: the harness prints to a Windows cp1252 console (cf. #475/#476).
         _log(
@@ -4207,6 +4315,7 @@ def _main_impl(
                 apply_setup=rig_apply_setup,
                 verify_track=rig_verify_track,
                 restart_launcher=rig_restart_launcher,
+                cleanup_failure=rig_force_safe_after_cleanup_failure,
             )
         )
     finally:

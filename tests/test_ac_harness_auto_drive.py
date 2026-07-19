@@ -21,12 +21,14 @@ from tools.ac_harness.auto_drive import (
     AppInstallProvenance,
     AutoDriveConfig,
     AutoDriveReport,
+    ControllerCleanupAbort,
     ControllerCleanupError,
     DriveStats,
     ProgressWatchdog,
     SimProcessIdentityMonitor,
     _build_arg_parser,
     _build_driver,
+    _close_controller,
     _config_from_args,
     _main,
     _wait_live,
@@ -53,6 +55,7 @@ from tools.ac_harness.auto_drive import (
     resolve_ac_user_dir,
     resolve_fast_lane,
     resolve_setup_ini,
+    rig_force_safe_after_cleanup_failure,
     rig_hijack,
     rig_launch,
     run_auto_drive,
@@ -303,6 +306,7 @@ def test_final_controller_close_failure_is_structured_cleanup_failure():
             hijack=lambda c: ctrl,
             drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
             tap=_tap_returning(CONTINUOUS),
+            cleanup_failure=lambda controller, error: True,
         )
     )
 
@@ -310,6 +314,87 @@ def test_final_controller_close_failure_is_structured_cleanup_failure():
     assert report.stage == "cleanup"
     assert report.error is not None and "final controller cleanup" in report.error
     assert ctrl.closed is True
+
+
+def test_controller_close_retries_only_the_retained_native_resources():
+    class FlakyCloseController(FakeController):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls < 3:
+                raise OSError("native close temporarily failed")
+            self.closed = True
+
+    ctrl = FlakyCloseController()
+
+    _close_controller(ctrl, context="test cleanup")
+
+    assert ctrl.closed is True
+    assert ctrl.close_calls == 3
+
+
+def test_safety_shutdown_after_persistent_close_failure_still_fails_the_run():
+    class CloseAfterShutdownController(FakeController):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls <= 3:
+                raise OSError("native close failed")
+            self.closed = True
+
+    ctrl = CloseAfterShutdownController()
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: ctrl,
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            cleanup_failure=lambda controller, error: True,
+        )
+    )
+
+    assert report.ok is False
+    assert report.stage == "cleanup"
+    assert report.error is not None and "AC safety shutdown confirmed" in report.error
+    assert ctrl.closed is True
+    assert ctrl.close_calls == 4
+
+
+def test_rig_cleanup_safety_brakes_kills_and_confirms_absence(monkeypatch):
+    import tools.ac_harness.entry_launcher as entry_launcher
+
+    class RecordingController(FakeController):
+        def __init__(self) -> None:
+            super().__init__()
+            self.controls: list[tuple[tuple, dict]] = []
+
+        def write_controls(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            self.controls.append((args, kwargs))
+
+    ctrl = RecordingController()
+    snapshots = iter((frozenset({42}), frozenset()))
+    monkeypatch.setattr(entry_launcher, "_taskkill", lambda image, runner: "killed acs.exe")
+    monkeypatch.setattr(
+        entry_launcher,
+        "running_process_ids",
+        lambda image, *, strict: next(snapshots),
+    )
+    monkeypatch.setattr("tools.ac_harness.auto_drive.time.sleep", lambda seconds: None)
+
+    safe = rig_force_safe_after_cleanup_failure(
+        ctrl,
+        ControllerCleanupError("final cleanup failed"),
+    )
+
+    assert safe is True
+    assert ctrl.controls == [((0.0, 1.0, 0.0), {"handbrake": 1.0})]
 
 
 def test_controller_close_failure_preserves_prior_pipeline_failure():
@@ -325,6 +410,7 @@ def test_controller_close_failure_preserves_prior_pipeline_failure():
             hijack=lambda c: ctrl,
             drive=_drive_returning(DriveStats(drove=True), {}),
             tap=broken_tap,
+            cleanup_failure=lambda controller, error: True,
         )
     )
 
@@ -993,7 +1079,7 @@ def test_run_auto_drive_fails_fast_on_track_mismatch():
     assert ctrl.closed is True  # controller released before bailing
 
 
-def test_track_mismatch_close_failure_reports_cleanup_and_preserves_mismatch():
+def test_track_mismatch_close_failure_preserves_primary_mismatch():
     ctrl = FailingCloseController()
 
     report = asyncio.run(
@@ -1004,12 +1090,31 @@ def test_track_mismatch_close_failure_reports_cleanup_and_preserves_mismatch():
             drive=lambda controller, config, stop: pytest.fail("must not drive the wrong track"),
             tap=_tap_returning(CONTINUOUS),
             verify_track=lambda c: ("spa", "ks_porsche_911_gt3_r_2016"),
+            cleanup_failure=lambda controller, error: True,
         )
     )
 
-    assert report.stage == "cleanup"
-    assert report.error is not None and "native close failed" in report.error
-    assert report.notes and "loaded track" in report.notes[0]
+    assert report.stage == "launch"
+    assert report.error is not None and "loaded track" in report.error
+    assert report.notes and "native close failed" in report.notes[0]
+
+
+def test_persistent_close_failure_without_safety_proof_aborts_and_retains_controller():
+    ctrl = FailingCloseController()
+
+    with pytest.raises(ControllerCleanupAbort) as caught:
+        asyncio.run(
+            run_auto_drive(
+                _cfg(),
+                launch=_ok_launch,
+                hijack=lambda c: ctrl,
+                drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+                tap=_tap_returning(CONTINUOUS),
+            )
+        )
+
+    assert caught.value.controller is ctrl
+    assert "failed after 3 close attempts" in str(caught.value)
 
 
 def test_handshake_outcome_gate_preserves_any_prior_failure():
@@ -1914,6 +2019,7 @@ def test_rig_hijack_normalizes_probe_close_failure(monkeypatch):
             raise OSError("unmap failed")
 
     monkeypatch.setattr("tools.ac_harness.custom_ai.CustomAIController", FailingProbe)
+    monkeypatch.setattr(ad, "rig_force_safe_after_cleanup_failure", lambda ctrl, error: True)
     monkeypatch.setattr(ad.time, "monotonic", clock.monotonic)
     monkeypatch.setattr(ad.time, "sleep", clock.sleep)
 

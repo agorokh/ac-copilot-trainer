@@ -370,7 +370,21 @@ def test_process_liveness_probe_fails_closed_and_confirms_absence() -> None:
 
     alive = _make_process_liveness_probe("acs.exe", process_ids=process_ids)
 
-    assert [alive() for _ in range(6)] == [True, False, False, True, True, False]
+    assert [alive() for _ in range(6)] == [False, False, False, True, True, False]
+
+
+def test_process_liveness_probe_fails_closed_after_real_sighting() -> None:
+    observations = iter([(42,), OSError("snapshot failed"), (), ()])
+
+    def process_ids(_image: str) -> tuple[int, ...]:
+        observation = next(observations)
+        if isinstance(observation, OSError):
+            raise observation
+        return observation
+
+    alive = _make_process_liveness_probe("acs.exe", process_ids=process_ids)
+
+    assert [alive() for _ in range(4)] == [True, True, True, False]
 
 
 def test_process_liveness_probe_does_not_invent_presence_before_first_sighting() -> None:
