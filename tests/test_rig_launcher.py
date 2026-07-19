@@ -1369,6 +1369,7 @@ def test_ensure_settings_file_writes_non_secret_template(tmp_path: Path) -> None
     assert payload["external_bind"] == ""
     assert payload["resilient_car"] == ""
     assert payload["resilient_track"] == ""
+    assert payload["resilient_layout"] == ""
     assert payload["resilient_cm_exe"] == ""
     assert "token" not in json.dumps(payload).lower()
 

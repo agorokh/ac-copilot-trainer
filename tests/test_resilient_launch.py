@@ -543,6 +543,36 @@ def test_ensure_acs_gone_returns_false_when_process_survives(monkeypatch):
     assert now == 1.0
 
 
+def test_ensure_acs_gone_does_not_treat_enumeration_failure_as_absence(monkeypatch):
+    now = 0.0
+    taskkills: list[list[str]] = []
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda command, **_kwargs: taskkills.append(command),
+    )
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+
+    assert (
+        _ensure_acs_gone(
+            lambda: (_ for _ in ()).throw(OSError("snapshot failed")),
+            timeout=1.0,
+            poll=0.25,
+        )
+        is False
+    )
+    assert taskkills == [["taskkill", "/im", "acs.exe", "/f", "/t"]]
+    assert now == 1.0
+
+
 def test_cleanup_failure_holds_ownership_until_acs_is_gone(monkeypatch):
     cleanup_results = iter([False, False, True])
     alive_results = iter([True, True, True, False])
@@ -619,6 +649,59 @@ def test_fatal_cleanup_hold_ignores_interrupt_until_acs_is_gone(monkeypatch):
         retry_cleanup=cleanup,
         allow_operator_release=False,
     )
+
+
+def test_fatal_cleanup_hold_ignores_release_but_still_runs_cleanup(monkeypatch):
+    alive_results = iter([True, False])
+    forwarded_release: list[object] = []
+    sleeps: list[float] = []
+
+    def cleanup(_acs_alive, *, release_requested=None):
+        forwarded_release.append(release_requested)
+        return True
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch._ensure_acs_gone", cleanup)
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch.time.sleep", lambda seconds: sleeps.append(seconds)
+    )
+
+    assert (
+        _hold_rig_until_acs_gone(
+            lambda: next(alive_results),
+            release_requested=lambda: True,
+            allow_operator_release=False,
+            poll=0.25,
+        )
+        is True
+    )
+    assert forwarded_release == [None]
+    assert sleeps == []
+
+
+def test_fatal_cleanup_hold_bounds_repeated_enumeration_failures(monkeypatch):
+    now = 0.0
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+
+    assert (
+        _hold_rig_until_acs_gone(
+            lambda: (_ for _ in ()).throw(OSError("snapshot failed")),
+            retry_cleanup=lambda _acs_alive: False,
+            allow_operator_release=False,
+            poll=0.25,
+            timeout=1.0,
+        )
+        is False
+    )
+    assert now == 1.0
 
 
 def test_cleanup_hold_honors_game_point_release_signal() -> None:
@@ -714,15 +797,15 @@ def test_make_rig_safe_attempts_cleanup_before_honoring_release(monkeypatch):
     monkeypatch.setattr("tools.ac_harness.resilient_launch._ensure_acs_gone", cleanup)
     monkeypatch.setattr(
         "tools.ac_harness.resilient_launch._hold_rig_until_acs_gone",
-        lambda _acs_alive, *, release_requested=None, allow_operator_release=True: held_with.append(
-            (release_requested, allow_operator_release)
+        lambda _acs_alive, *, release_requested=None, allow_operator_release=True, timeout=None: (
+            held_with.append((release_requested, allow_operator_release, timeout))
         ),
     )
 
     _make_rig_safe(lambda: True, release_requested=release_requested)
 
     assert callbacks == [None]
-    assert held_with == [(release_requested, True)]
+    assert held_with == [(release_requested, True, None)]
 
 
 def test_car0_probe_closes_controller_after_handshake(monkeypatch):
@@ -851,7 +934,7 @@ def test_car0_probe_close_failure_aborts_before_another_probe() -> None:
 
 def test_ensure_cm_running_fails_before_same_named_process_probe(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "tools.ac_harness.resilient_launch._process_running",
+        "tools.ac_harness.resilient_launch._strict_process_running",
         lambda _image: pytest.fail("a running image cannot validate a missing configured path"),
     )
 
@@ -867,7 +950,7 @@ def test_ensure_cm_running_probes_the_configured_image_name(tmp_path, monkeypatc
         images.append(image)
         return True
 
-    monkeypatch.setattr("tools.ac_harness.resilient_launch._process_running", running)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch._strict_process_running", running)
 
     assert _ensure_cm_running(cm_exe) is True
     assert images == ["PortableCM.exe"]
@@ -875,12 +958,57 @@ def test_ensure_cm_running_probes_the_configured_image_name(tmp_path, monkeypatc
 
 def test_ensure_cm_running_honors_release_before_process_probe(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "tools.ac_harness.resilient_launch._process_running",
+        "tools.ac_harness.resilient_launch._strict_process_running",
         lambda _image: pytest.fail("release must be checked before probing or starting CM"),
     )
 
     with pytest.raises(_OperatorRelease):
         _ensure_cm_running(tmp_path / "Content Manager.exe", release_requested=lambda: True)
+
+
+def test_ensure_cm_running_fails_on_unknown_process_state(tmp_path, monkeypatch):
+    cm_exe = tmp_path / "Content Manager.exe"
+    cm_exe.touch()
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch._strict_process_running",
+        lambda _image: (_ for _ in ()).throw(OSError("snapshot failed")),
+    )
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda _args: pytest.fail("unknown process state must not start a duplicate CM"),
+    )
+
+    assert _ensure_cm_running(cm_exe) is False
+
+
+def test_ensure_cm_running_rechecks_presence_after_settle(tmp_path, monkeypatch):
+    cm_exe = tmp_path / "Content Manager.exe"
+    cm_exe.touch()
+    observations = iter([False, True, False])
+    now = 0.0
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr("subprocess.Popen", lambda _args: object())
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+
+    assert (
+        _ensure_cm_running(
+            cm_exe,
+            timeout=5.0,
+            settle=1.0,
+            poll=0.5,
+            process_running=lambda _image: next(observations),
+        )
+        is False
+    )
+    assert now == 1.0
 
 
 def test_ensure_acs_gone_honors_release_before_process_probe() -> None:

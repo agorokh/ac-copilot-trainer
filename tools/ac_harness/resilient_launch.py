@@ -313,6 +313,13 @@ def _process_running(image: str) -> bool:  # pragma: no cover - rig-only
         return True
 
 
+def _strict_process_running(image: str) -> bool:  # pragma: no cover - rig-only
+    """Return process presence without converting enumeration failure into a boolean."""
+    from tools.ac_harness.entry_launcher import running_process_ids
+
+    return bool(running_process_ids(image, strict=True))
+
+
 def _make_process_liveness_probe(
     image: str,
     *,
@@ -392,6 +399,7 @@ def _ensure_cm_running(  # pragma: no cover - rig-only
     settle: float = 8.0,
     poll: float = 1.0,
     release_requested: Callable[[], bool] | None = None,
+    process_running: Callable[[str], bool] | None = None,
 ) -> bool:
     """Make sure Content Manager is up **before** an ``acmanager://`` URL is sent to it.
 
@@ -411,7 +419,13 @@ def _ensure_cm_running(  # pragma: no cover - rig-only
         _log(f"WARNING: Content Manager executable not found: {cm_exe}")
         return False
     process_name = cm_exe.name
-    if _process_running(process_name):
+    probe = process_running or _strict_process_running
+    try:
+        already_running = probe(process_name)
+    except OSError as exc:
+        _log(f"WARNING: Content Manager process enumeration failed: {exc}")
+        return False
+    if already_running:
         return True
     _log("Content Manager not running — starting it before sending the quick-drive URL")
     if release_requested is not None and release_requested():
@@ -425,7 +439,12 @@ def _ensure_cm_running(  # pragma: no cover - rig-only
     while time.monotonic() < deadline:
         if release_requested is not None and release_requested():
             raise _OperatorRelease
-        if _process_running(process_name):
+        try:
+            observed_running = probe(process_name)
+        except OSError as exc:
+            _log(f"WARNING: Content Manager process enumeration failed after start: {exc}")
+            return False
+        if observed_running:
             settle_deadline = time.monotonic() + settle
             while time.monotonic() < settle_deadline:
                 if release_requested is not None and release_requested():
@@ -434,7 +453,15 @@ def _ensure_cm_running(  # pragma: no cover - rig-only
                 if remaining <= 0:
                     break
                 time.sleep(min(poll, remaining))
-            return True
+            try:
+                survived_settle = probe(process_name)
+            except OSError as exc:
+                _log(f"WARNING: Content Manager settle verification failed: {exc}")
+                return False
+            if survived_settle:
+                return True
+            _log("WARNING: Content Manager exited during startup settle")
+            return False
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
@@ -484,7 +511,17 @@ def _ensure_acs_gone(  # pragma: no cover - rig-only
 
     if release_requested is not None and release_requested():
         raise _OperatorRelease
-    if not acs_alive():
+
+    def observe() -> bool | None:
+        try:
+            return acs_alive()
+        except OSError as exc:
+            _log(f"WARNING: acs.exe process enumeration failed during cleanup: {exc}")
+            return None
+
+    # Unknown is not absence. Attempt taskkill and keep polling rather than launching against a
+    # possibly surviving prior session whose shared memory could masquerade as the new attempt.
+    if observe() is False:
         return True
     if release_requested is not None and release_requested():
         raise _OperatorRelease
@@ -496,13 +533,13 @@ def _ensure_acs_gone(  # pragma: no cover - rig-only
     while time.monotonic() < deadline:
         if release_requested is not None and release_requested():
             raise _OperatorRelease
-        if not acs_alive():
+        if observe() is False:
             return True
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
         time.sleep(min(poll, remaining))
-    if not acs_alive():
+    if observe() is False:
         return True
     _log("ERROR: acs.exe still present after kill+wait; relaunch aborted")
     return False
@@ -515,7 +552,8 @@ def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
     release_requested: Callable[[], bool] | None = None,
     poll: float = 1.0,
     allow_operator_release: bool = True,
-) -> None:
+    timeout: float | None = None,
+) -> bool:
     """Keep machine-wide ownership after cleanup fails until the unsafe sim is gone.
 
     Returning from the launcher would release the OS lock and let a peer inherit a known-wedged
@@ -530,15 +568,36 @@ def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
     def cleanup() -> bool:
         if retry_cleanup is not None:
             return retry_cleanup(acs_alive)
-        return _ensure_acs_gone(acs_alive, release_requested=release_requested)
+        return _ensure_acs_gone(
+            acs_alive,
+            release_requested=release_requested if allow_operator_release else None,
+        )
 
-    while acs_alive():
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    while True:
+        if deadline is not None and time.monotonic() >= deadline:
+            _log("FATAL cleanup hold timed out; forcing process exit with rig lock retained")
+            return False
+        try:
+            alive = acs_alive()
+        except OSError as exc:
+            _log(f"WARNING: acs.exe enumeration failed during cleanup hold: {exc}")
+            alive = True
+        if not alive:
+            return True
         if allow_operator_release and release_requested is not None and release_requested():
             _log("Game Point explicitly released unsafe rig ownership; acs.exe may still be alive")
-            return
+            return False
         try:
-            if cleanup() and not acs_alive():
-                return
+            cleaned = cleanup()
+            if cleaned:
+                try:
+                    still_alive = acs_alive()
+                except OSError as exc:
+                    _log(f"WARNING: acs.exe cleanup confirmation failed: {exc}")
+                    still_alive = True
+                if not still_alive:
+                    return True
             time.sleep(poll)
         except _OperatorRelease:
             if allow_operator_release:
@@ -546,15 +605,17 @@ def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
                     "Game Point explicitly released unsafe rig ownership; "
                     "acs.exe may still be alive"
                 )
-                return
+                return False
             _log("ignoring release during fatal controller cleanup; acs.exe must exit first")
+            time.sleep(poll)
         except KeyboardInterrupt:
             if allow_operator_release:
                 _log(
                     "operator explicitly released unsafe rig ownership; acs.exe may still be alive"
                 )
-                return
+                return False
             _log("ignoring Ctrl-C during fatal controller cleanup; acs.exe must exit first")
+            time.sleep(poll)
 
 
 def _hold_stable_session(  # pragma: no cover - rig-only
@@ -582,14 +643,19 @@ def _make_rig_safe(  # pragma: no cover - rig-only
     *,
     release_requested: Callable[[], bool] | None = None,
     allow_operator_release: bool = True,
-) -> None:
+    hold_timeout: float | None = None,
+) -> bool:
     """Attempt cleanup before allowing a release to drop machine-wide ownership."""
     # A pre-stability release reaches this path with its durable sentinel still present. Do not
     # pass that callback into the first cleanup: _ensure_acs_gone would raise before taskkill and
     # let a live/wedged acs.exe outlast the rig lock. Only the subsequent unsafe-hold loop treats
     # the sentinel as the operator's explicit escape hatch after one real teardown attempt.
-    if not acs_alive():
-        return
+    try:
+        initially_alive = acs_alive()
+    except OSError:
+        initially_alive = True
+    if not initially_alive:
+        return True
     try:
         safe = _ensure_acs_gone(acs_alive)
     except (KeyboardInterrupt, _OperatorRelease):
@@ -598,11 +664,13 @@ def _make_rig_safe(  # pragma: no cover - rig-only
         _log("ignoring operator interrupt during fatal controller cleanup")
         safe = False
     if not safe:
-        _hold_rig_until_acs_gone(
+        return _hold_rig_until_acs_gone(
             acs_alive,
             release_requested=release_requested,
             allow_operator_release=allow_operator_release,
+            timeout=hold_timeout,
         )
+    return True
 
 
 def _run_with_safe_release(
@@ -790,6 +858,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
     acs_alive = _ResettableProcessLivenessProbe("acs.exe")
 
+    def acs_present() -> bool:
+        return _strict_process_running("acs.exe")
+
     lock_path = args.rig_lock_path or default_rig_session_lock_path()
     release_path = args.rig_release_path or (lock_path.parent / "rig-session.release")
 
@@ -847,7 +918,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 raise _OperatorRelease
             _log(f"attempt {attempt}/{args.max_attempts}: launching via Content Manager")
             # A wedged acs from the previous attempt must be GONE before relaunching.
-            if not _ensure_acs_gone(acs_alive, release_requested=release_requested):
+            if not _ensure_acs_gone(acs_present, release_requested=release_requested):
                 raise _AcsCleanupTimeout("acs.exe remained alive after the bounded cleanup wait")
             # The previous attempt's real process sighting must not leak into the next attempt's
             # pre-spawn absence. Reset only AFTER cleanup has used that history to confirm the old
@@ -919,7 +990,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     max_attempts=args.max_attempts,
                     on_never_live_streak=cold_restart_cm,
                 ),
-                acs_alive,
+                acs_present,
                 release_requested=release_requested,
             )
         except _OperatorRelease:
@@ -933,7 +1004,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # Re-confirm AC teardown here even though _run_with_safe_release already attempted it:
             # this fatal boundary ignores both Game Point release and Ctrl-C, and cannot make
             # ownership available while a surviving acs.exe could inherit the stale mapping.
-            _make_rig_safe(acs_alive, allow_operator_release=False)
+            _make_rig_safe(
+                acs_present,
+                allow_operator_release=False,
+                hold_timeout=30.0,
+            )
             os._exit(1)
         except _AcsCleanupTimeout as exc:
             _log(f"launch aborted: {exc}")
@@ -946,14 +1021,14 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # A FROZE terminal verdict deliberately leaves acs.exe alive so the watcher can
             # diagnose it. Once the attempt budget is exhausted, kill that corpse while the
             # machine-wide lock is still held; peers must never inherit a wedged sim.
-            _make_rig_safe(acs_alive, release_requested=release_requested)
+            _make_rig_safe(acs_present, release_requested=release_requested)
             return 1
 
         try:
             rig_lock.set_phase("stable")
         except OSError as exc:
             _log(f"stable handoff aborted: could not publish rig phase: {exc}")
-            _make_rig_safe(acs_alive, release_requested=release_requested)
+            _make_rig_safe(acs_present, release_requested=release_requested)
             return 1
 
         # The stable session belongs to this operator-facing launcher until AC exits. Releasing
