@@ -884,6 +884,12 @@ async def run_auto_drive(
     setup_applied: bool | None = None
     controller: Controller | None = None
     telemetry_cleanup_holds: list[Controller] = []
+
+    def finish(report: AutoDriveReport) -> AutoDriveReport:
+        for retained_controller in telemetry_cleanup_holds:
+            report.retain_cleanup_controller(retained_controller)
+        return report
+
     attempts = 1 if config.skip_launch else max(1, config.max_launches)
     launch_config = replace(config, max_launches=1)
     launched_once = config.skip_launch
@@ -927,26 +933,30 @@ async def run_auto_drive(
         # leg re-bakes, so this re-verifies each attempt.
         if config.setup:
             if apply_setup is None:
-                return AutoDriveReport(
-                    ok=False,
-                    stage="setup",
-                    launched=not config.skip_launch,
-                    setup_requested=setup_requested,
-                    setup_applied=False,
-                    error="setup requested but no apply_setup leg wired",
-                    **identity,
+                return finish(
+                    AutoDriveReport(
+                        ok=False,
+                        stage="setup",
+                        launched=not config.skip_launch,
+                        setup_requested=setup_requested,
+                        setup_applied=False,
+                        error="setup requested but no apply_setup leg wired",
+                        **identity,
+                    )
                 )
             try:
                 setup_ack = await apply_setup(config)
             except Exception as exc:  # noqa: BLE001 - a setup-leg crash is a run FAIL
-                return AutoDriveReport(
-                    ok=False,
-                    stage="setup",
-                    launched=not config.skip_launch,
-                    setup_requested=setup_requested,
-                    setup_applied=False,
-                    error=f"setup verify failed: {type(exc).__name__}: {exc}",
-                    **identity,
+                return finish(
+                    AutoDriveReport(
+                        ok=False,
+                        stage="setup",
+                        launched=not config.skip_launch,
+                        setup_requested=setup_requested,
+                        setup_applied=False,
+                        error=f"setup verify failed: {type(exc).__name__}: {exc}",
+                        **identity,
+                    )
                 )
             ok_setup, detail = verify_setup_ack(setup_ack, setup_requested)
             setup_applied = ok_setup
@@ -979,27 +989,31 @@ async def run_auto_drive(
                         f"— relaunching (attempt {attempt_idx + 2}/{attempts})"
                     )
                     continue
-                return AutoDriveReport(
-                    ok=False,
-                    stage="setup",
-                    launched=not config.skip_launch,
-                    setup_requested=setup_requested,
-                    setup_applied=False,
-                    setup_ack=setup_ack,
-                    error=(
-                        f"setup not applied: {detail}"
-                        + (
-                            f" (Content Manager served a cached session: {combo_mismatch}; still "
-                            f"mismatched after {attempts} launch attempt(s))"
-                            if combo_mismatch is not None
-                            else ""
-                        )
-                    ),
-                    **identity,
+                return finish(
+                    AutoDriveReport(
+                        ok=False,
+                        stage="setup",
+                        launched=not config.skip_launch,
+                        setup_requested=setup_requested,
+                        setup_applied=False,
+                        setup_ack=setup_ack,
+                        error=(
+                            f"setup not applied: {detail}"
+                            + (
+                                " (Content Manager served a cached session: "
+                                f"{combo_mismatch}; still "
+                                f"mismatched after {attempts} launch attempt(s))"
+                                if combo_mismatch is not None
+                                else ""
+                            )
+                        ),
+                        **identity,
+                    )
                 )
         try:
             controller = hijack(config)
         except ControllerTelemetryCleanupPending as exc:
+            telemetry_cleanup_holds.append(exc.controller)
             report = AutoDriveReport(
                 ok=False,
                 stage="cleanup",
@@ -1010,29 +1024,32 @@ async def run_auto_drive(
                 error=str(exc),
                 **identity,
             )
-            report.retain_cleanup_controller(exc.controller)
-            return report
+            return finish(report)
         except ControllerCleanupError as exc:
-            return AutoDriveReport(
-                ok=False,
-                stage="cleanup",
-                launched=not config.skip_launch,
-                setup_requested=setup_requested,
-                setup_applied=setup_applied,
-                setup_ack=setup_ack,
-                error=str(exc),
-                **identity,
+            return finish(
+                AutoDriveReport(
+                    ok=False,
+                    stage="cleanup",
+                    launched=not config.skip_launch,
+                    setup_requested=setup_requested,
+                    setup_applied=setup_applied,
+                    setup_ack=setup_ack,
+                    error=str(exc),
+                    **identity,
+                )
             )
         except Exception as exc:  # noqa: BLE001 - a hijack-leg crash is a structured run failure
-            return AutoDriveReport(
-                ok=False,
-                stage="hijack",
-                launched=not config.skip_launch,
-                setup_requested=setup_requested,
-                setup_applied=setup_applied,
-                setup_ack=setup_ack,
-                error=f"hijack failed: {type(exc).__name__}: {exc}",
-                **identity,
+            return finish(
+                AutoDriveReport(
+                    ok=False,
+                    stage="hijack",
+                    launched=not config.skip_launch,
+                    setup_requested=setup_requested,
+                    setup_applied=setup_applied,
+                    setup_ack=setup_ack,
+                    error=f"hijack failed: {type(exc).__name__}: {exc}",
+                    **identity,
+                )
             )
         if controller is not None:
             # AUTHORITATIVE identity guard (#532/#535). CM sometimes launches its cached last
@@ -1062,24 +1079,36 @@ async def run_auto_drive(
                     )
                 except ControllerTelemetryCleanupPending as exc:
                     cleanup_detail = str(exc)
+                    telemetry_cleanup_holds.append(exc.controller)
                     controller = None
-                    report = AutoDriveReport(
-                        ok=False,
-                        stage="launch",
-                        launched=not config.skip_launch,
-                        hijacked=True,
-                        setup_requested=setup_requested,
-                        setup_applied=setup_applied,
-                        setup_ack=setup_ack,
-                        error=(
-                            f"loaded {mismatch} — Content Manager launched a cached session; "
-                            "the harness will not drive the requested line on a different combo"
-                        ),
-                        notes=[*launch_notes, cleanup_detail],
-                        **identity,
+                    last_launch_error = (
+                        f"loaded {mismatch} — Content Manager launched a cached session"
                     )
-                    report.retain_cleanup_controller(exc.controller)
-                    return report
+                    if attempt_idx < attempts - 1 and not config.skip_launch:
+                        launch_notes.append(cleanup_detail)
+                        restart_cm_next = True
+                        _log(
+                            f"track/car guard: {mismatch} (CM cached session; read-only cleanup "
+                            f"retained) — relaunching (attempt {attempt_idx + 2}/{attempts})"
+                        )
+                        continue
+                    return finish(
+                        AutoDriveReport(
+                            ok=False,
+                            stage="launch",
+                            launched=not config.skip_launch,
+                            hijacked=True,
+                            setup_requested=setup_requested,
+                            setup_applied=setup_applied,
+                            setup_ack=setup_ack,
+                            error=(
+                                f"loaded {mismatch} — Content Manager launched a cached session; "
+                                "the harness will not drive the requested line on a different combo"
+                            ),
+                            notes=[*launch_notes, cleanup_detail],
+                            **identity,
+                        )
+                    )
                 except ControllerCleanupError as exc:
                     cleanup_detail = str(exc)
                     controller = None
@@ -1095,20 +1124,22 @@ async def run_auto_drive(
                             f"{attempt_idx + 2}/{attempts})"
                         )
                         continue
-                    return AutoDriveReport(
-                        ok=False,
-                        stage="launch",
-                        launched=not config.skip_launch,
-                        hijacked=True,
-                        setup_requested=setup_requested,
-                        setup_applied=setup_applied,
-                        setup_ack=setup_ack,
-                        error=(
-                            f"loaded {mismatch} — Content Manager launched a cached session; "
-                            "the harness will not drive the requested line on a different combo"
-                        ),
-                        notes=[*launch_notes, cleanup_detail],
-                        **identity,
+                    return finish(
+                        AutoDriveReport(
+                            ok=False,
+                            stage="launch",
+                            launched=not config.skip_launch,
+                            hijacked=True,
+                            setup_requested=setup_requested,
+                            setup_applied=setup_applied,
+                            setup_ack=setup_ack,
+                            error=(
+                                f"loaded {mismatch} — Content Manager launched a cached session; "
+                                "the harness will not drive the requested line on a different combo"
+                            ),
+                            notes=[*launch_notes, cleanup_detail],
+                            **identity,
+                        )
                     )
                 controller = None
                 last_launch_error = f"loaded {mismatch} — Content Manager launched a cached session"
@@ -1119,21 +1150,23 @@ async def run_auto_drive(
                         f"(attempt {attempt_idx + 2}/{attempts})"
                     )
                     continue
-                return AutoDriveReport(
-                    ok=False,
-                    stage="launch",
-                    launched=not config.skip_launch,
-                    hijacked=True,
-                    setup_requested=setup_requested,
-                    setup_applied=setup_applied,
-                    setup_ack=setup_ack,
-                    error=(
-                        f"loaded {mismatch} — Content Manager launched a cached session; "
-                        f"still mismatched after {attempts} launch attempt(s) (the harness "
-                        "will not drive the requested line on a different combo or persist a "
-                        "mislabeled plant)"
-                    ),
-                    **identity,
+                return finish(
+                    AutoDriveReport(
+                        ok=False,
+                        stage="launch",
+                        launched=not config.skip_launch,
+                        hijacked=True,
+                        setup_requested=setup_requested,
+                        setup_applied=setup_applied,
+                        setup_ack=setup_ack,
+                        error=(
+                            f"loaded {mismatch} — Content Manager launched a cached session; "
+                            f"still mismatched after {attempts} launch attempt(s) (the harness "
+                            "will not drive the requested line on a different combo or persist a "
+                            "mislabeled plant)"
+                        ),
+                        **identity,
+                    )
                 )
             break
         if config.skip_launch:
@@ -1141,37 +1174,43 @@ async def run_auto_drive(
 
     if controller is None:
         if not launched_once:
-            return AutoDriveReport(
-                ok=False,
-                stage="launch",
-                launched=False,
-                error=last_launch_error or "sim never reached LIVE",
-                **identity,
+            return finish(
+                AutoDriveReport(
+                    ok=False,
+                    stage="launch",
+                    launched=False,
+                    error=last_launch_error or "sim never reached LIVE",
+                    **identity,
+                )
             )
         if last_launch_error:
             # The most recent attempt failed at launch (never reached LIVE) or re-served a cached
             # session — report that, not a generic hijack failure, so the evidence bundle points at
             # the real subsystem (#537 Codex P2). Cleared on every successful launch above, so a
             # true hijack failure (launch OK, no controller) still reads as stage="hijack" below.
-            return AutoDriveReport(
+            return finish(
+                AutoDriveReport(
+                    ok=False,
+                    stage="launch",
+                    launched=not config.skip_launch,
+                    setup_requested=setup_requested,
+                    setup_applied=setup_applied,
+                    setup_ack=setup_ack,
+                    error=last_launch_error,
+                    **identity,
+                )
+            )
+        return finish(
+            AutoDriveReport(
                 ok=False,
-                stage="launch",
+                stage="hijack",
                 launched=not config.skip_launch,
                 setup_requested=setup_requested,
                 setup_applied=setup_applied,
                 setup_ack=setup_ack,
-                error=last_launch_error,
+                error="CSP did not accept the carcsw hijack",
                 **identity,
             )
-        return AutoDriveReport(
-            ok=False,
-            stage="hijack",
-            launched=not config.skip_launch,
-            setup_requested=setup_requested,
-            setup_applied=setup_applied,
-            setup_ack=setup_ack,
-            error="CSP did not accept the carcsw hijack",
-            **identity,
         )
 
     stop = threading.Event()
@@ -1357,9 +1396,7 @@ async def run_auto_drive(
         setup_ack=setup_ack,
         **identity,
     )
-    for retained_controller in telemetry_cleanup_holds:
-        report.retain_cleanup_controller(retained_controller)
-    return report
+    return finish(report)
 
 
 async def run_auto_drive_with_sim_retries(
@@ -2739,7 +2776,11 @@ def _wait_live(timeout: float) -> bool:  # pragma: no cover - rig-only
     return False
 
 
-def rig_hijack(config: AutoDriveConfig) -> Controller | None:  # pragma: no cover - rig-only
+def rig_hijack(
+    config: AutoDriveConfig,
+    *,
+    retain_telemetry_controller: Callable[[Controller], None] | None = None,
+) -> Controller | None:  # pragma: no cover - rig-only
     """Create CarControls0 and briefly wait for CSP to create Car0 — the hijack landing.
 
     Two coupled problems this handles (#154, #466):
@@ -2768,11 +2809,20 @@ def rig_hijack(config: AutoDriveConfig) -> Controller | None:  # pragma: no cove
                 _log(f"hijack landed (Car0) on probe {attempt}/{attempts}")
                 return ctrl
             time.sleep(0.1)
-        _close_controller(
-            ctrl,
-            context=f"hijack probe {attempt}/{attempts} cleanup",
-            cleanup_failure=rig_force_safe_after_cleanup_failure,
-        )  # recreate the section next attempt to re-trigger the hijack
+        try:
+            _close_controller(
+                ctrl,
+                context=f"hijack probe {attempt}/{attempts} cleanup",
+                cleanup_failure=rig_force_safe_after_cleanup_failure,
+            )  # recreate the section next attempt to re-trigger the hijack
+        except ControllerTelemetryCleanupPending as exc:
+            if retain_telemetry_controller is None:
+                raise
+            retain_telemetry_controller(exc.controller)
+            _log(
+                f"hijack probe {attempt}/{attempts}: retained a read-only telemetry mapping; "
+                "continuing with a fresh CarControls section"
+            )
         # ASCII-only message: the harness prints to a Windows cp1252 console (cf. #475/#476).
         _log(
             f"hijack probe {attempt}/{attempts}: no Car0 in {probe:.1f}s "
@@ -4391,11 +4441,15 @@ def _main_impl(
             return 2
 
         run_started_epoch = time.time()
+        rig_telemetry_cleanup_holds: list[Controller] = []
         report = asyncio.run(
             run_auto_drive_with_sim_retries(
                 config,
                 launch=rig_launch,
-                hijack=rig_hijack,
+                hijack=lambda run_config: rig_hijack(
+                    run_config,
+                    retain_telemetry_controller=rig_telemetry_cleanup_holds.append,
+                ),
                 drive=rig_drive,
                 tap=tap_frames,
                 apply_setup=rig_apply_setup,
@@ -4404,6 +4458,8 @@ def _main_impl(
                 cleanup_failure=rig_force_safe_after_cleanup_failure,
             )
         )
+        for retained_controller in rig_telemetry_cleanup_holds:
+            report.retain_cleanup_controller(retained_controller)
     finally:
         if sidecar_proc is not None and not args.keep_sidecar:
             sidecar_proc.terminate()

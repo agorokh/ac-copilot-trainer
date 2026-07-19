@@ -1189,6 +1189,39 @@ def test_track_mismatch_close_failure_preserves_primary_mismatch():
     assert report.notes and "native close failed" in report.notes[0]
 
 
+def test_track_mismatch_telemetry_cleanup_uses_remaining_relaunch_budget():
+    from tools.ac_harness.custom_ai import ControllerTelemetryCloseError
+
+    class TelemetryOnlyFailure(FakeController):
+        def close(self) -> None:
+            raise ControllerTelemetryCloseError("CarControls already released")
+
+    retained = TelemetryOnlyFailure()
+    landed = FakeController()
+    controllers: list[FakeController] = [retained, landed]
+    loaded_tracks = iter(("spa", "magione"))
+    launches: list[bool] = []
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", max_launches=2),
+            launch=lambda _config: launches.append(True) or (True, "live"),
+            hijack=lambda _config: controllers.pop(0),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda _config: (
+                next(loaded_tracks),
+                "ks_porsche_911_gt3_r_2016",
+            ),
+        )
+    )
+
+    assert report.ok is True
+    assert launches == [True, True]
+    assert report.cleanup_holds == (retained,)
+    assert landed.closed is True
+
+
 def test_persistent_close_failure_without_safety_proof_aborts_and_retains_controller():
     ctrl = FailingCloseController()
 
@@ -2146,6 +2179,38 @@ def test_rig_hijack_normalizes_probe_close_failure(monkeypatch):
 
     with pytest.raises(ControllerCleanupAbort, match="hijack probe 1/1 cleanup"):
         rig_hijack(_cfg(hijack_attempts=1, hijack_probe_seconds=0.5))
+
+
+def test_rig_hijack_retains_telemetry_only_failure_and_uses_next_probe(monkeypatch):
+    import tools.ac_harness.auto_drive as ad
+    from tools.ac_harness.custom_ai import ControllerTelemetryCloseError
+
+    clock = _Clock()
+    created: list[object] = []
+
+    class Probe:
+        def __init__(self, index: int = 0) -> None:
+            self.index = index
+            created.append(self)
+
+        def read_car_data(self):  # noqa: ANN201
+            return {"packet_id": 1} if len(created) >= 2 else None
+
+        def close(self) -> None:
+            raise ControllerTelemetryCloseError("CarControls already released")
+
+    retained: list[object] = []
+    monkeypatch.setattr("tools.ac_harness.custom_ai.CustomAIController", Probe)
+    monkeypatch.setattr(ad.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(ad.time, "sleep", clock.sleep)
+
+    controller = rig_hijack(
+        _cfg(hijack_attempts=2, hijack_probe_seconds=0.5),
+        retain_telemetry_controller=retained.append,
+    )
+
+    assert controller is created[1]
+    assert retained == [created[0]]
 
 
 def test_parse_setup_fuel_reads_value_and_tolerates_missing():
