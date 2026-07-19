@@ -166,24 +166,22 @@ def classify(
             seen_acs_alive = seen_acs_alive or sample.acs_alive
             if sample.t - t0 >= go_live_timeout:
                 return LaunchVerdict.NEVER_LIVE
-            if regressed:
-                # BEFORE go-live a regression is a hand-over, not a failure: there is no
-                # accumulated stability to protect yet. Measured on the rig, the previous
-                # session's acpmf_graphics section stays mapped for ~6 s INTO the new acs.exe's
-                # lifetime — the process exists and is loading, but has not yet published its own
-                # stream, so the reader is still seeing the dead session's high packet id:
-                #
-                #   t=0.0  acs=None   gfx=16983   <- corpse
-                #   t=2.0  acs=14020  gfx=16983   <- new acs alive, section STILL the corpse
-                #   t=8.0  acs=14020  gfx=121     <- new session finally publishes
-                #
-                # Failing here threw away a launch that was loading perfectly normally. Rebase on
-                # the new stream instead (``prev_packet`` is reassigned at the end of this
-                # iteration) and let the go-live timeout be the only pre-live failure. The
-                # post-go-live guard below is deliberately left as-is: a regression THERE really
-                # does mean a replacement session must not inherit its predecessor's progress.
-                pass
-            elif advanced and ready:
+            # A regression BEFORE go-live is a hand-over, not a failure — there is no accumulated
+            # stability to protect yet, so it is deliberately not checked here. Measured on the
+            # rig, the previous session's acpmf_graphics section stays mapped for ~6 s INTO the new
+            # acs.exe's lifetime: the process exists and is loading but has not yet published its
+            # own stream, so the reader still sees the dead session's high packet id.
+            #
+            #   t=0.0  acs=None   gfx=16983   <- corpse
+            #   t=2.0  acs=14020  gfx=16983   <- new acs alive, section STILL the corpse
+            #   t=8.0  acs=14020  gfx=121     <- new session finally publishes
+            #
+            # Failing on that threw away a launch that was loading perfectly normally. Rebasing is
+            # implicit: ``prev_packet`` is reassigned at the end of this iteration, and a regressed
+            # sample can never also be ``advanced``. The go-live timeout above remains the only
+            # pre-live failure. The post-go-live guard is deliberately left as-is — a regression
+            # THERE really does mean a replacement session must not inherit its progress. See #628.
+            if advanced and ready:
                 live_since = sample.t
         else:
             if not sample.acs_alive:
