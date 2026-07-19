@@ -25,6 +25,7 @@ from tools.ac_harness.entry_launcher import (
     make_actuator,
     normalize_race_ini_spawn_set,
     running_process_ids,
+    terminate_process_tree_confirmed_absent,
 )
 from tools.ac_harness.shared_memory import (
     AcGameStatus,
@@ -389,6 +390,59 @@ def test_running_process_ids_native_failure_is_only_suppressed_in_best_effort_mo
 @pytest.mark.skipif(sys.platform != "win32", reason="Toolhelp32 is Windows-only")
 def test_running_process_ids_native_snapshot_finds_current_python():
     assert os.getpid() in running_process_ids(Path(sys.executable).name)
+
+
+def test_terminate_process_tree_requires_consecutive_absence(monkeypatch):
+    clock = FakeClock()
+    observations = iter([True, False, False])
+    calls: list[list[str]] = []
+
+    def runner(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+
+    assert (
+        terminate_process_tree_confirmed_absent(
+            "acs.exe",
+            is_running=lambda: next(observations),
+            timeout=2.0,
+            poll=0.1,
+            runner=runner,
+            clock=clock,
+            sleep=clock.sleep,
+        )
+        is True
+    )
+    assert calls == [["taskkill", "/IM", "acs.exe", "/F", "/T"]]
+    assert clock.now == pytest.approx(0.2)
+
+
+def test_terminate_process_tree_bounds_unknown_enumeration(monkeypatch):
+    clock = FakeClock()
+    calls: list[list[str]] = []
+
+    def runner(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+
+    assert (
+        terminate_process_tree_confirmed_absent(
+            "acs.exe",
+            is_running=lambda: (_ for _ in ()).throw(OSError("snapshot failed")),
+            timeout=0.3,
+            poll=0.1,
+            runner=runner,
+            clock=clock,
+            sleep=clock.sleep,
+        )
+        is False
+    )
+    assert calls == [["taskkill", "/IM", "acs.exe", "/F", "/T"]]
+    assert clock.now == pytest.approx(0.3)
 
 
 def test_cold_restart_relaunch_reapplies_race_ini_normalization(monkeypatch, tmp_path: Path):

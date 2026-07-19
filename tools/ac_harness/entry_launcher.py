@@ -269,6 +269,65 @@ def running_process_ids(
     return frozenset(found)
 
 
+def terminate_process_tree_confirmed_absent(
+    process_name: str,
+    *,
+    is_running: Callable[[], bool] | None = None,
+    timeout: float = 15.0,
+    poll: float = 1.0,
+    absent_confirmations: int = 2,
+    runner: Callable[..., subprocess.CompletedProcess] | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    log: Callable[[str], None] | None = None,
+) -> bool:
+    """Kill one process tree and require consecutive strict absence observations.
+
+    This is the shared rig-safety boundary for both human and autonomous launchers. Enumeration
+    failure is unknown—not absence—and triggers the same best-effort taskkill as positive presence.
+    A process already absent is not killed, but still needs ``absent_confirmations`` observations.
+    """
+    if timeout <= 0:
+        raise ValueError("process termination timeout must be > 0")
+    if poll <= 0:
+        raise ValueError("process termination poll must be > 0")
+    if absent_confirmations < 1:
+        raise ValueError("absent_confirmations must be >= 1")
+    check_running = is_running
+    if check_running is None:
+
+        def check_running() -> bool:
+            return bool(running_process_ids(process_name, strict=True))
+
+    run = runner or subprocess.run
+    emit = log or (lambda _message: None)
+    deadline = clock() + timeout
+    absent_run = 0
+    kill_attempted = False
+    while True:
+        try:
+            present: bool | None = check_running()
+        except OSError as exc:
+            present = None
+            emit(f"process enumeration failed for {process_name}: {exc}")
+        if present is False:
+            absent_run += 1
+            if absent_run >= absent_confirmations:
+                return True
+        else:
+            absent_run = 0
+            if not kill_attempted:
+                try:
+                    emit(_taskkill(process_name, run))
+                except OSError as exc:
+                    emit(f"failed to invoke taskkill for {process_name}: {exc}")
+                kill_attempted = True
+        remaining = deadline - clock()
+        if remaining <= 0:
+            return False
+        sleep(min(poll, remaining))
+
+
 def _toolhelp_process_ids(process_name: str) -> frozenset[int]:
     """Enumerate Windows processes in-process via ``CreateToolhelp32Snapshot``."""
 

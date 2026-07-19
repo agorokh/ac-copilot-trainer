@@ -642,7 +642,7 @@ def rig_force_safe_after_cleanup_failure(
     error: ControllerCleanupError,
 ) -> bool:  # pragma: no cover - rig-only
     """Brake, terminate AC, and confirm absence after persistent controller cleanup failure."""
-    from tools.ac_harness.entry_launcher import _taskkill, running_process_ids
+    from tools.ac_harness.entry_launcher import terminate_process_tree_confirmed_absent
 
     try:
         controller.write_controls(0.0, 1.0, 0.0, handbrake=1.0)
@@ -650,34 +650,18 @@ def rig_force_safe_after_cleanup_failure(
         _log(f"controller cleanup safety brake failed: {type(exc).__name__}: {exc}")
 
     _log(f"FATAL {error}; terminating acs.exe before releasing controller ownership")
-    try:
-        kill_detail = _taskkill("acs.exe", subprocess.run)
-    except OSError as exc:
-        _log(f"FATAL could not execute acs.exe safety shutdown: {exc}")
-        return False
-    _log(f"controller cleanup safety action: {kill_detail}")
-    deadline = time.monotonic() + 3.0
-    absent_run = 0
-    while True:
-        try:
-            remaining = running_process_ids("acs.exe", strict=True)
-        except OSError as exc:
-            _log(f"FATAL cannot confirm acs.exe safety shutdown: {exc}")
-            return False
-        if remaining:
-            absent_run = 0
-        else:
-            absent_run += 1
-        if absent_run >= 2:
-            _log("controller cleanup safety action confirmed: acs.exe is absent")
-            return True
-        if time.monotonic() >= deadline:
-            _log(
-                "FATAL acs.exe remained alive after controller cleanup safety shutdown: "
-                + ", ".join(str(pid) for pid in sorted(remaining))
-            )
-            return False
-        time.sleep(0.1)
+    safe = terminate_process_tree_confirmed_absent(
+        "acs.exe",
+        timeout=3.0,
+        poll=0.1,
+        absent_confirmations=2,
+        log=lambda message: _log(f"controller cleanup safety action: {message}"),
+    )
+    if safe:
+        _log("controller cleanup safety action confirmed: acs.exe is absent")
+    else:
+        _log("FATAL could not confirm acs.exe safety shutdown")
+    return safe
 
 
 def rig_verify_track(

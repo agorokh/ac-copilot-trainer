@@ -9,6 +9,7 @@ semantics against synthetic traces — no Assetto Corsa, no Windows shared memor
 from __future__ import annotations
 
 import argparse
+import subprocess
 
 import pytest
 
@@ -515,14 +516,17 @@ def test_float_cli_types_reject_non_finite(value):
 
 def test_ensure_acs_gone_kills_the_full_process_tree(monkeypatch):
     calls: list[list[str]] = []
-    alive = iter([True, False])
+    alive = iter([True, False, False])
 
+    monkeypatch.setattr("tools.ac_harness.entry_launcher.sys.platform", "win32")
     monkeypatch.setattr(
         "subprocess.run",
-        lambda command, **_kwargs: calls.append(command),
+        lambda command, **_kwargs: (
+            calls.append(command) or subprocess.CompletedProcess(command, 0, "", "")
+        ),
     )
     assert _ensure_acs_gone(lambda: next(alive)) is True
-    assert calls == [["taskkill", "/im", "acs.exe", "/f", "/t"]]
+    assert calls == [["taskkill", "/IM", "acs.exe", "/F", "/T"]]
 
 
 def test_ensure_acs_gone_returns_false_when_process_survives(monkeypatch):
@@ -554,9 +558,12 @@ def test_ensure_acs_gone_does_not_treat_enumeration_failure_as_absence(monkeypat
         nonlocal now
         now += seconds
 
+    monkeypatch.setattr("tools.ac_harness.entry_launcher.sys.platform", "win32")
     monkeypatch.setattr(
         "subprocess.run",
-        lambda command, **_kwargs: taskkills.append(command),
+        lambda command, **_kwargs: (
+            taskkills.append(command) or subprocess.CompletedProcess(command, 0, "", "")
+        ),
     )
     monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
     monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
@@ -569,7 +576,7 @@ def test_ensure_acs_gone_does_not_treat_enumeration_failure_as_absence(monkeypat
         )
         is False
     )
-    assert taskkills == [["taskkill", "/im", "acs.exe", "/f", "/t"]]
+    assert taskkills == [["taskkill", "/IM", "acs.exe", "/F", "/T"]]
     assert now == 1.0
 
 

@@ -507,42 +507,29 @@ def _ensure_acs_gone(  # pragma: no cover - rig-only
     the process can linger — so poll (bounded) until it is actually gone. The caller must abort
     rather than relaunch when this returns ``False``.
     """
-    import subprocess
+    from tools.ac_harness.entry_launcher import terminate_process_tree_confirmed_absent
 
     if release_requested is not None and release_requested():
         raise _OperatorRelease
 
-    def observe() -> bool | None:
-        try:
-            return acs_alive()
-        except OSError as exc:
-            _log(f"WARNING: acs.exe process enumeration failed during cleanup: {exc}")
-            return None
-
-    # Unknown is not absence. Attempt taskkill and keep polling rather than launching against a
-    # possibly surviving prior session whose shared memory could masquerade as the new attempt.
-    if observe() is False:
-        return True
-    if release_requested is not None and release_requested():
-        raise _OperatorRelease
-    try:
-        subprocess.run(["taskkill", "/im", "acs.exe", "/f", "/t"], capture_output=True)
-    except OSError as exc:
-        _log(f"ERROR: failed to invoke taskkill for acs.exe: {exc}")
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    def observe() -> bool:
         if release_requested is not None and release_requested():
             raise _OperatorRelease
-        if observe() is False:
-            return True
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        time.sleep(min(poll, remaining))
-    if observe() is False:
-        return True
-    _log("ERROR: acs.exe still present after kill+wait; relaunch aborted")
-    return False
+        return acs_alive()
+
+    safe = terminate_process_tree_confirmed_absent(
+        "acs.exe",
+        is_running=observe,
+        timeout=timeout,
+        poll=poll,
+        absent_confirmations=2,
+        clock=time.monotonic,
+        sleep=time.sleep,
+        log=lambda message: _log(f"acs.exe cleanup: {message}"),
+    )
+    if not safe:
+        _log("ERROR: acs.exe absence could not be confirmed; relaunch aborted")
+    return safe
 
 
 def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
