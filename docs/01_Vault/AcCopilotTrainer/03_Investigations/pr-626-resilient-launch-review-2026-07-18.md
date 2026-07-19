@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `a54db2c`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `fc37f82`; the following vault SAVE records its handoff.
 Local repository parity is green; the updated head still requires its mandatory reviewer cooldown
 and exhaustive GitHub current-head audit. The PR remains open and unmerged; Windows-rig proof
 remains a separate future state.
@@ -192,10 +192,16 @@ remains a separate future state.
   so a later native hijack failure cannot erase evidence of an earlier retained telemetry mapping.
 - `_ReadableSection.read` now rejects a null mapped-view address after a partial close, matching the
   writable guard and converting a potential native dereference into `SharedMemoryUnavailable`.
+- The final post-safety `controller.close()` converts every `BaseException` into
+  `ControllerCleanupAbort`, so an interrupt or unexpected exception cannot unwind the rig lock while
+  a native mapping remains owned.
+- `ControllerCleanupAbort` now retains the fatal controller and every earlier telemetry-only owner.
+  Those non-serialized holds transfer across launch attempts, sim-death retries, and the rig CLI
+  probe layer until atomic process teardown.
 
 ## Verification contract
 
-Final code commit `a54db2c` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3222 passed`, `77 skipped`, `86.77%` coverage). The mandatory reviewer cooldown and exhaustive
+Final code commit `fc37f82` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3225 passed`, `77 skipped`, `86.76%` coverage). The mandatory reviewer cooldown and exhaustive
 current-head re-audit follow this vault snapshot. `/resolve-pr` does not merge the PR or substitute
 macOS tests for the pending Windows-rig proof.
