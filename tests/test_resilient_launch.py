@@ -317,6 +317,18 @@ class TestSectionOwnershipGate:
         # ...and the dead generation's value cannot seed the next one.
         assert gate.observe(acs_alive=True, packet=5) is False
 
+    def test_packet_regression_while_alive_revokes_trust(self) -> None:
+        """A restart fast enough that absence was never observed must still re-earn trust."""
+        gate = SectionOwnershipGate()
+        gate.observe(acs_alive=True, packet=100)
+        assert gate.observe(acs_alive=True, packet=200) is True
+
+        # Session replaced; the new stream restarts low while acs.exe never appeared absent.
+        assert gate.observe(acs_alive=True, packet=5) is False
+        assert gate.publishing is False
+        # ...and the new generation re-earns trust on its own strictly-increasing stream.
+        assert gate.observe(acs_alive=True, packet=9) is True
+
     def test_unreadable_section_neither_grants_nor_revokes_trust(self) -> None:
         gate = SectionOwnershipGate()
         gate.observe(acs_alive=True, packet=100)
@@ -367,6 +379,21 @@ class TestAttemptReadiness:
 
         # A new generation must re-earn ownership AND re-run the handshake.
         readiness.observe(acs_alive=True, packet=5, entry_ready=True)
+        readiness.observe(acs_alive=True, packet=9, entry_ready=True)
+        assert len(calls) == 2
+
+    def test_packet_regression_revokes_the_car0_cache(self) -> None:
+        """The revocation must propagate: a replacement session re-runs the handshake."""
+        calls = []
+        readiness = AttemptReadiness(lambda: (calls.append(1), True)[1])
+        self._earn_ownership(readiness)
+        readiness.observe(acs_alive=True, packet=300, entry_ready=True)
+        assert len(calls) == 1
+
+        # Session replaced without an observed absence.
+        assert readiness.observe(acs_alive=True, packet=5, entry_ready=True) == (None, None)
+        assert readiness.car0_ready is None
+
         readiness.observe(acs_alive=True, packet=9, entry_ready=True)
         assert len(calls) == 2
 

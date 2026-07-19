@@ -257,8 +257,18 @@ class SectionOwnershipGate:
             self._prev_packet = None
             self._publishing = False
             return False
-        if packet is not None and self._prev_packet is not None and packet > self._prev_packet:
-            self._publishing = True
+        if packet is not None and self._prev_packet is not None:
+            if packet > self._prev_packet:
+                self._publishing = True
+            elif packet < self._prev_packet:
+                # A regression while the process stays alive is the protocol's "new generation"
+                # signal — ``classify`` already treats a post-go-live regression as a replacement
+                # session that must not inherit its predecessor's progress. Revoking here keeps
+                # the two consistent, and makes the replacement re-earn trust before its readiness
+                # is believed (which also forces ``AttemptReadiness`` to re-run the Car0
+                # handshake instead of reusing the dead generation's verdict). Without this, a
+                # restart fast enough that absence was never observed would inherit trust.
+                self._publishing = False
         if packet is not None:
             self._prev_packet = packet
         return self._publishing
