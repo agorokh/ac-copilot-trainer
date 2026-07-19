@@ -682,6 +682,45 @@ def test_car0_probe_mapping_failure_is_retryable() -> None:
     assert _probe_car0_drivable(controller_factory=fail_controller) is False
 
 
+def test_car0_probe_honors_release_during_handshake(monkeypatch) -> None:
+    release_checks = iter([False, False, True])
+    closed: list[bool] = []
+
+    class Controller:
+        def read_car_data(self):
+            return None
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch.time.sleep",
+        lambda _seconds: pytest.fail("release must interrupt before another probe sleep"),
+    )
+
+    with pytest.raises(_OperatorRelease):
+        _probe_car0_drivable(
+            controller_factory=Controller,
+            release_requested=lambda: next(release_checks),
+        )
+
+    assert closed == [True]
+
+
+def test_car0_failure_verdict_does_not_restart_content_manager() -> None:
+    restarts: list[bool] = []
+
+    report = run_retry_loop(
+        lambda _attempt: LaunchVerdict.FROZE,
+        max_attempts=2,
+        on_never_live_streak=lambda: restarts.append(True),
+        never_live_before_restart=2,
+    )
+
+    assert report.verdict is LaunchVerdict.FROZE
+    assert restarts == []
+
+
 def test_car0_probe_close_failure_aborts_before_another_probe() -> None:
     class Controller:
         def read_car_data(self):

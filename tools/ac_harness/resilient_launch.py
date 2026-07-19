@@ -551,6 +551,7 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
     timeout: float = 5.0,
     poll: float = 0.1,
     controller_factory: Callable[[], object] | None = None,
+    release_requested: Callable[[], bool] | None = None,
 ) -> bool:
     """Briefly handshake CSP Car0, the established oracle for a drivable session (#466).
 
@@ -563,6 +564,8 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
     controller: object | None = None
     drivable = False
     try:
+        if release_requested is not None and release_requested():
+            raise _OperatorRelease
         if controller_factory is None:
             from tools.ac_harness.custom_ai import CustomAIController
 
@@ -571,11 +574,20 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
             controller = controller_factory()
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if release_requested is not None and release_requested():
+                raise _OperatorRelease
             if controller.read_car_data() is not None:  # type: ignore[attr-defined]
                 drivable = True
                 break
-            time.sleep(poll)
+            if release_requested is not None and release_requested():
+                raise _OperatorRelease
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(poll, remaining))
         else:
+            if release_requested is not None and release_requested():
+                raise _OperatorRelease
             drivable = controller.read_car_data() is not None  # type: ignore[attr-defined]
     except (SharedMemoryUnavailable, OSError) as exc:
         _log(f"Car0 drivability probe unavailable: {exc}")
@@ -780,7 +792,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     raise _OperatorRelease
                 packet, entry_ready = read_state()
                 if entry_ready is True and car0_ready is None:
-                    car0_ready = _probe_car0_drivable()
+                    car0_ready = _probe_car0_drivable(release_requested=release_requested)
                     if not car0_ready:
                         raise _Car0NotDrivable
                 return packet, entry_ready, car0_ready if entry_ready is True else None
@@ -793,7 +805,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     stability_window=args.stability_window,
                 )
             except _Car0NotDrivable:
-                verdict = LaunchVerdict.NEVER_LIVE
+                # CM did start a LIVE session; only the Car0 handoff failed. Treat this as a bad
+                # rendered attempt so it cannot advance the stale-CM/never-live restart streak.
+                verdict = LaunchVerdict.FROZE
             _log(f"attempt {attempt}: {verdict}")
             return verdict
 
