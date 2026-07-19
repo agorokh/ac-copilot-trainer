@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `86804b0`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `4a26de4`; the following vault SAVE records its handoff.
 All required GitHub checks are green, all GraphQL review threads are resolved, and the
 enforce-mode resolve gate reports no substantive findings. The PR remains open and unmerged;
 Windows-rig proof remains a separate future state.
@@ -122,11 +122,18 @@ Windows-rig proof remains a separate future state.
   Before the first real `acs.exe` sighting, empty process snapshots remain false and do not
   synthesize an early-lived process for the classifier; enumeration errors remain fail-closed, and
   post-sighting absence still requires two consecutive confirmations before ownership can release.
+- A process-enumeration error before the first real `acs.exe` sighting remains false, preventing a
+  later ordinary startup absence from becoming a false NEVER_LIVE process-exit edge. Persistent
+  Custom-AI close failures get bounded retries, then a rig safety path commands brake/handbrake,
+  terminates `acs.exe`, and confirms it absent. If safety cannot be confirmed, a fail-closed abort
+  retains the controller reference through process teardown. Cleanup after a positive combo
+  mismatch keeps that mismatch as the primary launch failure and records teardown as secondary
+  evidence.
 
 ## Verification contract
 
-Final code commit `86804b0` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3189 passed`, `77 skipped`, `86.72%` coverage), followed by the mandatory reviewer cooldown and
+Final code commit `4a26de4` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3194 passed`, `77 skipped`, `86.72%` coverage), followed by the mandatory reviewer cooldown and
 current-head re-audit. GitHub reports the build, canonical-docs, and conformance checks green;
 GraphQL reports all threads resolved; the enforce-mode resolve gate is clean. `/resolve-pr` did
 not merge the PR or substitute macOS tests for the pending Windows-rig proof.
