@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `b2e299d`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `629e3a2`; the following vault SAVE records its handoff.
 All required GitHub checks are green, all GraphQL review threads are resolved, and the
 enforce-mode resolve gate reports no substantive findings. The PR remains open and unmerged;
 Windows-rig proof remains a separate future state.
@@ -141,11 +141,17 @@ Windows-rig proof remains a separate future state.
   disabled before atomic process exit. Auto-drive's detached cleanup stack is retained only by the
   raised abort object for programmatic callers; the previous module-global retention list was
   removed to avoid an unbounded host-process resource leak.
+- Cleanup now reads `acs.exe` through a strict process oracle separate from watcher liveness:
+  enumeration failure triggers taskkill/retry and cannot prove absence. Fatal cleanup suppresses
+  release before taskkill, backs off after interrupts, and bounds repeated enumeration uncertainty
+  before atomic process exit. Content Manager enumeration failure aborts its ensure step, and a
+  started CM must remain present after the settle interval. The pre-existing `resilient_layout`
+  settings-template field is explicitly asserted by the launcher test.
 
 ## Verification contract
 
-Final code commit `b2e299d` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3198 passed`, `77 skipped`, `86.73%` coverage), followed by the mandatory reviewer cooldown and
+Final code commit `629e3a2` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3203 passed`, `77 skipped`, `86.73%` coverage), followed by the mandatory reviewer cooldown and
 current-head re-audit. GitHub reports the build, canonical-docs, and conformance checks green;
 GraphQL reports all threads resolved; the enforce-mode resolve gate is clean. `/resolve-pr` did
 not merge the PR or substitute macOS tests for the pending Windows-rig proof.

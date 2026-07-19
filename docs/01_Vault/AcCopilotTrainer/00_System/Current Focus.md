@@ -45,7 +45,7 @@ relates_to:
 **Review-resolved (2026-07-18):** PR
 [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
 operator session launcher through Game Point, with a machine-wide lock held across the live session.
-Final code commit `b2e299d` adds finite timing enforcement at the shared rig-lock boundary,
+Final code commit `629e3a2` adds finite timing enforcement at the shared rig-lock boundary,
 immediate failed-Car0 attempt termination, mandatory AC teardown before a pre-stability release can
 escape the unsafe-hold loop, early configured-CM path validation, and durable Stable AC ownership
 metadata. **Release AC** refuses known unrelated harness owners while preserving the recovery
@@ -84,6 +84,12 @@ Resilient Car0 probe close failure retains the controller and terminates by OS p
 running the normal rig-lock release `finally`; it explicitly reconfirms `acs.exe` teardown with
 operator interrupts disabled before that exit. Programmatic auto-drive abort ownership lives on the
 exception's detached cleanup stack rather than an unbounded module-global resource list.
+Cleanup uses a separate strict process oracle: enumeration uncertainty triggers taskkill/retry and
+cannot masquerade as prior-AC absence, while the launch watcher keeps its attempt-scoped semantics.
+Fatal cleanup ignores the release sentinel before taskkill, sleeps between retries, and has a
+bounded hold before atomic process exit. Content Manager must be positively enumerated and survive
+its startup settle before the Quick Drive URL is issued. The existing `resilient_layout` settings
+template key now has an explicit regression assertion.
 Required checks are green, all review threads are resolved, and the enforce resolve gate is clean.
 The PR remains open and unmerged; Windows-rig verification is still pending. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].
