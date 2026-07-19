@@ -51,6 +51,7 @@ from tools.ac_harness.custom_ai import (
     _WritableSection,
     car_controls_name,
     car_data_name,
+    close_controller_with_retries,
     parse_car_data,
 )
 
@@ -320,3 +321,20 @@ def test_controller_close_attempts_controls_after_car_data_failure() -> None:
         controller.close()
 
     assert closed == ["car_data", "controls"]
+
+
+def test_shared_controller_close_retries_retained_native_resources() -> None:
+    class FlakyController:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls < 3:
+                raise OSError("native close temporarily failed")
+
+    controller = FlakyController()
+
+    close_controller_with_retries(controller)
+
+    assert controller.close_calls == 3

@@ -946,16 +946,40 @@ def test_car0_failure_verdict_does_not_restart_content_manager() -> None:
 
 def test_car0_probe_close_failure_aborts_before_another_probe() -> None:
     class Controller:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
         def read_car_data(self):
             return {"packet_id": 1}
 
         def close(self):
+            self.close_calls += 1
             raise OSError("unmap failed")
 
     with pytest.raises(_Car0ProbeCleanupError, match="could not close") as caught:
         _probe_car0_drivable(controller_factory=Controller)
 
     assert isinstance(caught.value.controller, Controller)
+    assert caught.value.controller.close_calls == 3
+
+
+def test_car0_probe_retries_transient_close_failure() -> None:
+    class Controller:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def read_car_data(self):
+            return {"packet_id": 1}
+
+        def close(self):
+            self.close_calls += 1
+            if self.close_calls < 3:
+                raise OSError("unmap temporarily failed")
+
+    controller = Controller()
+
+    assert _probe_car0_drivable(controller_factory=lambda: controller) is True
+    assert controller.close_calls == 3
 
 
 def test_ensure_cm_running_fails_before_same_named_process_probe(tmp_path, monkeypatch):

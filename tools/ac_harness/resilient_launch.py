@@ -693,6 +693,10 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
     despite LIVE/not-in-pit and advancing packets. Close immediately after the probe so control is
     returned to the human driver before the stability window continues.
     """
+    from tools.ac_harness.custom_ai import (
+        ControllerCloseRetryError,
+        close_controller_with_retries,
+    )
     from tools.ac_harness.shared_memory import SharedMemoryUnavailable
 
     controller: object | None = None
@@ -728,8 +732,8 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
     finally:
         if controller is not None:
             try:
-                controller.close()  # type: ignore[attr-defined]
-            except (SharedMemoryUnavailable, OSError) as exc:
+                close_controller_with_retries(controller)  # type: ignore[arg-type]
+            except ControllerCloseRetryError as exc:
                 raise _Car0ProbeCleanupError(
                     f"could not close Car0 drivability probe: {exc}",
                     controller,

@@ -51,12 +51,56 @@ from __future__ import annotations
 import struct
 import sys
 from dataclasses import dataclass
+from typing import Protocol
 
 # Reuse the canonical exception from the read-side oracle rather than defining a second,
 # distinct class: a caller catching ``SharedMemoryUnavailable`` around either the reader or
 # this writer then catches both. (Two same-named classes from two modules silently fail to
 # match across an ``except`` boundary — the #175 footgun in a different guise.)
 from tools.ac_harness.shared_memory import SharedMemoryUnavailable
+
+
+class CloseableController(Protocol):
+    """Native controller surface required by the shared teardown retry boundary."""
+
+    def close(self) -> None: ...
+
+
+class ControllerCloseRetryError(RuntimeError):
+    """A controller retained native resources through every bounded close attempt."""
+
+    def __init__(self, last_error: BaseException, attempts: int) -> None:
+        super().__init__(
+            f"{type(last_error).__name__}: {last_error} (failed after {attempts} close attempts)"
+        )
+        self.last_error = last_error
+        self.attempts = attempts
+
+
+def close_controller_with_retries(
+    controller: CloseableController,
+    *,
+    attempts: int = 3,
+) -> None:
+    """Retry retained native resources, then require the caller's rig-safety fallback.
+
+    ``CustomAIController.close`` clears resources that released successfully and retains only
+    failed native handles/views, so retrying is both safe and meaningful. If the bounded attempts
+    are exhausted, the caller must keep ``controller`` alive and make AC safe before ownership can
+    be released.
+    """
+    if attempts < 1:
+        raise ValueError("controller cleanup attempts must be >= 1")
+    last_error: BaseException | None = None
+    for _ in range(attempts):
+        try:
+            controller.close()
+            return
+        except (OSError, SharedMemoryUnavailable) as exc:
+            last_error = exc
+    assert last_error is not None
+    raise ControllerCloseRetryError(last_error, attempts) from last_error
+
 
 # ---------------------------------------------------------------------------
 # Section-name templates. ``<N>`` is the car index; 0 == the player car. The external app

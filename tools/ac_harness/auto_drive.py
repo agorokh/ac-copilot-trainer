@@ -74,6 +74,10 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Protocol
 
 from tools.ac_content import read_car_data_member
+from tools.ac_harness.custom_ai import (
+    ControllerCloseRetryError,
+    close_controller_with_retries,
+)
 from tools.ac_harness.preset_utils import build_practice_preset
 from tools.ac_harness.sequence_probe import (
     Check,
@@ -587,20 +591,15 @@ def _close_controller(
     on the exception; process teardown then releases the mapping instead of a normal return
     silently dropping the last owner.
     """
-    if attempts < 1:
-        raise ValueError("controller cleanup attempts must be >= 1")
-    last_error: BaseException | None = None
-    for _ in range(attempts):
-        try:
-            controller.close()
-            return
-        except (OSError, SharedMemoryUnavailable) as exc:
-            last_error = exc
-
-    assert last_error is not None
+    try:
+        close_controller_with_retries(controller, attempts=attempts)
+        return
+    except ControllerCloseRetryError as exc:
+        last_error = exc.last_error
+        failed_attempts = exc.attempts
     error = ControllerCleanupError(
         f"{context}: {type(last_error).__name__}: {last_error} "
-        f"(failed after {attempts} close attempts)"
+        f"(failed after {failed_attempts} close attempts)"
     )
     error.__cause__ = last_error
     try:
