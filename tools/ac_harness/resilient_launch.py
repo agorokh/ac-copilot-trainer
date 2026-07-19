@@ -68,6 +68,10 @@ class _AcsCleanupTimeout(RuntimeError):
 class _Car0ProbeCleanupError(RuntimeError):
     """The temporary Custom-AI drivability mapping could not be released safely."""
 
+    def __init__(self, message: str, controller: object) -> None:
+        super().__init__(message)
+        self.controller = controller
+
 
 class _Car0NotDrivable(RuntimeError):
     """The one bounded Car0 handshake completed without a drivable car."""
@@ -354,6 +358,33 @@ def _make_process_liveness_probe(
     return is_alive
 
 
+class _ResettableProcessLivenessProbe:
+    """A process probe whose sighting/absence history can be scoped to one launch attempt."""
+
+    def __init__(
+        self,
+        image: str,
+        *,
+        absent_confirmations: int = 2,
+        process_ids: Callable[[str], Sequence[int]] | None = None,
+    ) -> None:
+        self.image = image
+        self.absent_confirmations = absent_confirmations
+        self.process_ids = process_ids
+        self._probe: Callable[[], bool]
+        self.reset()
+
+    def reset(self) -> None:
+        self._probe = _make_process_liveness_probe(
+            self.image,
+            absent_confirmations=self.absent_confirmations,
+            process_ids=self.process_ids,
+        )
+
+    def __call__(self) -> bool:
+        return self._probe()
+
+
 def _ensure_cm_running(  # pragma: no cover - rig-only
     cm_exe: Path,
     *,
@@ -621,7 +652,8 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
                 controller.close()  # type: ignore[attr-defined]
             except (SharedMemoryUnavailable, OSError) as exc:
                 raise _Car0ProbeCleanupError(
-                    f"could not close Car0 drivability probe: {exc}"
+                    f"could not close Car0 drivability probe: {exc}",
+                    controller,
                 ) from exc
     return drivable
 
@@ -732,7 +764,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         finally:
             reader.close()
 
-    acs_alive = _make_process_liveness_probe("acs.exe")
+    acs_alive = _ResettableProcessLivenessProbe("acs.exe")
 
     lock_path = args.rig_lock_path or default_rig_session_lock_path()
     release_path = args.rig_release_path or (lock_path.parent / "rig-session.release")
@@ -793,6 +825,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # A wedged acs from the previous attempt must be GONE before relaunching.
             if not _ensure_acs_gone(acs_alive, release_requested=release_requested):
                 raise _AcsCleanupTimeout("acs.exe remained alive after the bounded cleanup wait")
+            # The previous attempt's real process sighting must not leak into the next attempt's
+            # pre-spawn absence. Reset only AFTER cleanup has used that history to confirm the old
+            # process is gone; this attempt then earns its own first real acs.exe sighting.
+            acs_alive.reset()
             # The quick-drive URL is IPC to a RUNNING CM. Do not spend a full attempt when its
             # executable is absent or startup failed.
             if not _ensure_cm_running(
@@ -867,7 +903,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             return 1
         except _Car0ProbeCleanupError as exc:
             _log(f"launch aborted: {exc}")
-            return 1
+            # close() retained a native CarControls mapping. Normal return would run the finally
+            # block and release the machine lock first; terminate the process so Windows closes
+            # mapping and lock together. The exception retains the controller until that boundary.
+            os._exit(1)
         except _AcsCleanupTimeout as exc:
             _log(f"launch aborted: {exc}")
             return 1

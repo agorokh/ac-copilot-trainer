@@ -874,6 +874,7 @@ async def run_auto_drive(
     launch_config = replace(config, max_launches=1)
     launched_once = config.skip_launch
     last_launch_error = ""
+    launch_notes: list[str] = []
     # #558: cold-start a FRESH Content Manager before a relaunch when the previous attempt signalled
     # a stale CM. A stale CM keeps serving its cached session / stalling the pre-drive overlay no
     # matter how often the acmanager:// URL is re-issued, so the only real recovery is a CM restart.
@@ -1033,6 +1034,20 @@ async def run_auto_drive(
                         cleanup_failure=cleanup_failure,
                     )
                 except ControllerCleanupError as exc:
+                    cleanup_detail = str(exc)
+                    controller = None
+                    last_launch_error = (
+                        f"loaded {mismatch} — Content Manager launched a cached session"
+                    )
+                    if attempt_idx < attempts - 1 and not config.skip_launch:
+                        launch_notes.append(cleanup_detail)
+                        restart_cm_next = True
+                        _log(
+                            f"track/car guard: {mismatch} (CM cached session; cleanup required "
+                            f"AC safety shutdown) — relaunching (attempt "
+                            f"{attempt_idx + 2}/{attempts})"
+                        )
+                        continue
                     return AutoDriveReport(
                         ok=False,
                         stage="launch",
@@ -1045,7 +1060,7 @@ async def run_auto_drive(
                             f"loaded {mismatch} — Content Manager launched a cached session; "
                             "the harness will not drive the requested line on a different combo"
                         ),
-                        notes=[str(exc)],
+                        notes=[*launch_notes, cleanup_detail],
                         **identity,
                     )
                 controller = None
@@ -1137,7 +1152,7 @@ async def run_auto_drive(
     seq_ok: bool | None = None
     counts: dict[str, int] = {}
     checks: list[Check] = []
-    notes: list[str] = []
+    notes: list[str] = list(launch_notes)
     grace_applied = False
     # None until the tap actually returns frames — a tap that raised must not report "0 ticks"
     # (indistinguishable from a healthy tap on a silent producer). See AutoDriveReport.intervention.
@@ -1182,7 +1197,7 @@ async def run_auto_drive(
         seq_ok = result.ok
         counts = dict(result.counts)
         checks = list(result.checks)
-        notes = list(result.notes)
+        notes.extend(result.notes)
         # #577: the per-lap trajectory is report evidence whenever the lap machinery ran.
         if config.wait_lap:
             from tools.ac_harness.sequence_probe import timed_lap_times_ms

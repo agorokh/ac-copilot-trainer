@@ -27,6 +27,7 @@ from tools.ac_harness.resilient_launch import (
     _positive_float,
     _positive_int,
     _probe_car0_drivable,
+    _ResettableProcessLivenessProbe,
     _run_with_safe_release,
     _sample_now,
     _wait_process_exit,
@@ -395,6 +396,18 @@ def test_process_liveness_probe_does_not_invent_presence_before_first_sighting()
     )
 
     assert [alive() for _ in range(5)] == [False, False, True, True, False]
+
+
+def test_process_liveness_history_resets_between_launch_attempts() -> None:
+    observations = iter([(42,), (), (), (), (), (84,)])
+    alive = _ResettableProcessLivenessProbe(
+        "acs.exe",
+        process_ids=lambda _image: next(observations),
+    )
+
+    assert [alive() for _ in range(3)] == [True, True, False]
+    alive.reset()
+    assert [alive() for _ in range(3)] == [False, False, True]
 
 
 def test_process_liveness_probe_rejects_invalid_confirmation_count() -> None:
@@ -809,8 +822,10 @@ def test_car0_probe_close_failure_aborts_before_another_probe() -> None:
         def close(self):
             raise OSError("unmap failed")
 
-    with pytest.raises(_Car0ProbeCleanupError, match="could not close"):
+    with pytest.raises(_Car0ProbeCleanupError, match="could not close") as caught:
         _probe_car0_drivable(controller_factory=Controller)
+
+    assert isinstance(caught.value.controller, Controller)
 
 
 def test_ensure_cm_running_fails_before_same_named_process_probe(tmp_path, monkeypatch):

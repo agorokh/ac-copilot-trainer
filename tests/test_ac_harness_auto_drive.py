@@ -1221,6 +1221,37 @@ def test_run_auto_drive_relaunches_on_track_mismatch_then_drives():
     assert record["controller"] is c_good  # drove on the correct-track session
 
 
+def test_run_auto_drive_retries_after_safe_mismatch_cleanup_failure():
+    record: dict = {}
+    c_bad = CloseAfterSafetyController()
+    c_good = FakeController()
+    controllers: list[FakeController] = [c_bad, c_good]
+    loaded_tracks = ["spa", "magione"]
+    launches: list[int] = []
+    restarts: list[int] = []
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", car_id="ks_porsche_911_gt3_r_2016", max_launches=3),
+            launch=lambda c: (launches.append(1) or True, "live"),
+            hijack=lambda c: controllers.pop(0),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), record),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda c: (loaded_tracks.pop(0), "ks_porsche_911_gt3_r_2016"),
+            restart_launcher=lambda c: restarts.append(1),
+            cleanup_failure=lambda controller, error: True,
+        )
+    )
+
+    assert report.ok is True
+    assert launches == [1, 1]
+    assert restarts == [1]
+    assert c_bad.closed is True
+    assert c_bad.close_calls == 4
+    assert record["controller"] is c_good
+    assert any("AC safety shutdown confirmed" in note for note in report.notes)
+
+
 def test_run_auto_drive_restart_launcher_failure_does_not_crash_recovery():
     # #558: a restart-seam failure must be swallowed — the plain relaunch still runs and recovers.
     record: dict = {}
