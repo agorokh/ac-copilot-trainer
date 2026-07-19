@@ -18,8 +18,8 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `bd7cbe2`; the following vault SAVE records its handoff.
-All required GitHub checks are green, all 25 GraphQL review threads are resolved, and the
+Review resolution's final code commit is `3fac4ee`; the following vault SAVE records its handoff.
+All required GitHub checks are green, all GraphQL review threads are resolved, and the
 enforce-mode resolve gate reports no substantive findings. The PR remains open and unmerged;
 Windows-rig proof remains a separate future state.
 
@@ -110,12 +110,16 @@ Windows-rig proof remains a separate future state.
   non-green before that transition. A regressed graphics packet terminates the attempt so a
   recycled `acs.exe` cannot inherit its predecessor's stability time. The Car0 loop reaches its
   intended final read at the timeout boundary, and `release_unsupported` renders as busy rather
-  than suggesting a Stable AC action that the owner gate refuses.
+  than suggesting a Stable AC action that the owner gate refuses. Owner metadata is opened without
+  append semantics and replaced as a complete valid record before truncation; a publication error
+  during acquisition rolls back the machine-wide byte lock. Command acceptance is separate from
+  readiness: a successfully spawned or already stabilizing child returns CLI success and avoids a
+  GUI failure warning while the polled aggregate status remains non-green until `phase=stable`.
 
 ## Verification contract
 
-Final code commit `bd7cbe2` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3175 passed`, `77 skipped`, `86.74%` coverage), followed by the mandatory reviewer cooldown and
+Final code commit `3fac4ee` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3183 passed`, `77 skipped`, `86.72%` coverage), followed by the mandatory reviewer cooldown and
 current-head re-audit. GitHub reports the build, canonical-docs, and conformance checks green;
-GraphQL reports 25/25 threads resolved; the enforce-mode resolve gate is clean. `/resolve-pr` did
+GraphQL reports all threads resolved; the enforce-mode resolve gate is clean. `/resolve-pr` did
 not merge the PR or substitute macOS tests for the pending Windows-rig proof.

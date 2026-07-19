@@ -111,7 +111,7 @@ CSP-init retry and stable-session handoff through the canonical Game Point launc
 hardening now covers streaming verdict semantics, LIVE/not-in-pit readiness, cross-worktree rig
 ownership, approved preset storage, Content Manager failure handling, finite CLI inputs, process
 tree cleanup, source/frozen Game Point dispatch, finite lock timing, one-shot Car0 failure, and
-Stable-AC-specific release signaling (`bd7cbe2`). The final review rounds also validate the
+Stable-AC-specific release signaling (`3fac4ee`). The final review rounds also validate the
 configured Content Manager path before process shortcuts, require one real AC teardown attempt
 before pre-stability release can escape a subsequent unsafe hold, reject known unrelated release
 targets, and preserve recovery for unknown/legacy lock metadata. Bounded waits now clamp to their
@@ -129,9 +129,12 @@ go-live remains anchored before that blocking probe. The launcher summary labels
 owner busy without directing the operator to a refused Stable AC action. Game Point remains
 durably non-green while the child is starting/retrying: the lock owner publishes `stabilizing`
 until the successful handoff rewrites it to `stable`. A graphics packet regression ends the
-attempt, and the Car0 timeout performs one final boundary read. Repository parity is `3175 passed`,
-`77 skipped`, `86.74%` coverage.
-Required checks are green, all 25 GraphQL threads are resolved, and the enforce resolve gate is
+attempt, and the Car0 timeout performs one final boundary read. Owner metadata updates use a
+non-append descriptor and padded valid-record replacement before truncation; acquisition write
+failures unlock and close before propagating. The one-shot CLI/GUI accepts a spawned or already
+stabilizing child without confusing that command result with aggregate readiness. Repository
+parity is `3183 passed`, `77 skipped`, `86.72%` coverage.
+Required checks are green, all GraphQL threads are resolved, and the enforce resolve gate is
 clean. The PR remains open and unmerged; Windows-rig proof is the remaining separate state. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].
 
