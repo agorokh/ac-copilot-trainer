@@ -588,40 +588,36 @@ class GamePointSupervisor:
 
     def _resilient_process_status(self) -> ProbeResult:
         with self._proc_lock:
-            if self._resilient_process is None:
-                owner = self._rig_session_owner()
-                if owner is not None:
-                    return self._rig_owner_status(owner)
-                if not self.config.resilient_car or not self.config.resilient_track:
-                    return ProbeResult(
-                        "ac_session",
-                        True,
-                        "unconfigured",
-                        "set resilient_car and resilient_track in settings",
-                    )
+            process = self._resilient_process
+            rc = process.poll() if process is not None else None
+            pid = process.pid if process is not None else None
+        if process is not None and rc is None:
+            return ProbeResult("ac_session", True, "running", f"pid={pid}")
+        # Lock-file I/O can block on Windows sharing violations. Keep it outside _proc_lock,
+        # which also serializes START/stop mutations on the Tk thread.
+        owner = self._rig_session_owner()
+        if owner is not None:
+            return self._rig_owner_status(owner)
+        if process is None:
+            if not self.config.resilient_car or not self.config.resilient_track:
                 return ProbeResult(
                     "ac_session",
                     True,
-                    "idle",
-                    "press STABLE AC to start a driver session",
+                    "unconfigured",
+                    "set resilient_car and resilient_track in settings",
                 )
-            rc = self._resilient_process.poll()
-            if rc is None:
-                return ProbeResult(
-                    "ac_session",
-                    True,
-                    "running",
-                    f"pid={self._resilient_process.pid}",
-                )
-            owner = self._rig_session_owner()
-            if owner is not None:
-                return self._rig_owner_status(owner)
             return ProbeResult(
                 "ac_session",
-                rc == 0,
-                "exited",
-                f"exit={rc}; log={self.paths.resilient_log_path}",
+                True,
+                "idle",
+                "press STABLE AC to start a driver session",
             )
+        return ProbeResult(
+            "ac_session",
+            rc == 0,
+            "exited",
+            f"exit={rc}; log={self.paths.resilient_log_path}",
+        )
 
     @staticmethod
     def _rig_owner_status(owner: Mapping[str, Any]) -> ProbeResult:

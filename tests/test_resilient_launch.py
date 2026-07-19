@@ -358,6 +358,16 @@ def test_wait_process_exit_rejects_lingering_killed_process(monkeypatch):
     assert now == 1.0
 
 
+def test_wait_process_exit_honors_release_before_process_probe(monkeypatch):
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch._process_running",
+        lambda _image: pytest.fail("release must be checked before the process probe"),
+    )
+
+    with pytest.raises(_OperatorRelease):
+        _wait_process_exit("Content Manager.exe", release_requested=lambda: True)
+
+
 @pytest.mark.parametrize(
     ("parser", "value", "message"),
     [
@@ -452,6 +462,26 @@ def test_cleanup_hold_honors_game_point_release_signal() -> None:
         retry_cleanup=lambda _acs_alive: pytest.fail("release must precede another cleanup"),
         release_requested=lambda: True,
     )
+
+
+def test_cleanup_hold_forwards_release_to_default_cleanup(monkeypatch) -> None:
+    callbacks: list[object] = []
+
+    def release_requested() -> bool:
+        return False
+
+    def cleanup(_acs_alive, *, release_requested=None):
+        callbacks.append(release_requested)
+        raise _OperatorRelease
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch._ensure_acs_gone", cleanup)
+
+    _hold_rig_until_acs_gone(
+        lambda: True,
+        release_requested=release_requested,
+    )
+
+    assert callbacks == [release_requested]
 
 
 def test_stable_session_exit_without_release_is_failure() -> None:

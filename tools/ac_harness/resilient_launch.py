@@ -340,14 +340,22 @@ def _ensure_cm_running(  # pragma: no cover - rig-only
 
 
 def _wait_process_exit(  # pragma: no cover - rig-only
-    image: str, *, timeout: float = 15.0, poll: float = 0.25
+    image: str,
+    *,
+    timeout: float = 15.0,
+    poll: float = 0.25,
+    release_requested: Callable[[], bool] | None = None,
 ) -> bool:
     """Wait until a killed Windows process has left the table before reusing its IPC name."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if release_requested is not None and release_requested():
+            raise _OperatorRelease
         if not _process_running(image):
             return True
         time.sleep(poll)
+    if release_requested is not None and release_requested():
+        raise _OperatorRelease
     return not _process_running(image)
 
 
@@ -393,7 +401,7 @@ def _ensure_acs_gone(  # pragma: no cover - rig-only
 def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
     acs_alive: Callable[[], bool],
     *,
-    retry_cleanup: Callable[[Callable[[], bool]], bool] = _ensure_acs_gone,
+    retry_cleanup: Callable[[Callable[[], bool]], bool] | None = None,
     release_requested: Callable[[], bool] | None = None,
     poll: float = 1.0,
 ) -> None:
@@ -407,14 +415,23 @@ def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
         "UNSAFE RIG: acs.exe survived cleanup; retaining ownership and retrying "
         "(Ctrl-C explicitly releases)"
     )
+
+    def cleanup() -> bool:
+        if retry_cleanup is not None:
+            return retry_cleanup(acs_alive)
+        return _ensure_acs_gone(acs_alive, release_requested=release_requested)
+
     while acs_alive():
         if release_requested is not None and release_requested():
             _log("Game Point explicitly released unsafe rig ownership; acs.exe may still be alive")
             return
         try:
-            if retry_cleanup(acs_alive):
+            if cleanup():
                 return
             time.sleep(poll)
+        except _OperatorRelease:
+            _log("Game Point explicitly released unsafe rig ownership; acs.exe may still be alive")
+            return
         except KeyboardInterrupt:
             _log("operator explicitly released unsafe rig ownership; acs.exe may still be alive")
             return
@@ -688,18 +705,20 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             if release_requested():
                 raise _OperatorRelease
             try:
-                actuator.launch() if attempt == 1 else actuator.relaunch()
+                # Cleanup already normalized acs.exe above. Calling relaunch() here would add a
+                # second uninterruptible taskkill window between the final release check and launch.
+                actuator.launch()
             except (OSError, EntryLaunchUnsupported) as exc:
                 _log(f"attempt {attempt}: Content Manager launch failed: {exc}")
                 return LaunchVerdict.NEVER_LIVE
-            car0_ready = False
+            car0_ready: bool | None = None
 
             def read_attempt_state() -> tuple[int | None, bool | None, bool | None]:
                 nonlocal car0_ready
                 if release_requested():
                     raise _OperatorRelease
                 packet, entry_ready = read_state()
-                if entry_ready is True and not car0_ready:
+                if entry_ready is True and car0_ready is None:
                     car0_ready = _probe_car0_drivable()
                 return packet, entry_ready, car0_ready if entry_ready is True else None
 
@@ -714,8 +733,13 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
         def cold_restart_cm() -> None:
             _log("two consecutive never_live — cold-restarting Content Manager (stale preset IPC)")
+            if release_requested():
+                raise _OperatorRelease
             actuator.restart_content_manager()
-            if not _wait_process_exit(actuator.cm_exe.name):
+            if not _wait_process_exit(
+                actuator.cm_exe.name,
+                release_requested=release_requested,
+            ):
                 raise _ContentManagerRestartTimeout(
                     "Content Manager remained alive after the bounded shutdown wait"
                 )

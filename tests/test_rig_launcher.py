@@ -373,6 +373,23 @@ def test_resilient_status_adopts_machine_wide_lock_owner(tmp_path: Path) -> None
     assert started == status
 
 
+def test_resilient_status_probes_rig_owner_outside_process_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    sup = GamePointSupervisor(
+        GamePointConfig(paths=LauncherPaths(tmp_path)),
+        environ={},
+    )
+
+    def owner() -> None:
+        assert not sup._proc_lock._is_owned()  # type: ignore[attr-defined]
+        return None
+
+    monkeypatch.setattr(sup, "_rig_session_owner", owner)
+
+    assert sup._resilient_process_status().state == "unconfigured"
+
+
 def test_preflight_blocks_external_bind_without_token(tmp_path: Path) -> None:
     cfg = GamePointConfig(external_bind="0.0.0.0", token=None, paths=LauncherPaths(tmp_path))
     sup = GamePointSupervisor(cfg, environ={})
