@@ -111,7 +111,7 @@ CSP-init retry and stable-session handoff through the canonical Game Point launc
 hardening now covers streaming verdict semantics, LIVE/not-in-pit readiness, cross-worktree rig
 ownership, approved preset storage, Content Manager failure handling, finite CLI inputs, process
 tree cleanup, source/frozen Game Point dispatch, finite lock timing, one-shot Car0 failure, and
-Stable-AC-specific release signaling (`e5a13f0`). The final review rounds also validate the
+Stable-AC-specific release signaling (`1f42f74`). The final review rounds also validate the
 configured Content Manager path before process shortcuts, require one real AC teardown attempt
 before pre-stability release can escape a subsequent unsafe hold, reject known unrelated release
 targets, and preserve recovery for unknown/legacy lock metadata. Bounded waits now clamp to their
@@ -170,7 +170,9 @@ them throughout stabilization and the stable operator hold instead of dropping t
 references; a standalone probe carries its retained controller on the cleanup exception.
 Auto-drive returns a structured cleanup report whose non-serialized hold keeps the controller
 reachable for process-lifetime cleanup, without entering the retained-controls AC-kill or
-atomic-abort path. Fatal cleanup
+atomic-abort path. A writable section with an already-unmapped null view now raises
+`SharedMemoryUnavailable` before `ctypes.memmove`, so handle-only close retention cannot native-crash
+the emergency-brake attempt before authoritative taskkill. Fatal cleanup
 suppresses release before taskkill, backs off, and exits after a bounded hold if enumeration stays
 unknown. Content Manager unknown state fails closed, and a newly started CM must survive the settle
 interval before the launch URL is sent. The already-present `resilient_layout` template key is

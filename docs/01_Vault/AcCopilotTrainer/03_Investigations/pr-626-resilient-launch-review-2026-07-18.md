@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `e5a13f0`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `1f42f74`; the following vault SAVE records its handoff.
 Local repository parity is green; the updated head still requires its mandatory reviewer cooldown
 and exhaustive GitHub current-head audit. The PR remains open and unmerged; Windows-rig proof
 remains a separate future state.
@@ -173,10 +173,13 @@ remains a separate future state.
   cleanup exception. Auto-drive emits a structured cleanup failure whose non-serialized report hold
   retains the controller for process-lifetime cleanup without invoking the control-retention AC
   safety shutdown or atomic-abort path.
+- `_WritableSection.write` rejects a null mapped-view address before `ctypes.memmove`. When unmap
+  succeeds but `CloseHandle` fails, the emergency-brake attempt now raises a catchable Python error
+  and continues to authoritative taskkill instead of risking a native null-pointer crash.
 
 ## Verification contract
 
-Final code commit `e5a13f0` passed focused launcher/theme tests and repository-venv `make ci-fast`
+Final code commit `1f42f74` passed focused launcher/theme tests and repository-venv `make ci-fast`
 (`3216 passed`, `77 skipped`, `86.73%` coverage). The mandatory reviewer cooldown and exhaustive
 current-head re-audit follow this vault snapshot. `/resolve-pr` does not merge the PR or substitute
 macOS tests for the pending Windows-rig proof.
