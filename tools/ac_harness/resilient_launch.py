@@ -310,12 +310,12 @@ def _ensure_cm_running(  # pragma: no cover - rig-only
 
     if release_requested is not None and release_requested():
         raise _OperatorRelease
-    process_name = cm_exe.name
-    if _process_running(process_name):
-        return True
     if not cm_exe.is_file():
         _log(f"WARNING: Content Manager executable not found: {cm_exe}")
         return False
+    process_name = cm_exe.name
+    if _process_running(process_name):
+        return True
     _log("Content Manager not running — starting it before sending the quick-drive URL")
     if release_requested is not None and release_requested():
         raise _OperatorRelease
@@ -467,8 +467,14 @@ def _make_rig_safe(  # pragma: no cover - rig-only
     release_requested: Callable[[], bool] | None = None,
 ) -> None:
     """Confirm no live sim can outlast machine-wide ownership."""
-    if acs_alive() and not _ensure_acs_gone(acs_alive):
-        _hold_rig_until_acs_gone(acs_alive, release_requested=release_requested)
+    try:
+        if acs_alive() and not _ensure_acs_gone(
+            acs_alive,
+            release_requested=release_requested,
+        ):
+            _hold_rig_until_acs_gone(acs_alive, release_requested=release_requested)
+    except _OperatorRelease:
+        _log("Game Point explicitly released ownership during safety cleanup")
 
 
 def _run_with_safe_release(
@@ -689,6 +695,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
         cm_exe = args.cm_exe or ContentManagerActuator.DEFAULT_CM_EXE
         actuator = ContentManagerActuator(preset=preset, cm_exe=cm_exe)
+        if not actuator.cm_exe.is_file():
+            _log(f"launch aborted: Content Manager executable not found: {actuator.cm_exe}")
+            return 1
 
         def watch_attempt(attempt: int) -> LaunchVerdict:
             if release_requested():

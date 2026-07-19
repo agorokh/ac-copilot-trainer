@@ -4022,6 +4022,7 @@ def _main_impl(
             car=config.car_id,
             track=config.track_id,
             started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            session_kind="auto_drive",
         ),
         timeout=args.rig_lock_timeout,
     )

@@ -573,7 +573,12 @@ class GamePointSupervisor:
         owner = self._rig_session_owner()
         if not local_running and owner is None:
             return ProbeResult("ac_session", True, "idle", "no resilient session owns the rig")
-        if not local_running and owner.get("session_kind") != "resilient_launch":
+        known_kind = (
+            owner.get("session_kind")
+            if owner is not None and owner.get("cwd") != "unknown"
+            else None
+        )
+        if not local_running and known_kind not in {None, "resilient_launch"}:
             return ProbeResult(
                 "ac_session",
                 False,

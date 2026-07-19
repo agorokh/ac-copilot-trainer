@@ -20,6 +20,7 @@ from tools.ac_harness.resilient_launch import (
     _ensure_cm_running,
     _hold_rig_until_acs_gone,
     _hold_stable_session,
+    _make_rig_safe,
     _non_negative_float,
     _OperatorRelease,
     _positive_float,
@@ -535,6 +536,23 @@ def test_pre_stable_operator_release_makes_rig_safe_before_propagating(monkeypat
     ]
 
 
+def test_make_rig_safe_forwards_release_to_first_cleanup(monkeypatch):
+    callbacks: list[object] = []
+
+    def release_requested() -> bool:
+        return False
+
+    def cleanup(_acs_alive, *, release_requested=None):
+        callbacks.append(release_requested)
+        return True
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch._ensure_acs_gone", cleanup)
+
+    _make_rig_safe(lambda: True, release_requested=release_requested)
+
+    assert callbacks == [release_requested]
+
+
 def test_car0_probe_closes_controller_after_handshake(monkeypatch):
     reads = iter([None] * 12 + [{"packet_id": 1}])
     closed: list[bool] = []
@@ -587,12 +605,19 @@ def test_car0_probe_close_failure_aborts_before_another_probe() -> None:
         _probe_car0_drivable(controller_factory=Controller)
 
 
-def test_ensure_cm_running_fails_fast_when_executable_is_missing(tmp_path):
+def test_ensure_cm_running_fails_before_same_named_process_probe(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch._process_running",
+        lambda _image: pytest.fail("a running image cannot validate a missing configured path"),
+    )
+
     assert _ensure_cm_running(tmp_path / "missing.exe") is False
 
 
 def test_ensure_cm_running_probes_the_configured_image_name(tmp_path, monkeypatch):
     images: list[str] = []
+    cm_exe = tmp_path / "PortableCM.exe"
+    cm_exe.touch()
 
     def running(image: str) -> bool:
         images.append(image)
@@ -600,7 +625,7 @@ def test_ensure_cm_running_probes_the_configured_image_name(tmp_path, monkeypatc
 
     monkeypatch.setattr("tools.ac_harness.resilient_launch._process_running", running)
 
-    assert _ensure_cm_running(tmp_path / "PortableCM.exe") is True
+    assert _ensure_cm_running(cm_exe) is True
     assert images == ["PortableCM.exe"]
 
 
