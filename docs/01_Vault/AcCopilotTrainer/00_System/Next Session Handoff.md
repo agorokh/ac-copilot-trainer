@@ -111,7 +111,7 @@ CSP-init retry and stable-session handoff through the canonical Game Point launc
 hardening now covers streaming verdict semantics, LIVE/not-in-pit readiness, cross-worktree rig
 ownership, approved preset storage, Content Manager failure handling, finite CLI inputs, process
 tree cleanup, source/frozen Game Point dispatch, finite lock timing, one-shot Car0 failure, and
-Stable-AC-specific release signaling (`73fd3a7`). The final review rounds also validate the
+Stable-AC-specific release signaling (`b2e299d`). The final review rounds also validate the
 configured Content Manager path before process shortcuts, require one real AC teardown attempt
 before pre-stability release can escape a subsequent unsafe hold, reject known unrelated release
 targets, and preserve recovery for unknown/legacy lock metadata. Bounded waits now clamp to their
@@ -148,8 +148,10 @@ recorded as a note, and a safely released mismatched attempt continues through t
 relaunch budget. Per-attempt process liveness history resets after prior-session cleanup, preventing
 an earlier `acs.exe` sighting from fabricating an exit during the next attempt's normal startup.
 The resilient Car0 probe also retains a failed-close controller and exits at the OS boundary without
-running the normal lock-release `finally`. Repository parity is `3197 passed`, `77 skipped`,
-`86.73%` coverage.
+running the normal lock-release `finally`; before exit it reconfirms `acs.exe` teardown while
+ignoring operator interrupts. Auto-drive's detached cleanup stack remains attached only to its
+fatal abort exception, avoiding a module-global resource leak. Repository parity is `3198 passed`,
+`77 skipped`, `86.73%` coverage.
 Required checks are green, all GraphQL threads are resolved, and the enforce resolve gate is
 clean. The PR remains open and unmerged; Windows-rig proof is the remaining separate state. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].

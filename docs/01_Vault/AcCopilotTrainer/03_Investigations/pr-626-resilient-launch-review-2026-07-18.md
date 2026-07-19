@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `73fd3a7`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `b2e299d`; the following vault SAVE records its handoff.
 All required GitHub checks are green, all GraphQL review threads are resolved, and the
 enforce-mode resolve gate reports no substantive findings. The PR remains open and unmerged;
 Windows-rig proof remains a separate future state.
@@ -137,11 +137,15 @@ Windows-rig proof remains a separate future state.
   OS process exit, bypassing the normal rig-lock release `finally` so mapping and lock close
   together. Auto-drive continues through the remaining mismatch relaunch budget after confirmed
   AC safety shutdown/local release and carries the cleanup detail into final report notes.
+- The resilient fatal Car0 cleanup handler reconfirms AC teardown with release and Ctrl-C escape
+  disabled before atomic process exit. Auto-drive's detached cleanup stack is retained only by the
+  raised abort object for programmatic callers; the previous module-global retention list was
+  removed to avoid an unbounded host-process resource leak.
 
 ## Verification contract
 
-Final code commit `73fd3a7` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3197 passed`, `77 skipped`, `86.73%` coverage), followed by the mandatory reviewer cooldown and
+Final code commit `b2e299d` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3198 passed`, `77 skipped`, `86.73%` coverage), followed by the mandatory reviewer cooldown and
 current-head re-audit. GitHub reports the build, canonical-docs, and conformance checks green;
 GraphQL reports all threads resolved; the enforce-mode resolve gate is clean. `/resolve-pr` did
 not merge the PR or substitute macOS tests for the pending Windows-rig proof.
