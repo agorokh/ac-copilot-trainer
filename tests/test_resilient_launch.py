@@ -539,7 +539,11 @@ def test_ensure_acs_gone_returns_false_when_process_survives(monkeypatch):
         nonlocal now
         now += seconds
 
-    monkeypatch.setattr("subprocess.run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("tools.ac_harness.entry_launcher.sys.platform", "win32")
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, "", ""),
+    )
     monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
     monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
 

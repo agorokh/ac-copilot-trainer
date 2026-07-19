@@ -293,6 +293,10 @@ def terminate_process_tree_confirmed_absent(
         raise ValueError("process termination poll must be > 0")
     if absent_confirmations < 1:
         raise ValueError("absent_confirmations must be >= 1")
+    emit = log or (lambda _message: None)
+    if sys.platform != "win32":
+        emit(f"cannot confirm {process_name} termination on unsupported platform {sys.platform}")
+        return False
     check_running = is_running
     if check_running is None:
 
@@ -300,7 +304,6 @@ def terminate_process_tree_confirmed_absent(
             return bool(running_process_ids(process_name, strict=True))
 
     run = runner or subprocess.run
-    emit = log or (lambda _message: None)
     deadline = clock() + timeout
     absent_run = 0
     kill_attempted = False

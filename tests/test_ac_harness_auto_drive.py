@@ -388,6 +388,7 @@ def test_rig_cleanup_safety_brakes_kills_and_confirms_absence(monkeypatch):
         process_snapshots.append(snapshot)
         return snapshot
 
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
     monkeypatch.setattr(entry_launcher, "_taskkill", lambda image, runner: "killed acs.exe")
     monkeypatch.setattr(entry_launcher, "running_process_ids", process_ids)
     monkeypatch.setattr("tools.ac_harness.auto_drive.time.sleep", lambda seconds: None)
@@ -2367,6 +2368,37 @@ def test_main_retains_registered_rig_cleanup_on_controller_abort(monkeypatch):
     hold = caught.value.cleanup_hold
     hold.close()
     assert released == [True]
+
+
+def test_fatal_cleanup_exit_emits_chained_traceback_before_os_exit(monkeypatch, capsys):
+    import tools.ac_harness.auto_drive as auto_drive_module
+
+    class ImmediateExit(BaseException):
+        pass
+
+    def exit_process(code):
+        raise ImmediateExit(code)
+
+    ctrl = FailingCloseController()
+    try:
+        try:
+            raise OSError("CloseHandle failed")
+        except OSError as exc:
+            raise ControllerCleanupAbort(
+                ControllerCleanupError("unsafe mapping retained"),
+                ctrl,
+            ) from exc
+    except ControllerCleanupAbort as abort:
+        monkeypatch.setattr(auto_drive_module.os, "_exit", exit_process)
+        with pytest.raises(ImmediateExit) as caught:
+            auto_drive_module._exit_after_controller_cleanup_abort(abort)
+
+    stderr = capsys.readouterr().err
+    assert caught.value.args == (1,)
+    assert "immediate OS process exit" in stderr
+    assert "Traceback (most recent call last)" in stderr
+    assert "OSError: CloseHandle failed" in stderr
+    assert "ControllerCleanupAbort: fatal controller cleanup failure" in stderr
 
 
 def test_rig_drive_synchronously_checks_pid_before_clean_stop(monkeypatch):

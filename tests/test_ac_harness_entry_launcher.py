@@ -419,6 +419,25 @@ def test_terminate_process_tree_requires_consecutive_absence(monkeypatch):
     assert clock.now == pytest.approx(0.2)
 
 
+def test_terminate_process_tree_fails_closed_off_windows(monkeypatch):
+    calls: list[list[str]] = []
+    messages: list[str] = []
+
+    monkeypatch.setattr(entry_launcher.sys, "platform", "darwin")
+
+    assert (
+        terminate_process_tree_confirmed_absent(
+            "acs.exe",
+            is_running=lambda: False,
+            runner=lambda command, **_kwargs: calls.append(command),
+            log=messages.append,
+        )
+        is False
+    )
+    assert calls == []
+    assert messages == ["cannot confirm acs.exe termination on unsupported platform darwin"]
+
+
 def test_terminate_process_tree_bounds_unknown_enumeration(monkeypatch):
     clock = FakeClock()
     calls: list[list[str]] = []

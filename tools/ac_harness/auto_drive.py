@@ -62,8 +62,10 @@ import math
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
+import traceback
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field, replace
@@ -4531,8 +4533,19 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         cleanup.close()
 
 
+def _exit_after_controller_cleanup_abort(exc: ControllerCleanupAbort) -> None:
+    """Emit chained fatal-cleanup evidence, then atomically drop the mapping and rig lock."""
+    print(
+        "auto-drive: fatal controller cleanup abort; retained native resources will be released "
+        "by immediate OS process exit",
+        file=sys.stderr,
+    )
+    traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
+    sys.stderr.flush()
+    os._exit(1)
+
+
 if __name__ == "__main__":  # pragma: no cover - rig-only CLI wiring
-    import sys
     from pathlib import Path as _Path
 
     _repo_root = str(_Path(__file__).resolve().parents[2])
@@ -4544,6 +4557,6 @@ if __name__ == "__main__":  # pragma: no cover - rig-only CLI wiring
         # Do not run normal interpreter unwinding after a fatal native cleanup failure: the OS
         # closes the retained Custom-AI mapping and rig-lock descriptor together at process exit,
         # leaving no window where a peer can acquire the rig while this process still controls it.
-        print(f"auto-drive: {_cleanup_abort}", file=sys.stderr, flush=True)
-        os._exit(1)
+        # Emit and flush the chained exception first so the rare native failure remains diagnosable.
+        _exit_after_controller_cleanup_abort(_cleanup_abort)
     raise SystemExit(_exit_code)
