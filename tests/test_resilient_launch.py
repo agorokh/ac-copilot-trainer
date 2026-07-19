@@ -239,14 +239,39 @@ def test_corpse_reading_does_not_mask_a_genuinely_dead_launch() -> None:
     )
 
 
-def test_pre_go_live_regression_with_acs_alive_is_still_never_live() -> None:
-    """The #628 fix must not weaken the real guard, only ignore corpse readings.
+def test_corpse_persisting_into_the_new_acs_lifetime_does_not_fail_the_launch() -> None:
+    """#628 — the exact trace measured on the rig, which the ``acs_alive`` guard alone misses.
 
-    A regression observed while ``acs.exe`` IS alive still means the render stream was replaced.
-    (The post-go-live half of this guard is pinned by
-    ``test_packet_reset_during_stability_cannot_inherit_prior_session_progress``.)
+    The dead session's section stays mapped for ~6 s AFTER the new acs.exe starts: the process is
+    alive and loading but has not published its own stream yet, so readings in that window are
+    live-correlated *and* stale. Verbatim from ``.scratch/trial_verbose.py``::
+
+        t=0.0  acs=None   gfx=16983   <- corpse
+        t=2.0  acs=14020  gfx=16983   <- new acs ALIVE, section still the corpse
+        t=4.0  acs=14020  gfx=16983
+        t=6.0  acs=14020  gfx=16983
+        t=8.0  acs=14020  gfx=121     <- new session finally publishes
+
+    Before the fix this was ``never_live`` at t=8.0 s — a normal, healthy load discarded.
     """
-    samples = trace([(0.0, 1_000, True), (2.0, 5, True)])
+    samples = [Sample(t=0.0, gfx_packet=16_983, acs_alive=False, entry_ready=True, drivable=True)]
+    samples += [
+        Sample(t=t, gfx_packet=16_983, acs_alive=True, entry_ready=True, drivable=True)
+        for t in (2.0, 4.0, 6.0)
+    ]
+    samples += [Sample(t=8.0, gfx_packet=121, acs_alive=True, entry_ready=True, drivable=True)]
+    samples += steady(10.0, 70.0, first_packet=200)
+
+    assert classify(samples, go_live_timeout=80.0, stability_window=45.0) is LaunchVerdict.STABLE
+
+
+def test_pre_go_live_regression_does_not_bypass_the_go_live_timeout() -> None:
+    """Rebasing before go-live must not become an infinite grace period."""
+    # A stream that keeps resetting and never advances-while-ready must still time out.
+    samples = [
+        Sample(t=float(t), gfx_packet=1_000 - t, acs_alive=True, entry_ready=False, drivable=False)
+        for t in range(0, 40, 2)
+    ]
 
     assert classify(samples, go_live_timeout=30.0, stability_window=45.0) is (
         LaunchVerdict.NEVER_LIVE
