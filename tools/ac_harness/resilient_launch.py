@@ -618,10 +618,13 @@ def _hold_stable_session(  # pragma: no cover - rig-only
     release_requested: Callable[[], bool],
     *,
     poll: float = 1.0,
+    maintenance: Callable[[], None] | None = None,
 ) -> bool:
     """Hold rig ownership for a stable session and report whether release was intentional."""
     try:
         while acs_alive() and not release_requested():
+            if maintenance is not None:
+                maintenance()
             time.sleep(poll)
     except KeyboardInterrupt:
         _log("operator released rig ownership; AC left LIVE")
@@ -1083,7 +1086,21 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             "stable session handed to operator; holding rig ownership until AC exits "
             f"(Ctrl-C releases; phase={'stable' if phase_published else 'stabilizing'})"
         )
-        return 0 if _hold_stable_session(acs_alive, release_requested) else 1
+        try:
+            intentional_release = _hold_stable_session(
+                acs_alive,
+                release_requested,
+                maintenance=lambda: _retry_telemetry_cleanup_holds(telemetry_cleanup_holds),
+            )
+        except _Car0ProbeCleanupError as exc:
+            _log(f"stable-session cleanup aborted: {exc}")
+            _make_rig_safe(
+                acs_present,
+                allow_operator_release=False,
+                hold_timeout=30.0,
+            )
+            os._exit(1)
+        return 0 if intentional_release else 1
     finally:
         if preset is not None:
             try:

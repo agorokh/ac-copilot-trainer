@@ -23,6 +23,7 @@ from tools.ac_harness.auto_drive import (
     AutoDriveReport,
     ControllerCleanupAbort,
     ControllerCleanupError,
+    ControllerTelemetryCleanupPending,
     DriveStats,
     ProgressWatchdog,
     SimProcessIdentityMonitor,
@@ -358,7 +359,7 @@ def test_read_only_mapping_close_failure_does_not_trigger_ac_safety_shutdown():
             raise ControllerTelemetryCloseError("CarControls already released")
 
     with pytest.raises(
-        ControllerCleanupAbort,
+        ControllerTelemetryCleanupPending,
         match="read-only telemetry mapping retained",
     ) as caught:
         _close_controller(
@@ -369,6 +370,34 @@ def test_read_only_mapping_close_failure_does_not_trigger_ac_safety_shutdown():
 
     assert safety_calls == []
     assert caught.value.controller is controller
+
+
+def test_read_only_mapping_close_failure_returns_structured_report_with_retained_owner():
+    from tools.ac_harness.custom_ai import ControllerTelemetryCloseError
+
+    safety_calls: list[bool] = []
+
+    class TelemetryOnlyFailure(FakeController):
+        def close(self) -> None:
+            raise ControllerTelemetryCloseError("CarControls already released")
+
+    controller = TelemetryOnlyFailure()
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda _config: controller,
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            cleanup_failure=lambda _controller, _error: safety_calls.append(True) or True,
+        )
+    )
+
+    assert report.ok is False
+    assert report.stage == "cleanup"
+    assert report.cleanup_holds == (controller,)
+    assert safety_calls == []
+    assert "_cleanup_holds" not in report.to_dict()
 
 
 def test_safety_shutdown_after_persistent_close_failure_still_fails_the_run():

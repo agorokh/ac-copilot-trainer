@@ -450,6 +450,19 @@ class AutoDriveReport:
     attempts: list[dict[str, Any]] = field(default_factory=list)
 
     @property
+    def cleanup_holds(self) -> tuple[Controller, ...]:
+        """Non-serialized telemetry mapping owners retained for process-lifetime cleanup."""
+        return tuple(getattr(self, "_cleanup_holds", ()))
+
+    def retain_cleanup_controller(self, controller: Controller) -> None:
+        """Keep a failed read-only mapping reachable without polluting JSON evidence."""
+        holds = getattr(self, "_cleanup_holds", None)
+        if holds is None:
+            holds = []
+            self._cleanup_holds = holds
+        holds.append(controller)
+
+    @property
     def reason(self) -> str:
         """Current run-level root cause: non-empty exactly when this report fails (#596 Part C).
 
@@ -563,6 +576,14 @@ class ControllerCleanupError(RuntimeError):
     """A Custom-AI controller could not release its native shared-memory resources."""
 
 
+class ControllerTelemetryCleanupPending(ControllerCleanupError):
+    """CarControls released, but a read-only mapping remains owned for later/process cleanup."""
+
+    def __init__(self, message: str, controller: Controller) -> None:
+        super().__init__(message)
+        self.controller = controller
+
+
 class ControllerCleanupAbort(SystemExit):
     """Fail-closed abort that retains a controller until process teardown releases its mapping."""
 
@@ -604,10 +625,10 @@ def _close_controller(
     )
     error.__cause__ = last_error
     if not controls_retained:
-        telemetry_error = ControllerCleanupError(
-            f"{error}; CarControls ownership released, read-only telemetry mapping retained"
-        )
-        raise ControllerCleanupAbort(telemetry_error, controller) from last_error
+        raise ControllerTelemetryCleanupPending(
+            f"{error}; CarControls ownership released, read-only telemetry mapping retained",
+            controller,
+        ) from last_error
     try:
         safety_confirmed = (
             cleanup_failure(controller, error) if cleanup_failure is not None else False
@@ -854,6 +875,7 @@ async def run_auto_drive(
     setup_ack: dict | None = None
     setup_applied: bool | None = None
     controller: Controller | None = None
+    telemetry_cleanup_holds: list[Controller] = []
     attempts = 1 if config.skip_launch else max(1, config.max_launches)
     launch_config = replace(config, max_launches=1)
     launched_once = config.skip_launch
@@ -969,6 +991,19 @@ async def run_auto_drive(
                 )
         try:
             controller = hijack(config)
+        except ControllerTelemetryCleanupPending as exc:
+            report = AutoDriveReport(
+                ok=False,
+                stage="cleanup",
+                launched=not config.skip_launch,
+                setup_requested=setup_requested,
+                setup_applied=setup_applied,
+                setup_ack=setup_ack,
+                error=str(exc),
+                **identity,
+            )
+            report.retain_cleanup_controller(exc.controller)
+            return report
         except ControllerCleanupError as exc:
             return AutoDriveReport(
                 ok=False,
@@ -1017,6 +1052,26 @@ async def run_auto_drive(
                         context=f"cleanup after rejecting mismatched {mismatch}",
                         cleanup_failure=cleanup_failure,
                     )
+                except ControllerTelemetryCleanupPending as exc:
+                    cleanup_detail = str(exc)
+                    controller = None
+                    report = AutoDriveReport(
+                        ok=False,
+                        stage="launch",
+                        launched=not config.skip_launch,
+                        hijacked=True,
+                        setup_requested=setup_requested,
+                        setup_applied=setup_applied,
+                        setup_ack=setup_ack,
+                        error=(
+                            f"loaded {mismatch} — Content Manager launched a cached session; "
+                            "the harness will not drive the requested line on a different combo"
+                        ),
+                        notes=[*launch_notes, cleanup_detail],
+                        **identity,
+                    )
+                    report.retain_cleanup_controller(exc.controller)
+                    return report
                 except ControllerCleanupError as exc:
                     cleanup_detail = str(exc)
                     controller = None
@@ -1254,6 +1309,13 @@ async def run_auto_drive(
                     context="final controller cleanup",
                     cleanup_failure=cleanup_failure,
                 )
+            except ControllerTelemetryCleanupPending as exc:
+                telemetry_cleanup_holds.append(exc.controller)
+                cleanup_error = str(exc)
+                if error is None:
+                    stage, error = "cleanup", cleanup_error
+                else:
+                    notes.append(cleanup_error)
             except ControllerCleanupError as exc:
                 cleanup_error = str(exc)
                 if error is None:
@@ -1267,7 +1329,7 @@ async def run_auto_drive(
     ok = bool(seq_ok) and drive_leg_succeeded(stats) and error is None
     # #596 Part C: `reason` is computed from these same live inputs, so it cannot drift from the
     # `ok` gate computed just above — including after the handshake mutates the report.
-    return AutoDriveReport(
+    report = AutoDriveReport(
         ok=ok,
         stage=stage,
         launched=not config.skip_launch,
@@ -1287,6 +1349,9 @@ async def run_auto_drive(
         setup_ack=setup_ack,
         **identity,
     )
+    for retained_controller in telemetry_cleanup_holds:
+        report.retain_cleanup_controller(retained_controller)
+    return report
 
 
 async def run_auto_drive_with_sim_retries(

@@ -753,6 +753,35 @@ def test_stable_session_release_is_success() -> None:
     assert _hold_stable_session(lambda: True, lambda: True) is True
 
 
+def test_stable_session_retries_retained_telemetry_until_released(monkeypatch) -> None:
+    from tools.ac_harness.custom_ai import ControllerTelemetryCloseError
+
+    class Controller:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls < 5:
+                raise ControllerTelemetryCloseError("read mapping still busy")
+
+    controller = Controller()
+    retained: list[object] = [controller]
+    alive = iter((True, True, False))
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", lambda _seconds: None)
+
+    assert (
+        _hold_stable_session(
+            lambda: next(alive),
+            lambda: False,
+            maintenance=lambda: _retry_telemetry_cleanup_holds(retained),
+        )
+        is False
+    )
+    assert retained == []
+    assert controller.close_calls == 5
+
+
 def test_stable_phase_publication_failure_keeps_proven_session_available(capsys) -> None:
     phases: list[str] = []
 
