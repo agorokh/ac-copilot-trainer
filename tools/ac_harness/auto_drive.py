@@ -85,7 +85,6 @@ from tools.ac_harness.sequence_probe import (
     intervention_summary,
     tap_frames,
 )
-from tools.ac_harness.shared_memory import SharedMemoryUnavailable
 from tools.ac_harness.window_utils import minimize_foreground_window
 from tools.ai_sidecar.external_protocol import CLIENT_CLASS_OBSERVER
 
@@ -460,7 +459,8 @@ class AutoDriveReport:
         if holds is None:
             holds = []
             self._cleanup_holds = holds
-        holds.append(controller)
+        if not any(retained is controller for retained in holds):
+            holds.append(controller)
 
     @property
     def reason(self) -> str:
@@ -590,7 +590,18 @@ class ControllerCleanupAbort(SystemExit):
     def __init__(self, error: ControllerCleanupError, controller: Controller) -> None:
         super().__init__(f"fatal controller cleanup failure: {error}")
         self.controller = controller
+        self._cleanup_holds: list[Controller] = [controller]
         self.cleanup_hold: ExitStack | None = None
+
+    @property
+    def cleanup_holds(self) -> tuple[Controller, ...]:
+        """All native mapping owners that must remain reachable until process teardown."""
+        return tuple(self._cleanup_holds)
+
+    def retain_cleanup_controller(self, controller: Controller) -> None:
+        """Attach an earlier telemetry-only owner to this fail-closed abort."""
+        if not any(retained is controller for retained in self._cleanup_holds):
+            self._cleanup_holds.append(controller)
 
 
 CleanupFailureFn = Callable[[Controller, ControllerCleanupError], bool]
@@ -652,7 +663,9 @@ def _close_controller(
     # a successful cleanup, even when this last local close succeeds.
     try:
         controller.close()
-    except (OSError, SharedMemoryUnavailable) as exc:
+    except ControllerCleanupAbort:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - retain mapping and rig lock on every failure
         final_error = ControllerCleanupError(
             f"{error}; AC safety shutdown confirmed, but final local release failed: "
             f"{type(exc).__name__}: {exc}"
@@ -885,6 +898,10 @@ async def run_auto_drive(
     controller: Controller | None = None
     telemetry_cleanup_holds: list[Controller] = []
 
+    def retain_abort_cleanup_holds(exc: ControllerCleanupAbort) -> None:
+        for retained_controller in telemetry_cleanup_holds:
+            exc.retain_cleanup_controller(retained_controller)
+
     def finish(report: AutoDriveReport) -> AutoDriveReport:
         prior_notes = [note for note in launch_notes if note not in report.notes]
         report.notes[:0] = prior_notes
@@ -1014,6 +1031,9 @@ async def run_auto_drive(
                 )
         try:
             controller = hijack(config)
+        except ControllerCleanupAbort as exc:
+            retain_abort_cleanup_holds(exc)
+            raise
         except ControllerTelemetryCleanupPending as exc:
             telemetry_cleanup_holds.append(exc.controller)
             report = AutoDriveReport(
@@ -1079,6 +1099,9 @@ async def run_auto_drive(
                         context=f"cleanup after rejecting mismatched {mismatch}",
                         cleanup_failure=cleanup_failure,
                     )
+                except ControllerCleanupAbort as exc:
+                    retain_abort_cleanup_holds(exc)
+                    raise
                 except ControllerTelemetryCleanupPending as exc:
                     cleanup_detail = str(exc)
                     telemetry_cleanup_holds.append(exc.controller)
@@ -1358,6 +1381,9 @@ async def run_auto_drive(
                     context="final controller cleanup",
                     cleanup_failure=cleanup_failure,
                 )
+            except ControllerCleanupAbort as exc:
+                retain_abort_cleanup_holds(exc)
+                raise
             except ControllerTelemetryCleanupPending as exc:
                 telemetry_cleanup_holds.append(exc.controller)
                 cleanup_error = str(exc)
@@ -1430,18 +1456,27 @@ async def run_auto_drive_with_sim_retries(
     if retry_budget < 0:
         raise ValueError("sim_death_retries must be >= 0")
     attempt_reports: list[dict[str, Any]] = []
+    cleanup_holds: list[Controller] = []
     for attempt_idx in range(retry_budget + 1):
-        report = await run_auto_drive(
-            config,
-            launch=launch,
-            hijack=hijack,
-            drive=drive,
-            tap=tap,
-            apply_setup=apply_setup,
-            verify_track=verify_track,
-            restart_launcher=restart_launcher,
-            cleanup_failure=cleanup_failure,
-        )
+        try:
+            report = await run_auto_drive(
+                config,
+                launch=launch,
+                hijack=hijack,
+                drive=drive,
+                tap=tap,
+                apply_setup=apply_setup,
+                verify_track=verify_track,
+                restart_launcher=restart_launcher,
+                cleanup_failure=cleanup_failure,
+            )
+        except ControllerCleanupAbort as exc:
+            for retained_controller in cleanup_holds:
+                exc.retain_cleanup_controller(retained_controller)
+            raise
+        for retained_controller in report.cleanup_holds:
+            if not any(retained is retained_controller for retained in cleanup_holds):
+                cleanup_holds.append(retained_controller)
         # Snapshot BEFORE assigning the aggregate list, so nested attempts do not recursively
         # contain themselves.  This is the full attempt (checks, trace, cause), not a lossy summary.
         attempt_reports.append(_attempt_snapshot(report))
@@ -1459,6 +1494,8 @@ async def run_auto_drive_with_sim_retries(
                 f"(attempt {attempt_idx + 2}/{retry_budget + 1})"
             )
             continue
+        for retained_controller in cleanup_holds:
+            report.retain_cleanup_controller(retained_controller)
         report.attempts = attempt_reports
         return report
 
@@ -4444,22 +4481,27 @@ def _main_impl(
 
         run_started_epoch = time.time()
         rig_telemetry_cleanup_holds: list[Controller] = []
-        report = asyncio.run(
-            run_auto_drive_with_sim_retries(
-                config,
-                launch=rig_launch,
-                hijack=lambda run_config: rig_hijack(
-                    run_config,
-                    retain_telemetry_controller=rig_telemetry_cleanup_holds.append,
-                ),
-                drive=rig_drive,
-                tap=tap_frames,
-                apply_setup=rig_apply_setup,
-                verify_track=rig_verify_track,
-                restart_launcher=rig_restart_launcher,
-                cleanup_failure=rig_force_safe_after_cleanup_failure,
+        try:
+            report = asyncio.run(
+                run_auto_drive_with_sim_retries(
+                    config,
+                    launch=rig_launch,
+                    hijack=lambda run_config: rig_hijack(
+                        run_config,
+                        retain_telemetry_controller=rig_telemetry_cleanup_holds.append,
+                    ),
+                    drive=rig_drive,
+                    tap=tap_frames,
+                    apply_setup=rig_apply_setup,
+                    verify_track=rig_verify_track,
+                    restart_launcher=rig_restart_launcher,
+                    cleanup_failure=rig_force_safe_after_cleanup_failure,
+                )
             )
-        )
+        except ControllerCleanupAbort as exc:
+            for retained_controller in rig_telemetry_cleanup_holds:
+                exc.retain_cleanup_controller(retained_controller)
+            raise
         for retained_controller in rig_telemetry_cleanup_holds:
             report.retain_cleanup_controller(retained_controller)
     finally:

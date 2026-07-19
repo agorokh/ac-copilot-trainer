@@ -452,6 +452,33 @@ def test_close_retry_interrupt_converts_to_abort_and_retains_controller():
     assert "control ownership unknown" in str(caught.value)
 
 
+def test_post_safety_final_close_interrupt_retains_controller():
+    class InterruptedFinalCloseController(FakeController):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls <= 3:
+                raise OSError("native close failed")
+            raise KeyboardInterrupt
+
+    controller = InterruptedFinalCloseController()
+
+    with pytest.raises(ControllerCleanupAbort) as caught:
+        _close_controller(
+            controller,
+            context="post-safety interrupted close",
+            cleanup_failure=lambda _controller, _error: True,
+        )
+
+    assert caught.value.controller is controller
+    assert caught.value.cleanup_holds == (controller,)
+    assert isinstance(caught.value.__cause__, KeyboardInterrupt)
+    assert "AC safety shutdown confirmed, but final local release failed" in str(caught.value)
+
+
 def test_rig_cleanup_safety_brakes_kills_and_confirms_absence(monkeypatch):
     import tools.ac_harness.entry_launcher as entry_launcher
 
@@ -838,6 +865,42 @@ def test_sim_death_retries_full_launch_and_preserves_failed_attempt():
     assert report.attempts[1]["ok"] is True
     assert all(attempt["attempts"] == [] for attempt in report.attempts)
     assert all(controller.closed for controller in controllers)
+
+
+def test_sim_death_retry_transfers_prior_cleanup_holds_to_later_abort(monkeypatch):
+    from tools.ac_harness import auto_drive
+
+    telemetry_owner = FakeController()
+    fatal_owner = FailingCloseController()
+    attempts = 0
+
+    async def _attempt(config, **kwargs):  # noqa: ANN001
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            report = AutoDriveReport(
+                ok=False,
+                stage="drive",
+                drive=DriveStats(drove=True, sim_dead=True),
+            )
+            report.retain_cleanup_controller(telemetry_owner)
+            return report
+        raise ControllerCleanupAbort(ControllerCleanupError("unsafe mapping"), fatal_owner)
+
+    monkeypatch.setattr(auto_drive, "run_auto_drive", _attempt)
+
+    with pytest.raises(ControllerCleanupAbort) as caught:
+        asyncio.run(
+            auto_drive.run_auto_drive_with_sim_retries(
+                _cfg(sim_death_retries=1),
+                launch=_ok_launch,
+                hijack=lambda c: FakeController(),
+                drive=_drive_returning(DriveStats(drove=True), {}),
+                tap=_tap_returning(CONTINUOUS),
+            )
+        )
+
+    assert caught.value.cleanup_holds == (fatal_owner, telemetry_owner)
 
 
 @pytest.mark.parametrize(
@@ -1255,6 +1318,39 @@ def test_retained_cleanup_note_survives_later_hijack_early_exit():
     assert report.stage == "hijack"
     assert report.notes and "read-only telemetry mapping retained" in report.notes[0]
     assert len(report.cleanup_holds) == 1
+
+
+def test_prior_telemetry_cleanup_hold_survives_later_fatal_abort():
+    from tools.ac_harness.custom_ai import ControllerTelemetryCloseError
+
+    class TelemetryOnlyFailure(FakeController):
+        def close(self) -> None:
+            raise ControllerTelemetryCloseError("CarControls already released")
+
+    telemetry_owner = TelemetryOnlyFailure()
+    fatal_owner = FailingCloseController()
+    controllers = iter((telemetry_owner, fatal_owner))
+    loaded_combos = iter(
+        (
+            ("spa", "ks_porsche_911_gt3_r_2016"),
+            ("imola", "ks_porsche_911_gt3_r_2016"),
+        )
+    )
+
+    with pytest.raises(ControllerCleanupAbort) as caught:
+        asyncio.run(
+            run_auto_drive(
+                _cfg(max_launches=2),
+                launch=_ok_launch,
+                hijack=lambda _config: next(controllers),
+                drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+                tap=_tap_returning(CONTINUOUS),
+                verify_track=lambda _config: next(loaded_combos),
+            )
+        )
+
+    assert caught.value.controller is fatal_owner
+    assert caught.value.cleanup_holds == (fatal_owner, telemetry_owner)
 
 
 def test_persistent_close_failure_without_safety_proof_aborts_and_retains_controller():
