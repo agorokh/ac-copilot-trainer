@@ -111,7 +111,7 @@ CSP-init retry and stable-session handoff through the canonical Game Point launc
 hardening now covers streaming verdict semantics, LIVE/not-in-pit readiness, cross-worktree rig
 ownership, approved preset storage, Content Manager failure handling, finite CLI inputs, process
 tree cleanup, source/frozen Game Point dispatch, finite lock timing, one-shot Car0 failure, and
-Stable-AC-specific release signaling (`2138d30`). The final review rounds also validate the
+Stable-AC-specific release signaling (`86804b0`). The final review rounds also validate the
 configured Content Manager path before process shortcuts, require one real AC teardown attempt
 before pre-stability release can escape a subsequent unsafe hold, reject known unrelated release
 targets, and preserve recovery for unknown/legacy lock metadata. Bounded waits now clamp to their
@@ -134,8 +134,10 @@ non-append descriptor and padded valid-record replacement before truncation; acq
 failures unlock and close before propagating. The one-shot CLI/GUI accepts a spawned or already
 stabilizing child without confusing that command result with aggregate readiness. Owner records
 are bounded to 4 KiB, oversized corrupt metadata is replaced without proportional
-allocation, and AC-session recovery copy takes priority over a stopped sidecar prompt. Repository
-parity is `3188 passed`, `77 skipped`, `86.72%` coverage.
+allocation, and AC-session recovery copy takes priority over a stopped sidecar prompt. Pre-sighting
+process absence stays false until `acs.exe` is actually observed; two-sample disappearance
+confirmation applies only after that first sighting, while enumeration errors remain fail-closed.
+Repository parity is `3189 passed`, `77 skipped`, `86.72%` coverage.
 Required checks are green, all GraphQL threads are resolved, and the enforce resolve gate is
 clean. The PR remains open and unmerged; Windows-rig proof is the remaining separate state. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].
