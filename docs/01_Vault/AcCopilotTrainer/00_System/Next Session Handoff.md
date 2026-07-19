@@ -111,7 +111,7 @@ CSP-init retry and stable-session handoff through the canonical Game Point launc
 hardening now covers streaming verdict semantics, LIVE/not-in-pit readiness, cross-worktree rig
 ownership, approved preset storage, Content Manager failure handling, finite CLI inputs, process
 tree cleanup, source/frozen Game Point dispatch, finite lock timing, one-shot Car0 failure, and
-Stable-AC-specific release signaling (`fc37f82`). The final review rounds also validate the
+Stable-AC-specific release signaling (`8c9d22d`). The final review rounds also validate the
 configured Content Manager path before process shortcuts, require one real AC teardown attempt
 before pre-stability release can escape a subsequent unsafe hold, reject known unrelated release
 targets, and preserve recovery for unknown/legacy lock metadata. Bounded waits now clamp to their
@@ -187,12 +187,14 @@ Readable sections now reject an already-unmapped null view with `SharedMemoryUna
 the writable section's partial-close safety guard. The final post-safety close catches all
 `BaseException` failures and enters the retained-owner abort path. That abort carries its fatal
 controller plus every earlier read-only owner across launch attempts, sim-death retries, and the
-rig CLI layer, keeping all native mappings reachable until atomic process teardown. Fatal cleanup suppresses release before
+rig CLI layer, keeping all native mappings reachable until atomic process teardown. A
+safety-confirmed hijack cleanup now cold-restarts Content Manager and consumes the remaining launch
+budget while preserving its diagnostic note. Fatal cleanup suppresses release before
 taskkill, backs off, and exits after a bounded hold if enumeration stays
 unknown. Content Manager unknown state fails closed, and a newly started CM must survive the settle
 interval before the launch URL is sent. The already-present `resilient_layout` template key is
-pinned by an explicit settings-file test. Repository parity is `3225 passed`, `77 skipped`,
-`86.76%` coverage.
+pinned by an explicit settings-file test. Repository parity is `3226 passed`, `77 skipped`,
+`86.77%` coverage.
 The updated head still requires its mandatory reviewer cooldown and exhaustive GitHub current-head
 audit. The PR remains open and unmerged; Windows-rig proof is the remaining separate state. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].

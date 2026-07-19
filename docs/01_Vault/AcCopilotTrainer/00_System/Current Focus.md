@@ -45,7 +45,7 @@ relates_to:
 **Review-resolved (2026-07-18):** PR
 [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
 operator session launcher through Game Point, with a machine-wide lock held across the live session.
-Final code commit `fc37f82` adds finite timing enforcement at the shared rig-lock boundary,
+Final code commit `8c9d22d` adds finite timing enforcement at the shared rig-lock boundary,
 immediate failed-Car0 attempt termination, mandatory AC teardown before a pre-stability release can
 escape the unsafe-hold loop, early configured-CM path validation, and durable Stable AC ownership
 metadata. **Release AC** refuses known unrelated harness owners while preserving the recovery
@@ -124,11 +124,13 @@ writable guard by rejecting an already-unmapped null view with `SharedMemoryUnav
 The final post-safety native close converts every `BaseException` into the fail-closed cleanup
 abort. That abort retains the fatal controller plus all earlier telemetry-only owners, including
 owners accumulated across sim-death retries and rig CLI hijack probes, until process teardown.
+A hijack cleanup that confirms AC absent and releases its native mapping consumes the remaining
+launch budget instead of ending the run; its cleanup detail stays in the final report.
 Fatal cleanup ignores the release sentinel before taskkill, sleeps between retries, and has a
 bounded hold before atomic process exit. Content Manager must be positively enumerated and survive
 its startup settle before the Quick Drive URL is issued. The existing `resilient_layout` settings
 template key now has an explicit regression assertion.
-Local repository parity is green at `3225 passed`, `77 skipped`, and `86.76%` coverage. The updated
+Local repository parity is green at `3226 passed`, `77 skipped`, and `86.77%` coverage. The updated
 head still requires its mandatory reviewer cooldown and exhaustive GitHub current-head audit. The
 PR remains open and unmerged; Windows-rig verification is still pending. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].

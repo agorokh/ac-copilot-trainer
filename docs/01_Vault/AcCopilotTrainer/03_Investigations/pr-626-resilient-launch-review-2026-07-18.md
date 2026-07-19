@@ -18,7 +18,7 @@ source_path: "AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-
 PR [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) implements issue
 [#624](https://github.com/agorokh/ac-copilot-trainer/issues/624): bounded retries around the
 stochastic CSP initialization livelock, followed by a stability proof and a live operator handoff.
-Review resolution's final code commit is `fc37f82`; the following vault SAVE records its handoff.
+Review resolution's final code commit is `8c9d22d`; the following vault SAVE records its handoff.
 Local repository parity is green; the updated head still requires its mandatory reviewer cooldown
 and exhaustive GitHub current-head audit. The PR remains open and unmerged; Windows-rig proof
 remains a separate future state.
@@ -198,10 +198,13 @@ remains a separate future state.
 - `ControllerCleanupAbort` now retains the fatal controller and every earlier telemetry-only owner.
   Those non-serialized holds transfer across launch attempts, sim-death retries, and the rig CLI
   probe layer until atomic process teardown.
+- A hijack cleanup that confirms AC absent and completes its final local close now cold-restarts
+  Content Manager and uses the remaining bounded launch budget; the cleanup detail survives as a
+  final report note.
 
 ## Verification contract
 
-Final code commit `fc37f82` passed focused launcher/theme tests and repository-venv `make ci-fast`
-(`3225 passed`, `77 skipped`, `86.76%` coverage). The mandatory reviewer cooldown and exhaustive
+Final code commit `8c9d22d` passed focused launcher/theme tests and repository-venv `make ci-fast`
+(`3226 passed`, `77 skipped`, `86.77%` coverage). The mandatory reviewer cooldown and exhaustive
 current-head re-audit follow this vault snapshot. `/resolve-pr` does not merge the PR or substitute
 macOS tests for the pending Windows-rig proof.
