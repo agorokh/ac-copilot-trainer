@@ -20,6 +20,7 @@ from tools.ac_harness.resilient_launch import (
     _ensure_cm_running,
     _hold_rig_until_acs_gone,
     _hold_stable_session,
+    _make_process_liveness_probe,
     _make_rig_safe,
     _non_negative_float,
     _OperatorRelease,
@@ -322,6 +323,34 @@ def test_sample_timestamp_precedes_blocking_readiness_work(monkeypatch):
     assert sample.acs_alive is True
     assert observations == [("alive", 10.0), ("state", 10.0)]
     assert now == 15.0
+
+
+def test_process_liveness_probe_fails_closed_and_confirms_absence() -> None:
+    observations = iter(
+        [
+            OSError("snapshot failed"),
+            (),
+            (),
+            (42,),
+            (),
+            (),
+        ]
+    )
+
+    def process_ids(_image: str) -> tuple[int, ...]:
+        observation = next(observations)
+        if isinstance(observation, OSError):
+            raise observation
+        return observation
+
+    alive = _make_process_liveness_probe("acs.exe", process_ids=process_ids)
+
+    assert [alive() for _ in range(6)] == [True, True, False, True, True, False]
+
+
+def test_process_liveness_probe_rejects_invalid_confirmation_count() -> None:
+    with pytest.raises(ValueError, match="absent_confirmations"):
+        _make_process_liveness_probe("acs.exe", absent_confirmations=0)
 
 
 def test_streaming_watch_waits_through_short_hitch(monkeypatch):

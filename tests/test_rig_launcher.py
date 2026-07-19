@@ -231,6 +231,33 @@ def test_resilient_command_resolves_relative_cm_path_from_launcher_root(tmp_path
     assert command[cm_flag + 1] == str((tmp_path / "portable/Content Manager.exe").resolve())
 
 
+def test_invalid_relative_cm_path_blocks_resilient_start(tmp_path: Path) -> None:
+    spawned: list[bool] = []
+    cfg = GamePointConfig(
+        resilient_car="ks_porsche_911_gt3_r_2016",
+        resilient_track="spa",
+        resilient_cm_exe="../outside/Content Manager.exe",
+        paths=LauncherPaths(tmp_path),
+    )
+    sup = GamePointSupervisor(
+        cfg,
+        environ={},
+        popen=lambda *_args, **_kwargs: spawned.append(True),
+        python_executable="python",
+    )
+
+    result = sup.start_resilient_session()
+    status = sup._resilient_process_status()
+
+    assert result.ok is False
+    assert result.state == "unconfigured"
+    assert "resilient_cm_exe" in result.detail
+    assert status == result
+    assert spawned == []
+    with pytest.raises(ValueError, match="resilient_cm_exe"):
+        sup.resilient_command()
+
+
 def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> None:
     calls: list[tuple[list[str], dict[str, Any]]] = []
     proc = _Proc()

@@ -359,6 +359,33 @@ def test_running_process_ids_treats_no_match_and_tasklist_failure_as_empty(monke
     assert running_process_ids("acs.exe", failed) == frozenset()
 
 
+def test_running_process_ids_strict_mode_surfaces_enumeration_failure(monkeypatch):
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+
+    def failed(cmd, **kwargs):  # noqa: ANN001
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="access denied")
+
+    with pytest.raises(OSError, match="access denied"):
+        running_process_ids("acs.exe", failed, strict=True)
+
+
+def test_running_process_ids_native_failure_is_only_suppressed_in_best_effort_mode(monkeypatch):
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+
+    def fail_snapshot(_name: str) -> frozenset[int]:
+        raise OSError("snapshot failed")
+
+    monkeypatch.setattr(
+        entry_launcher,
+        "_toolhelp_process_ids",
+        fail_snapshot,
+    )
+
+    assert running_process_ids("acs.exe") == frozenset()
+    with pytest.raises(OSError, match="snapshot failed"):
+        running_process_ids("acs.exe", strict=True)
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Toolhelp32 is Windows-only")
 def test_running_process_ids_native_snapshot_finds_current_python():
     assert os.getpid() in running_process_ids(Path(sys.executable).name)

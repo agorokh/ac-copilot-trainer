@@ -362,8 +362,11 @@ class GamePointSupervisor:
                 self.config.resilient_cm_exe,
                 base=self._launcher_path_base(),
             )
-            if cm_exe:
-                args.extend(["--cm-exe", cm_exe])
+            if cm_exe is None:
+                raise ValueError(
+                    "resilient_cm_exe must be absolute or stay within the Game Point folder"
+                )
+            args.extend(["--cm-exe", cm_exe])
         if self.config.rig_lock_path is not None:
             args.extend(["--rig-lock-path", str(self.config.rig_lock_path)])
         args.extend(["--rig-release-path", str(self._rig_release_path())])
@@ -510,6 +513,20 @@ class GamePointSupervisor:
                 "unconfigured",
                 f"set {', '.join(missing)} in settings.json or the matching environment variables",
             )
+        if (
+            self.config.resilient_cm_exe
+            and _resolve_launcher_path(
+                self.config.resilient_cm_exe,
+                base=self._launcher_path_base(),
+            )
+            is None
+        ):
+            return ProbeResult(
+                "ac_session",
+                False,
+                "unconfigured",
+                "resilient_cm_exe must be absolute or stay within the Game Point folder",
+            )
         with self._proc_lock:
             if self._resilient_process is not None and self._resilient_process.poll() is None:
                 return ProbeResult(
@@ -626,6 +643,20 @@ class GamePointSupervisor:
                     True,
                     "unconfigured",
                     "set resilient_car and resilient_track in settings",
+                )
+            if (
+                self.config.resilient_cm_exe
+                and _resolve_launcher_path(
+                    self.config.resilient_cm_exe,
+                    base=self._launcher_path_base(),
+                )
+                is None
+            ):
+                return ProbeResult(
+                    "ac_session",
+                    False,
+                    "unconfigured",
+                    "resilient_cm_exe must be absolute or stay within the Game Point folder",
                 )
             return ProbeResult(
                 "ac_session",

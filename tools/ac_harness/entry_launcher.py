@@ -228,6 +228,8 @@ def _taskkill(
 def running_process_ids(
     process_name: str,
     runner: Callable[..., subprocess.CompletedProcess] | None = None,
+    *,
+    strict: bool = False,
 ) -> frozenset[int]:
     """Return PIDs for a Windows image name without adding a runtime dependency.
 
@@ -239,7 +241,12 @@ def running_process_ids(
     if sys.platform != "win32":
         return frozenset()
     if runner is None:
-        return _toolhelp_process_ids(process_name)
+        try:
+            return _toolhelp_process_ids(process_name)
+        except OSError:
+            if strict:
+                raise
+            return frozenset()
     result = runner(
         ["tasklist", "/FI", f"IMAGENAME eq {process_name}", "/FO", "CSV", "/NH"],
         check=False,
@@ -247,6 +254,9 @@ def running_process_ids(
         text=True,
     )
     if result.returncode != 0:
+        if strict:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise OSError(f"tasklist exited {result.returncode}: {detail or 'unknown error'}")
         return frozenset()
     found: set[int] = set()
     for row in csv.reader(io.StringIO(result.stdout or "")):
@@ -291,16 +301,27 @@ def _toolhelp_process_ids(process_name: str) -> frozenset[int]:
 
     snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
     if snapshot == wintypes.HANDLE(-1).value:
-        return frozenset()
+        error = ctypes.get_last_error()
+        raise OSError(error, "CreateToolhelp32Snapshot failed")
     found: set[int] = set()
     try:
         entry = ProcessEntry32W()
         entry.dwSize = ctypes.sizeof(entry)
+        ctypes.set_last_error(0)
         ok = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
-        while ok:
+        if not ok:
+            error = ctypes.get_last_error()
+            raise OSError(error, "Process32FirstW failed")
+        while True:
             if entry.szExeFile.casefold() == process_name.casefold():
                 found.add(int(entry.th32ProcessID))
+            ctypes.set_last_error(0)
             ok = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+            if not ok:
+                error = ctypes.get_last_error()
+                if error not in (0, 18):  # ERROR_NO_MORE_FILES is normal enumeration completion.
+                    raise OSError(error, "Process32NextW failed")
+                break
     finally:
         kernel32.CloseHandle(snapshot)
     return frozenset(found)

@@ -287,7 +287,47 @@ def _sample_now(
 def _process_running(image: str) -> bool:  # pragma: no cover - rig-only
     from tools.ac_harness.entry_launcher import running_process_ids
 
-    return bool(running_process_ids(image))
+    try:
+        return bool(running_process_ids(image, strict=True))
+    except OSError as exc:
+        _log(f"WARNING: process enumeration failed for {image}; treating it as running: {exc}")
+        return True
+
+
+def _make_process_liveness_probe(
+    image: str,
+    *,
+    absent_confirmations: int = 2,
+    process_ids: Callable[[str], Sequence[int]] | None = None,
+) -> Callable[[], bool]:
+    """Return a fail-closed process probe with consecutive absence confirmation."""
+    if absent_confirmations < 1:
+        raise ValueError("absent_confirmations must be >= 1")
+    list_process_ids = process_ids
+    if list_process_ids is None:
+        from tools.ac_harness.entry_launcher import running_process_ids
+
+        def strict_process_ids(name: str) -> Sequence[int]:
+            return running_process_ids(name, strict=True)
+
+        list_process_ids = strict_process_ids
+    absent_run = 0
+
+    def is_alive() -> bool:
+        nonlocal absent_run
+        try:
+            found = list_process_ids(image)
+        except OSError as exc:
+            absent_run = 0
+            _log(f"WARNING: process enumeration failed for {image}; retaining ownership: {exc}")
+            return True
+        if found:
+            absent_run = 0
+            return True
+        absent_run += 1
+        return absent_run < absent_confirmations
+
+    return is_alive
 
 
 def _ensure_cm_running(  # pragma: no cover - rig-only
@@ -628,7 +668,6 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     from tools.ac_harness.entry_launcher import (
         ContentManagerActuator,
         EntryLaunchUnsupported,
-        running_process_ids,
     )
     from tools.ac_harness.preset_utils import build_practice_preset
     from tools.ac_harness.rig_lock import (
@@ -654,8 +693,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         finally:
             reader.close()
 
-    def acs_alive() -> bool:
-        return bool(running_process_ids("acs.exe"))
+    acs_alive = _make_process_liveness_probe("acs.exe")
 
     lock_path = args.rig_lock_path or default_rig_session_lock_path()
     release_path = args.rig_release_path or (lock_path.parent / "rig-session.release")
