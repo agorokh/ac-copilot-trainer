@@ -124,17 +124,46 @@ def test_windows_status_probe_never_acquires_the_exclusive_byte(
 
 def test_contended_lock_without_metadata_returns_unknown_owner(tmp_path: Path) -> None:
     path = tmp_path / "rig-session.lock"
-    lock = RigSessionLock(path, owner=_owner(os.getpid()))
-    lock.acquire()
-    try:
-        assert lock._file is not None
-        lock._file.seek(1)
-        lock._file.truncate()
-        lock._file.flush()
+    ready = tmp_path / "ready"
+    release = tmp_path / "release"
+    script = """
+import os
+import sys
+import time
+from pathlib import Path
+from tools.ac_harness.rig_lock import RigSessionLock, RigSessionOwner
 
+path, ready, release = map(Path, sys.argv[1:])
+lock = RigSessionLock(path, owner=RigSessionOwner(pid=os.getpid(), cwd='peer-worktree'))
+lock.acquire()
+assert lock._file is not None
+lock._file.seek(1)
+lock._file.truncate()
+lock._file.flush()
+ready.touch()
+try:
+    while not release.exists():
+        time.sleep(0.01)
+finally:
+    lock.release()
+"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script, str(path), str(ready), str(release)], env=env
+    )
+    try:
+        for _ in range(500):
+            if ready.exists():
+                break
+            if proc.poll() is not None:
+                raise AssertionError(f"lock-holder exited early: {proc.returncode}")
+            time.sleep(0.01)
+        assert ready.exists()
         assert read_rig_session_owner(path) == {"cwd": "unknown"}
     finally:
-        lock.release()
+        release.touch()
+        proc.wait(timeout=5)
 
 
 def test_status_probe_reports_unknown_when_lock_file_cannot_be_opened(

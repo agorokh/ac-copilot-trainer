@@ -219,6 +219,18 @@ def test_resilient_command_routes_source_and_frozen_launcher(tmp_path: Path) -> 
     ]
 
 
+def test_resilient_command_resolves_relative_cm_path_from_launcher_root(tmp_path: Path) -> None:
+    cfg = GamePointConfig(
+        resilient_cm_exe="portable/Content Manager.exe",
+        paths=LauncherPaths(tmp_path),
+    )
+
+    command = GamePointSupervisor(cfg, environ={}, python_executable="python").resilient_command()
+
+    cm_flag = command.index("--cm-exe")
+    assert command[cm_flag + 1] == str((tmp_path / "portable/Content Manager.exe").resolve())
+
+
 def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> None:
     calls: list[tuple[list[str], dict[str, Any]]] = []
     proc = _Proc()

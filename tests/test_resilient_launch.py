@@ -299,20 +299,28 @@ def test_streaming_watch_survives_go_live_timeout_until_stability(monkeypatch):
 
 def test_sample_timestamp_precedes_blocking_readiness_work(monkeypatch):
     now = 10.0
+    observations: list[tuple[str, float]] = []
 
     def monotonic() -> float:
         return now
 
+    def acs_alive() -> bool:
+        observations.append(("alive", now))
+        return True
+
     def read_state() -> tuple[int, bool, bool]:
         nonlocal now
+        observations.append(("state", now))
         now += 5.0
         return 101, True, True
 
     monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
 
-    sample = _sample_now(read_state, lambda: True)
+    sample = _sample_now(read_state, acs_alive)
 
     assert sample.t == 10.0
+    assert sample.acs_alive is True
+    assert observations == [("alive", 10.0), ("state", 10.0)]
     assert now == 15.0
 
 
@@ -356,6 +364,24 @@ def test_wait_process_exit_rejects_lingering_killed_process(monkeypatch):
     monkeypatch.setattr("tools.ac_harness.resilient_launch._process_running", lambda _image: True)
 
     assert _wait_process_exit("Content Manager.exe", timeout=1.0, poll=0.25) is False
+    assert now == 1.0
+
+
+def test_wait_process_exit_clamps_sleep_to_deadline(monkeypatch):
+    now = 0.0
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch._process_running", lambda _image: True)
+
+    assert _wait_process_exit("Content Manager.exe", timeout=1.0, poll=0.6) is False
     assert now == 1.0
 
 
@@ -428,6 +454,7 @@ def test_ensure_acs_gone_returns_false_when_process_survives(monkeypatch):
 
 def test_cleanup_failure_holds_ownership_until_acs_is_gone(monkeypatch):
     cleanup_results = iter([False, False, True])
+    alive_results = iter([True, True, True, False])
     cleanup_calls: list[int] = []
     sleeps: list[float] = []
 
@@ -439,10 +466,37 @@ def test_cleanup_failure_holds_ownership_until_acs_is_gone(monkeypatch):
         "tools.ac_harness.resilient_launch.time.sleep", lambda seconds: sleeps.append(seconds)
     )
 
-    _hold_rig_until_acs_gone(lambda: True, retry_cleanup=retry_cleanup, poll=0.25)
+    _hold_rig_until_acs_gone(
+        lambda: next(alive_results),
+        retry_cleanup=retry_cleanup,
+        poll=0.25,
+    )
 
     assert len(cleanup_calls) == 3
     assert sleeps == [0.25, 0.25]
+
+
+def test_cleanup_hold_rechecks_liveness_after_reported_success(monkeypatch):
+    alive_results = iter([True, True, True, False])
+    cleanup_calls: list[int] = []
+    sleeps: list[float] = []
+
+    def retry_cleanup(_acs_alive) -> bool:
+        cleanup_calls.append(1)
+        return True
+
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch.time.sleep", lambda seconds: sleeps.append(seconds)
+    )
+
+    _hold_rig_until_acs_gone(
+        lambda: next(alive_results),
+        retry_cleanup=retry_cleanup,
+        poll=0.25,
+    )
+
+    assert len(cleanup_calls) == 2
+    assert sleeps == [0.25]
 
 
 def test_cleanup_hold_allows_only_explicit_operator_release(monkeypatch):

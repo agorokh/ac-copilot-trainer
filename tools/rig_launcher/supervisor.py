@@ -18,7 +18,7 @@ import urllib.request
 from collections.abc import Callable, Iterable, Mapping, MutableMapping
 from dataclasses import dataclass, field, replace
 from importlib.util import find_spec
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from tools.rig_launcher.build_info import BuildInfo, resolve_build_info, write_runtime_hook
@@ -77,6 +77,10 @@ def _resolve_launcher_path(value: str | None, *, base: Path) -> str | None:
         return None
     root = base.expanduser().resolve(strict=False)
     path = Path(text).expanduser()
+    # Preserve an absolute Windows drive/UNC path when tests or configuration are inspected from
+    # a non-Windows host; on the rig, Path already recognizes the same value as absolute.
+    if not path.is_absolute() and PureWindowsPath(text).is_absolute():
+        return str(PureWindowsPath(text))
     if not path.is_absolute():
         path = (root / path).resolve(strict=False)
         try:
@@ -354,7 +358,12 @@ class GamePointSupervisor:
         if self.config.resilient_layout:
             args.extend(["--layout", self.config.resilient_layout])
         if self.config.resilient_cm_exe:
-            args.extend(["--cm-exe", self.config.resilient_cm_exe])
+            cm_exe = _resolve_launcher_path(
+                self.config.resilient_cm_exe,
+                base=self._launcher_path_base(),
+            )
+            if cm_exe:
+                args.extend(["--cm-exe", cm_exe])
         if self.config.rig_lock_path is not None:
             args.extend(["--rig-lock-path", str(self.config.rig_lock_path)])
         args.extend(["--rig-release-path", str(self._rig_release_path())])

@@ -264,9 +264,11 @@ def _sample_now(
     ],
     acs_alive: Callable[[], bool],
 ) -> Sample:  # pragma: no cover - rig-only
-    # Stamp the observation before readiness work: the Car0 handshake can block for up to five
-    # seconds, but a session that became ready inside the go-live budget must not be dated late.
+    # Stamp liveness together with the timestamp before readiness work: the Car0 handshake can
+    # block for up to five seconds, but the classifier must not combine a pre-probe timestamp with
+    # post-probe process state or date an in-budget readiness observation late.
     observed_at = time.monotonic()
+    observed_alive = acs_alive()
     state = read_state()
     if len(state) == 2:
         packet, entry_ready = state
@@ -276,7 +278,7 @@ def _sample_now(
     return Sample(
         t=observed_at,
         gfx_packet=packet,
-        acs_alive=acs_alive(),
+        acs_alive=observed_alive,
         entry_ready=entry_ready,
         drivable=drivable,
     )
@@ -338,7 +340,10 @@ def _ensure_cm_running(  # pragma: no cover - rig-only
                     break
                 time.sleep(min(poll, remaining))
             return True
-        time.sleep(poll)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(poll, remaining))
     _log("WARNING: Content Manager did not start; the launch URL will not be honored")
     return False
 
@@ -357,7 +362,10 @@ def _wait_process_exit(  # pragma: no cover - rig-only
             raise _OperatorRelease
         if not _process_running(image):
             return True
-        time.sleep(poll)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(poll, remaining))
     if release_requested is not None and release_requested():
         raise _OperatorRelease
     return not _process_running(image)
@@ -395,7 +403,10 @@ def _ensure_acs_gone(  # pragma: no cover - rig-only
             raise _OperatorRelease
         if not acs_alive():
             return True
-        time.sleep(poll)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(poll, remaining))
     if not acs_alive():
         return True
     _log("ERROR: acs.exe still present after kill+wait; relaunch aborted")
@@ -430,7 +441,7 @@ def _hold_rig_until_acs_gone(  # pragma: no cover - rig-only
             _log("Game Point explicitly released unsafe rig ownership; acs.exe may still be alive")
             return
         try:
-            if cleanup():
+            if cleanup() and not acs_alive():
                 return
             time.sleep(poll)
         except _OperatorRelease:
