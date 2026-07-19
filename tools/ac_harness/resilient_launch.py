@@ -1070,7 +1070,17 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 if release_requested():
                     raise _OperatorRelease
 
-                alive = acs_present()
+                try:
+                    alive = acs_present()
+                except OSError as exc:
+                    # A transient process-enumeration failure is UNKNOWN liveness, not death.
+                    # Report the sample as unobserved and leave the ownership gate untouched:
+                    # feeding it acs_alive=False would REVOKE proven ownership over a hiccup and
+                    # re-arm the Car0 handshake mid-session. ``classify`` already treats a
+                    # None packet / None readiness as "no observation" rather than as evidence.
+                    _log(f"WARNING: acs.exe enumeration failed; sample unobserved: {exc}")
+                    return None, None, None
+
                 packet, entry_ready = read_state() if alive else (None, None)
                 if not ownership.observe(acs_alive=alive, packet=packet):
                     return packet, None, None
