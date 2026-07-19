@@ -45,7 +45,7 @@ relates_to:
 **Review-resolved (2026-07-18):** PR
 [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
 operator session launcher through Game Point, with a machine-wide lock held across the live session.
-Final code commit `4a26de4` adds finite timing enforcement at the shared rig-lock boundary,
+Final code commit `07eb203` adds finite timing enforcement at the shared rig-lock boundary,
 immediate failed-Car0 attempt termination, mandatory AC teardown before a pre-stability release can
 escape the unsafe-hold loop, early configured-CM path validation, and durable Stable AC ownership
 metadata. **Release AC** refuses known unrelated harness owners while preserving the recovery
@@ -73,9 +73,11 @@ sidecar-down prompt. Process absence before the first real `acs.exe` sighting re
 enumeration uncertainty and post-sighting disappearance retain fail-closed/confirmed semantics;
 enumeration errors before the first real sighting no longer synthesize a false process-exit edge.
 Controller teardown retries the retained native resources, then brakes, terminates, and confirms
-`acs.exe` absent before a cleanup report may drop ownership; an unconfirmed safety shutdown aborts
-while retaining the controller. A track/car mismatch remains the primary launch error when its
-cleanup also fails.
+`acs.exe` absent in two consecutive strict snapshots before a cleanup report may drop ownership.
+An unconfirmed safety shutdown or failed post-safety close aborts while retaining the controller
+and detaching the rig-lock ExitStack; the CLI uses immediate OS process exit so the mapping and
+machine lock close together. A track/car mismatch remains the primary launch error when its cleanup
+also fails.
 Required checks are green, all review threads are resolved, and the enforce resolve gate is clean.
 The PR remains open and unmerged; Windows-rig verification is still pending. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].

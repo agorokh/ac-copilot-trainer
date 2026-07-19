@@ -111,7 +111,7 @@ CSP-init retry and stable-session handoff through the canonical Game Point launc
 hardening now covers streaming verdict semantics, LIVE/not-in-pit readiness, cross-worktree rig
 ownership, approved preset storage, Content Manager failure handling, finite CLI inputs, process
 tree cleanup, source/frozen Game Point dispatch, finite lock timing, one-shot Car0 failure, and
-Stable-AC-specific release signaling (`4a26de4`). The final review rounds also validate the
+Stable-AC-specific release signaling (`07eb203`). The final review rounds also validate the
 configured Content Manager path before process shortcuts, require one real AC teardown attempt
 before pre-stability release can escape a subsequent unsafe hold, reject known unrelated release
 targets, and preserve recovery for unknown/legacy lock metadata. Bounded waits now clamp to their
@@ -140,9 +140,11 @@ confirmation applies only after that first sighting, while enumeration errors re
 An enumeration error before the first sighting also stays false instead of inventing an early
 process-exit transition. Native controller teardown gets bounded retries; a persistent failure
 brakes the car, terminates AC, and confirms process absence before returning a cleanup report.
-Without that proof the harness aborts while retaining the controller, and a simultaneous combo
-mismatch stays the primary launch error with teardown failure recorded as a note.
-Repository parity is `3194 passed`, `77 skipped`, `86.72%` coverage.
+Confirmation requires two consecutive strict empty process snapshots. Without that proof—or when
+the post-safety native close still fails—the harness aborts while retaining both the controller and
+the detached rig-lock cleanup stack; immediate OS process exit closes the mapping and lock
+together. A simultaneous combo mismatch stays the primary launch error with teardown failure
+recorded as a note. Repository parity is `3195 passed`, `77 skipped`, `86.72%` coverage.
 Required checks are green, all GraphQL threads are resolved, and the enforce resolve gate is
 clean. The PR remains open and unmerged; Windows-rig proof is the remaining separate state. Detail:
 [[pr-626-resilient-launch-review-2026-07-18]].
