@@ -1126,17 +1126,27 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 try:
                     alive = acs_present()
                 except OSError as exc:
-                    # A transient process-enumeration failure is UNKNOWN liveness, not death.
-                    # Report the sample as unobserved and leave the readiness state untouched:
-                    # feeding it acs_alive=False would REVOKE proven ownership over a hiccup and
-                    # re-arm the Car0 handshake mid-session. ``classify`` already treats a
-                    # None packet / None readiness as "no observation" rather than as evidence.
                     _log(f"WARNING: acs.exe enumeration failed; sample unobserved: {exc}")
+                    alive = False
+
+                if not alive:
+                    # ``acs_present`` is an UNDEBOUNCED strict probe, so this may be a single
+                    # false-negative snapshot, not a real exit. Two things follow:
+                    #  - Do NOT read shared memory. If the process really is gone, its section is a
+                    #    corpse; suppressing the read is what keeps a corpse from being trusted.
+                    #  - Do NOT revoke ownership on this one miss. Revoking here would clear the
+                    #    Car0 verdict and re-arm the blocking handshake on a healthy session over a
+                    #    momentary enumeration blip. A REAL exit is still caught: ``_sample_now``
+                    #    stamps ``Sample.acs_alive`` from the DEBOUNCED probe, so ``classify`` ends
+                    #    the attempt after its absence confirmations. A fast restart that never
+                    #    trips the debounce is caught instead by packet regression in
+                    #    ``SectionOwnershipGate`` (the new low stream revokes trust). So ownership
+                    #    is revoked by the two debounced/structural signals, never by one raw miss.
                     return None, None, None
 
-                packet, entry_ready = read_state() if alive else (None, None)
+                packet, entry_ready = read_state()
                 ready, drivable = readiness.observe(
-                    acs_alive=alive, packet=packet, entry_ready=entry_ready
+                    acs_alive=True, packet=packet, entry_ready=entry_ready
                 )
                 return packet, ready, drivable
 
