@@ -21,6 +21,7 @@ from tools.ac_harness.auto_drive import (
     AppInstallProvenance,
     AutoDriveConfig,
     AutoDriveReport,
+    ControllerCleanupError,
     DriveStats,
     ProgressWatchdog,
     SimProcessIdentityMonitor,
@@ -108,6 +109,12 @@ class FakeController:
 
     def close(self) -> None:
         self.closed = True
+
+
+class FailingCloseController(FakeController):
+    def close(self) -> None:
+        self.closed = True
+        raise OSError("native close failed")
 
 
 class _Clock:
@@ -284,6 +291,46 @@ def test_happy_path_window_mode_passes_and_tears_down():
     # Orchestrator must always stop the drive and release the controller.
     assert record["stop_set"] is True
     assert ctrl.closed is True
+
+
+def test_final_controller_close_failure_is_structured_cleanup_failure():
+    ctrl = FailingCloseController()
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: ctrl,
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+
+    assert report.ok is False
+    assert report.stage == "cleanup"
+    assert report.error is not None and "final controller cleanup" in report.error
+    assert ctrl.closed is True
+
+
+def test_controller_close_failure_preserves_prior_pipeline_failure():
+    ctrl = FailingCloseController()
+
+    async def broken_tap(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise RuntimeError("tap failed first")
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: ctrl,
+            drive=_drive_returning(DriveStats(drove=True), {}),
+            tap=broken_tap,
+        )
+    )
+
+    assert report.stage == "pipeline"
+    assert report.error is not None and "tap failed first" in report.error
+    assert any("final controller cleanup" in note for note in report.notes)
 
 
 def test_pipeline_failure_when_continuous_topic_missing():
@@ -944,6 +991,25 @@ def test_run_auto_drive_fails_fast_on_track_mismatch():
     assert report.stage == "launch"
     assert "spa" in report.error and "magione" in report.error
     assert ctrl.closed is True  # controller released before bailing
+
+
+def test_track_mismatch_close_failure_reports_cleanup_and_preserves_mismatch():
+    ctrl = FailingCloseController()
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", skip_launch=True),
+            launch=_ok_launch,
+            hijack=lambda c: ctrl,
+            drive=lambda controller, config, stop: pytest.fail("must not drive the wrong track"),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda c: ("spa", "ks_porsche_911_gt3_r_2016"),
+        )
+    )
+
+    assert report.stage == "cleanup"
+    assert report.error is not None and "native close failed" in report.error
+    assert report.notes and "loaded track" in report.notes[0]
 
 
 def test_handshake_outcome_gate_preserves_any_prior_failure():
@@ -1830,6 +1896,29 @@ def test_rig_hijack_fast_fails_to_none_and_bounds_dead_time(monkeypatch):
     # Bounded dead-wait: ~3 probes * 0.5 s (+ up to one 0.1 s poll each), NOT a single long
     # timeout. The point is the bound, not the exact figure — this is what kills the 25 s dead-wait.
     assert clock.now <= 3 * (0.5 + 0.1) + 1e-6
+
+
+def test_rig_hijack_normalizes_probe_close_failure(monkeypatch):
+    import tools.ac_harness.auto_drive as ad
+
+    clock = _Clock()
+
+    class FailingProbe:
+        def __init__(self, index: int = 0) -> None:
+            self.index = index
+
+        def read_car_data(self):  # noqa: ANN201
+            return None
+
+        def close(self) -> None:
+            raise OSError("unmap failed")
+
+    monkeypatch.setattr("tools.ac_harness.custom_ai.CustomAIController", FailingProbe)
+    monkeypatch.setattr(ad.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(ad.time, "sleep", clock.sleep)
+
+    with pytest.raises(ControllerCleanupError, match="hijack probe 1/1 cleanup"):
+        rig_hijack(_cfg(hijack_attempts=1, hijack_probe_seconds=0.5))
 
 
 def test_parse_setup_fuel_reads_value_and_tolerates_missing():

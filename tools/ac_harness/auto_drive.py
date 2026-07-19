@@ -79,6 +79,7 @@ from tools.ac_harness.sequence_probe import (
     intervention_summary,
     tap_frames,
 )
+from tools.ac_harness.shared_memory import SharedMemoryUnavailable
 from tools.ac_harness.window_utils import minimize_foreground_window
 from tools.ai_sidecar.external_protocol import CLIENT_CLASS_OBSERVER
 
@@ -405,7 +406,7 @@ class AutoDriveReport:
     """Structured result of one composed autonomous self-test run."""
 
     ok: bool
-    stage: str  # preflight | launch | hijack | setup | pipeline | drive | done
+    stage: str  # preflight | launch | hijack | setup | pipeline | drive | cleanup | done
     launched: bool = False
     hijacked: bool = False
     drive: DriveStats | None = None
@@ -550,6 +551,18 @@ class Controller(Protocol):
     def read_car_data(self) -> dict[str, object] | None: ...
     def teleport_to_pits(self) -> None: ...
     def close(self) -> None: ...
+
+
+class ControllerCleanupError(RuntimeError):
+    """A Custom-AI controller could not release its native shared-memory resources."""
+
+
+def _close_controller(controller: Controller, *, context: str) -> None:
+    """Close a controller at one observable boundary and normalize native teardown failures."""
+    try:
+        controller.close()
+    except (OSError, SharedMemoryUnavailable) as exc:
+        raise ControllerCleanupError(f"{context}: {type(exc).__name__}: {exc}") from exc
 
 
 LaunchFn = Callable[[AutoDriveConfig], "tuple[bool, str]"]
@@ -858,7 +871,30 @@ async def run_auto_drive(
                     ),
                     **identity,
                 )
-        controller = hijack(config)
+        try:
+            controller = hijack(config)
+        except ControllerCleanupError as exc:
+            return AutoDriveReport(
+                ok=False,
+                stage="cleanup",
+                launched=not config.skip_launch,
+                setup_requested=setup_requested,
+                setup_applied=setup_applied,
+                setup_ack=setup_ack,
+                error=str(exc),
+                **identity,
+            )
+        except Exception as exc:  # noqa: BLE001 - a hijack-leg crash is a structured run failure
+            return AutoDriveReport(
+                ok=False,
+                stage="hijack",
+                launched=not config.skip_launch,
+                setup_requested=setup_requested,
+                setup_applied=setup_applied,
+                setup_ack=setup_ack,
+                error=f"hijack failed: {type(exc).__name__}: {exc}",
+                **identity,
+            )
         if controller is not None:
             # AUTHORITATIVE identity guard (#532/#535). CM sometimes launches its cached last
             # session instead of the requested preset; driving the requested line on a different
@@ -879,7 +915,24 @@ async def run_auto_drive(
                 # the terminal attempt — or skip_launch, which has no launch leg to relaunch —
                 # FAILs fast at stage="launch", preserving the #535/#532 honest-failure guard so
                 # the harness never drives a mismatched combo or persists a mislabeled plant.
-                controller.close()
+                try:
+                    _close_controller(
+                        controller,
+                        context=f"cleanup after rejecting mismatched {mismatch}",
+                    )
+                except ControllerCleanupError as exc:
+                    return AutoDriveReport(
+                        ok=False,
+                        stage="cleanup",
+                        launched=not config.skip_launch,
+                        hijacked=True,
+                        setup_requested=setup_requested,
+                        setup_applied=setup_applied,
+                        setup_ack=setup_ack,
+                        error=str(exc),
+                        notes=[f"original launch failure: loaded {mismatch}"],
+                        **identity,
+                    )
                 controller = None
                 last_launch_error = f"loaded {mismatch} — Content Manager launched a cached session"
                 if attempt_idx < attempts - 1 and not config.skip_launch:
@@ -1081,7 +1134,14 @@ async def run_auto_drive(
                 # coherent and surface the drive crash in notes instead of dropping it.
                 notes.append(drive_error)
         finally:
-            controller.close()
+            try:
+                _close_controller(controller, context="final controller cleanup")
+            except ControllerCleanupError as exc:
+                cleanup_error = str(exc)
+                if error is None:
+                    stage, error = "cleanup", cleanup_error
+                else:
+                    notes.append(cleanup_error)
 
     # Success needs a clean pipeline AND a real drive that did not die mid-run or stall out. The
     # drive-leg vetoes (drove / sim_dead / recovery_capped) live in drive_leg_succeeded so this gate
@@ -2515,7 +2575,10 @@ def rig_hijack(config: AutoDriveConfig) -> Controller | None:  # pragma: no cove
                 _log(f"hijack landed (Car0) on probe {attempt}/{attempts}")
                 return ctrl
             time.sleep(0.1)
-        ctrl.close()  # recreate the section next attempt to re-trigger the hijack
+        _close_controller(
+            ctrl,
+            context=f"hijack probe {attempt}/{attempts} cleanup",
+        )  # recreate the section next attempt to re-trigger the hijack
         # ASCII-only message: the harness prints to a Windows cp1252 console (cf. #475/#476).
         _log(
             f"hijack probe {attempt}/{attempts}: no Car0 in {probe:.1f}s "

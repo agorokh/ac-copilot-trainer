@@ -176,6 +176,23 @@ def test_unknown_ac_lock_does_not_prompt_an_action_that_will_be_refused() -> Non
     )
 
 
+def test_busy_non_resilient_owner_does_not_prompt_refused_stable_ac_action() -> None:
+    status = _status(
+        resilient=ProbeResult(
+            "ac_session",
+            False,
+            "busy_other_session",
+            "rig owned by session_kind=auto_drive; Stable AC was not started",
+        )
+    )
+
+    assert theme.summary_for(status) == (
+        "AC SESSION BUSY",
+        "brake",
+        "rig owned by session_kind=auto_drive; Stable AC was not started",
+    )
+
+
 def test_launcher_buttons_are_uppercase_with_start_emphasis() -> None:
     from tools.rig_launcher import view
     from tools.rig_launcher.preview import _NOOP_ACTIONS

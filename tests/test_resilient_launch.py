@@ -298,7 +298,7 @@ def test_streaming_watch_survives_go_live_timeout_until_stability(monkeypatch):
     )
 
 
-def test_sample_timestamp_precedes_blocking_readiness_work(monkeypatch):
+def test_sample_timestamp_follows_blocking_readiness_work(monkeypatch):
     now = 10.0
     observations: list[tuple[str, float]] = []
 
@@ -319,10 +319,27 @@ def test_sample_timestamp_precedes_blocking_readiness_work(monkeypatch):
 
     sample = _sample_now(read_state, acs_alive)
 
-    assert sample.t == 10.0
+    assert sample.t == 15.0
     assert sample.acs_alive is True
-    assert observations == [("alive", 10.0), ("state", 10.0)]
+    assert observations == [("state", 10.0), ("alive", 15.0)]
     assert now == 15.0
+
+
+def test_blocking_readiness_probe_consumes_go_live_budget() -> None:
+    samples = [
+        Sample(t=15.0, gfx_packet=1, acs_alive=True, entry_ready=True, drivable=True),
+        Sample(t=16.0, gfx_packet=2, acs_alive=True, entry_ready=True, drivable=True),
+    ]
+
+    assert (
+        classify(
+            samples,
+            go_live_timeout=4.0,
+            stability_window=20.0,
+            started_at=10.0,
+        )
+        is LaunchVerdict.NEVER_LIVE
+    )
 
 
 def test_process_liveness_probe_fails_closed_and_confirms_absence() -> None:

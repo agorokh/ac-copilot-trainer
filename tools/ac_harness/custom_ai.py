@@ -341,6 +341,33 @@ def _kernel32():  # pragma: no cover - rig-only
     return k
 
 
+def _release_mapping_resources(
+    *,
+    address: object | None,
+    handle: object | None,
+) -> tuple[object | None, object | None, list[str]]:
+    """Release one mapped view and handle while preserving any failed resource for retry."""
+    import ctypes
+
+    kernel32 = _kernel32()
+    errors: list[str] = []
+    if address is not None:
+        if kernel32.UnmapViewOfFile(address):
+            address = None
+        else:
+            errors.append(
+                f"UnmapViewOfFile failed: WinError {getattr(ctypes, 'get_last_error', lambda: 0)()}"
+            )
+    if handle is not None:
+        if kernel32.CloseHandle(handle):
+            handle = None
+        else:
+            errors.append(
+                f"CloseHandle failed: WinError {getattr(ctypes, 'get_last_error', lambda: 0)()}"
+            )
+    return address, handle, errors
+
+
 class _WritableSection:  # pragma: no cover - Windows ctypes view; validated on the rig
     """A read/write view of a Windows named section we CREATED (held until :meth:`close`)."""
 
@@ -357,27 +384,12 @@ class _WritableSection:  # pragma: no cover - Windows ctypes view; validated on 
         ctypes.memmove(self._address, data, len(data))
 
     def close(self) -> None:
-        import ctypes
-
         if self._address is None and self._handle is None:
             return
-        kernel32 = _kernel32()
-        errors: list[str] = []
-        if self._address is not None:
-            if kernel32.UnmapViewOfFile(self._address):
-                self._address = None
-            else:
-                errors.append(
-                    "UnmapViewOfFile failed: "
-                    f"WinError {getattr(ctypes, 'get_last_error', lambda: 0)()}"
-                )
-        if self._handle is not None:
-            if kernel32.CloseHandle(self._handle):
-                self._handle = None
-            else:
-                errors.append(
-                    f"CloseHandle failed: WinError {getattr(ctypes, 'get_last_error', lambda: 0)()}"
-                )
+        self._address, self._handle, errors = _release_mapping_resources(
+            address=self._address,
+            handle=self._handle,
+        )
         if errors:
             raise OSError("; ".join(errors))
 
@@ -398,27 +410,12 @@ class _ReadableSection:  # pragma: no cover - Windows ctypes view; validated on 
         return ctypes.string_at(self._address, n)
 
     def close(self) -> None:
-        import ctypes
-
         if self._address is None and self._handle is None:
             return
-        kernel32 = _kernel32()
-        errors: list[str] = []
-        if self._address is not None:
-            if kernel32.UnmapViewOfFile(self._address):
-                self._address = None
-            else:
-                errors.append(
-                    "UnmapViewOfFile failed: "
-                    f"WinError {getattr(ctypes, 'get_last_error', lambda: 0)()}"
-                )
-        if self._handle is not None:
-            if kernel32.CloseHandle(self._handle):
-                self._handle = None
-            else:
-                errors.append(
-                    f"CloseHandle failed: WinError {getattr(ctypes, 'get_last_error', lambda: 0)()}"
-                )
+        self._address, self._handle, errors = _release_mapping_resources(
+            address=self._address,
+            handle=self._handle,
+        )
         if errors:
             raise OSError("; ".join(errors))
 
@@ -578,17 +575,17 @@ class CustomAIController:  # pragma: no cover - Windows/rig-only; validated agai
 
     def close(self) -> None:
         """Release both sections — releasing ``CarControls<N>`` hands the car back to AC."""
-        errors: list[BaseException] = []
+        errors: list[Exception] = []
         if self._car_data is not None:
             try:
                 self._car_data.close()
-            except BaseException as exc:
+            except Exception as exc:
                 errors.append(exc)
             else:
                 self._car_data = None
         try:
             self._controls.close()
-        except BaseException as exc:
+        except Exception as exc:
             errors.append(exc)
         if errors:
             primary = errors[0]

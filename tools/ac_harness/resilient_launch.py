@@ -101,6 +101,7 @@ def classify(
     go_live_timeout: float = DEFAULT_GO_LIVE_TIMEOUT,
     stability_window: float = DEFAULT_STABILITY_WINDOW,
     stall_samples: int = DEFAULT_STALL_SAMPLES,
+    started_at: float | None = None,
 ) -> LaunchVerdict:
     """Classify one launch attempt from its liveness trace. Pure — no I/O, no clock.
 
@@ -124,7 +125,9 @@ def classify(
     if stall_samples <= 0:
         raise ValueError("stall_samples must be > 0")
 
-    t0 = samples[0].t
+    # ``_watch_live`` supplies its pre-probe start so a blocking readiness handshake consumes the
+    # go-live budget. Pure/unit callers may omit it and retain the trace-relative behavior.
+    t0 = samples[0].t if started_at is None else started_at
     live_since: float | None = None
     prev_packet: int | None = None
     stall_run = 0
@@ -264,12 +267,13 @@ def _sample_now(
     ],
     acs_alive: Callable[[], bool],
 ) -> Sample:  # pragma: no cover - rig-only
-    # Stamp liveness together with the timestamp before readiness work: the Car0 handshake can
-    # block for up to five seconds, but the classifier must not combine a pre-probe timestamp with
-    # post-probe process state or date an in-budget readiness observation late.
-    observed_at = time.monotonic()
-    observed_alive = acs_alive()
+    # The Car0 handshake can block for up to five seconds. Read it first, then stamp process
+    # liveness and time together: readiness is proven only when that handshake returns, so an
+    # observation that completes after the go-live budget cannot be backdated into the budget or
+    # shorten the stability window by the probe duration.
     state = read_state()
+    observed_alive = acs_alive()
+    observed_at = time.monotonic()
     if len(state) == 2:
         packet, entry_ready = state
         drivable = entry_ready
@@ -616,11 +620,15 @@ def _watch_live(  # pragma: no cover - rig-only
 ) -> LaunchVerdict:
     """Sample until the attempt resolves, then classify. Streams samples into :func:`classify`."""
     samples: list[Sample] = []
-    deadline = time.monotonic() + go_live_timeout + stability_window + 30.0
+    started_at = time.monotonic()
+    deadline = started_at + go_live_timeout + stability_window + 30.0
     while time.monotonic() < deadline:
         samples.append(_sample_now(read_state, acs_alive))
         verdict = classify(
-            samples, go_live_timeout=go_live_timeout, stability_window=stability_window
+            samples,
+            go_live_timeout=go_live_timeout,
+            stability_window=stability_window,
+            started_at=started_at,
         )
         if verdict is not LaunchVerdict.PENDING:
             return verdict
