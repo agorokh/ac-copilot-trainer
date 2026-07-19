@@ -214,6 +214,45 @@ def test_packet_reset_during_stability_cannot_inherit_prior_session_progress() -
     assert classify(samples, go_live_timeout=30.0, stability_window=45.0) is LaunchVerdict.FROZE
 
 
+def test_surviving_shared_memory_corpse_does_not_fail_a_healthy_launch() -> None:
+    """#628 — a dead session's ``acpmf_*`` section outlives it and must not poison the next verdict.
+
+    Measured on the rig: after ``taskkill /IM acs.exe /F`` the graphics section is still PRESENT
+    14 s later, holding the previous session's high packet id. The next launch renders its own
+    stream from ~0. Before the fix that read as a regression and a perfectly healthy session was
+    discarded as ``never_live`` — burning every retry after the first.
+    """
+    corpse = trace([(0.0, 23_000, False), (2.0, 23_000, False), (4.0, 23_000, False)])
+    fresh = steady(6.0, 60.0, first_packet=5)
+
+    assert classify(corpse + fresh, go_live_timeout=30.0, stability_window=45.0) is (
+        LaunchVerdict.STABLE
+    )
+
+
+def test_corpse_reading_does_not_mask_a_genuinely_dead_launch() -> None:
+    """The corpse must not manufacture liveness either: no live acs means NEVER_LIVE."""
+    corpse = trace([(float(t), 23_000, False) for t in range(0, 40, 2)])
+
+    assert classify(corpse, go_live_timeout=30.0, stability_window=45.0) is (
+        LaunchVerdict.NEVER_LIVE
+    )
+
+
+def test_pre_go_live_regression_with_acs_alive_is_still_never_live() -> None:
+    """The #628 fix must not weaken the real guard, only ignore corpse readings.
+
+    A regression observed while ``acs.exe`` IS alive still means the render stream was replaced.
+    (The post-go-live half of this guard is pinned by
+    ``test_packet_reset_during_stability_cannot_inherit_prior_session_progress``.)
+    """
+    samples = trace([(0.0, 1_000, True), (2.0, 5, True)])
+
+    assert classify(samples, go_live_timeout=30.0, stability_window=45.0) is (
+        LaunchVerdict.NEVER_LIVE
+    )
+
+
 def test_empty_trace_is_pending():
     assert classify([]) is LaunchVerdict.PENDING
 

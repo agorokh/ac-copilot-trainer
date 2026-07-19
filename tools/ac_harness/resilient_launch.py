@@ -197,7 +197,14 @@ def classify(
                 stall_run = 0
             if advanced and ready and sample.t - live_since >= stability_window:
                 return LaunchVerdict.STABLE
-        if sample.gfx_packet is not None:
+        # Only a reading correlated with a LIVE acs.exe may seed the comparison baseline.
+        # ``acpmf_*`` is a shared section that survives its creator: a hard kill leaves it mapped
+        # by whatever else has it open (measured on the rig: still PRESENT 14 s after taskkill),
+        # still holding the dead session's high packet id. Seeding ``prev_packet`` from that corpse
+        # makes the NEXT acs.exe — rendering its own stream from ~0 — look like a regression, and a
+        # perfectly healthy launch is thrown away as NEVER_LIVE. That is trap §7.1 of the #627
+        # brief reaching the shipped verdict logic, not just the ad-hoc probes. See #628.
+        if sample.gfx_packet is not None and sample.acs_alive:
             prev_packet = sample.gfx_packet
 
     if live_since is None:
