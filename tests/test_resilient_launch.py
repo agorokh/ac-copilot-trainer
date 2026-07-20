@@ -164,6 +164,208 @@ def test_sustained_not_ready_state_fails_the_attempt():
     )
 
 
+def steady_phys(
+    start_t: float, end_t: float, *, first_packet: int, first_phys: int, step: float = 1.0
+) -> list[Sample]:
+    """A healthy render trace where BOTH the graphics and physics packets advance."""
+    out: list[Sample] = []
+    packet, phys, t = first_packet, first_phys, start_t
+    while t <= end_t:
+        out.append(Sample(t=t, gfx_packet=packet, acs_alive=True, phys_packet=phys))
+        packet += 60
+        phys += 40
+        t += step
+    return out
+
+
+def test_pause_via_physics_stagnation_is_not_a_freeze():
+    """#630 Part B — a pause is read from PHYSICS stagnation, not status (which AC leaves LIVE).
+
+    An alt-tab pins the graphics packet AND stops physics; that must not FROZE + taskkill a healthy
+    session. A real wedge (physics still advancing) is unaffected — see the next test.
+    """
+    samples = steady_phys(0.0, 10.0, first_packet=100, first_phys=5000)
+    # 12 s paused: gfx pinned, physics pinned (status may still read LIVE, entry_ready False).
+    samples += [
+        Sample(t=11.0 + i, gfx_packet=760, acs_alive=True, entry_ready=False, phys_packet=5480)
+        for i in range(12)
+    ]
+    # ...then the operator resumes and both streams advance, completing the window.
+    samples += steady_phys(24.0, 90.0, first_packet=820, first_phys=5520)
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.STABLE
+    )
+
+
+def test_render_wedge_with_physics_still_advancing_is_froze():
+    """The pause carve-out must not weaken real freeze detection: gfx pinned + phys ADVANCING."""
+    samples = steady_phys(0.0, 10.0, first_packet=100, first_phys=5000)
+    held = samples[-1].gfx_packet
+    phys = samples[-1].phys_packet
+    # The #627 §2 signature: graphics packet pinned while physics keeps advancing.
+    samples += [
+        Sample(t=11.0 + i, gfx_packet=held, acs_alive=True, phys_packet=phys + 40 * (i + 1))
+        for i in range(5)
+    ]
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.FROZE
+    )
+
+
+def test_pause_suspends_the_stability_clock():
+    """#630 Part B — paused seconds are not credited toward the window.
+
+    Without suspension, a session that goes live, pauses for longer than the window, then emits one
+    resumed frame would satisfy ``t - live_since >= window`` immediately and hand off without a real
+    post-resume render window — letting the delayed init wedge land after handoff.
+    """
+    samples = steady_phys(0.0, 10.0, first_packet=100, first_phys=5000)
+    # Paused (physics pinned) from t=11 to t=70 — 60 s, well past the 45 s window.
+    samples += [
+        Sample(t=11.0 + i, gfx_packet=760, acs_alive=True, entry_ready=False, phys_packet=5480)
+        for i in range(60)
+    ]
+    # One resumed live frame: the window must NOT be satisfied yet (paused time excluded).
+    samples.append(Sample(t=71.0, gfx_packet=820, acs_alive=True, phys_packet=5520))
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.PENDING
+    )
+
+
+def test_pause_beyond_budget_falls_back_to_stall_detection():
+    """The pause hold is bounded (#637 daemon MEDIUM).
+
+    A hang that pins BOTH streams while acs.exe stays enumerated is indistinguishable from an
+    alt-tab at any single instant, so past ``pause_budget`` the hold expires and the ordinary
+    stall/not-ready paths must still FROZE the attempt.
+    """
+    samples = steady_phys(0.0, 10.0, first_packet=100, first_phys=5000)
+    # 30 s of dual stagnation against a 10 s pause budget: the hold must expire mid-trace.
+    samples += [
+        Sample(t=11.0 + i, gfx_packet=760, acs_alive=True, entry_ready=False, phys_packet=5480)
+        for i in range(30)
+    ]
+
+    assert (
+        classify(
+            samples,
+            go_live_timeout=30.0,
+            stability_window=45.0,
+            stall_samples=4,
+            pause_budget=10.0,
+        )
+        is LaunchVerdict.FROZE
+    )
+
+
+def test_stable_requires_physics_advancing_past_pause_budget():
+    """#637 daemon HIGH — STABLE must never land while physics is still pinned.
+
+    AC can keep the graphics stream animating through a pause/menu; if readiness stays true and
+    the pause outlasts ``pause_budget``, the pre-fix code fell through to the ordinary STABLE
+    predicate and handed off a session whose physics never resumed (the delayed-init handoff
+    #630 Part B exists to prevent). Physics-pinned seconds are never credited and STABLE
+    requires physics advancing, so this trace stays PENDING.
+    """
+    samples = steady_phys(0.0, 10.0, first_packet=100, first_phys=5000)
+    # Past the 5 s budget: graphics keeps ANIMATING, physics pinned, still READY.
+    samples += [
+        Sample(t=11.0 + i, gfx_packet=760 + 60 * i, acs_alive=True, phys_packet=5480)
+        for i in range(20)
+    ]
+
+    assert (
+        classify(
+            samples,
+            go_live_timeout=30.0,
+            stability_window=12.0,
+            stall_samples=4,
+            pause_budget=5.0,
+        )
+        is LaunchVerdict.PENDING
+    )
+
+
+def test_streaming_watch_extends_deadline_through_pause(monkeypatch):
+    """#637 Codex P1 + daemon HIGH: a pause longer than the spare 30 s must not FROZE at the
+    fixed wall-clock deadline — the watcher stretches its budget by the pause hold classify
+    reports, so a healthy paused session survives to STABLE after the operator resumes."""
+    now = 0.0
+    tick = 0
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    def read_state() -> tuple[int, bool, bool, int]:
+        nonlocal tick
+        tick += 1
+        if tick <= 5:
+            return 100 + tick, True, True, 5000 + tick  # live, both streams advancing
+        if tick <= 45:
+            return 105, False, True, 5005  # 40 s paused: graphics AND physics pinned
+        return 105 + (tick - 45), True, True, 5005 + (tick - 45)  # resumed
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+    # Budget is 2 + 5 + 30 = 37 s; the 40 s pause outlives it, so without the pause-aware
+    # deadline this returns FROZE while the operator is simply alt-tabbed.
+    assert (
+        _watch_live(
+            read_state,
+            lambda: True,
+            go_live_timeout=2.0,
+            stability_window=5.0,
+            poll_interval=1.0,
+        )
+        is LaunchVerdict.STABLE
+    )
+
+
+def test_streaming_watch_freezes_dual_stream_hang_past_pause_budget(monkeypatch):
+    """A hang that pins both streams forever is not an infinite pause: once the hold exceeds
+    ``pause_budget`` the stall path takes over and FROZEs — the deadline extension is capped."""
+    now = 0.0
+    tick = 0
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    def read_state() -> tuple[int, bool, bool, int]:
+        nonlocal tick
+        tick += 1
+        if tick <= 5:
+            return 100 + tick, True, True, 5000 + tick
+        return 105, True, True, 5005  # hard hang: both pinned, still READY (not a menu)
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+    assert (
+        _watch_live(
+            read_state,
+            lambda: True,
+            go_live_timeout=2.0,
+            stability_window=5.0,
+            poll_interval=1.0,
+            pause_budget=8.0,
+        )
+        is LaunchVerdict.FROZE
+    )
+
+
 def test_unfinished_live_trace_is_pending_not_a_terminal_failure():
     samples = steady(0.0, 20.0, first_packet=100)
     assert classify(samples, go_live_timeout=10.0, stability_window=60.0) is LaunchVerdict.PENDING
