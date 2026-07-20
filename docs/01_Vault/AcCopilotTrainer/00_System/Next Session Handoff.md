@@ -2,8 +2,10 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-19T01:50:00Z
+last_updated: 2026-07-20T18:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
+  - AcCopilotTrainer/03_Investigations/mcp-preflight-guard-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
   - AcCopilotTrainer/03_Investigations/issue-531-partf-pages-2026-07-16.md
   - AcCopilotTrainer/03_Investigations/rig-physics-wedge-voice-wasapi-2026-07-16.md
@@ -103,6 +105,24 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-20) — #630 Part B pause-aware launch verdicts MERGED (PR #637)
+
+**PR [#637](https://github.com/agorokh/ac-copilot-trainer/pull/637) MERGED** `2026-07-20T19:43Z` as
+squash [`5497775`](https://github.com/agorokh/ac-copilot-trainer/commit/54977750e47d2cc669c58857db019b152019009e).
+`tools/ac_harness/resilient_launch.py`: a pause is read from **physics-packet stagnation** (AC often
+leaves `status` LIVE when paused), and the pause semantics settled across two daemon rework rounds —
+stability-clock suspension unbounded, freeze-counter clearing bounded by `DEFAULT_PAUSE_BUDGET`
+(300 s), `_watch_live` deadline extends by the reported hold, STABLE requires physics advancing.
+Design record: [[pr-637-pause-semantics-review-2026-07-20]].
+
+**Verification:** CI green on head `0ba0346`; GraphQL 0 unresolved (Codex P1 fixed + resolved);
+resolve-gate ledger clean; daemon cursor 0 findings on the merged SHA (1 antigravity MEDIUM =
+advisory WONTFIX, PR comment); 99 `test_resilient_launch` tests, each regression test proven to
+fail against its pre-fix source. Post-merge classification: **no flags**.
+
+**What remains:** #630 launcher-verdict hardening continues (Parts beyond B per the issue);
+rig-side acceptance of the pause path rides on the next rig session.
 
 ## Verified (2026-07-19 eve) — the full pipeline DRIVES, reliably, post-#628
 
