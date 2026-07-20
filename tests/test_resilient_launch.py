@@ -264,6 +264,34 @@ def test_pause_beyond_budget_falls_back_to_stall_detection():
     )
 
 
+def test_stable_requires_physics_advancing_past_pause_budget():
+    """#637 daemon HIGH — STABLE must never land while physics is still pinned.
+
+    AC can keep the graphics stream animating through a pause/menu; if readiness stays true and
+    the pause outlasts ``pause_budget``, the pre-fix code fell through to the ordinary STABLE
+    predicate and handed off a session whose physics never resumed (the delayed-init handoff
+    #630 Part B exists to prevent). Physics-pinned seconds are never credited and STABLE
+    requires physics advancing, so this trace stays PENDING.
+    """
+    samples = steady_phys(0.0, 10.0, first_packet=100, first_phys=5000)
+    # Past the 5 s budget: graphics keeps ANIMATING, physics pinned, still READY.
+    samples += [
+        Sample(t=11.0 + i, gfx_packet=760 + 60 * i, acs_alive=True, phys_packet=5480)
+        for i in range(20)
+    ]
+
+    assert (
+        classify(
+            samples,
+            go_live_timeout=30.0,
+            stability_window=12.0,
+            stall_samples=4,
+            pause_budget=5.0,
+        )
+        is LaunchVerdict.PENDING
+    )
+
+
 def test_streaming_watch_extends_deadline_through_pause(monkeypatch):
     """#637 Codex P1 + daemon HIGH: a pause longer than the spare 30 s must not FROZE at the
     fixed wall-clock deadline — the watcher stretches its budget by the pause hold classify

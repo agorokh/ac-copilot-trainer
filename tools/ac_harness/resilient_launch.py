@@ -135,10 +135,11 @@ def classify(
     * after go-live, ``stall_samples`` consecutive samples with an unchanged ``gfx_packet`` while
       ``acs_alive`` → ``FROZE`` (this is the delayed init livelock the other launchers miss).
     * surviving ``stability_window`` seconds past go-live without stalling → ``STABLE``.
-    * a **pause** (physics packet stagnant post-go-live, #630 Part B) is held — freeze counters
-      cleared, stability clock suspended — but only up to ``pause_budget`` cumulative seconds.
-      Beyond the budget, sustained dual-stream stagnation falls back to the ordinary
-      stall/not-ready paths: an unbounded hold would make a real hang undetectable.
+    * a **pause** (physics packet stagnant post-go-live, #630 Part B) is never credited toward
+      the stability window, and its freeze counters stay cleared for up to ``pause_budget``
+      cumulative seconds. Beyond the budget the ordinary stall/not-ready paths resume — an
+      unbounded hold would make a real hang undetectable — and ``STABLE`` always requires
+      physics ADVANCING, so a session that never resumed cannot hand off.
 
     ``acs`` disappearing after go-live is reported as ``FROZE`` rather than ``STABLE``: the session
     did not survive, and the caller must retry either way.
@@ -223,20 +224,21 @@ def classify(
                 # packetId reset means the render stream/session was replaced; never let a new
                 # acs.exe inherit stability time accumulated by its predecessor.
                 return LaunchVerdict.FROZE
-            if phys_stagnant and paused_total < pause_budget:
+            if phys_stagnant and prev_t is not None:
+                # Physics pinned: this interval is NEVER credited as proven-live time, whatever
+                # the budget — STABLE must be earned with physics RUNNING, so a pause that
+                # outlasts the budget cannot hand off on wall-clock accumulation (#637 daemon).
+                live_since += sample.t - prev_t
+                paused_total += sample.t - prev_t
+            if phys_stagnant and paused_total <= pause_budget:
                 # #630 Part B — physics stopped advancing: the sim is paused or at a menu (the
                 # graphics packet may pin OR keep animating; either way this is NOT a render wedge,
                 # which holds physics ADVANCING). Hold: clear the freeze counters so an alt-tab
-                # cannot trip a false FROZE + taskkill, and suspend the stability clock so paused
-                # seconds are not credited as proven-live time (a session that only just resumed
-                # must still earn its window — finding: the delayed init wedge could otherwise land
-                # after handoff). The hold is BOUNDED by ``pause_budget``: a hang that pins both
-                # streams while acs.exe stays enumerated is indistinguishable from a pause at any
-                # single instant, so past the budget the sample falls through to the ordinary
-                # stall/not-ready paths and the attempt still fails (#637 daemon MEDIUM).
-                if prev_t is not None:
-                    live_since += sample.t - prev_t
-                    paused_total += sample.t - prev_t
+                # cannot trip a false FROZE + taskkill. The counter-clearing is BOUNDED by
+                # ``pause_budget``: a hang that pins both streams while acs.exe stays enumerated
+                # is indistinguishable from a pause at any single instant, so past the budget the
+                # sample falls through to the ordinary stall/not-ready paths and the attempt still
+                # fails (#637 daemon MEDIUM).
                 not_ready_run = 0
                 stall_run = 0
             else:
@@ -258,7 +260,15 @@ def classify(
                 else:
                     # Missing shared memory is unknown, not another observation of the same packet.
                     stall_run = 0
-                if advanced and ready and sample.t - live_since >= stability_window:
+                # STABLE additionally requires physics ADVANCING when a physics reading exists:
+                # an animating graphics stream with pinned physics past the pause budget is a
+                # session that never resumed, not a proven-live one (#637 daemon HIGH).
+                if (
+                    advanced
+                    and ready
+                    and not phys_stagnant
+                    and sample.t - live_since >= stability_window
+                ):
                     return LaunchVerdict.STABLE
         # Only a reading correlated with a LIVE acs.exe may seed the comparison baseline.
         # ``acpmf_*`` is a shared section that survives its creator: a hard kill leaves it mapped
