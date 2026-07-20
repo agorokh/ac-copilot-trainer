@@ -1,0 +1,36 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "**/AGENTS.md"
+  - "docs/**/*"
+source: process-miner
+rule_fingerprint: fabdf5014a0424a6
+mined_from: 3 review comments across 2 PRs
+last_updated: 2026-07-20
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: maintainability
+preventability: architecture
+---
+
+# Packet Code Only (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Align the ownership proof with the final design**
+
+This says ownership is proven only by a packet advance *while...
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Remove the redundant acs.exe liveness requirement**
+
+When a future maintainer follows this Tier-1 instruction to...
+- Fixed in `dedd94d`. You are right — the 'while acs.exe is alive' phrasing contradicts the shipped contract and, worse, could invite re-adding the very liveness probe the #628 refactor removed. Correct...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

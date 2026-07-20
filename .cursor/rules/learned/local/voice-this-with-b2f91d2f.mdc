@@ -1,0 +1,40 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "docs/**/*"
+source: process-miner
+rule_fingerprint: b2f91d2f3b338df3
+mined_from: 4 review comments across 3 PRs
+last_updated: 2026-07-20
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: maintainability
+preventability: guideline
+---
+
+# Voice This With (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Update Current Focus for the voice-off blocker**
+
+This new mitigation changes the active rig state, but the comm...
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Remove the stale voice quarantine after the correction**
+
+The added correction says the voice/WASAPI attribution...
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Update the active handoff with the corrected cause**
+
+This correction unblocks voice after the font-cache rebuil...
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Clarify the voice re-arm instruction**
+
+In the next LOAD/SAVE handoff, this new resume block says to restore the...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

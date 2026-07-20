@@ -1,0 +1,36 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "**/*"
+source: process-miner
+rule_fingerprint: 7fc144241e8faa2a
+mined_from: 10 review comments across 10 PRs
+last_updated: 2026-07-20
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: security
+preventability: guideline
+---
+
+# Code Documentation Only (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- _cursor: Docs-only vault/handoff updates with no executable, config, or auth surface; no correctness or security defects introduced._
+_antigravity: No architectural issues found in this Vault document...
+- _cursor: Documentation-only vault handoff and investigation notes with no executable code changes; no execution-correctness or security defects introduced by this diff._
+_antigravity: The diff contain...
+- _cursor: Docs-only vault/handoff update with no executable code; no correctness or security defects introduced._
+_antigravity: The diff consists entirely of documentation updates to vault notes, intro...
+- _cursor: Documentation-only wording change in TOOLCHAIN.md; no executable logic or security surface is introduced or altered._
+_antigravity: The diff only updates documentation regarding MCP server co...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

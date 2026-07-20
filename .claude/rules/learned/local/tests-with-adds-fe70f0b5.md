@@ -1,0 +1,56 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "**/*"
+source: process-miner
+rule_fingerprint: fe70f0b5e3437645
+mined_from: 5 review comments across 5 PRs
+last_updated: 2026-07-20
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: reliability
+preventability: typecheck
+---
+
+# Tests With Adds (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <h3>PR Summary by Qodo</h3>
+
+Harness: multi-lap flying windows and progressive self-play plant refinement
+
+<code>✨ Enhancement</code> <code>🧪 Tests</code> <code>🕐 40+ Minutes</code>
+
+<img src="https:/...
+- <h3>PR Summary by Qodo</h3>
+
+Refactor sidecar routing: derive /health endpoints from a single route registry
+
+<code>🐞 Bug fix</code> <code>🧪 Tests</code> <code>🕐 40+ Minutes</code>
+
+<img src="https://...
+- <h3>PR Summary by Qodo</h3>
+
+Detect stale AC trainer app junction during harness preflight
+
+<code>🐞 Bug fix</code> <code>✨ Enhancement</code> <code>🧪 Tests</code> <code>🕐 40+ Minutes</code>
+
+<img src=...
+- <h3>PR Summary by Qodo</h3>
+
+Ensure auto_drive failures always include an actionable reason and failing checks
+
+<code>🐞 Bug fix</code> <code>🧪 Tests</code> <code>🕐 40+ Minutes</code>
+
+<img src="https:...
+
+## Suggested enforcement
+
+- Strengthen typing (mypy/pyright) or narrow APIs to catch this earlier.

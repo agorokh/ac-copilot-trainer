@@ -1,0 +1,40 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 9a8d88c16e828e52
+mined_from: 5 review comments across 2 PRs
+last_updated: 2026-07-20
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: guideline
+---
+
+# Code Gate This (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **Confirmed and fixed in `6ba8301` — this was the #596 bug reintroduced through a door my fix did not cover.**
+
+Verified against the live code before acting rather than taking the finding on trust: `p...
+- Confirmed and fixed in `03e5a06` — this was a real regression introduced by the ownership-gate
+commit. `acs_present()` is `_strict_process_running`, which deliberately does not swallow
+enumeration fai...
+- Confirmed and fixed. This was real: `SectionOwnershipGate` revoked trust on death but `car0_ready`
+did not follow, so an acs death/restart inside one attempt let a new generation inherit the previous
+...
+- Confirmed and fixed in this push. The decisive part of your analysis is the one I had missed:
+`classify()` **already** treats a post-go-live regression as a replacement session that must not
+inherit i...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

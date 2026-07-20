@@ -1,0 +1,44 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "**/*"
+source: process-miner
+rule_fingerprint: a14dd95be3d7a979
+mined_from: 12 review comments across 11 PRs
+last_updated: 2026-07-20
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: maintainability
+preventability: test
+---
+
+# Findings Above Medium (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- _This diff consists entirely of documentation updates to the vault tracking session progress and investigations; there are no architectural changes to review._
+
+No findings at or above **medium** seve...
+- _The refactor successfully centralizes the HTTP routing logic into a single source of truth, enforcing invariants structurally and eliminating the risk of drift between dispatch and advertisement._
+
+N...
+- _The changes update project tracking documentation and introduce no structural or architectural changes to the codebase._
+
+No findings at or above **medium** severity. ✅
+
+<sub>model `Gemini 3.1 Pro (L...
+- _The provided diff only modifies a Markdown documentation and session handoff file, introducing no software architecture or structural issues._
+
+No findings at or above **medium** severity. ✅
+
+<sub>mo...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.
