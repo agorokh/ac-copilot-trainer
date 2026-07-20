@@ -42,6 +42,11 @@ def test_second_process_fails_busy_with_owner_metadata(tmp_path: Path) -> None:
     path = tmp_path / "rig-session.lock"
     ready = tmp_path / "ready"
     release = tmp_path / "release"
+    # The child publishes ITS OWN pid into the ready sentinel. On Windows, `.venv\\Scripts\\
+    # python.exe` is a launcher shim that re-spawns the real interpreter as a child, so
+    # `Popen(sys.executable).pid` is the shim's pid, not the interpreter that took the lock and
+    # wrote `os.getpid()` into the owner metadata. Asserting against the shim pid failed
+    # deterministically on the rig (#631) while passing in CI. Read the lock-holder's own pid.
     script = """
 import os
 import sys
@@ -54,7 +59,7 @@ owner = RigSessionOwner(
     pid=os.getpid(), cwd='peer-worktree', car='peer-car', track='peer-track'
 )
 with RigSessionLock(path, owner=owner):
-    ready.touch()
+    ready.write_text(str(os.getpid()))
     while not release.exists():
         time.sleep(0.01)
 """
@@ -64,22 +69,24 @@ with RigSessionLock(path, owner=owner):
         [sys.executable, "-c", script, str(path), str(ready), str(release)], env=env
     )
     try:
+        holder_pid: int | None = None
         for _ in range(500):
-            if ready.exists():
+            if ready.exists() and ready.read_text().strip():
+                holder_pid = int(ready.read_text().strip())
                 break
             if proc.poll() is not None:
                 raise AssertionError(f"lock-holder exited early: {proc.returncode}")
             time.sleep(0.01)
-        assert ready.exists()
+        assert holder_pid is not None
 
         with pytest.raises(RigSessionBusy) as exc_info:
             RigSessionLock(path, owner=_owner(9999)).acquire()
 
-        assert exc_info.value.owner["pid"] == proc.pid
+        assert exc_info.value.owner["pid"] == holder_pid
         assert exc_info.value.owner["car"] == "peer-car"
         assert "peer-worktree" in str(exc_info.value)
         assert read_rig_session_owner(path) == {
-            "pid": proc.pid,
+            "pid": holder_pid,
             "cwd": "peer-worktree",
             "car": "peer-car",
             "track": "peer-track",
