@@ -44,6 +44,11 @@ DEFAULT_GO_LIVE_TIMEOUT = 80.0
 DEFAULT_MAX_ATTEMPTS = 12
 #: consecutive unchanged-packet samples (while acs is alive) that count as a wedge
 DEFAULT_STALL_SAMPLES = 4
+#: seconds a physics-stagnant pause hold (#630 Part B) is honored before sustained dual-stream
+#: stagnation must be treated as the hang it may be — a hard hang that pins BOTH streams while
+#: acs.exe stays enumerated is indistinguishable from an alt-tab at any single instant, so the
+#: carve-out is bounded and the ordinary stall/not-ready paths take over past this budget.
+DEFAULT_PAUSE_BUDGET = 300.0
 #: consecutive never_live attempts before cold-restarting Content Manager (#537/#558)
 NEVER_LIVE_BEFORE_CM_RESTART = 2
 
@@ -118,6 +123,8 @@ def classify(
     stability_window: float = DEFAULT_STABILITY_WINDOW,
     stall_samples: int = DEFAULT_STALL_SAMPLES,
     started_at: float | None = None,
+    pause_budget: float = DEFAULT_PAUSE_BUDGET,
+    pause_sink: list[float] | None = None,
 ) -> LaunchVerdict:
     """Classify one launch attempt from its liveness trace. Pure — no I/O, no clock.
 
@@ -128,9 +135,17 @@ def classify(
     * after go-live, ``stall_samples`` consecutive samples with an unchanged ``gfx_packet`` while
       ``acs_alive`` → ``FROZE`` (this is the delayed init livelock the other launchers miss).
     * surviving ``stability_window`` seconds past go-live without stalling → ``STABLE``.
+    * a **pause** (physics packet stagnant post-go-live, #630 Part B) is held — freeze counters
+      cleared, stability clock suspended — but only up to ``pause_budget`` cumulative seconds.
+      Beyond the budget, sustained dual-stream stagnation falls back to the ordinary
+      stall/not-ready paths: an unbounded hold would make a real hang undetectable.
 
     ``acs`` disappearing after go-live is reported as ``FROZE`` rather than ``STABLE``: the session
     did not survive, and the caller must retry either way.
+
+    When ``pause_sink`` is provided and the trace is still ``PENDING`` past go-live, the cumulative
+    held-pause seconds are appended to it. ``_watch_live`` extends its wall-clock budget by exactly
+    this much so a held pause cannot FROZE a healthy paused session at a fixed deadline.
     """
     if not samples:
         return LaunchVerdict.PENDING
@@ -140,6 +155,8 @@ def classify(
         raise ValueError("stability_window must be > 0")
     if stall_samples <= 0:
         raise ValueError("stall_samples must be > 0")
+    if pause_budget <= 0:
+        raise ValueError("pause_budget must be > 0")
 
     # ``_watch_live`` supplies its pre-probe start so a blocking readiness handshake consumes the
     # go-live budget. Pure/unit callers may omit it and retain the trace-relative behavior.
@@ -150,6 +167,7 @@ def classify(
     prev_t: float | None = None
     stall_run = 0
     not_ready_run = 0
+    paused_total = 0.0
     seen_acs_alive = False
 
     for sample in samples:
@@ -205,16 +223,20 @@ def classify(
                 # packetId reset means the render stream/session was replaced; never let a new
                 # acs.exe inherit stability time accumulated by its predecessor.
                 return LaunchVerdict.FROZE
-            if phys_stagnant:
+            if phys_stagnant and paused_total < pause_budget:
                 # #630 Part B — physics stopped advancing: the sim is paused or at a menu (the
                 # graphics packet may pin OR keep animating; either way this is NOT a render wedge,
                 # which holds physics ADVANCING). Hold: clear the freeze counters so an alt-tab
                 # cannot trip a false FROZE + taskkill, and suspend the stability clock so paused
                 # seconds are not credited as proven-live time (a session that only just resumed
                 # must still earn its window — finding: the delayed init wedge could otherwise land
-                # after handoff).
+                # after handoff). The hold is BOUNDED by ``pause_budget``: a hang that pins both
+                # streams while acs.exe stays enumerated is indistinguishable from a pause at any
+                # single instant, so past the budget the sample falls through to the ordinary
+                # stall/not-ready paths and the attempt still fails (#637 daemon MEDIUM).
                 if prev_t is not None:
                     live_since += sample.t - prev_t
+                    paused_total += sample.t - prev_t
                 not_ready_run = 0
                 stall_run = 0
             else:
@@ -255,6 +277,8 @@ def classify(
         return LaunchVerdict.PENDING
     # The trace ended before either terminal threshold. A short hitch is not a freeze, and an
     # advancing live session is not a never-live failure merely because its window is unfinished.
+    if pause_sink is not None:
+        pause_sink.append(paused_total)
     return LaunchVerdict.PENDING
 
 
@@ -935,28 +959,45 @@ def _retry_telemetry_cleanup_holds(controllers: list[object]) -> None:
 def _watch_live(  # pragma: no cover - rig-only
     read_state: Callable[
         [],
-        tuple[int | None, bool | None] | tuple[int | None, bool | None, bool | None],
+        tuple[int | None, bool | None]
+        | tuple[int | None, bool | None, bool | None]
+        | tuple[int | None, bool | None, bool | None, int | None],
     ],
     acs_alive: Callable[[], bool],
     *,
     go_live_timeout: float,
     stability_window: float,
     poll_interval: float = 1.0,
+    pause_budget: float = DEFAULT_PAUSE_BUDGET,
 ) -> LaunchVerdict:
-    """Sample until the attempt resolves, then classify. Streams samples into :func:`classify`."""
+    """Sample until the attempt resolves, then classify. Streams samples into :func:`classify`.
+
+    The wall-clock budget is ``go_live_timeout + stability_window + 30`` **plus the pause hold**
+    ``classify`` reports (capped at ``pause_budget``): a long alt-tab must stay PENDING, never
+    FROZE a healthy paused session at a fixed deadline — the exact failure #630 Part B set out to
+    stop (#637 Codex P1 + self-hosted daemon HIGH). A dual-stream hang outlasting the pause
+    budget stops being a hold inside ``classify`` and fails via the ordinary stall/not-ready
+    paths, so the extension cannot hide a real freeze either.
+    """
     samples: list[Sample] = []
     started_at = time.monotonic()
-    deadline = started_at + go_live_timeout + stability_window + 30.0
-    while time.monotonic() < deadline:
+    budget = go_live_timeout + stability_window + 30.0
+    paused = 0.0
+    while time.monotonic() < started_at + budget + min(paused, pause_budget):
         samples.append(_sample_now(read_state, acs_alive))
+        sink: list[float] = []
         verdict = classify(
             samples,
             go_live_timeout=go_live_timeout,
             stability_window=stability_window,
             started_at=started_at,
+            pause_budget=pause_budget,
+            pause_sink=sink,
         )
         if verdict is not LaunchVerdict.PENDING:
             return verdict
+        if sink:
+            paused = sink[-1]
         time.sleep(poll_interval)
     return LaunchVerdict.FROZE
 

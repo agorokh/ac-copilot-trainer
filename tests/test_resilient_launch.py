@@ -238,6 +238,106 @@ def test_pause_suspends_the_stability_clock():
     )
 
 
+def test_pause_beyond_budget_falls_back_to_stall_detection():
+    """The pause hold is bounded (#637 daemon MEDIUM).
+
+    A hang that pins BOTH streams while acs.exe stays enumerated is indistinguishable from an
+    alt-tab at any single instant, so past ``pause_budget`` the hold expires and the ordinary
+    stall/not-ready paths must still FROZE the attempt.
+    """
+    samples = steady_phys(0.0, 10.0, first_packet=100, first_phys=5000)
+    # 30 s of dual stagnation against a 10 s pause budget: the hold must expire mid-trace.
+    samples += [
+        Sample(t=11.0 + i, gfx_packet=760, acs_alive=True, entry_ready=False, phys_packet=5480)
+        for i in range(30)
+    ]
+
+    assert (
+        classify(
+            samples,
+            go_live_timeout=30.0,
+            stability_window=45.0,
+            stall_samples=4,
+            pause_budget=10.0,
+        )
+        is LaunchVerdict.FROZE
+    )
+
+
+def test_streaming_watch_extends_deadline_through_pause(monkeypatch):
+    """#637 Codex P1 + daemon HIGH: a pause longer than the spare 30 s must not FROZE at the
+    fixed wall-clock deadline — the watcher stretches its budget by the pause hold classify
+    reports, so a healthy paused session survives to STABLE after the operator resumes."""
+    now = 0.0
+    tick = 0
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    def read_state() -> tuple[int, bool, bool, int]:
+        nonlocal tick
+        tick += 1
+        if tick <= 5:
+            return 100 + tick, True, True, 5000 + tick  # live, both streams advancing
+        if tick <= 45:
+            return 105, False, True, 5005  # 40 s paused: graphics AND physics pinned
+        return 105 + (tick - 45), True, True, 5005 + (tick - 45)  # resumed
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+    # Budget is 2 + 5 + 30 = 37 s; the 40 s pause outlives it, so without the pause-aware
+    # deadline this returns FROZE while the operator is simply alt-tabbed.
+    assert (
+        _watch_live(
+            read_state,
+            lambda: True,
+            go_live_timeout=2.0,
+            stability_window=5.0,
+            poll_interval=1.0,
+        )
+        is LaunchVerdict.STABLE
+    )
+
+
+def test_streaming_watch_freezes_dual_stream_hang_past_pause_budget(monkeypatch):
+    """A hang that pins both streams forever is not an infinite pause: once the hold exceeds
+    ``pause_budget`` the stall path takes over and FROZEs — the deadline extension is capped."""
+    now = 0.0
+    tick = 0
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    def read_state() -> tuple[int, bool, bool, int]:
+        nonlocal tick
+        tick += 1
+        if tick <= 5:
+            return 100 + tick, True, True, 5000 + tick
+        return 105, True, True, 5005  # hard hang: both pinned, still READY (not a menu)
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+    assert (
+        _watch_live(
+            read_state,
+            lambda: True,
+            go_live_timeout=2.0,
+            stability_window=5.0,
+            poll_interval=1.0,
+            pause_budget=8.0,
+        )
+        is LaunchVerdict.FROZE
+    )
+
+
 def test_unfinished_live_trace_is_pending_not_a_terminal_failure():
     samples = steady(0.0, 20.0, first_packet=100)
     assert classify(samples, go_live_timeout=10.0, stability_window=60.0) is LaunchVerdict.PENDING
