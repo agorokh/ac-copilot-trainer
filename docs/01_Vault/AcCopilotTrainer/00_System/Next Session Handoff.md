@@ -104,6 +104,36 @@ relates_to:
 
 # Next session handoff
 
+## Verified (2026-07-19 eve) — the full pipeline DRIVES, reliably, post-#628
+
+Operator reality-check: watching the launcher, the car "roamed between pre-start and drive screens
+with zero attempts to drive." Correct on two counts: (a) the #628 soak was a *launch-reliability*
+test that never sends inputs — it just cycles launches; (b) the **#466 pre-drive overlay stall**
+(LIVE-but-not-drivable) is exactly the "sometimes drive screen" they saw. Neither is the car being
+un-driveable.
+
+Proved it drives with `python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track
+spa --driver ggv --wait-lap` — **3/3 clean autonomous laps**, each PASS:
+
+| drive | lap | dist | max | recoveries | cues |
+|---|---|---|---|---|---|
+| 1 | 3:18.69 | 7220 m | 209.8 km/h | 0 | 26 |
+| 2 | 3:23.18 | 7220 m | 209.8 km/h | 0 | 26 |
+| 3 | 3:19.39 | 7219 m | 209.8 km/h | 0 | 26 |
+
+Full WS contract flowed (coaching.cue=26, coaching.snapshot≈1828, tire_temps≈914, lap=1 each);
+electronics live (ABS/TC firing); HUD RENDERING. Live screenshots captured the car at 209 km/h in
+gear 5 and the post-run "SIDECAR V1: ACK LAP 1". The **#466 overlay stall recovered within 1-2 launch
+cycles every time** (hijack landed on probe 2 or 3). No terminal freeze occurred across all drives at
+up to **12.8 h uptime** — another (non-dispositive, per the #627 council) data point that the wedge
+is not reproducing.
+
+**What remains here:** the #466 overlay stall is the real launch→drive friction (costs ~1 relaunch,
+~30 s). It's not blocking (auto_drive recovers) but it's why launch-to-drive isn't instant; the clean
+fix needs a different setup-injection mechanism (PIT-spawn + in-pit `setup.load`), tracked on #466.
+GGV ~3:20 is the conservative-friction plant; a real hot lap is the `auto_alien` optimized-line path
+(#529). Evidence bundles under `.scratch/harness-evidence/2026072{0}T*_ks_porsche_911_gt3_r_2016_spa/`.
+
 ## Delivered (2026-07-19) — #628 launcher discarded HEALTHY sessions (PR #629 MERGED `c5c7b75`)
 
 **The rig was far less broken than #627 suggested — the launcher was throwing good sessions away.**
