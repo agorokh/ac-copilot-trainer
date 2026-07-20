@@ -97,7 +97,10 @@ class Sample:
     frozen render loop pins it while the process stays alive. ``entry_ready`` preserves the
     graphics page's LIVE + not-in-pit predicate. ``drivable`` is the stronger, rig-proven Car0
     handshake: the CSP pre-drive overlay can report LIVE + not-in-pit while remaining non-drivable.
-    ``None`` means that field could not be read yet.
+    ``phys_packet`` is ``acpmf_physics.packetId``: it keeps advancing during a genuine render wedge
+    (#627 §2) but STOPS at a pause/menu, so its stagnation is the reliable pause signal — AC often
+    leaves ``status`` at LIVE when paused (``shared_memory`` documents this), which is why status
+    alone cannot tell a pause from a freeze (#630 Part B). ``None`` means the field was not read.
     """
 
     t: float
@@ -105,6 +108,7 @@ class Sample:
     acs_alive: bool
     entry_ready: bool | None = True
     drivable: bool | None = True
+    phys_packet: int | None = None
 
 
 def classify(
@@ -142,6 +146,8 @@ def classify(
     t0 = samples[0].t if started_at is None else started_at
     live_since: float | None = None
     prev_packet: int | None = None
+    prev_phys: int | None = None
+    prev_t: float | None = None
     stall_run = 0
     not_ready_run = 0
     seen_acs_alive = False
@@ -159,6 +165,15 @@ def classify(
             sample.gfx_packet is not None
             and prev_packet is not None
             and sample.gfx_packet < prev_packet
+        )
+        # A pause/menu is read from PHYSICS stagnation, not status: a render wedge (#627 §2) keeps
+        # physics advancing while the graphics packet pins, whereas a pause stops physics — and AC
+        # often leaves status at LIVE when paused. Unknown physics (None) degrades to the
+        # graphics-only behavior so off-rig traces without a physics page are unaffected.
+        phys_stagnant = (
+            sample.phys_packet is not None
+            and prev_phys is not None
+            and sample.phys_packet == prev_phys
         )
         if live_since is None:
             if seen_acs_alive and not sample.acs_alive:
@@ -190,26 +205,39 @@ def classify(
                 # packetId reset means the render stream/session was replaced; never let a new
                 # acs.exe inherit stability time accumulated by its predecessor.
                 return LaunchVerdict.FROZE
-            if not_ready:
-                not_ready_run += 1
-                if not_ready_run >= stall_samples:
-                    return LaunchVerdict.FROZE
-            elif ready:
+            if phys_stagnant:
+                # #630 Part B — physics stopped advancing: the sim is paused or at a menu (the
+                # graphics packet may pin OR keep animating; either way this is NOT a render wedge,
+                # which holds physics ADVANCING). Hold: clear the freeze counters so an alt-tab
+                # cannot trip a false FROZE + taskkill, and suspend the stability clock so paused
+                # seconds are not credited as proven-live time (a session that only just resumed
+                # must still earn its window — finding: the delayed init wedge could otherwise land
+                # after handoff).
+                if prev_t is not None:
+                    live_since += sample.t - prev_t
                 not_ready_run = 0
-            else:
-                # An unavailable graphics observation cannot extend a consecutive run.
-                not_ready_run = 0
-            if advanced:
                 stall_run = 0
-            elif sample.gfx_packet is not None and sample.gfx_packet == prev_packet:
-                stall_run += 1
-                if stall_run >= stall_samples:
-                    return LaunchVerdict.FROZE
             else:
-                # Missing shared memory is unknown, not another observation of the same packet.
-                stall_run = 0
-            if advanced and ready and sample.t - live_since >= stability_window:
-                return LaunchVerdict.STABLE
+                if not_ready:
+                    not_ready_run += 1
+                    if not_ready_run >= stall_samples:
+                        return LaunchVerdict.FROZE
+                elif ready:
+                    not_ready_run = 0
+                else:
+                    # An unavailable graphics observation cannot extend a consecutive run.
+                    not_ready_run = 0
+                if advanced:
+                    stall_run = 0
+                elif sample.gfx_packet is not None and sample.gfx_packet == prev_packet:
+                    stall_run += 1
+                    if stall_run >= stall_samples:
+                        return LaunchVerdict.FROZE
+                else:
+                    # Missing shared memory is unknown, not another observation of the same packet.
+                    stall_run = 0
+                if advanced and ready and sample.t - live_since >= stability_window:
+                    return LaunchVerdict.STABLE
         # Only a reading correlated with a LIVE acs.exe may seed the comparison baseline.
         # ``acpmf_*`` is a shared section that survives its creator: a hard kill leaves it mapped
         # by whatever else has it open (measured on the rig: still PRESENT 14 s after taskkill),
@@ -219,6 +247,9 @@ def classify(
         # brief reaching the shipped verdict logic, not just the ad-hoc probes. See #628.
         if sample.gfx_packet is not None and sample.acs_alive:
             prev_packet = sample.gfx_packet
+        if sample.phys_packet is not None and sample.acs_alive:
+            prev_phys = sample.phys_packet
+        prev_t = sample.t
 
     if live_since is None:
         return LaunchVerdict.PENDING
@@ -390,7 +421,9 @@ def _log(msg: str) -> None:  # pragma: no cover - rig-only progress trace
 def _sample_now(
     read_state: Callable[
         [],
-        tuple[int | None, bool | None] | tuple[int | None, bool | None, bool | None],
+        tuple[int | None, bool | None]
+        | tuple[int | None, bool | None, bool | None]
+        | tuple[int | None, bool | None, bool | None, int | None],
     ],
     acs_alive: Callable[[], bool],
 ) -> Sample:  # pragma: no cover - rig-only
@@ -401,17 +434,21 @@ def _sample_now(
     state = read_state()
     observed_alive = acs_alive()
     observed_at = time.monotonic()
+    phys_packet: int | None = None
     if len(state) == 2:
         packet, entry_ready = state
         drivable = entry_ready
-    else:
+    elif len(state) == 3:
         packet, entry_ready, drivable = state
+    else:
+        packet, entry_ready, drivable, phys_packet = state
     return Sample(
         t=observed_at,
         gfx_packet=packet,
         acs_alive=observed_alive,
         entry_ready=entry_ready,
         drivable=drivable,
+        phys_packet=phys_packet,
     )
 
 
@@ -1000,17 +1037,23 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     from tools.ac_harness.shared_memory import SharedMemoryReader, SharedMemoryUnavailable
     from tools.ac_harness.window_utils import minimize_foreground_window
 
-    def read_state() -> tuple[int | None, bool | None]:
-        """Current render packet and LIVE+not-in-pit readiness from one graphics snapshot."""
+    def read_state() -> tuple[int | None, bool | None, int | None]:
+        """Render packet, LIVE+not-in-pit readiness, and the PHYSICS packet from one snapshot.
+
+        The physics packetId is the reliable pause signal (it stops at a pause/menu but keeps
+        advancing during a render wedge); ``classify`` uses its stagnation for #630 Part B.
+        """
         try:
-            reader = SharedMemoryReader(with_physics=False)
+            reader = SharedMemoryReader(with_physics=True)
         except (SharedMemoryUnavailable, OSError):
-            return None, None
+            return None, None, None
         try:
             graphics = reader.read_graphics()
-            return graphics.packet_id, graphics.is_live and not graphics.is_in_pit
+            physics = reader.read_physics()
+            ready = graphics.is_live and not graphics.is_in_pit
+            return graphics.packet_id, ready, (physics.packet_id if physics else None)
         except (SharedMemoryUnavailable, OSError):
-            return None, None
+            return None, None, None
         finally:
             reader.close()
 
@@ -1109,23 +1152,24 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 )
             )
 
-            def read_attempt_state() -> tuple[int | None, bool | None, bool | None]:
+            def read_attempt_state() -> tuple[int | None, bool | None, bool | None, int | None]:
                 """Report shared memory; trust readiness only once the packet proves a live owner.
 
                 No process-liveness probe is consulted here on purpose (see
                 :class:`SectionOwnershipGate`): a corpse's fields — including ``is_live`` — are
                 trusted only after the render packet ADVANCES, which only a live process can do.
-                ``read_state`` already degrades a shared-memory failure to ``(None, None)``, which
+                ``read_state`` degrades a shared-memory failure to ``(None, None, None)``, which
                 ``classify`` treats as "no observation"; process death is ended by ``classify`` via
-                the debounced ``Sample.acs_alive``.
+                the debounced ``Sample.acs_alive``. The physics packet rides straight through so
+                ``classify`` can read a pause from its stagnation (#630 Part B).
                 """
                 _retry_telemetry_cleanup_holds(telemetry_cleanup_holds)
                 if release_requested():
                     raise _OperatorRelease
 
-                packet, entry_ready = read_state()
+                packet, entry_ready, phys_packet = read_state()
                 ready, drivable = readiness.observe(packet=packet, entry_ready=entry_ready)
-                return packet, ready, drivable
+                return packet, ready, drivable, phys_packet
 
             try:
                 verdict = _watch_live(

@@ -164,6 +164,80 @@ def test_sustained_not_ready_state_fails_the_attempt():
     )
 
 
+def steady_phys(
+    start_t: float, end_t: float, *, first_packet: int, first_phys: int, step: float = 1.0
+) -> list[Sample]:
+    """A healthy render trace where BOTH the graphics and physics packets advance."""
+    out: list[Sample] = []
+    packet, phys, t = first_packet, first_phys, start_t
+    while t <= end_t:
+        out.append(Sample(t=t, gfx_packet=packet, acs_alive=True, phys_packet=phys))
+        packet += 60
+        phys += 40
+        t += step
+    return out
+
+
+def test_pause_via_physics_stagnation_is_not_a_freeze():
+    """#630 Part B — a pause is read from PHYSICS stagnation, not status (which AC leaves LIVE).
+
+    An alt-tab pins the graphics packet AND stops physics; that must not FROZE + taskkill a healthy
+    session. A real wedge (physics still advancing) is unaffected — see the next test.
+    """
+    samples = steady_phys(0.0, 10.0, first_packet=100, first_phys=5000)
+    # 12 s paused: gfx pinned, physics pinned (status may still read LIVE, entry_ready False).
+    samples += [
+        Sample(t=11.0 + i, gfx_packet=760, acs_alive=True, entry_ready=False, phys_packet=5480)
+        for i in range(12)
+    ]
+    # ...then the operator resumes and both streams advance, completing the window.
+    samples += steady_phys(24.0, 90.0, first_packet=820, first_phys=5520)
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.STABLE
+    )
+
+
+def test_render_wedge_with_physics_still_advancing_is_froze():
+    """The pause carve-out must not weaken real freeze detection: gfx pinned + phys ADVANCING."""
+    samples = steady_phys(0.0, 10.0, first_packet=100, first_phys=5000)
+    held = samples[-1].gfx_packet
+    phys = samples[-1].phys_packet
+    # The #627 §2 signature: graphics packet pinned while physics keeps advancing.
+    samples += [
+        Sample(t=11.0 + i, gfx_packet=held, acs_alive=True, phys_packet=phys + 40 * (i + 1))
+        for i in range(5)
+    ]
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.FROZE
+    )
+
+
+def test_pause_suspends_the_stability_clock():
+    """#630 Part B — paused seconds are not credited toward the window.
+
+    Without suspension, a session that goes live, pauses for longer than the window, then emits one
+    resumed frame would satisfy ``t - live_since >= window`` immediately and hand off without a real
+    post-resume render window — letting the delayed init wedge land after handoff.
+    """
+    samples = steady_phys(0.0, 10.0, first_packet=100, first_phys=5000)
+    # Paused (physics pinned) from t=11 to t=70 — 60 s, well past the 45 s window.
+    samples += [
+        Sample(t=11.0 + i, gfx_packet=760, acs_alive=True, entry_ready=False, phys_packet=5480)
+        for i in range(60)
+    ]
+    # One resumed live frame: the window must NOT be satisfied yet (paused time excluded).
+    samples.append(Sample(t=71.0, gfx_packet=820, acs_alive=True, phys_packet=5520))
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.PENDING
+    )
+
+
 def test_unfinished_live_trace_is_pending_not_a_terminal_failure():
     samples = steady(0.0, 20.0, first_packet=100)
     assert classify(samples, go_live_timeout=10.0, stability_window=60.0) is LaunchVerdict.PENDING
