@@ -65,6 +65,9 @@ jobs:
 
       - name: Upload process-miner audit sidecar
         if: always()
+        # Audit telemetry must never gate rules delivery: a transient upload-artifact
+        # failure (quota, network) would otherwise skip commit/push/PR (review, gov-hub#289).
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: process-miner-audit-${{ github.run_id }}
