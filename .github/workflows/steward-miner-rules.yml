@@ -1,11 +1,14 @@
 # Rules-miner Steward consumer — wires this repo's `chore: weekly miner rules` PRs into the
-# hub-canonical deterministic gate (agorokh/governance-hub#216, epic #197). Mirror of the
-# vault-automerge cross-repo pattern: calls the PRIVATE hub's composite action with THIS repo's
-# OWN GITHUB_TOKEN (no central fleet super-token). Actuates this repo's own PR only.
+# hub-canonical deterministic gate (agorokh/governance-hub#216, epic #197). Actuates this repo's
+# own PR only, with this repo's OWN GITHUB_TOKEN.
 #
-# Ships REPORT-ONLY: comments the verdict + digest and files a council issue for escalations, but
-# closes/labels NOTHING until the STEWARD_MINER_MODE repo variable is set to `enforce` after
-# observing one live report cycle. Pinned to the hub SHA that carries the full Steward stack.
+# PUBLIC-SPOKE RESOLUTION (gov-hub#197 loop break 3): a public repo can NEVER resolve a private
+# repo's action via cross-repo `uses:` ("Unable to resolve action `agorokh/governance-hub`, not
+# found" — failed identically 2026-07-13 and 2026-07-20; private-action sharing only extends to
+# private repos). Mirror this repo's own proven vault-automerge pattern (issue #329): mint the
+# fleet-bot App token, check the hub out at its pinned SHA, run the composite via a local path.
+# Reference-not-vendor is preserved — the logic lives ONCE in the hub at this SHA; only the fetch
+# mechanism differs from private spokes.
 name: steward-miner-rules
 
 on:
@@ -42,8 +45,23 @@ jobs:
   steward:
     runs-on: ubuntu-latest
     steps:
+      - name: Mint fleet-bot token (read governance-hub)
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.FLEET_BOT_APP_ID }}
+          private-key: ${{ secrets.FLEET_BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: governance-hub
+      - name: Check out the pinned governance-hub steward action
+        uses: actions/checkout@v7
+        with:
+          repository: agorokh/governance-hub
+          ref: e9e5f352d44bd802b3da1150b9ab6da517b3df1d  # pragma: allowlist secret (git SHA, not a secret)
+          token: ${{ steps.app-token.outputs.token }}
+          path: .governance-hub
       - name: Adjudicate the miner-rules PR
-        uses: agorokh/governance-hub/.github/actions/steward-miner-rules@6d94f29a8bf8b66138a46d0dab328f452fd0c176
+        uses: ./.governance-hub/.github/actions/steward-miner-rules
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repo: ${{ github.repository }}
