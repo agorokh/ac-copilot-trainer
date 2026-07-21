@@ -11,8 +11,9 @@ This module answers it from three cheap, independent signals:
 ``S1`` ``QueryThreadCycleTime`` per thread → **burning CPU vs blocked**. A blocked thread accrues
     ~0 cycles; a spinning one accrues ~a full core. This alone kills the deadlock explanation.
 ``S2`` RIP sampled from repeated NONINVASIVE ``cdb`` attaches → **tight loop vs long computation**.
-    A long computation walks through code (RIP wanders); a tight loop pins RIP inside a few dozen
-    bytes indefinitely.
+    A long computation walks through code (RIP wanders); a tight loop pins RIP inside a small
+    window across the whole sampling interval (the render packet is the independent progress
+    check: a converging loop would let it advance).
 ``S3`` ``acpmf_graphics`` vs ``acpmf_physics`` packet ids, with an ``acs.exe`` liveness check →
     the #627 §2 discriminator, and the guard against trap §7.1 (shared-memory sections outlive
     ``acs.exe``, so a dead sim reads identical to a wedged one without the process check).
@@ -115,8 +116,10 @@ def classify_forensics(
         return (
             ForensicVerdict.LIVELOCK_CONFIRMED,
             f"the main thread burns CPU while the render packet never advances, and RIP stays "
-            f"inside a {span}-byte window across the sampling interval. A thread cannot "
-            "be waiting with RIP on moving code: this is a tight loop that is not converging.",
+            f"inside a {span}-byte window across the sampling interval. RIP locality alone cannot "
+            "rule out a finite loop longer than that interval — the independent progress check is "
+            "the render packet itself, which a converging loop would let advance. No sample shows "
+            "progress: a tight loop with no observed convergence (re-run to confirm).",
         )
     return (
         ForensicVerdict.LONG_COMPUTATION,
