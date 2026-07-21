@@ -185,10 +185,15 @@ def selected_tid_confirmed(raw: str, tid: int) -> bool:
 
 
 def find_cdb() -> Path | None:  # pragma: no cover - rig-only
-    """Locate ``cdb.exe`` without pinning a WinDbg version (a store update breaks a pinned path)."""
+    """Locate ``cdb.exe`` without pinning a WinDbg version (a store update breaks a pinned path).
+
+    The Windows Kits debugger is preferred: the Store-packaged cdb under ``WindowsApps`` commonly
+    fails ``CreateProcess`` for a normal operator (package ACLs), so preferring it would leave RIP
+    sampling broken on machines that also have a working Kits install.
+    """
     for pattern in (
-        r"C:\Program Files\WindowsApps\Microsoft.WinDbg_*\amd64\cdb.exe",
         r"C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe",
+        r"C:\Program Files\WindowsApps\Microsoft.WinDbg_*\amd64\cdb.exe",
     ):
         hits = sorted(glob.glob(pattern))
         if hits:
@@ -326,6 +331,10 @@ def cdb_snapshot(
         raw = proc.stdout + proc.stderr
     except subprocess.TimeoutExpired:
         return RipSample(time.time(), None, "", "cdb timed out")
+    except OSError as exc:
+        # The binary can vanish or refuse CreateProcess (WindowsApps ACLs) between the glob and
+        # exec — degrade to INCONCLUSIVE like every other capture failure, never crash the run.
+        return RipSample(time.time(), None, "", f"cdb failed to start: {exc}")
     if not selected_tid_confirmed(raw, tid):
         return RipSample(time.time(), None, "", raw)
     stack_lines: list[str] = []
