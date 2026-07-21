@@ -63,6 +63,18 @@ jobs:
         run: |
           echo "::warning::Process miner wrote 0 new learned artifact files this run (stricter clustering or sparse review data)."
 
+      - name: Upload process-miner audit sidecar
+        if: always()
+        # Audit telemetry must never gate rules delivery: a transient upload-artifact
+        # failure (quota, network) would otherwise skip commit/push/PR (review, gov-hub#289).
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: process-miner-audit-${{ github.run_id }}
+          path: reports/process_miner
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Configure git
         run: |
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -79,11 +91,17 @@ jobs:
           fi
           BRANCH="chore/miner-weekly-$(date -u +%Y%m%d)-${GITHUB_RUN_ID}"
           git checkout -b "$BRANCH"
-          git add .claude/rules/learned .cursor/rules/learned reports/process_miner AGENTS.md || true
+          # Rules-only, add-only staging (epic gov-hub#197: scope_pure_for_pr). The miner may
+          # still touch AGENTS.md / reports/process_miner in the runner workspace: reports are
+          # preserved as a workflow artifact above; AGENTS.md deltas are intentionally not
+          # emitted (the learned-rules mirrors are the sole rules channel).
+          git add -- ':(glob).claude/rules/learned/**/*.md' || true
+          git add -- ':(glob).cursor/rules/learned/**/*.mdc' || true
           if git diff --cached --quiet; then
             echo "No changes to commit."
             exit 0
           fi
+          scripts/process_miner_pr_scope.sh
           git commit -m "chore: weekly process miner — learned rules"
           git push --set-upstream origin "$BRANCH"
           if gh pr create \
