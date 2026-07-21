@@ -106,6 +106,46 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-07-20) — #630 Parts A+B: the launcher no longer lies about a frozen session
+
+Two false-verdict paths in the operator-facing launcher, both merged.
+
+**Part B** (PR [#637](https://github.com/agorokh/ac-copilot-trainer/pull/637), `5497775`) — a pause
+was being treated as a freeze. The first cut keyed on `status == PAUSE`, which review correctly
+killed: `shared_memory.py` documents that AC *"sometimes doesn't bother setting Status to Pause"*.
+The reliable signal is **physics-packet stagnation** — a render wedge keeps physics ADVANCING while
+graphics pins (#627 §2); a pause stops physics. `Sample.phys_packet` + a `pause_budget` (300 s) cap
+so an unbounded hold can never mask a real dual-stream hang.
+
+**Part A** (PR [#642](https://github.com/agorokh/ac-copilot-trainer/pull/642), `cea4111`) — the
+launcher went blind after handoff. `_hold_stable_session` polled only process liveness, so a wedge
+landing AFTER the stable handoff was invisible and a frozen session was held as healthy forever —
+**the operator's original report**. `StableSessionWatch` now proves a wedge with the same physics
+discriminator (so an alt-tab can never false-fire), and Game Point carries a distinct **`wedged`**
+state rendered as "AC WEDGED" — previously every non-`stable` phase collapsed to "STABILIZING AC",
+which would have shown a frozen session as a startup in progress.
+
+**Five review rounds shaped Part A**, every finding real: the publish retry (a swallowed OSError
+left the lock reading `stable`), the unreadable-blip contract, the wedge-clock anchor being moved
+forward by a blip (deferring detection by the whole gap), and twice-corrected recovery text
+(RELEASE AC is asynchronous — the driver must wait for idle before STABLE AC). One antigravity
+finding (`_launch_once` unwired) was a false positive, rebutted with a pasted grep: no such symbol,
+one call site, wired.
+
+Rig-verified: stable handoff on attempt 1, both streams advancing during the hold, `phase=stable`
+throughout — the detector correctly did NOT fire on a healthy session (the important negative).
+
+**Resume here / what remains on #630:**
+- **Part C** — the init livelock buckets as `never_live`, not `froze`, so any freeze rate computed
+  from the FROZE bucket understates it (matters for #627 measurement).
+- **Part D** — Car0 drivability is a one-shot latch per attempt.
+- **Part E** — no machine-readable per-attempt record (#627 §9.2 wants verdict+uptime+launch-index
+  per trial); the bespoke `.scratch/capture_freeze.py` exists only because the shipped tool cannot.
+- **Part F** — promote `.scratch/freeze_forensics.py` (the validated QueryThreadCycleTime spin-vs-block
+  instrument) into `tools/`; it is gitignored and invisible to future sessions.
+- Optional follow-up surfaced in review: make RELEASE AC → STABLE AC atomic so wedge recovery is one
+  action instead of a wait-and-retry.
+
 ## Delivered (2026-07-20) — #630 Part B pause-aware launch verdicts MERGED (PR #637)
 
 **PR [#637](https://github.com/agorokh/ac-copilot-trainer/pull/637) MERGED** `2026-07-20T19:43Z` as
