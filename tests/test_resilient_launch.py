@@ -1593,3 +1593,90 @@ class TestStableSessionWatch:
         assert watch.observe(gfx_packet=5000, phys_packet=9060, now=25.0) is True
         # A later advance does not un-wedge it (terminal per #627 §3.2).
         assert watch.observe(gfx_packet=6000, phys_packet=9090, now=26.0) is True
+
+
+def test_unreadable_sample_does_not_restart_the_wedge_clock() -> None:
+    """#630 Part A — an unreadable blip must not defer (or defeat) detection of a real wedge.
+
+    Resetting the clock on ``None`` would let a periodically-unreadable section keep restarting the
+    window while the render thread stays dead.
+    """
+    watch = StableSessionWatch(wedge_seconds=20.0)
+    watch.observe(gfx_packet=5000, phys_packet=9000, now=0.0)
+    watch.observe(gfx_packet=5000, phys_packet=9030, now=5.0)  # wedge clock running from t=0
+    watch.observe(gfx_packet=None, phys_packet=None, now=10.0)  # blip: neutral, clock keeps running
+    assert watch.observe(gfx_packet=5000, phys_packet=9060, now=20.0) is True
+
+
+def test_a_resumed_render_after_a_blip_still_clears_the_clock() -> None:
+    """The neutral-blip rule must not make the clock un-clearable: real progress still resets it."""
+    watch = StableSessionWatch(wedge_seconds=20.0)
+    watch.observe(gfx_packet=5000, phys_packet=9000, now=0.0)
+    watch.observe(gfx_packet=None, phys_packet=None, now=5.0)
+    watch.observe(gfx_packet=5100, phys_packet=9030, now=10.0)  # render advanced -> clock cleared
+    assert watch.observe(gfx_packet=5100, phys_packet=9060, now=25.0) is False
+
+
+def test_hold_retries_a_failed_wedged_phase_publish() -> None:
+    """#630 Part A — a swallowed publish failure would leave Game Point showing a healthy hold.
+
+    That is the exact failure this detection exists to end, so the durable write is retried until
+    it lands rather than attempted once inside the latch transition.
+    """
+    polls = {"n": 0}
+
+    def acs_alive() -> bool:
+        polls["n"] += 1
+        return polls["n"] <= 10
+
+    phys = {"p": 1000}
+
+    def read_state() -> tuple[int | None, bool | None, int | None]:
+        phys["p"] += 10  # physics advancing while graphics stays pinned -> a wedge
+        return 500, True, phys["p"]
+
+    published = {"attempts": 0}
+
+    def set_phase(name: str) -> None:
+        assert name == "wedged"
+        published["attempts"] += 1
+        if published["attempts"] == 1:
+            raise OSError("durable phase write failed")
+
+    _hold_stable_session(
+        acs_alive,
+        lambda: False,
+        poll=0.0,
+        read_state=read_state,
+        set_phase=set_phase,
+        wedge_seconds=1e-6,
+    )
+
+    # First attempt raised; the loop must have retried and landed it.
+    assert published["attempts"] >= 2
+
+
+def test_hold_publishes_the_wedged_phase_exactly_once_on_success() -> None:
+    polls = {"n": 0}
+
+    def acs_alive() -> bool:
+        polls["n"] += 1
+        return polls["n"] <= 10
+
+    phys = {"p": 1000}
+
+    def read_state() -> tuple[int | None, bool | None, int | None]:
+        phys["p"] += 10
+        return 500, True, phys["p"]
+
+    calls: list[str] = []
+    _hold_stable_session(
+        acs_alive,
+        lambda: False,
+        poll=0.0,
+        read_state=read_state,
+        set_phase=calls.append,
+        wedge_seconds=1e-6,
+    )
+
+    assert calls == ["wedged"]
