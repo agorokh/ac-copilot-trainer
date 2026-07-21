@@ -38,6 +38,7 @@ import glob
 import re
 import subprocess
 import time
+from collections.abc import Sequence
 from ctypes import wintypes
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -69,15 +70,21 @@ def classify_forensics(
     burning_cpu: bool,
     gfx_static: bool,
     phys_advancing: bool,
-    rip_samples_observed: int,
-    rip_span_bytes: int | None,
+    rips: Sequence[int],
     tight_loop_bytes: int = DEFAULT_TIGHT_LOOP_BYTES,
 ) -> tuple[ForensicVerdict, str]:
     """Decide the verdict from the three signals. Pure — no I/O, no clock.
 
     The order of these checks is the whole design: each one rules out a cheaper explanation before
     the more expensive claim is allowed.
+
+    ``rips`` is the observed instruction pointers themselves, not a pre-computed count and span.
+    Passing those two separately made an inconsistent state representable — a caller could report
+    "2 samples" with a ``None`` span, which fell through to ``LONG_COMPUTATION``, the single verdict
+    that must never be reached without evidence. Deriving both here makes that unrepresentable.
     """
+    observed = list(rips)
+    span = rip_span(observed)
     if not gfx_static:
         return (
             ForensicVerdict.NOT_WEDGED,
@@ -97,23 +104,23 @@ def classify_forensics(
             "the hottest thread is not consuming CPU, so the main thread is WAITING, not "
             "spinning. That is a block/deadlock — a different bug from the livelock hypothesis.",
         )
-    if rip_samples_observed < MIN_RIP_SAMPLES:
+    if span is None:
         return (
             ForensicVerdict.INCONCLUSIVE_INSUFFICIENT_RIP_SAMPLES,
-            f"only {rip_samples_observed} RIP sample(s) were read (need >={MIN_RIP_SAMPLES}). CPU "
+            f"only {len(observed)} RIP sample(s) were read (need >={MIN_RIP_SAMPLES}). CPU "
             "is burning, but spin-vs-long-computation cannot be decided: one sample carries no "
             "information about wandering. Re-run the capture against the still-live process.",
         )
-    if rip_span_bytes is not None and rip_span_bytes < tight_loop_bytes:
+    if span < tight_loop_bytes:
         return (
             ForensicVerdict.LIVELOCK_CONFIRMED,
             f"the main thread burns CPU while the render packet never advances, and RIP stays "
-            f"inside a {rip_span_bytes}-byte window across the sampling interval. A thread cannot "
+            f"inside a {span}-byte window across the sampling interval. A thread cannot "
             "be waiting with RIP on moving code: this is a tight loop that is not converging.",
         )
     return (
         ForensicVerdict.LONG_COMPUTATION,
-        f"CPU is burning but RIP wanders across {rip_span_bytes} bytes — the thread is walking "
+        f"CPU is burning but RIP wanders across {span} bytes — the thread is walking "
         "through code, so this is a long finite computation rather than a tight loop.",
     )
 
@@ -133,7 +140,10 @@ TH32CS_SNAPTHREAD = 0x00000004
 THREAD_QUERY_LIMITED_INFORMATION = 0x0800
 INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
 
-_RIP_RE = re.compile(r"rip=([0-9a-f]{16})", re.IGNORECASE)
+#: WinDbg/cdb print 64-bit addresses either flat or with a backtick separator
+#: (``rip=00007ff6`00001234``). Missing the backtick form would yield zero parsed RIPs and
+#: silently degrade every diagnosis to INCONCLUSIVE.
+_RIP_RE = re.compile(r"rip=([0-9a-f`]{16,17})", re.IGNORECASE)
 
 
 def find_cdb() -> Path | None:  # pragma: no cover - rig-only

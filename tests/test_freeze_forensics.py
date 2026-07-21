@@ -22,8 +22,7 @@ def _classify(**overrides):
         "burning_cpu": True,
         "gfx_static": True,
         "phys_advancing": True,
-        "rip_samples_observed": 3,
-        "rip_span_bytes": 64,
+        "rips": [0x7FF000001000, 0x7FF000001020, 0x7FF000001040],
     }
     args.update(overrides)
     return classify_forensics(**args)
@@ -48,7 +47,7 @@ def test_a_recovered_session_is_not_a_wedge() -> None:
 
 def test_a_recovered_session_wins_over_every_other_signal() -> None:
     """Even with CPU burning and a pinned RIP, an advancing render packet means no wedge."""
-    verdict, _ = _classify(gfx_static=False, burning_cpu=True, rip_span_bytes=8)
+    verdict, _ = _classify(gfx_static=False, burning_cpu=True, rips=[0x1000, 0x1008])
     assert verdict is ForensicVerdict.NOT_WEDGED
 
 
@@ -71,27 +70,27 @@ def test_one_rip_sample_is_inconclusive_not_a_long_computation() -> None:
     Falling through to LONG_COMPUTATION would print "RIP wanders" from one point — and that is the
     one verdict that would wrongly kill the livelock hypothesis the upstream report rests on.
     """
-    verdict, reading = _classify(rip_samples_observed=1, rip_span_bytes=None)
+    verdict, reading = _classify(rips=[0x1000])
     assert verdict is ForensicVerdict.INCONCLUSIVE_INSUFFICIENT_RIP_SAMPLES
     assert "cannot be decided" in reading
 
 
 def test_zero_rip_samples_is_inconclusive() -> None:
-    verdict, _ = _classify(rip_samples_observed=0, rip_span_bytes=None)
+    verdict, _ = _classify(rips=[])
     assert verdict is ForensicVerdict.INCONCLUSIVE_INSUFFICIENT_RIP_SAMPLES
 
 
 def test_wandering_rip_is_a_long_computation() -> None:
-    verdict, reading = _classify(rip_span_bytes=DEFAULT_TIGHT_LOOP_BYTES * 4)
+    verdict, reading = _classify(rips=[0x1000, 0x1000 + DEFAULT_TIGHT_LOOP_BYTES * 4])
     assert verdict is ForensicVerdict.LONG_COMPUTATION
     assert "wanders" in reading
 
 
 def test_the_tight_loop_boundary_is_exclusive() -> None:
-    assert _classify(rip_span_bytes=DEFAULT_TIGHT_LOOP_BYTES - 1)[0] is (
+    assert _classify(rips=[0x1000, 0x1000 + DEFAULT_TIGHT_LOOP_BYTES - 1])[0] is (
         ForensicVerdict.LIVELOCK_CONFIRMED
     )
-    assert _classify(rip_span_bytes=DEFAULT_TIGHT_LOOP_BYTES)[0] is (
+    assert _classify(rips=[0x1000, 0x1000 + DEFAULT_TIGHT_LOOP_BYTES])[0] is (
         ForensicVerdict.LONG_COMPUTATION
     )
 
@@ -104,3 +103,24 @@ def test_rip_span_needs_two_samples() -> None:
 
 def test_rip_span_is_the_full_spread_not_the_last_step() -> None:
     assert rip_span([0x1000, 0x1010, 0x1004]) == 0x10
+
+
+def test_two_identical_rips_are_a_zero_span_tight_loop() -> None:
+    """A perfectly pinned RIP is span 0 — the strongest livelock evidence, not a missing span."""
+    verdict, _ = _classify(rips=[0x7FF000001000, 0x7FF000001000])
+    assert verdict is ForensicVerdict.LIVELOCK_CONFIRMED
+
+
+def test_rip_regex_parses_both_windbg_address_forms() -> None:
+    """WinDbg prints 64-bit addresses flat OR backtick-separated (``00007ff6`00001234``).
+
+    Missing the backtick form yields zero parsed RIPs, silently degrading every diagnosis to
+    INCONCLUSIVE — the instrument would look like it works while proving nothing.
+    """
+    from tools.ac_harness.freeze_forensics import _RIP_RE
+
+    flat = _RIP_RE.search("rax=0000000000000001 rip=00007ff600001234 rsp=...")
+    ticked = _RIP_RE.search("rax=0000000000000001 rip=00007ff6`00001234 rsp=...")
+
+    assert flat is not None and int(flat.group(1).replace("`", ""), 16) == 0x00007FF600001234
+    assert ticked is not None and int(ticked.group(1).replace("`", ""), 16) == 0x00007FF600001234
