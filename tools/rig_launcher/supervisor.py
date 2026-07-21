@@ -718,8 +718,9 @@ class GamePointSupervisor:
                 "ac_session",
                 False,
                 "wedged",
-                "resilient session WEDGED after handoff (render frozen); press RELEASE AC "
-                "then STABLE AC to recover" + (f": {detail}" if detail else ""),
+                "resilient session WEDGED after handoff (render frozen); press RELEASE AC, "
+                "wait for the rig to report idle, then STABLE AC"
+                + (f": {detail}" if detail else ""),
             )
         if phase != "stable":
             return ProbeResult(

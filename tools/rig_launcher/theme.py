@@ -183,7 +183,7 @@ def summary_for(status: GamePointStatus, port: int = 8765) -> tuple[str, str, st
                 "AC WEDGED",
                 "brake",
                 status.resilient.detail
-                or "session froze after handoff; press RELEASE AC then STABLE AC",
+                or "session froze after handoff; RELEASE AC, wait for idle, then STABLE AC",
             )
         if resilient_state in {"starting", "stabilizing"}:
             return (
