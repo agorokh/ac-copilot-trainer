@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-20T18:40:00Z
+last_updated: 2026-07-21T06:10:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/mcp-preflight-guard-2026-07-20.md
@@ -105,6 +105,49 @@ relates_to:
 ---
 
 # Next session handoff
+
+## In flight (2026-07-21) — #630 Part F: freeze-forensics instrument promoted; PR #644 green & converged, awaiting merge
+
+**PR [#644](https://github.com/agorokh/ac-copilot-trainer/pull/644) OPEN**, head `2544c9c`, CI
+green (build / canonical-docs / conformance), all review threads resolved — **ready to merge**.
+Promotes `.scratch/freeze_forensics.py` into `tools/ac_harness/freeze_forensics.py` (S1
+`QueryThreadCycleTime` spin-vs-block, S2 noninvasive cdb RIP sampling, the S3 contract inside
+`classify_forensics`; 14 unit tests).
+
+**Five review rounds, every finding real** (codex 4×P1, daemon cursor HIGH, daemon antigravity
+HIGH-advisory):
+
+1. `int(match.group(1), 16)` crashed on WinDbg's backtick address form → extracted `parse_rip`
+   (regex + strip + ValueError-safe) as the single source of truth; the old test re-implemented
+   the sanitization and masked the gap (the antigravity test-production-drift point) — it now
+   calls the production parser directly.
+2. `LIVELOCK_CONFIRMED` overclaimed non-convergence → the verdict text now names the residual
+   class (a finite tight loop longer than the sampling interval) and points at the independent
+   progress check already in the design (the render packet → `NOT_WEDGED` on re-run). Verdict and
+   gate order unchanged.
+3. `tid=None` default selected thread index 0 (parked in ntdll) → `tid` is now a required keyword
+   argument sourced from `sample_cycles`' hottest row; the `~0s` fallback is deleted, so the
+   documented misdiagnosis is unrepresentable.
+4. Daemon HIGH: a failed `~~[0xTID]s` does NOT abort cdb's `-c` script — registers still print
+   from the default (parked) context → a `.printf "AC_TID=%x"` marker right after the switch;
+   unconfirmed transcripts return `rip=None` so the verdict stays INCONCLUSIVE.
+5. The substring marker check accepted hex-prefix tids (`AC_TID=1a2b` vs requested `0x1a`) →
+   exact regex capture + integer compare; the prefix case is pinned in tests.
+
+**Out of scope, tracked:** codex "no runnable capture path" (the module has no `main()`) → filed
+as **Part G** on #630 ([comment](https://github.com/agorokh/ac-copilot-trainer/issues/630#issuecomment-5030577466)):
+S1→S2→S3 driver + machine-readable record (overlaps Part E).
+
+**Two ops notes for next session:**
+- The ws-ops daemon reviewed only 3 of 6 head SHAs this session (465 s lag once, then silent for
+  the last three pushes despite full cooldowns). Absence-after-cooldown is vacuous per the
+  resolve-pr anti-hang rule, but the trigger health is worth a glance.
+- This host's git identity is unset: the session's commits carry
+  `arseny_gorokh@Arsenys-Mac-Studio.local` instead of the branch's `Arseny <agorokh@example.com>`.
+  Amend before merge if attribution matters, or set `git config` on this host.
+
+**Resume here:** merge PR #644 (squash). Remaining on #630: Parts C, D, E, G. Local `main` is 13
+behind origin — sync on the post-merge pass.
 
 ## Delivered (2026-07-20) — #630 Parts A+B: the launcher no longer lies about a frozen session
 
