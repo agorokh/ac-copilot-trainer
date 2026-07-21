@@ -175,6 +175,16 @@ def summary_for(status: GamePointStatus, port: int = 8765) -> tuple[str, str, st
                 "brake",
                 status.resilient.detail or "another rig session owns Assetto Corsa",
             )
+        if resilient_state == "wedged":
+            # #630 Part A — a post-handoff render freeze is a distinct, actionable state: the
+            # session is dead and needs a relaunch. Rendering it as "STABILIZING AC" would tell
+            # the driver a start is still in progress while the picture is frozen.
+            return (
+                "AC WEDGED",
+                "brake",
+                status.resilient.detail
+                or "session froze after handoff; RELEASE AC, wait for idle, then STABLE AC",
+            )
         if resilient_state in {"starting", "stabilizing"}:
             return (
                 "STABILIZING AC",

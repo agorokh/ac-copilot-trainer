@@ -309,3 +309,25 @@ def test_display_ladder_prefers_bundled_semicondensed_family() -> None:
     # the Windows fallbacks.
     assert theme.FONT_DISPLAY[:2] == ("Saira SemiCondensed", "Saira Semi Condensed")
     assert "Bahnschrift" in theme.FONT_DISPLAY
+
+
+def test_post_handoff_wedge_renders_as_a_distinct_state() -> None:
+    """#630 Part A — a frozen handed-off session must not read as an in-progress start.
+
+    Every non-``stable`` phase used to collapse into "STABILIZING AC", so a post-handoff render
+    freeze told the driver a startup was still running while the picture sat frozen.
+    """
+    status = _status(
+        resilient=ProbeResult(
+            "ac_session",
+            False,
+            "wedged",
+            "resilient session WEDGED after handoff (render frozen); relaunch to recover",
+        )
+    )
+
+    assert theme.summary_for(status) == (
+        "AC WEDGED",
+        "brake",
+        "resilient session WEDGED after handoff (render frozen); relaunch to recover",
+    )

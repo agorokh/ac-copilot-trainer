@@ -376,6 +376,84 @@ class AttemptReadiness:
         return entry_ready, (self.car0_ready if entry_ready is True else None)
 
 
+#: seconds a held session's render packet may stay pinned — while physics keeps advancing —
+#: before the hold reports a post-handoff wedge. Well past any frame-time hitch, and #627 §3.2
+#: records a wedge as terminal once it lands, so a conservative window rules out false alarms.
+DEFAULT_HOLD_WEDGE_SECONDS = 20.0
+
+
+class StableSessionWatch:
+    """Detect a render freeze that lands AFTER the stable session was handed to the operator.
+
+    The hold loop polls only process liveness and the release sentinel, so a render-thread wedge
+    that pins the graphics packet while ``acs.exe`` stays alive — the #627 §2 signature, and the
+    operator's literal "the video freezes but the tool says everything's fine" report — is
+    invisible: the launcher holds a dead session as healthy indefinitely (#630 Part A).
+
+    The wedge test is the same discriminator ``classify`` uses (#630 Part B): **graphics pinned
+    while PHYSICS keeps advancing**. Watching the graphics packet alone would latch a false wedge
+    on an ordinary alt-tab, because a pause pins graphics too — it just stops physics as well. So a
+    pause can never trip this, and only a genuine render-thread stall can.
+    """
+
+    def __init__(self, wedge_seconds: float = DEFAULT_HOLD_WEDGE_SECONDS) -> None:
+        if wedge_seconds <= 0:
+            raise ValueError("wedge_seconds must be > 0")
+        self._wedge_seconds = wedge_seconds
+        self._prev_gfx: int | None = None
+        self._prev_phys: int | None = None
+        self._prev_t: float | None = None
+        self._wedged_since: float | None = None
+        self._wedged = False
+
+    @property
+    def wedged(self) -> bool:
+        return self._wedged
+
+    def observe(self, *, gfx_packet: int | None, phys_packet: int | None, now: float) -> bool:
+        """Record one held-session sample; return True once a sustained render wedge is proven.
+
+        Latches, so the caller surfaces the wedge exactly once. An unreadable packet neither
+        advances nor confirms; a pause (physics stagnant) clears the wedge clock.
+        """
+        if self._wedged:
+            return True
+        gfx_known = gfx_packet is not None and self._prev_gfx is not None
+        phys_known = phys_packet is not None and self._prev_phys is not None
+        gfx_pinned = gfx_known and gfx_packet == self._prev_gfx
+        gfx_moved = gfx_known and gfx_packet != self._prev_gfx
+        phys_advancing = phys_known and phys_packet > self._prev_phys
+        phys_stagnant = phys_known and phys_packet == self._prev_phys
+        if gfx_pinned and phys_advancing:
+            # Anchor at the previous sample: the packet was already pinned at that value then, so
+            # the stall is measured from when it stopped moving, not from the first repeat we saw.
+            if self._wedged_since is None:
+                self._wedged_since = self._prev_t if self._prev_t is not None else now
+        elif gfx_moved or phys_stagnant:
+            # Positive evidence that no wedge is in progress: the render advanced, or physics
+            # stopped (a pause). Only these clear the clock — an UNREADABLE sample must not, or a
+            # momentary shared-memory blip would restart the window and could defer, or with
+            # periodic blips entirely defeat, detection of a real wedge. This is the "neither
+            # advances nor confirms" contract in the docstring.
+            self._wedged_since = None
+        # An armed clock expires on ANY sample, including a neutral one. Once the wedge has been
+        # confirmed at least once, a shared-memory blackout must not postpone reporting it: the
+        # surfacing is non-destructive (a log plus a phase), so erring toward reporting is right.
+        if self._wedged_since is not None and now - self._wedged_since >= self._wedge_seconds:
+            self._wedged = True
+        if gfx_packet is not None:
+            self._prev_gfx = gfx_packet
+        if phys_packet is not None:
+            self._prev_phys = phys_packet
+        if gfx_packet is not None:
+            # Only a readable graphics sample may move the anchor. The anchor means "when the
+            # render packet was last seen at this value"; letting an unreadable blip carry it
+            # forward would measure the stall from the blip instead of the last observed pin and
+            # defer detection by the whole blip gap.
+            self._prev_t = now
+        return self._wedged
+
+
 @dataclass(frozen=True)
 class LaunchReport:
     """Summary of a full retry run."""
@@ -794,12 +872,46 @@ def _hold_stable_session(  # pragma: no cover - rig-only
     *,
     poll: float = 1.0,
     maintenance: Callable[[], None] | None = None,
+    read_state: Callable[[], tuple[int | None, bool | None, int | None]] | None = None,
+    set_phase: Callable[[str], None] | None = None,
+    wedge_seconds: float = DEFAULT_HOLD_WEDGE_SECONDS,
 ) -> bool:
-    """Hold rig ownership for a stable session and report whether release was intentional."""
+    """Hold rig ownership for a stable session and report whether release was intentional.
+
+    While holding, watch for a post-handoff render wedge (#630 Part A): graphics pinned while
+    physics keeps advancing. On one, say so loudly and republish the rig phase as ``wedged`` so
+    Game Point renders a distinct recovery state instead of continuing to present a frozen session
+    as a healthy hold. Ownership is deliberately retained either way — a wedged ``acs.exe`` must
+    not be inherited by a peer harness — so recovery stays the operator's/supervisor's call.
+    """
+    watch = StableSessionWatch(wedge_seconds) if read_state is not None else None
+    wedge_phase_published = False
     try:
         while acs_alive() and not release_requested():
             if maintenance is not None:
                 maintenance()
+            if watch is not None and read_state is not None:
+                if not watch.wedged:
+                    gfx_packet, _ready, phys_packet = read_state()
+                    if watch.observe(
+                        gfx_packet=gfx_packet, phys_packet=phys_packet, now=time.monotonic()
+                    ):
+                        _log(
+                            "WARNING: the handed-off session has WEDGED — the render packet has "
+                            f"been pinned for >={wedge_seconds:.0f}s while PHYSICS keeps advancing "
+                            "and acs.exe is alive (#627 §2 render freeze, not a pause). Holding "
+                            "rig ownership; the session needs a relaunch to recover."
+                        )
+                # Keep retrying the durable phase write until it lands. A single swallowed OSError
+                # would leave the lock metadata reading "stable" while the session is frozen — Game
+                # Point would keep presenting a healthy handoff, which is precisely the #630 failure
+                # this detection exists to end. The latch is never cleared by a retry.
+                if watch.wedged and not wedge_phase_published and set_phase is not None:
+                    try:
+                        set_phase("wedged")
+                        wedge_phase_published = True
+                    except OSError as exc:
+                        _log(f"WARNING: could not publish the wedged rig phase; retrying: {exc}")
             time.sleep(poll)
     except KeyboardInterrupt:
         _log("operator released rig ownership; AC left LIVE")
@@ -1304,6 +1416,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 acs_alive,
                 release_requested,
                 maintenance=lambda: _retry_telemetry_cleanup_holds(telemetry_cleanup_holds),
+                read_state=read_state,
+                set_phase=rig_lock.set_phase,
             )
         except _Car0ProbeCleanupError as exc:
             _log(f"stable-session cleanup aborted: {exc}")
