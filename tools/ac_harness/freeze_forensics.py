@@ -1,0 +1,413 @@
+"""Decide what a wedged ``acs.exe`` is actually doing: spinning, blocked, or still working.
+
+#627 §6.1 blocks the upstream CSP bug report on one question — is the wedge a **livelock** (a
+data-dependent loop that never converges) or something else? A single memory dump cannot answer it:
+a thread moving very fast in a circle and a thread grinding through a long computation look
+identical at one instant. The council's answer was "take two 4.8 GB dumps 10 s apart and diff
+thread 0" — expensive, and it still only gives two points.
+
+This module answers it from three cheap, independent signals:
+
+``S1`` ``QueryThreadCycleTime`` per thread → **burning CPU vs blocked**. A blocked thread accrues
+    ~0 cycles; a spinning one accrues ~a full core. This alone kills the deadlock explanation.
+``S2`` RIP sampled from repeated NONINVASIVE ``cdb`` attaches → **tight loop vs long computation**.
+    A long computation walks through code (RIP wanders); a tight loop pins RIP inside a small
+    window across the whole sampling interval (the render packet is the independent progress
+    check: a converging loop would let it advance).
+``S3`` ``acpmf_graphics`` vs ``acpmf_physics`` packet ids, with an ``acs.exe`` liveness check →
+    the #627 §2 discriminator, and the guard against trap §7.1 (shared-memory sections outlive
+    ``acs.exe``, so a dead sim reads identical to a wedged one without the process check).
+
+The decision over those signals is :func:`classify_forensics` — pure, so every branch is unit
+tested off-rig. Collection is Windows/rig-only.
+
+Two lessons from the 2026-07-19 session are encoded as explicit verdicts, because both were
+mistakes made in practice:
+
+* A session whose graphics packet ADVANCED during the diagnosis had recovered — it was a transient
+  init stall, not a terminal wedge. Reported as ``NOT_WEDGED`` rather than quietly analysed. (I
+  called such a trial a confirmed spin before reading the artifact; it was not.)
+* Fewer than two successful RIP reads carries no information about wandering, so it must not fall
+  through to ``LONG_COMPUTATION`` — the one verdict that would wrongly kill the livelock
+  hypothesis. Reported as ``INCONCLUSIVE_INSUFFICIENT_RIP_SAMPLES``.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import glob
+import re
+import subprocess
+import time
+from collections.abc import Sequence
+from ctypes import wintypes
+from dataclasses import dataclass, field
+from enum import StrEnum
+from pathlib import Path
+
+#: cycles/second above which a thread counts as burning CPU. A modern core retires on the order of
+#: 1e9 cycles/s, so a spin pins ~one core; an idle/blocked thread accrues essentially none.
+DEFAULT_BURNING_CYCLES_PER_S = 2e8
+#: RIP spread (bytes) within which the sampled instruction pointer counts as a tight loop rather
+#: than a computation walking through code.
+DEFAULT_TIGHT_LOOP_BYTES = 4096
+#: RIP reads needed before "wandering" can be claimed at all.
+MIN_RIP_SAMPLES = 2
+
+
+class ForensicVerdict(StrEnum):
+    """What the three signals together prove about a wedged process."""
+
+    LIVELOCK_CONFIRMED = "livelock_confirmed"
+    LONG_COMPUTATION = "long_computation"
+    BLOCKED_NOT_SPIN = "blocked_not_spin"
+    NOT_WEDGED = "not_wedged"
+    NOT_RENDER_WEDGE = "not_render_wedge"
+    INCONCLUSIVE_INSUFFICIENT_RIP_SAMPLES = "inconclusive_insufficient_rip_samples"
+
+
+def classify_forensics(
+    *,
+    burning_cpu: bool,
+    gfx_static: bool,
+    phys_advancing: bool,
+    rips: Sequence[int],
+    tight_loop_bytes: int = DEFAULT_TIGHT_LOOP_BYTES,
+) -> tuple[ForensicVerdict, str]:
+    """Decide the verdict from the three signals. Pure — no I/O, no clock.
+
+    The order of these checks is the whole design: each one rules out a cheaper explanation before
+    the more expensive claim is allowed.
+
+    ``rips`` is the observed instruction pointers themselves, not a pre-computed count and span.
+    Passing those two separately made an inconsistent state representable — a caller could report
+    "2 samples" with a ``None`` span, which fell through to ``LONG_COMPUTATION``, the single verdict
+    that must never be reached without evidence. Deriving both here makes that unrepresentable.
+    """
+    observed = list(rips)
+    span = rip_span(observed)
+    if not gfx_static:
+        return (
+            ForensicVerdict.NOT_WEDGED,
+            "the render packet ADVANCED during the diagnosis, so the session recovered — this was "
+            "a transient stall, not a terminal wedge. Nothing here supports a livelock claim.",
+        )
+    if not phys_advancing:
+        return (
+            ForensicVerdict.NOT_RENDER_WEDGE,
+            "graphics and physics are BOTH stopped. A #627 §2 render wedge keeps physics "
+            "advancing, so this is a pause, a fully stopped sim, or a dead process — not a "
+            "render-thread wedge.",
+        )
+    if not burning_cpu:
+        return (
+            ForensicVerdict.BLOCKED_NOT_SPIN,
+            "the hottest sampled thread is not consuming CPU, so nothing in the process is "
+            "spinning hard enough to explain a wedge — the stalled path is WAITING, not "
+            "spinning. That is a block/deadlock — a different bug from the livelock hypothesis.",
+        )
+    if span is None:
+        return (
+            ForensicVerdict.INCONCLUSIVE_INSUFFICIENT_RIP_SAMPLES,
+            f"only {len(observed)} RIP sample(s) were read (need >={MIN_RIP_SAMPLES}). CPU "
+            "is burning, but spin-vs-long-computation cannot be decided: one sample carries no "
+            "information about wandering. Re-run the capture against the still-live process.",
+        )
+    if span < tight_loop_bytes:
+        return (
+            ForensicVerdict.LIVELOCK_CONFIRMED,
+            f"the hottest sampled thread burns CPU while the render packet never advances, and "
+            f"its RIP stays inside a {span}-byte window across the sampling interval. Two "
+            "residuals remain: (1) RIP locality alone cannot rule out a finite loop longer than "
+            "that interval — the independent progress check is the render packet itself, which a "
+            "converging loop would let advance; (2) S1/S2 sample the *hottest* thread, not a "
+            "render-identified one, so a busy physics worker (physics keeps advancing under the "
+            "#627 §2 signature) can supply both signals while the renderer is merely blocked — "
+            "confirm the sampled thread's stack is render-side before treating this as the #627 "
+            "livelock, or re-run against a render-stack TID. No sample shows progress: a tight "
+            "loop with no observed convergence (re-run to confirm).",
+        )
+    return (
+        ForensicVerdict.LONG_COMPUTATION,
+        f"the hottest sampled thread burns CPU but RIP wanders across {span} bytes — that "
+        "thread is walking through code, so this is a long finite computation rather than a "
+        "tight loop (same hottest-thread residual as LIVELOCK_CONFIRMED).",
+    )
+
+
+def rip_span(rips: list[int]) -> int | None:
+    """Spread of the observed instruction pointers, or ``None`` below the evidence threshold."""
+    if len(rips) < MIN_RIP_SAMPLES:
+        return None
+    return max(rips) - min(rips)
+
+
+# --------------------------------------------------------------------------------------
+# Collection (Windows/rig-only).
+# --------------------------------------------------------------------------------------
+
+TH32CS_SNAPTHREAD = 0x00000004
+THREAD_QUERY_LIMITED_INFORMATION = 0x0800
+INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
+
+#: WinDbg/cdb print 64-bit addresses either flat or with a backtick separator
+#: (``rip=00007ff6`00001234``). Missing the backtick form would yield zero parsed RIPs and
+#: silently degrade every diagnosis to INCONCLUSIVE.
+_RIP_RE = re.compile(r"rip=([0-9a-f`]{16,17})", re.IGNORECASE)
+
+
+def parse_rip(raw: str) -> int | None:
+    """First RIP register value in cdb output, or ``None`` when absent or unparseable.
+
+    Single source of truth for the regex match, backtick strip, and hex conversion — the
+    backtick form must be normalized *before* ``int(..., 16)`` or a matched address raises
+    ``ValueError`` and aborts the whole capture.
+    """
+    match = _RIP_RE.search(raw)
+    if match is None:
+        return None
+    try:
+        return int(match.group(1).replace("`", ""), 16)
+    except ValueError:
+        return None
+
+
+#: Token ``cdb_snapshot`` prints (via ``.printf``) immediately after the thread switch, carrying
+#: the *actual* current OS thread id — the only proof the register/stack dump ran on the requested
+#: thread. A failed ``~~[0xTID]s`` does not abort the ``-c`` script: cdb continues in the default
+#: context (thread index 0, parked in an ntdll wait) and still prints registers, so without this
+#: marker a wrong-thread RIP parses as real evidence and recreates the parked-thread misdiagnosis.
+_TID_MARKER = "AC_TID"
+
+#: Exact marker-value capture. A substring test would accept a requested tid that is a hex prefix
+#: of the actual thread (``AC_TID=1a2b`` contains ``ac_tid=1a``), re-admitting the wrong-thread
+#: transcript the marker exists to reject.
+_TID_RE = re.compile(rf"{_TID_MARKER}=([0-9a-f]+)", re.IGNORECASE)
+
+
+def selected_tid_confirmed(raw: str, tid: int) -> bool:
+    """True only when the cdb transcript's post-switch marker names the requested OS thread."""
+    match = _TID_RE.search(raw)
+    return match is not None and int(match.group(1), 16) == tid
+
+
+def find_cdb() -> Path | None:  # pragma: no cover - rig-only
+    """Locate ``cdb.exe`` without pinning a WinDbg version (a store update breaks a pinned path).
+
+    The Windows Kits debugger is preferred: the Store-packaged cdb under ``WindowsApps`` commonly
+    fails ``CreateProcess`` for a normal operator (package ACLs), so preferring it would leave RIP
+    sampling broken on machines that also have a working Kits install.
+    """
+    for pattern in (
+        r"C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe",
+        r"C:\Program Files\WindowsApps\Microsoft.WinDbg_*\amd64\cdb.exe",
+    ):
+        hits = sorted(glob.glob(pattern))
+        if hits:
+            return Path(hits[-1])
+    return None
+
+
+class _THREADENTRY32(ctypes.Structure):  # pragma: no cover - rig-only
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ThreadID", wintypes.DWORD),
+        ("th32OwnerProcessID", wintypes.DWORD),
+        ("tpBasePri", ctypes.c_long),
+        ("tpDeltaPri", ctypes.c_long),
+        ("dwFlags", wintypes.DWORD),
+    ]
+
+
+def _kernel32():  # pragma: no cover - rig-only
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    k.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    k.Thread32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(_THREADENTRY32)]
+    k.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(_THREADENTRY32)]
+    k.OpenThread.restype = wintypes.HANDLE
+    k.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k.QueryThreadCycleTime.restype = wintypes.BOOL
+    k.QueryThreadCycleTime.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_ulonglong)]
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    return k
+
+
+def thread_ids(pid: int) -> list[int]:  # pragma: no cover - rig-only
+    """Every thread id owned by ``pid``, in enumeration order."""
+    k = _kernel32()
+    snap = k.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+    if snap == INVALID_HANDLE_VALUE:
+        raise OSError(ctypes.get_last_error(), "CreateToolhelp32Snapshot failed")
+    try:
+        entry = _THREADENTRY32()
+        entry.dwSize = ctypes.sizeof(_THREADENTRY32)
+        out: list[int] = []
+        if not k.Thread32First(snap, ctypes.byref(entry)):
+            return out
+        while True:
+            if entry.th32OwnerProcessID == pid:
+                out.append(entry.th32ThreadID)
+            if not k.Thread32Next(snap, ctypes.byref(entry)):
+                break
+        return out
+    finally:
+        k.CloseHandle(snap)
+
+
+def sample_cycles(pid: int, window_s: float = 5.0) -> list[dict]:  # pragma: no cover - rig-only
+    """Cycles/second per thread over ``window_s``, hottest first.
+
+    The hottest row is a *candidate* for S2, not a proof of render-thread identity. Under the
+    #627 §2 wedge signature physics keeps advancing, so a legitimate physics worker can outrank a
+    blocked renderer; the stack from :func:`cdb_snapshot` is what ties the candidate to (or rules
+    it out of) the render path before :func:`classify_forensics` is trusted as a #627 livelock.
+
+    NOTE for anyone validating this against a fixture: a Python venv launcher (``.venv\\Scripts\\
+    python.exe``) re-spawns the real interpreter as a CHILD, so sampling the pid ``Popen`` returns
+    measures a parked shim and reads 0 cycles/s. Resolve to the worker pid first. ``acs.exe`` has
+    no such shim.
+    """
+    k = _kernel32()
+
+    def cycles(tid: int) -> int | None:
+        handle = k.OpenThread(THREAD_QUERY_LIMITED_INFORMATION, False, tid)
+        if not handle:
+            return None
+        try:
+            value = ctypes.c_ulonglong(0)
+            if not k.QueryThreadCycleTime(handle, ctypes.byref(value)):
+                return None
+            return value.value
+        finally:
+            k.CloseHandle(handle)
+
+    tids = thread_ids(pid)
+    first = {t: cycles(t) for t in tids}
+    started = time.monotonic()
+    time.sleep(window_s)
+    elapsed = time.monotonic() - started
+
+    rows: list[dict] = []
+    for tid in tids:
+        before, after = first.get(tid), cycles(tid)
+        if before is None or after is None:
+            continue
+        rows.append({"tid": tid, "cycles_per_s": (after - before) / elapsed})
+    rows.sort(key=lambda row: row["cycles_per_s"], reverse=True)
+    return rows
+
+
+@dataclass
+class RipSample:
+    """One noninvasive register/stack snapshot."""
+
+    at: float
+    rip: int | None
+    stack: str
+    raw: str = field(repr=False, default="")
+
+
+#: How long the best-effort thaw attach may run. Short on purpose — a stuck thaw must not
+#: re-block the operator for the full sampling budget.
+_THAW_TIMEOUT_S = 15.0
+
+
+def thaw_cdb_command(cdb: Path, pid: int) -> list[str]:
+    """Command that attaches noninvasively and immediately detaches (``qd``).
+
+    Used after a timed-out primary attach: ``subprocess.run`` kills ``cdb`` before the trailing
+    ``qd`` of the sampling script can run, and a killed ``-pv`` session does not reliably clear the
+    suspend counts it applied. A follow-up ``qd`` is the cheapest way to thaw without becoming the
+    process's debugger (which would risk terminating the evidence on detach).
+    """
+    return [str(cdb), "-pv", "-p", str(pid), "-c", "qd"]
+
+
+def best_effort_thaw(cdb: Path, pid: int, *, timeout: float = _THAW_TIMEOUT_S) -> str:
+    """Best-effort thaw of ``pid`` after a failed noninvasive attach. Never raises.
+
+    Returns a short status token for the sample's ``raw`` field so a log can show whether the
+    thaw was attempted and whether it completed. A zero exit is required for ``thaw=ok`` —
+    ``subprocess.run`` returns normally on a nonzero exit, and treating that as success would
+    claim the process was resumed when ``qd`` may never have run. Failures are otherwise
+    swallowed: the capture already failed, and a second exception here would only hide that fact.
+    """
+    try:
+        proc = subprocess.run(
+            thaw_cdb_command(cdb, pid),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            errors="replace",
+        )
+    except subprocess.TimeoutExpired:
+        return "thaw=timeout"
+    except OSError as exc:
+        return f"thaw=failed:{exc}"
+    if proc.returncode != 0:
+        # Keep the token short (it rides in RipSample.raw) but include enough of stderr that a
+        # log shows *why* the thaw did not complete.
+        err = (proc.stderr or proc.stdout or "").strip().replace("\n", " ")
+        if len(err) > 160:
+            err = err[:157] + "..."
+        detail = f" rc={proc.returncode}" + (f" err={err}" if err else "")
+        return f"thaw=failed:{detail.strip()}"
+    return "thaw=ok"
+
+
+def cdb_snapshot(
+    pid: int, *, tid: int, timeout: float = 90.0
+) -> RipSample:  # pragma: no cover - rig-only
+    """One NONINVASIVE register+stack snapshot of ``tid``.
+
+    ``-pv`` attaches without becoming the process's debugger, so detaching cannot terminate it —
+    the wedged process is irreplaceable evidence. ``tid`` is required and must be the OS thread id
+    of the *hot* thread — the first row of :func:`sample_cycles`. There is no safe default:
+    ``~0s`` selects thread *index* 0, which in ``acs.exe`` is parked in an ntdll wait while the hot
+    thread is elsewhere, so a default would combine a parked thread's RIPs with the hot thread's
+    CPU reading and fabricate both false livelocks and false long computations. The post-switch
+    :data:`_TID_MARKER` line is checked before any parsing, because a failed thread switch does
+    not abort the ``-c`` script — an unconfirmed transcript yields ``rip=None`` so the verdict
+    stays at INCONCLUSIVE rather than convicting a parked thread.
+
+    On ``TimeoutExpired``, :func:`best_effort_thaw` runs before returning: the primary ``-c`` script
+    ends with ``qd``, but a hard-killed ``cdb`` never reaches it, and suspend counts can stick.
+    """
+    cdb = find_cdb()
+    if cdb is None:
+        return RipSample(time.time(), None, "", "cdb.exe not found")
+    select = f"~~[0x{tid:x}]s"
+    command = [
+        str(cdb),
+        "-pv",
+        "-p",
+        str(pid),
+        "-c",
+        f'{select}; .printf "{_TID_MARKER}=%x\\n", @$tid; r; k; lm; qd',
+    ]
+    try:
+        proc = subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout, errors="replace"
+        )
+        raw = proc.stdout + proc.stderr
+    except subprocess.TimeoutExpired:
+        thaw_status = best_effort_thaw(cdb, pid)
+        return RipSample(time.time(), None, "", f"cdb timed out; {thaw_status}")
+    except OSError as exc:
+        # The binary can vanish or refuse CreateProcess (WindowsApps ACLs) between the glob and
+        # exec — degrade to INCONCLUSIVE like every other capture failure, never crash the run.
+        return RipSample(time.time(), None, "", f"cdb failed to start: {exc}")
+    if not selected_tid_confirmed(raw, tid):
+        return RipSample(time.time(), None, "", raw)
+    stack_lines: list[str] = []
+    grabbing = False
+    for line in raw.splitlines():
+        if line.strip().startswith("#") or "Child-SP" in line:
+            grabbing = True
+        if grabbing and line.strip():
+            stack_lines.append(line.rstrip())
+        if grabbing and len(stack_lines) > 30:
+            break
+    return RipSample(time.time(), parse_rip(raw), "\n".join(stack_lines), raw)
