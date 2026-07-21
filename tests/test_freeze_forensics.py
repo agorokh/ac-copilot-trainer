@@ -111,16 +111,15 @@ def test_two_identical_rips_are_a_zero_span_tight_loop() -> None:
     assert verdict is ForensicVerdict.LIVELOCK_CONFIRMED
 
 
-def test_rip_regex_parses_both_windbg_address_forms() -> None:
+def test_parse_rip_handles_both_windbg_address_forms() -> None:
     """WinDbg prints 64-bit addresses flat OR backtick-separated (``00007ff6`00001234``).
 
     Missing the backtick form yields zero parsed RIPs, silently degrading every diagnosis to
-    INCONCLUSIVE — the instrument would look like it works while proving nothing.
+    INCONCLUSIVE — the instrument would look like it works while proving nothing. The test
+    must exercise the production parser itself so the sanitization cannot drift away from it.
     """
-    from tools.ac_harness.freeze_forensics import _RIP_RE
+    from tools.ac_harness.freeze_forensics import parse_rip
 
-    flat = _RIP_RE.search("rax=0000000000000001 rip=00007ff600001234 rsp=...")
-    ticked = _RIP_RE.search("rax=0000000000000001 rip=00007ff6`00001234 rsp=...")
-
-    assert flat is not None and int(flat.group(1).replace("`", ""), 16) == 0x00007FF600001234
-    assert ticked is not None and int(ticked.group(1).replace("`", ""), 16) == 0x00007FF600001234
+    assert parse_rip("rax=0000000000000001 rip=00007ff600001234 rsp=...") == 0x00007FF600001234
+    assert parse_rip("rax=0000000000000001 rip=00007ff6`00001234 rsp=...") == 0x00007FF600001234
+    assert parse_rip("no registers captured") is None

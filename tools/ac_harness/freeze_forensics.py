@@ -146,6 +146,22 @@ INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
 _RIP_RE = re.compile(r"rip=([0-9a-f`]{16,17})", re.IGNORECASE)
 
 
+def parse_rip(raw: str) -> int | None:
+    """First RIP register value in cdb output, or ``None`` when absent or unparseable.
+
+    Single source of truth for the regex match, backtick strip, and hex conversion — the
+    backtick form must be normalized *before* ``int(..., 16)`` or a matched address raises
+    ``ValueError`` and aborts the whole capture.
+    """
+    match = _RIP_RE.search(raw)
+    if match is None:
+        return None
+    try:
+        return int(match.group(1).replace("`", ""), 16)
+    except ValueError:
+        return None
+
+
 def find_cdb() -> Path | None:  # pragma: no cover - rig-only
     """Locate ``cdb.exe`` without pinning a WinDbg version (a store update breaks a pinned path)."""
     for pattern in (
@@ -277,7 +293,6 @@ def cdb_snapshot(
         raw = proc.stdout + proc.stderr
     except subprocess.TimeoutExpired:
         return RipSample(time.time(), None, "", "cdb timed out")
-    match = _RIP_RE.search(raw)
     stack_lines: list[str] = []
     grabbing = False
     for line in raw.splitlines():
@@ -287,6 +302,4 @@ def cdb_snapshot(
             stack_lines.append(line.rstrip())
         if grabbing and len(stack_lines) > 30:
             break
-    return RipSample(
-        time.time(), int(match.group(1), 16) if match else None, "\n".join(stack_lines), raw
-    )
+    return RipSample(time.time(), parse_rip(raw), "\n".join(stack_lines), raw)
