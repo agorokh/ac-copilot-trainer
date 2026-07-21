@@ -1680,3 +1680,26 @@ def test_hold_publishes_the_wedged_phase_exactly_once_on_success() -> None:
     )
 
     assert calls == ["wedged"]
+
+
+def test_a_blip_before_the_first_confirm_does_not_move_the_wedge_anchor() -> None:
+    """#630 Part A — the reviewer's deferral scenario, pinned.
+
+    Establish the pin at t=0, blip at t=10, first confirming read at t=15. The anchor must remain
+    t=0 (when the packet was last SEEN at that value), so the 20 s window latches at t=20 — not at
+    t=30, which is what an anchor moved forward by the blip would produce.
+    """
+    watch = StableSessionWatch(wedge_seconds=20.0)
+    watch.observe(gfx_packet=5000, phys_packet=9000, now=0.0)
+    watch.observe(gfx_packet=None, phys_packet=None, now=10.0)  # blip must not move the anchor
+    assert watch.observe(gfx_packet=5000, phys_packet=9030, now=15.0) is False
+    assert watch.observe(gfx_packet=5000, phys_packet=9060, now=20.0) is True
+
+
+def test_an_armed_clock_expires_even_on_a_neutral_sample() -> None:
+    """A shared-memory blackout after the wedge was confirmed must not postpone reporting it."""
+    watch = StableSessionWatch(wedge_seconds=20.0)
+    watch.observe(gfx_packet=5000, phys_packet=9000, now=0.0)
+    watch.observe(gfx_packet=5000, phys_packet=9030, now=5.0)  # clock armed, anchored at t=0
+    # Section goes unreadable and never comes back; the armed clock still expires.
+    assert watch.observe(gfx_packet=None, phys_packet=None, now=25.0) is True

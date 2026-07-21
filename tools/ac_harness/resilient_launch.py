@@ -429,8 +429,6 @@ class StableSessionWatch:
             # the stall is measured from when it stopped moving, not from the first repeat we saw.
             if self._wedged_since is None:
                 self._wedged_since = self._prev_t if self._prev_t is not None else now
-            if now - self._wedged_since >= self._wedge_seconds:
-                self._wedged = True
         elif gfx_moved or phys_stagnant:
             # Positive evidence that no wedge is in progress: the render advanced, or physics
             # stopped (a pause). Only these clear the clock — an UNREADABLE sample must not, or a
@@ -438,11 +436,21 @@ class StableSessionWatch:
             # periodic blips entirely defeat, detection of a real wedge. This is the "neither
             # advances nor confirms" contract in the docstring.
             self._wedged_since = None
+        # An armed clock expires on ANY sample, including a neutral one. Once the wedge has been
+        # confirmed at least once, a shared-memory blackout must not postpone reporting it: the
+        # surfacing is non-destructive (a log plus a phase), so erring toward reporting is right.
+        if self._wedged_since is not None and now - self._wedged_since >= self._wedge_seconds:
+            self._wedged = True
         if gfx_packet is not None:
             self._prev_gfx = gfx_packet
         if phys_packet is not None:
             self._prev_phys = phys_packet
-        self._prev_t = now
+        if gfx_packet is not None:
+            # Only a readable graphics sample may move the anchor. The anchor means "when the
+            # render packet was last seen at this value"; letting an unreadable blip carry it
+            # forward would measure the stall from the blip instead of the last observed pin and
+            # defer detection by the whole blip gap.
+            self._prev_t = now
         return self._wedged
 
 
