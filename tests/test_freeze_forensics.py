@@ -34,6 +34,9 @@ def test_livelock_is_confirmed_when_all_three_signals_agree() -> None:
     verdict, reading = _classify()
     assert verdict is ForensicVerdict.LIVELOCK_CONFIRMED
     assert "tight loop" in reading
+    # Hottest-thread residual must stay visible in the reading — S1/S2 do not identify render.
+    assert "hottest sampled thread" in reading
+    assert "physics worker" in reading
 
 
 def test_a_recovered_session_is_not_a_wedge() -> None:
@@ -183,6 +186,27 @@ def test_best_effort_thaw_never_raises_on_oserror(monkeypatch) -> None:
     assert best_effort_thaw(Path("/fake/cdb.exe"), 99).startswith("thaw=failed:")
 
 
+def test_best_effort_thaw_requires_zero_exit(monkeypatch) -> None:
+    """A nonzero cdb exit is a failed thaw — subprocess.run still returns normally."""
+    from pathlib import Path
+
+    from tools.ac_harness.freeze_forensics import best_effort_thaw
+
+    def _nonzero(*_args, **_kwargs):
+        return subprocess.CompletedProcess(
+            args=["cdb"], returncode=1, stdout="", stderr="Could not attach"
+        )
+
+    monkeypatch.setattr(
+        "tools.ac_harness.freeze_forensics.subprocess.run",
+        _nonzero,
+    )
+    status = best_effort_thaw(Path("/fake/cdb.exe"), 99)
+    assert status.startswith("thaw=failed:")
+    assert "rc=1" in status
+    assert "Could not attach" in status
+
+
 def test_cdb_snapshot_thaws_target_after_timeout(monkeypatch) -> None:
     """A hard-killed ``-pv`` attach leaves suspend counts on the target unless ``qd`` re-runs.
 
@@ -195,6 +219,7 @@ def test_cdb_snapshot_thaws_target_after_timeout(monkeypatch) -> None:
     import tools.ac_harness.freeze_forensics as ff
 
     calls: list[list[str]] = []
+    cdb = Path("/fake/cdb.exe")
 
     def fake_run(cmd, **kwargs):
         calls.append(list(cmd))
@@ -202,7 +227,7 @@ def test_cdb_snapshot_thaws_target_after_timeout(monkeypatch) -> None:
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 90))
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(ff, "find_cdb", lambda: Path("/fake/cdb.exe"))
+    monkeypatch.setattr(ff, "find_cdb", lambda: cdb)
     monkeypatch.setattr(ff.subprocess, "run", fake_run)
 
     sample = ff.cdb_snapshot(1234, tid=0x1A2B, timeout=1.0)
@@ -211,4 +236,5 @@ def test_cdb_snapshot_thaws_target_after_timeout(monkeypatch) -> None:
     assert "thaw=ok" in sample.raw
     assert len(calls) == 2
     # Second call is the thaw: noninvasive attach + immediate detach.
-    assert calls[1] == ["/fake/cdb.exe", "-pv", "-p", "1234", "-c", "qd"]
+    # Use str(Path) so the expected path matches production on Windows and POSIX.
+    assert calls[1] == [str(cdb), "-pv", "-p", "1234", "-c", "qd"]

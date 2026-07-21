@@ -102,7 +102,8 @@ def classify_forensics(
     if not burning_cpu:
         return (
             ForensicVerdict.BLOCKED_NOT_SPIN,
-            "the hottest thread is not consuming CPU, so the main thread is WAITING, not "
+            "the hottest sampled thread is not consuming CPU, so nothing in the process is "
+            "spinning hard enough to explain a wedge — the stalled path is WAITING, not "
             "spinning. That is a block/deadlock — a different bug from the livelock hypothesis.",
         )
     if span is None:
@@ -115,16 +116,22 @@ def classify_forensics(
     if span < tight_loop_bytes:
         return (
             ForensicVerdict.LIVELOCK_CONFIRMED,
-            f"the main thread burns CPU while the render packet never advances, and RIP stays "
-            f"inside a {span}-byte window across the sampling interval. RIP locality alone cannot "
-            "rule out a finite loop longer than that interval — the independent progress check is "
-            "the render packet itself, which a converging loop would let advance. No sample shows "
-            "progress: a tight loop with no observed convergence (re-run to confirm).",
+            f"the hottest sampled thread burns CPU while the render packet never advances, and "
+            f"its RIP stays inside a {span}-byte window across the sampling interval. Two "
+            "residuals remain: (1) RIP locality alone cannot rule out a finite loop longer than "
+            "that interval — the independent progress check is the render packet itself, which a "
+            "converging loop would let advance; (2) S1/S2 sample the *hottest* thread, not a "
+            "render-identified one, so a busy physics worker (physics keeps advancing under the "
+            "#627 §2 signature) can supply both signals while the renderer is merely blocked — "
+            "confirm the sampled thread's stack is render-side before treating this as the #627 "
+            "livelock, or re-run against a render-stack TID. No sample shows progress: a tight "
+            "loop with no observed convergence (re-run to confirm).",
         )
     return (
         ForensicVerdict.LONG_COMPUTATION,
-        f"CPU is burning but RIP wanders across {span} bytes — the thread is walking "
-        "through code, so this is a long finite computation rather than a tight loop.",
+        f"the hottest sampled thread burns CPU but RIP wanders across {span} bytes — that "
+        "thread is walking through code, so this is a long finite computation rather than a "
+        "tight loop (same hottest-thread residual as LIVELOCK_CONFIRMED).",
     )
 
 
@@ -250,7 +257,12 @@ def thread_ids(pid: int) -> list[int]:  # pragma: no cover - rig-only
 
 
 def sample_cycles(pid: int, window_s: float = 5.0) -> list[dict]:  # pragma: no cover - rig-only
-    """Cycles/second per thread over ``window_s``, hottest first. The spin shows as one hot thread.
+    """Cycles/second per thread over ``window_s``, hottest first.
+
+    The hottest row is a *candidate* for S2, not a proof of render-thread identity. Under the
+    #627 §2 wedge signature physics keeps advancing, so a legitimate physics worker can outrank a
+    blocked renderer; the stack from :func:`cdb_snapshot` is what ties the candidate to (or rules
+    it out of) the render path before :func:`classify_forensics` is trusted as a #627 livelock.
 
     NOTE for anyone validating this against a fixture: a Python venv launcher (``.venv\\Scripts\\
     python.exe``) re-spawns the real interpreter as a CHILD, so sampling the pid ``Popen`` returns
@@ -317,22 +329,32 @@ def best_effort_thaw(cdb: Path, pid: int, *, timeout: float = _THAW_TIMEOUT_S) -
     """Best-effort thaw of ``pid`` after a failed noninvasive attach. Never raises.
 
     Returns a short status token for the sample's ``raw`` field so a log can show whether the
-    thaw was attempted and whether it completed. Failures are swallowed: the capture already
-    failed, and a second exception here would only hide that fact.
+    thaw was attempted and whether it completed. A zero exit is required for ``thaw=ok`` —
+    ``subprocess.run`` returns normally on a nonzero exit, and treating that as success would
+    claim the process was resumed when ``qd`` may never have run. Failures are otherwise
+    swallowed: the capture already failed, and a second exception here would only hide that fact.
     """
     try:
-        subprocess.run(
+        proc = subprocess.run(
             thaw_cdb_command(cdb, pid),
             capture_output=True,
             text=True,
             timeout=timeout,
             errors="replace",
         )
-        return "thaw=ok"
     except subprocess.TimeoutExpired:
         return "thaw=timeout"
     except OSError as exc:
         return f"thaw=failed:{exc}"
+    if proc.returncode != 0:
+        # Keep the token short (it rides in RipSample.raw) but include enough of stderr that a
+        # log shows *why* the thaw did not complete.
+        err = (proc.stderr or proc.stdout or "").strip().replace("\n", " ")
+        if len(err) > 160:
+            err = err[:157] + "..."
+        detail = f" rc={proc.returncode}" + (f" err={err}" if err else "")
+        return f"thaw=failed:{detail.strip()}"
+    return "thaw=ok"
 
 
 def cdb_snapshot(
