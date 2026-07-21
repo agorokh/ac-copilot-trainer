@@ -132,4 +132,6 @@ def test_selected_tid_confirmed_only_for_the_requested_thread() -> None:
 
     assert selected_tid_confirmed("AC_TID=1a2b\nrip=00007ff600001234", 0x1A2B)
     assert not selected_tid_confirmed("AC_TID=3c4d\nrip=00007ff600001234", 0x1A2B)
+    # The requested tid as a hex PREFIX of the actual thread must not confirm (substring trap).
+    assert not selected_tid_confirmed("AC_TID=1a2b\nrip=00007ff600001234", 0x1A)
     assert not selected_tid_confirmed("no marker at all", 0x1A2B)

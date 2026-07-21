@@ -172,10 +172,16 @@ def parse_rip(raw: str) -> int | None:
 #: marker a wrong-thread RIP parses as real evidence and recreates the parked-thread misdiagnosis.
 _TID_MARKER = "AC_TID"
 
+#: Exact marker-value capture. A substring test would accept a requested tid that is a hex prefix
+#: of the actual thread (``AC_TID=1a2b`` contains ``ac_tid=1a``), re-admitting the wrong-thread
+#: transcript the marker exists to reject.
+_TID_RE = re.compile(rf"{_TID_MARKER}=([0-9a-f]+)", re.IGNORECASE)
+
 
 def selected_tid_confirmed(raw: str, tid: int) -> bool:
     """True only when the cdb transcript's post-switch marker names the requested OS thread."""
-    return f"{_TID_MARKER}={tid:x}".lower() in raw.lower()
+    match = _TID_RE.search(raw)
+    return match is not None and int(match.group(1), 16) == tid
 
 
 def find_cdb() -> Path | None:  # pragma: no cover - rig-only
