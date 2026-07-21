@@ -2,9 +2,11 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-19T01:50:00Z
+last_updated: 2026-07-21T15:10:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
+  - AcCopilotTrainer/03_Investigations/issue-628-acpmf-corpse-classify-2026-07-19.md
   - AcCopilotTrainer/03_Investigations/issue-602-portaudio-fixed-layout-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-603-car-content-preflight-2026-07-15.md
   - AcCopilotTrainer/03_Investigations/issue-596-pit-stall-sim-death-2026-07-15.md
@@ -42,17 +44,23 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
+**Delivered (2026-07-21):** PR [#644](https://github.com/agorokh/ac-copilot-trainer/pull/644) MERGED
+`012577e` (#630 **Part F**). The validated freeze-forensics instrument is no longer trapped in
+gitignored `.scratch/` — it lives at `tools/ac_harness/freeze_forensics.py` (S1 cycle-time
+spin-vs-block, S2 noninvasive cdb RIP, pure `classify_forensics` with 19 unit tests, including the
+cdb-timeout thaw path). Issue #630 stays OPEN. **Next on #630:** Parts C (init livelock mis-bucket),
+D (Car0 one-shot latch), E (per-trial record), G (runnable capture driver + render-stack TID). Rig
+next: catch a real wedge with the promoted instrument to settle #627 §6.1. Detail: handoff 2026-07-21
+Part F block.
+
+**Delivered (2026-07-20):** #630 Parts A+B — PR [#642](https://github.com/agorokh/ac-copilot-trainer/pull/642)
+`cea4111` (post-STABLE wedge watch + Game Point `wedged` state) and PR
+[#637](https://github.com/agorokh/ac-copilot-trainer/pull/637) `5497775` (pause ≠ freeze via physics
+packet). Detail: [[pr-637-pause-semantics-review-2026-07-20]].
+
 **Delivered (2026-07-19):** PR [#629](https://github.com/agorokh/ac-copilot-trainer/pull/629) MERGED
-`c5c7b75` (issue #628 CLOSED). The merged resilient launcher (#626) was discarding **healthy** AC
-sessions as `never_live`/`froze` because the `acpmf_*` shared section outlives `acs.exe` and hands
-over into the next process's lifetime. Fixed by making section trust purely packet-based (a packet
-advances only if a live process wrote it), live-verified on the unmodified `python -m
-tools.ac_harness.resilient_launch` path — stable drivable handoffs, and a run that retried past 4
-real CSP freezes to stable on attempt 5. The underlying CSP freeze (#619/#625) is unchanged and still
-third-party; what changed is the harness can now measure and survive it. **Next:** catch a real wedge
-with `.scratch/soak.py` + `freeze_forensics.py` (freezes reproduce at ~2.7 h uptime) to settle #627
-§6.1. Follow-ups #630 (other launcher false-verdict paths) and #631 (venv-shim pid test) filed.
-Detail: [[issue-628-acpmf-corpse-classify-2026-07-19]].
+`c5c7b75` (issue #628 CLOSED). Launcher no longer discards healthy sessions on `acpmf_*` corpse
+readings — section trust is packet-based only. Detail: [[issue-628-acpmf-corpse-classify-2026-07-19]].
 
 **Review-resolved (2026-07-18):** PR
 [#626](https://github.com/agorokh/ac-copilot-trainer/pull/626) delivers issue #624's resilient
