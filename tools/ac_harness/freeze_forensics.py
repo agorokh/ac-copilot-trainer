@@ -274,20 +274,21 @@ class RipSample:
 
 
 def cdb_snapshot(
-    pid: int, *, tid: int | None = None, timeout: float = 90.0
+    pid: int, *, tid: int, timeout: float = 90.0
 ) -> RipSample:  # pragma: no cover - rig-only
     """One NONINVASIVE register+stack snapshot of ``tid``.
 
     ``-pv`` attaches without becoming the process's debugger, so detaching cannot terminate it —
-    the wedged process is irreplaceable evidence. ``tid`` selects by OS thread id
-    (``~~[0xTID]s``): ``~0s`` selects thread *index* 0, which in ``acs.exe`` is parked in an ntdll
-    wait while the hot thread is elsewhere, making RIP appear to wander across gigabytes and
-    misreporting a real livelock as a long computation.
+    the wedged process is irreplaceable evidence. ``tid`` is required and must be the OS thread id
+    of the *hot* thread — the first row of :func:`sample_cycles`. There is no safe default:
+    ``~0s`` selects thread *index* 0, which in ``acs.exe`` is parked in an ntdll wait while the hot
+    thread is elsewhere, so a default would combine a parked thread's RIPs with the hot thread's
+    CPU reading and fabricate both false livelocks and false long computations.
     """
     cdb = find_cdb()
     if cdb is None:
         return RipSample(time.time(), None, "", "cdb.exe not found")
-    select = f"~~[0x{tid:x}]s" if tid is not None else "~0s"
+    select = f"~~[0x{tid:x}]s"
     command = [str(cdb), "-pv", "-p", str(pid), "-c", f"{select}; r; k; lm; qd"]
     try:
         proc = subprocess.run(
