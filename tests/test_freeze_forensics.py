@@ -123,3 +123,13 @@ def test_parse_rip_handles_both_windbg_address_forms() -> None:
     assert parse_rip("rax=0000000000000001 rip=00007ff600001234 rsp=...") == 0x00007FF600001234
     assert parse_rip("rax=0000000000000001 rip=00007ff6`00001234 rsp=...") == 0x00007FF600001234
     assert parse_rip("no registers captured") is None
+
+
+def test_selected_tid_confirmed_only_for_the_requested_thread() -> None:
+    """A failed ``~~[tid]s`` leaves cdb in the default (parked) context but still prints
+    registers — only the post-switch marker separates real evidence from a wrong-thread RIP."""
+    from tools.ac_harness.freeze_forensics import selected_tid_confirmed
+
+    assert selected_tid_confirmed("AC_TID=1a2b\nrip=00007ff600001234", 0x1A2B)
+    assert not selected_tid_confirmed("AC_TID=3c4d\nrip=00007ff600001234", 0x1A2B)
+    assert not selected_tid_confirmed("no marker at all", 0x1A2B)

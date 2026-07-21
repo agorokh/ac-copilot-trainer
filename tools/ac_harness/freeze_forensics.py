@@ -165,6 +165,19 @@ def parse_rip(raw: str) -> int | None:
         return None
 
 
+#: Token ``cdb_snapshot`` prints (via ``.printf``) immediately after the thread switch, carrying
+#: the *actual* current OS thread id — the only proof the register/stack dump ran on the requested
+#: thread. A failed ``~~[0xTID]s`` does not abort the ``-c`` script: cdb continues in the default
+#: context (thread index 0, parked in an ntdll wait) and still prints registers, so without this
+#: marker a wrong-thread RIP parses as real evidence and recreates the parked-thread misdiagnosis.
+_TID_MARKER = "AC_TID"
+
+
+def selected_tid_confirmed(raw: str, tid: int) -> bool:
+    """True only when the cdb transcript's post-switch marker names the requested OS thread."""
+    return f"{_TID_MARKER}={tid:x}".lower() in raw.lower()
+
+
 def find_cdb() -> Path | None:  # pragma: no cover - rig-only
     """Locate ``cdb.exe`` without pinning a WinDbg version (a store update breaks a pinned path)."""
     for pattern in (
@@ -283,13 +296,23 @@ def cdb_snapshot(
     of the *hot* thread — the first row of :func:`sample_cycles`. There is no safe default:
     ``~0s`` selects thread *index* 0, which in ``acs.exe`` is parked in an ntdll wait while the hot
     thread is elsewhere, so a default would combine a parked thread's RIPs with the hot thread's
-    CPU reading and fabricate both false livelocks and false long computations.
+    CPU reading and fabricate both false livelocks and false long computations. The post-switch
+    :data:`_TID_MARKER` line is checked before any parsing, because a failed thread switch does
+    not abort the ``-c`` script — an unconfirmed transcript yields ``rip=None`` so the verdict
+    stays at INCONCLUSIVE rather than convicting a parked thread.
     """
     cdb = find_cdb()
     if cdb is None:
         return RipSample(time.time(), None, "", "cdb.exe not found")
     select = f"~~[0x{tid:x}]s"
-    command = [str(cdb), "-pv", "-p", str(pid), "-c", f"{select}; r; k; lm; qd"]
+    command = [
+        str(cdb),
+        "-pv",
+        "-p",
+        str(pid),
+        "-c",
+        f'{select}; .printf "{_TID_MARKER}=%x\\n", @$tid; r; k; lm; qd',
+    ]
     try:
         proc = subprocess.run(
             command, capture_output=True, text=True, timeout=timeout, errors="replace"
@@ -297,6 +320,8 @@ def cdb_snapshot(
         raw = proc.stdout + proc.stderr
     except subprocess.TimeoutExpired:
         return RipSample(time.time(), None, "", "cdb timed out")
+    if not selected_tid_confirmed(raw, tid):
+        return RipSample(time.time(), None, "", raw)
     stack_lines: list[str] = []
     grabbing = False
     for line in raw.splitlines():
