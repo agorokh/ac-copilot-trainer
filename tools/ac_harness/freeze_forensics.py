@@ -297,6 +297,44 @@ class RipSample:
     raw: str = field(repr=False, default="")
 
 
+#: How long the best-effort thaw attach may run. Short on purpose — a stuck thaw must not
+#: re-block the operator for the full sampling budget.
+_THAW_TIMEOUT_S = 15.0
+
+
+def thaw_cdb_command(cdb: Path, pid: int) -> list[str]:
+    """Command that attaches noninvasively and immediately detaches (``qd``).
+
+    Used after a timed-out primary attach: ``subprocess.run`` kills ``cdb`` before the trailing
+    ``qd`` of the sampling script can run, and a killed ``-pv`` session does not reliably clear the
+    suspend counts it applied. A follow-up ``qd`` is the cheapest way to thaw without becoming the
+    process's debugger (which would risk terminating the evidence on detach).
+    """
+    return [str(cdb), "-pv", "-p", str(pid), "-c", "qd"]
+
+
+def best_effort_thaw(cdb: Path, pid: int, *, timeout: float = _THAW_TIMEOUT_S) -> str:
+    """Best-effort thaw of ``pid`` after a failed noninvasive attach. Never raises.
+
+    Returns a short status token for the sample's ``raw`` field so a log can show whether the
+    thaw was attempted and whether it completed. Failures are swallowed: the capture already
+    failed, and a second exception here would only hide that fact.
+    """
+    try:
+        subprocess.run(
+            thaw_cdb_command(cdb, pid),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            errors="replace",
+        )
+        return "thaw=ok"
+    except subprocess.TimeoutExpired:
+        return "thaw=timeout"
+    except OSError as exc:
+        return f"thaw=failed:{exc}"
+
+
 def cdb_snapshot(
     pid: int, *, tid: int, timeout: float = 90.0
 ) -> RipSample:  # pragma: no cover - rig-only
@@ -311,6 +349,9 @@ def cdb_snapshot(
     :data:`_TID_MARKER` line is checked before any parsing, because a failed thread switch does
     not abort the ``-c`` script — an unconfirmed transcript yields ``rip=None`` so the verdict
     stays at INCONCLUSIVE rather than convicting a parked thread.
+
+    On ``TimeoutExpired``, :func:`best_effort_thaw` runs before returning: the primary ``-c`` script
+    ends with ``qd``, but a hard-killed ``cdb`` never reaches it, and suspend counts can stick.
     """
     cdb = find_cdb()
     if cdb is None:
@@ -330,7 +371,8 @@ def cdb_snapshot(
         )
         raw = proc.stdout + proc.stderr
     except subprocess.TimeoutExpired:
-        return RipSample(time.time(), None, "", "cdb timed out")
+        thaw_status = best_effort_thaw(cdb, pid)
+        return RipSample(time.time(), None, "", f"cdb timed out; {thaw_status}")
     except OSError as exc:
         # The binary can vanish or refuse CreateProcess (WindowsApps ACLs) between the glob and
         # exec — degrade to INCONCLUSIVE like every other capture failure, never crash the run.
