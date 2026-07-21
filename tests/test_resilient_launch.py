@@ -18,6 +18,7 @@ from tools.ac_harness.resilient_launch import (
     LaunchVerdict,
     Sample,
     SectionOwnershipGate,
+    StableSessionWatch,
     _Car0NotDrivable,
     _Car0ProbeCleanupError,
     _ensure_acs_gone,
@@ -1522,3 +1523,73 @@ def test_ensure_acs_gone_honors_release_before_process_probe() -> None:
             lambda: pytest.fail("release must be checked before probing or killing acs.exe"),
             release_requested=lambda: True,
         )
+
+
+class TestStableSessionWatch:
+    """#630 Part A — a render freeze AFTER the stable handoff must be surfaced, not held as healthy.
+
+    The wedge test is the Part B discriminator: graphics pinned while PHYSICS keeps advancing. That
+    is what makes it safe — an alt-tab pins graphics too, but it also stops physics, so a pause can
+    never latch a false wedge here.
+    """
+
+    @staticmethod
+    def _watch() -> StableSessionWatch:
+        return StableSessionWatch(wedge_seconds=20.0)
+
+    def test_healthy_session_never_wedges(self) -> None:
+        watch = self._watch()
+        for i in range(60):  # both streams advancing for 60 s
+            assert (
+                watch.observe(gfx_packet=1000 + i * 5, phys_packet=9000 + i * 30, now=float(i))
+                is False
+            )
+        assert watch.wedged is False
+
+    def test_gfx_pinned_while_physics_advances_is_a_wedge(self) -> None:
+        """The #627 §2 signature: render thread dead, physics thread alive."""
+        watch = self._watch()
+        watch.observe(gfx_packet=5000, phys_packet=9000, now=0.0)
+        # gfx pinned at 5000 from t=0; physics keeps advancing.
+        assert watch.observe(gfx_packet=5000, phys_packet=9030, now=10.0) is False
+        assert watch.observe(gfx_packet=5000, phys_packet=9060, now=19.0) is False
+        assert watch.observe(gfx_packet=5000, phys_packet=9090, now=20.0) is True
+        assert watch.wedged is True
+
+    def test_a_pause_never_wedges_even_though_graphics_pins(self) -> None:
+        """An alt-tab pins graphics AND stops physics — the false wedge this avoids."""
+        watch = self._watch()
+        watch.observe(gfx_packet=5000, phys_packet=9000, now=0.0)
+        for t in range(1, 90):  # 90 s paused: both streams pinned
+            assert watch.observe(gfx_packet=5000, phys_packet=9000, now=float(t)) is False
+        assert watch.wedged is False
+
+    def test_a_brief_hitch_under_the_window_is_not_a_wedge(self) -> None:
+        watch = self._watch()
+        watch.observe(gfx_packet=5000, phys_packet=9000, now=0.0)
+        for t in (5.0, 10.0, 15.0):  # 15 s pinned, physics advancing — under the window
+            assert watch.observe(gfx_packet=5000, phys_packet=9000 + int(t) * 3, now=t) is False
+        # ...then rendering resumes.
+        assert watch.observe(gfx_packet=5100, phys_packet=9100, now=17.0) is False
+        assert watch.wedged is False
+
+    def test_resumed_render_clears_the_wedge_clock(self) -> None:
+        watch = self._watch()
+        watch.observe(gfx_packet=5000, phys_packet=9000, now=0.0)
+        watch.observe(gfx_packet=5000, phys_packet=9030, now=15.0)  # 15 s pinned
+        watch.observe(gfx_packet=5100, phys_packet=9060, now=16.0)  # advances -> clock resets
+        assert watch.observe(gfx_packet=5100, phys_packet=9090, now=30.0) is False  # 14 s
+        assert watch.observe(gfx_packet=5100, phys_packet=9120, now=36.0) is True  # 20 s since 16
+
+    def test_unreadable_sample_neither_advances_nor_confirms(self) -> None:
+        watch = self._watch()
+        watch.observe(gfx_packet=5000, phys_packet=9000, now=0.0)
+        assert watch.observe(gfx_packet=None, phys_packet=None, now=10.0) is False
+        assert watch.wedged is False
+
+    def test_wedged_latches(self) -> None:
+        watch = self._watch()
+        watch.observe(gfx_packet=5000, phys_packet=9000, now=0.0)
+        assert watch.observe(gfx_packet=5000, phys_packet=9060, now=25.0) is True
+        # A later advance does not un-wedge it (terminal per #627 §3.2).
+        assert watch.observe(gfx_packet=6000, phys_packet=9090, now=26.0) is True

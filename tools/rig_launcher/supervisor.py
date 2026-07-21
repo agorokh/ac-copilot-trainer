@@ -709,6 +709,18 @@ class GamePointSupervisor:
             for key in ("pid", "car", "track", "started_at", "phase")
             if owner.get(key) not in (None, "")
         )
+        if phase == "wedged":
+            # #630 Part A — the launcher proved a stable session, handed it over, and then watched
+            # its render packet pin while physics kept advancing (#627 §2). That is a frozen
+            # session needing a relaunch, NOT a startup still in progress, so it must not fall
+            # through to "stabilizing" and be presented as an in-progress start.
+            return ProbeResult(
+                "ac_session",
+                False,
+                "wedged",
+                "resilient session WEDGED after handoff (render frozen); relaunch to recover"
+                + (f": {detail}" if detail else ""),
+            )
         if phase != "stable":
             return ProbeResult(
                 "ac_session",
