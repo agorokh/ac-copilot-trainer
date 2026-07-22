@@ -117,6 +117,7 @@ def test_sidecar_command_uses_env_for_token_and_voice(tmp_path: Path) -> None:
         external_bind="0.0.0.0",
         token="secret-token",
         reference_archive="ref.json",
+        alien_line="alien.json",
         voice_bank="voice-bank",
         voice_tts=True,
         paths=LauncherPaths(tmp_path),
@@ -139,6 +140,7 @@ def test_sidecar_command_uses_env_for_token_and_voice(tmp_path: Path) -> None:
     ]
     assert env["AC_COPILOT_SIDECAR_TOKEN"] == "secret-token"
     assert env["AC_COPILOT_REFERENCE_ARCHIVE"] == str((tmp_path / "ref.json").resolve())
+    assert env["AC_COPILOT_ALIEN_LINE"] == str((tmp_path / "alien.json").resolve())
     assert env["AC_COPILOT_VOICE_BANK"] == str((tmp_path / "voice-bank").resolve())
     assert env["AC_COPILOT_VOICE_TTS"] == "1"
 
@@ -1066,15 +1068,19 @@ def test_sidecar_environment_resolves_relative_voice_paths(tmp_path: Path) -> No
         external_bind="0.0.0.0",
         token="token",
         reference_archive=str(tmp_path / "ref.json"),
+        alien_line="alien/line.json",
         voice_bank="banks/default",
         paths=LauncherPaths(tmp_path),
     )
     (tmp_path / "ref.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "alien").mkdir()
+    (tmp_path / "alien" / "line.json").write_text("{}", encoding="utf-8")
 
     env = GamePointSupervisor(cfg, environ={}).sidecar_environment()
 
     assert env["AC_COPILOT_VOICE_BANK"] == str(bank_dir.resolve())
     assert env["AC_COPILOT_REFERENCE_ARCHIVE"] == str((tmp_path / "ref.json").resolve())
+    assert env["AC_COPILOT_ALIEN_LINE"] == str((tmp_path / "alien/line.json").resolve())
 
 
 def test_close_terminates_supervised_sidecar(tmp_path: Path) -> None:
@@ -1292,6 +1298,7 @@ def test_config_from_settings_file_supplies_non_secret_defaults(tmp_path: Path) 
             {
                 "external_bind": "127.0.0.1",
                 "reference_archive": "ref.json",
+                "alien_line": "alien.json",
                 "setup_store": "setup.jsonl",
                 "sidecar_port": 9999,
                 "simhub_exe": "SimHubWPF.exe",
@@ -1312,6 +1319,7 @@ def test_config_from_settings_file_supplies_non_secret_defaults(tmp_path: Path) 
     assert cfg.port == 9999
     assert cfg.external_bind == "127.0.0.1"
     assert cfg.reference_archive == "ref.json"
+    assert cfg.alien_line == "alien.json"
     assert cfg.voice_bank == "bank"
     assert cfg.voice_tts is True
     assert cfg.setup_store == "setup.jsonl"

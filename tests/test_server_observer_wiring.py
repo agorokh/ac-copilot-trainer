@@ -49,6 +49,23 @@ def _reset_feed(monkeypatch):
     server._background_tasks.clear()
 
 
+def test_public_voice_status_exposes_frontier_and_redacts_paths(monkeypatch):
+    class _Coach:
+        frontier = {
+            "configured": True,
+            "active": False,
+            "source": "reference",
+            "reason": "alien_load_failed: /private/driver/alien.json",
+            "corners": [],
+        }
+
+    monkeypatch.setattr(server, "_coach_runtime", _Coach())
+    status = server.public_voice_runtime_status()
+
+    assert status["coach_frontier"]["source"] == "reference"
+    assert "/private/driver" not in status["coach_frontier"]["reason"]
+
+
 async def _run_publish_cues(frame, *, exclude):
     await server._publish_coaching_cues(frame, exclude=exclude)
     pending = list(server._background_tasks)

@@ -230,6 +230,7 @@ _voice_clip_files: frozenset[str] = frozenset()
 class VoiceRuntimeConfig:
     reference_path: str | None
     bank_dir: str | None
+    alien_line_path: str | None = None
     tts_enabled: bool = False
     tts_rate: int | None = None
     tts_volume: float | None = None
@@ -294,6 +295,13 @@ def public_voice_runtime_status() -> dict[str, object]:
     reason = str(status.get("disabled_reason") or "")
     if reason:
         status["disabled_reason"] = _ABSOLUTE_PATH_RE.sub("<path>", reason)
+    frontier = getattr(_coach_runtime, "frontier", None)
+    if isinstance(frontier, dict):
+        public_frontier = dict(frontier)
+        frontier_reason = str(public_frontier.get("reason") or "")
+        if frontier_reason:
+            public_frontier["reason"] = _ABSOLUTE_PATH_RE.sub("<path>", frontier_reason)
+        status["coach_frontier"] = public_frontier
     return status
 
 
@@ -2735,6 +2743,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
     # voice-disabled (or different-bank) configuration can never keep serving stale clips;
     # the enabled path below re-arms via _set_voice_web_bank (PR #519 review).
     _disarm_voice_web_bank()
+    set_coach_runtime(None)
     # Same authority for the reference-derived track map (#531 Part F): a re-wire whose
     # reference cannot supply geometry — or that has no reference at all — must not leave
     # the previous track's map for late subscribers (Codex on PR #618).
@@ -2742,12 +2751,13 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
     _track_map_frame = None
     reference_path = voice_settings.reference_path
     bank_dir = voice_settings.bank_dir
+    alien_line_path = voice_settings.alien_line_path or os.environ.get("AC_COPILOT_ALIEN_LINE")
     bank_backend = (
         voice_settings.backend or os.environ.get("AC_COPILOT_VOICE_BACKEND") or "rtmixer"
         if bank_dir
         else None
     )
-    configured = bool(reference_path or bank_dir or voice_settings.tts_enabled)
+    configured = bool(reference_path or bank_dir or voice_settings.tts_enabled or alien_line_path)
     set_voice_runtime_status(
         configured=configured,
         enabled=False,
@@ -2756,12 +2766,13 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
         backend=bank_backend or "",
         bank_configured=bool(bank_dir),
         reference_configured=bool(reference_path),
+        alien_line_configured=bool(alien_line_path),
         tts_enabled=bool(voice_settings.tts_enabled),
     )
     if not configured:
         return
-    if (bank_dir or voice_settings.tts_enabled) and not reference_path:
-        reason = "voice configured without AC_COPILOT_REFERENCE_ARCHIVE"
+    if (bank_dir or voice_settings.tts_enabled or alien_line_path) and not reference_path:
+        reason = "voice or alien frontier configured without AC_COPILOT_REFERENCE_ARCHIVE"
         logger.error("voice: %s", reason)
         set_voice_runtime_status(
             configured=True,
@@ -2771,6 +2782,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
             backend=bank_backend or ("pyttsx3" if voice_settings.tts_enabled else ""),
             bank_configured=bool(bank_dir),
             reference_configured=False,
+            alien_line_configured=bool(alien_line_path),
             tts_enabled=bool(voice_settings.tts_enabled),
         )
         return
@@ -2844,15 +2856,20 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                 coach_rt = build_coach_runtime(
                     archive,
                     driver_profile_path=os.environ.get("AC_COPILOT_DRIVER_PROFILE"),
+                    alien_line_path=alien_line_path,
                 )
                 if coach_rt is not None:
                     set_coach_runtime(coach_rt)
                     logger.info(
                         "voice: Coach v2 runtime wired (%d corners) - "
-                        "diagnosed anticipatory cues policy=%s budget=%d",
+                        "diagnosed anticipatory cues policy=%s budget=%d "
+                        "frontier=%s active=%s reason=%s",
                         len(coach_rt.refs),
                         coach_rt.cue_policy.level,
                         coach_rt.ledger.lap_budget,
+                        coach_rt.frontier.get("source"),
+                        coach_rt.frontier.get("active"),
+                        coach_rt.frontier.get("reason"),
                     )
                 else:
                     # M1: v2 was REQUESTED but could not build — fail loud + SILENT, never degrade
@@ -3154,6 +3171,15 @@ def main() -> None:
         ),
     )
     p.add_argument(
+        "--alien-line",
+        default=None,
+        help=(
+            "Issue #529 P5: verified alien-line artifact used as Coach v2's personalized "
+            "per-corner speed ceiling. Falls back to $AC_COPILOT_ALIEN_LINE; invalid or "
+            "wrong-combo artifacts retain the human reference targets."
+        ),
+    )
+    p.add_argument(
         "--voice-backend",
         default=None,
         choices=("rtmixer", "sounddevice"),
@@ -3282,10 +3308,12 @@ def main() -> None:
 
     ref_path = args.voice_reference or os.environ.get("AC_COPILOT_REFERENCE_ARCHIVE")
     bank_dir = args.voice_bank or os.environ.get("AC_COPILOT_VOICE_BANK")
+    alien_line_path = args.alien_line or os.environ.get("AC_COPILOT_ALIEN_LINE")
     _wire_voice(
         VoiceRuntimeConfig(
             reference_path=ref_path,
             bank_dir=bank_dir,
+            alien_line_path=alien_line_path,
             tts_enabled=args.voice_tts or _env_truthy("AC_COPILOT_VOICE_TTS"),
             tts_rate=args.voice_rate,
             tts_volume=args.voice_volume,

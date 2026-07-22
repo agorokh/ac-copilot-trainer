@@ -87,6 +87,16 @@ Settings precedence is:
 created ahead of time by calling `ensure_settings_file()` from
 `tools.rig_launcher.settings`.
 
+Coach v2 can consume an issue #529 alien-line artifact through
+`AC_COPILOT_ALIEN_LINE` or the non-secret `alien_line` settings key. The launcher
+resolves relative paths against the Game Point data directory and passes the
+absolute path to the sidecar. The artifact supplies only a per-corner speed
+ceiling: the demonstrated reference archive remains authoritative for braking,
+throttle, steering, and cue timing. Missing driver history retains reference
+targets; malformed, unverified, wrong-combo, unmatchable, or slower-than-driver
+alien evidence fails closed and reports the reason under
+`voice.coach_frontier` in `/health`.
+
 The launcher status row for `voice` is sourced from the sidecar `/health`
 payload when the sidecar is reachable. A stale bank, missing reference archive,
 or failed audio backend reports `voice: DISABLED - <reason>` and makes the

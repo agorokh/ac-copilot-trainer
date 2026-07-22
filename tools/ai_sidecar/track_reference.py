@@ -42,14 +42,23 @@ class CornerReference:
     #: (issue #522 coverage). ``best_brake_point_spline`` stays the first of these for consumers
     #: that only understand one mark per corner.
     brake_marks: list[float] = field(default_factory=list)
+    #: Personalized, evidence-gated step toward the verified alien envelope.  The demonstrated
+    #: reference remains the source of brake/throttle/steer technique; only the apex-speed target
+    #: may be replaced by this value.
+    coachable_apex_kmh: float | None = None
+    target_source: str = "reference"
 
     @property
     def target_apex_kmh(self) -> float:
-        """The realistic target: corpus best when known, else the GGV optimum."""
+        """The realistic target: personalized frontier, corpus best, then GGV optimum."""
         return (
-            self.best_observed_apex_kmh
-            if self.best_observed_apex_kmh is not None
-            else self.optimal_apex_kmh
+            self.coachable_apex_kmh
+            if self.coachable_apex_kmh is not None
+            else (
+                self.best_observed_apex_kmh
+                if self.best_observed_apex_kmh is not None
+                else self.optimal_apex_kmh
+            )
         )
 
 
@@ -163,7 +172,11 @@ def score_lap(
         d_opt = round(ref.optimal_apex_kmh - driven, 1)
         findings: list[str] = []
         if d_target >= notable_kmh:
-            src = "best lap" if ref.best_observed_apex_kmh is not None else "GGV optimum"
+            src = (
+                "coachable frontier"
+                if ref.coachable_apex_kmh is not None
+                else ("best lap" if ref.best_observed_apex_kmh is not None else "GGV optimum")
+            )
             findings.append(
                 f"apex {d_target:.0f} km/h under the {src} ({driven:.0f} vs {target:.0f}) — "
                 "carry more entry speed (if grip is available)."

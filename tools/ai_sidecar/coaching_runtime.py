@@ -19,9 +19,10 @@ I/O — so it is unit-tested by feeding synthetic injected-mistake frame streams
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -119,6 +120,15 @@ class CoachRuntime:
     track_length_m: float = _DEFAULT_TRACK_M
     ledger: CoachingLedger = field(default_factory=CoachingLedger)
     cue_policy: DriverCuePolicy = field(default_factory=default_cue_policy)
+    frontier: dict[str, Any] = field(
+        default_factory=lambda: {
+            "configured": False,
+            "active": False,
+            "source": "reference",
+            "reason": "not_configured",
+            "corners": [],
+        }
+    )
     _pass: dict[int, _PassState] = field(default_factory=dict)
     _last_spline: float | None = None
     _last_lap: float | None = None
@@ -554,6 +564,8 @@ def build_coach_runtime(
     lead_s: float = _DEFAULT_LEAD_S,
     driver_profile: Mapping[str, Any] | None = None,
     driver_profile_path: str | Path | None = None,
+    alien_line_path: str | Path | None = None,
+    alien_line_artifact: Mapping[str, Any] | None = None,
 ) -> CoachRuntime | None:
     """Build a :class:`CoachRuntime` from a reference archive (same input as the observer)."""
     try:
@@ -590,13 +602,65 @@ def build_coach_runtime(
         {k: row[fi[k]] for k in ("spline", "speed", "brake", "throttle", "steer") if k in fi}
         for row in tr.get("samples") or []
     ]
-    ref_sigs = _reference_signatures(refs, anchors, ref_frames)
     # Pacing thresholds are env-tunable so the autonomous harness can verify PRIMEs in a few laps
     # (lower assess/hysteresis); production defaults stay conservative.
     profile = _profile_for_reference_combo(
         _profile_for_runtime(driver_profile, driver_profile_path), reference_archive
     )
     policy = cue_policy_from_profile(profile)
+    frontier: dict[str, Any] = {
+        "configured": False,
+        "active": False,
+        "source": "reference",
+        "reason": "not_configured",
+        "corners": [],
+    }
+    configured_alien = alien_line_path or os.environ.get("AC_COPILOT_ALIEN_LINE")
+    artifact = alien_line_artifact
+    if artifact is not None and not isinstance(artifact, Mapping):
+        from tools.ai_sidecar.coachable_frontier import frontier_fallback
+
+        frontier = frontier_fallback("alien_load_failed: artifact root must be an object")
+        artifact = None
+    if artifact is None and configured_alien:
+        try:
+            with Path(configured_alien).open(encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            if not isinstance(loaded, Mapping):
+                raise ValueError("alien artifact root must be an object")
+            artifact = loaded
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            from tools.ai_sidecar.coachable_frontier import frontier_fallback
+
+            frontier = frontier_fallback(f"alien_load_failed: {exc}")
+    if artifact is not None:
+        from tools.ai_sidecar.coachable_frontier import (
+            FrontierError,
+            derive_coachable_frontier,
+            frontier_fallback,
+        )
+
+        combo = _archive_combo(reference_archive)
+        if combo is None:
+            frontier = frontier_fallback("reference_combo_missing")
+        else:
+            try:
+                frontier = derive_coachable_frontier(
+                    refs,
+                    artifact,
+                    combo=combo,
+                    profile=profile,
+                    driver_level=policy.level,
+                )
+            except FrontierError as exc:
+                frontier = frontier_fallback(str(exc))
+
+    ref_sigs = _reference_signatures(refs, anchors, ref_frames)
+    # Only minimum speed is borrowed from the derived frontier. All other signature fields remain
+    # the human reference technique, which is the central safety/coachability invariant for P5.
+    for ref in refs:
+        if ref.coachable_apex_kmh is not None and ref.index in ref_sigs:
+            ref_sigs[ref.index] = replace(ref_sigs[ref.index], min_speed_kmh=ref.coachable_apex_kmh)
     ledger = CoachingLedger(
         hysteresis=_env_int("AC_COPILOT_COACH_HYSTERESIS", policy.hysteresis, min_value=1),
         assess_laps=_env_int("AC_COPILOT_COACH_ASSESS_LAPS", policy.assess_laps, min_value=0),
@@ -609,6 +673,7 @@ def build_coach_runtime(
         track_length_m=track_m,
         ledger=ledger,
         cue_policy=policy,
+        frontier=frontier,
     )
 
 
