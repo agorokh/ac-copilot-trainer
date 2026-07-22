@@ -78,6 +78,7 @@ def classify_forensics(
     phys_advancing: bool,
     rips: Sequence[int],
     tight_loop_bytes: int = DEFAULT_TIGHT_LOOP_BYTES,
+    thread_desc: str = "the hottest sampled thread",
 ) -> tuple[ForensicVerdict, str]:
     """Decide the verdict from the three signals. Pure — no I/O, no clock.
 
@@ -88,6 +89,11 @@ def classify_forensics(
     Passing those two separately made an inconsistent state representable — a caller could report
     "2 samples" with a ``None`` span, which fell through to ``LONG_COMPUTATION``, the single verdict
     that must never be reached without evidence. Deriving both here makes that unrepresentable.
+
+    ``thread_desc`` names the thread the S1/S2 signals describe. The Part G driver may select a
+    render-stack candidate that is NOT the hottest thread — a rationale hard-coded to "the hottest
+    sampled thread" would then state false evidence in the capture record and mislead the
+    follow-up diagnosis (#647 review round 3).
     """
     observed = list(rips)
     span = rip_span(observed)
@@ -107,9 +113,10 @@ def classify_forensics(
     if not burning_cpu:
         return (
             ForensicVerdict.BLOCKED_NOT_SPIN,
-            "the hottest sampled thread is not consuming CPU, so nothing in the process is "
-            "spinning hard enough to explain a wedge — the stalled path is WAITING, not "
-            "spinning. That is a block/deadlock — a different bug from the livelock hypothesis.",
+            f"{thread_desc} is not consuming CPU — the stalled path is WAITING, not "
+            "spinning. That is a block/deadlock — a different bug from the livelock hypothesis. "
+            "(The claim is about the sampled thread only; when it was render-preferred rather "
+            "than hottest, other threads may still be busy by design.)",
         )
     if span is None:
         return (
@@ -121,22 +128,22 @@ def classify_forensics(
     if span < tight_loop_bytes:
         return (
             ForensicVerdict.LIVELOCK_CONFIRMED,
-            f"the hottest sampled thread burns CPU while the render packet never advances, and "
+            f"{thread_desc} burns CPU while the render packet never advances, and "
             f"its RIP stays inside a {span}-byte window across the sampling interval. Two "
             "residuals remain: (1) RIP locality alone cannot rule out a finite loop longer than "
             "that interval — the independent progress check is the render packet itself, which a "
-            "converging loop would let advance; (2) S1/S2 sample the *hottest* thread, not a "
-            "render-identified one, so a busy physics worker (physics keeps advancing under the "
-            "#627 §2 signature) can supply both signals while the renderer is merely blocked — "
-            "confirm the sampled thread's stack is render-side before treating this as the #627 "
-            "livelock, or re-run against a render-stack TID. No sample shows progress: a tight "
-            "loop with no observed convergence (re-run to confirm).",
+            "converging loop would let advance; (2) unless the sampled thread was selected off a "
+            "render-side stack, a busy physics worker (physics keeps advancing under the #627 §2 "
+            "signature) can supply both signals while the renderer is merely blocked — confirm "
+            "the sampled thread's stack is render-side before treating this as the #627 "
+            "livelock. No sample shows progress: a tight loop with no observed convergence "
+            "(re-run to confirm).",
         )
     return (
         ForensicVerdict.LONG_COMPUTATION,
-        f"the hottest sampled thread burns CPU but RIP wanders across {span} bytes — that "
+        f"{thread_desc} burns CPU but RIP wanders across {span} bytes — that "
         "thread is walking through code, so this is a long finite computation rather than a "
-        "tight loop (same hottest-thread residual as LIVELOCK_CONFIRMED).",
+        "tight loop (same sampled-thread residual as LIVELOCK_CONFIRMED).",
     )
 
 
@@ -743,15 +750,16 @@ def _self_test() -> int:  # pragma: no cover - rig-only
         proc.kill()
 
 
-def _repo_checkout_root() -> Path:
-    """The checkout this module runs from — a FIXED approved output root, unlike the CWD.
+def _scratch_root() -> Path:
+    """The checkout's gitignored ``.scratch`` directory — the ONLY checkout-side approved root.
 
-    Anchoring on the module's own location (``tools/ac_harness/`` → two parents up) keeps the
-    ``.scratch`` capture-artifact workflow working from any invocation directory, while an
-    arbitrary caller CWD is never trusted as a write root (same boundary as PR #646's launcher
-    fix — a CWD root is caller-controlled and therefore no boundary at all).
+    Anchored on the module's own location (``tools/ac_harness/`` → two parents up), never the
+    caller's CWD (a CWD root is caller-controlled and therefore no boundary at all). Scoped to
+    ``.scratch`` rather than the whole checkout because a checkout-wide root would validate
+    ``--json <checkout>/tools/ac_harness/freeze_forensics.py`` and let a capture record overwrite
+    source (#647 review round 3).
     """
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[2] / ".scratch"
 
 
 def _resolve_record_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
@@ -759,9 +767,10 @@ def _resolve_record_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
 
     #647 review: an absolute path or ``..`` traversal would let this rig tool create parent
     directories and overwrite arbitrary writable locations. Approved roots are the per-user
-    Harness root (rig lock / presets) and the repo checkout root (gitignored ``.scratch``
-    capture artifacts). A relative path still resolves against the caller's CWD — but it only
-    passes when that resolution lands inside a fixed root.
+    Harness root (rig lock / presets) and the checkout's gitignored ``.scratch`` directory
+    (capture artifacts) — never the whole checkout, which would allow overwriting source. A
+    relative path still resolves against the caller's CWD — but it only passes when that
+    resolution lands inside a fixed root.
     """
     resolved = raw.expanduser()
     if not resolved.is_absolute():
@@ -805,13 +814,21 @@ def _non_negative_int(value: str) -> int:
     return parsed
 
 
-def _write_record(record: dict, path: Path) -> None:  # pragma: no cover - rig-only
+def _write_record(record: dict, path: Path) -> bool:  # pragma: no cover - rig-only
+    """Persist the record; report success so a requested-but-absent artifact fails the run.
+
+    When ``--json`` was supplied, the persisted record is part of the deliverable — automation
+    reading exit 0 while the artifact is absent would treat a failed capture as archived
+    (#647 review round 3). The record is always printed to stdout first as salvage.
+    """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
         print(f"record -> {path}")
+        return True
     except OSError as exc:
         print(f"WARNING: could not write capture record {path}: {exc}")
+        return False
 
 
 def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-only entrypoint
@@ -877,7 +894,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         try:
             args.json_path = _resolve_record_path(
                 args.json_path,
-                approved_roots=(default_rig_session_lock_path().parent, _repo_checkout_root()),
+                approved_roots=(default_rig_session_lock_path().parent, _scratch_root()),
             )
         except ValueError as exc:
             print(f"CAPTURE ABORTED: {exc}")
@@ -908,7 +925,13 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
     s3_samples: list[tuple[int | None, int | None, bool]] = [_read_s3_once(pid)]
     print(f"capture: pid {pid}; S1 cycle sampling over {args.cycles_window:.1f}s ...")
-    rows = sample_cycles(pid, args.cycles_window)
+    try:
+        rows = sample_cycles(pid, args.cycles_window)
+    except OSError as exc:
+        # Thread enumeration can fail outright (CreateToolhelp32Snapshot) — degrade to the same
+        # controlled exit-2 as every other capture failure instead of a traceback.
+        print(f"CAPTURE FAILED: thread cycle sampling failed: {exc}")
+        return 2
     if not rows:
         print("CAPTURE FAILED: no thread cycle data (process gone or access denied)")
         return 2
@@ -925,6 +948,13 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     tid, tid_reason = select_capture_tid(candidate_stacks)
     hot_cycles = next(row["cycles_per_s"] for row in rows if row["tid"] == tid)
     print(f"capture: selected tid {tid} ({tid_reason}); {hot_cycles:.3g} cycles/s")
+    # The rationale must name the thread the signals actually describe: when a render-stack
+    # candidate outranked a hotter physics worker, "the hottest sampled thread" would be false
+    # evidence in the record (#647 review round 3).
+    if "render-stack" in tid_reason:
+        thread_desc = f"the selected render-stack thread (tid {tid}, not necessarily the hottest)"
+    else:
+        thread_desc = f"the hottest sampled thread (tid {tid})"
 
     rips: list[int] = list(candidate_rips.get(tid, []))
     for index in range(args.rip_samples):
@@ -957,6 +987,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         )
         print(json.dumps(record, indent=2))
         if args.json_path is not None:
+            # Best-effort persistence of the refusal record; the exit is already the stronger 2.
             _write_record(record, args.json_path)
         return 2
 
@@ -965,6 +996,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         gfx_static=s3.gfx_static,
         phys_advancing=s3.phys_advancing,
         rips=rips,
+        thread_desc=thread_desc,
     )
     record = build_capture_record(
         pid=pid,
@@ -980,9 +1012,13 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         elapsed_s=time.monotonic() - started,
     )
     print(json.dumps(record, indent=2))
+    record_written = True
     if args.json_path is not None:
-        _write_record(record, args.json_path)
+        record_written = _write_record(record, args.json_path)
     print(f"VERDICT: {verdict} — {rationale}")
+    if not record_written:
+        print("CAPTURE INCOMPLETE: the requested record JSON could not be written (see WARNING)")
+        return 1
     return 0
 
 
