@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-22T05:30:00Z
+last_updated: 2026-07-22T07:45:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-625-init-perturber-ab-prepared-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
   - AcCopilotTrainer/03_Investigations/issue-628-acpmf-corpse-classify-2026-07-19.md
@@ -43,6 +44,14 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**In flight (2026-07-22):** issue [#625](https://github.com/agorokh/ac-copilot-trainer/issues/625),
+draft PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657). The overlay/init-perturber
+A/B driver is code-complete and full-CI green. The experiment is not yet run: `pc` stayed offline
+after canonical Wake-on-LAN, and the live issue requires explicit operator authorization before
+toggling and later restoring Steam overlay + NVIDIA ShadowPlay. Resume with the 40-trial fresh-boot
+interleaved run; do not ready or merge PR #657 until the actual rate/CI/Fisher result is attached.
+Detail: [[issue-625-init-perturber-ab-prepared-2026-07-22]].
 
 **Delivered (2026-07-22):** PR [#646](https://github.com/agorokh/ac-copilot-trainer/pull/646) MERGED
 `4265845` (#630 **Parts C+D+E**): `WEDGED_INIT` verdict (init livelock no longer buckets as

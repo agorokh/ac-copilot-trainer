@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-22T06:55:16Z
+last_updated: 2026-07-22T07:45:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-625-init-perturber-ab-prepared-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/mcp-preflight-guard-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
@@ -105,6 +106,23 @@ relates_to:
 ---
 
 # Next session handoff
+
+## In flight (2026-07-22) — #625 overlay/init-perturber A/B, PR #657 draft
+
+PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657) is a draft on
+`feat/issue-625-overlay-freeze-ab` (`535a3d4`). The statistically honest driver is code-complete and
+green: seeded adjacent A/B pairs, 20 analyzable launches per arm, immutable one-trial report ingest,
+uptime/order/summary checks, Wilson intervals, Fisher exact, paired exact sensitivity, and honest
+`never_live` separation. Full `make ci-fast`: **3,261 passed, 89 skipped**, 83.39% coverage. CLI plan
+and analysis were exercised through the actual module; exact math matched SciPy across 2,056 tables.
+
+**Do not ready/merge yet.** Physical outcome proof remains. `pc` is offline; canonical WOL sent to
+both declared NICs but Tailscale stayed offline and SSH timed out. Issue #625 is still OPEN and its
+live body explicitly requires operator sign-off before toggling Steam overlay + NVIDIA ShadowPlay,
+with both restored afterward. Resume: power on `pc`; obtain that explicit authorization; fresh
+reboot; run the PR's printed interleaved schedule (>=20 analyzable/arm); restore both settings;
+attach counts + Wilson CI + Fisher p + paired sensitivity to #625; then ready/resolve/merge/post-
+merge. Detail: [[issue-625-init-perturber-ab-prepared-2026-07-22]].
 
 ## Delivered (2026-07-22) — session UUID replay scoping (#622, PR #652 MERGED)
 
