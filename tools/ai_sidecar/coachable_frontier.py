@@ -195,12 +195,25 @@ def alien_lap_trace(
 
 
 def _default_fast_lane_path(ac_root: Path, *, track_id: str, layout: str) -> Path:
-    track_root = ac_root / "content" / "tracks" / track_id
-    return (
-        track_root / layout / "ai" / "fast_lane.ai"
-        if layout
+    from tools.ac_harness.auto_drive import validate_ac_id
+
+    try:
+        safe_track_id = validate_ac_id("track", track_id)
+        safe_layout = validate_ac_id("layout", layout) if layout else ""
+    except ValueError:
+        raise FrontierError("alien_fast_lane_source_invalid") from None
+    tracks_root = (ac_root / "content" / "tracks").resolve()
+    track_root = tracks_root / safe_track_id
+    candidate = (
+        track_root / safe_layout / "ai" / "fast_lane.ai"
+        if safe_layout
         else track_root / "ai" / "fast_lane.ai"
     )
+    try:
+        candidate.resolve().relative_to(tracks_root)
+    except ValueError:
+        raise FrontierError("alien_fast_lane_source_invalid") from None
+    return candidate
 
 
 def load_verified_alien_evidence(
@@ -362,11 +375,11 @@ def _driver_samples_by_reference(
     """
     if not isinstance(profile, Mapping) or not isinstance(profile.get("corner_history"), Mapping):
         return {}
-    usable_refs = {
-        index: brake_point
-        for index, brake_point in reference_brake_points.items()
-        if brake_point is not None
-    }
+    usable_refs: dict[int, float] = {}
+    for index, raw_brake_point in reference_brake_points.items():
+        brake_point = _finite(raw_brake_point)
+        if brake_point is not None and 0.0 <= brake_point <= 1.0:
+            usable_refs[index] = brake_point
     out: dict[int, list[Mapping[str, Any]]] = {index: [] for index in usable_refs}
     for row in profile["corner_history"].values():
         if not isinstance(row, Mapping):
@@ -378,7 +391,11 @@ def _driver_samples_by_reference(
             if not isinstance(sample, Mapping):
                 continue
             brake_point = _finite(sample.get("brake_point_spline"))
-            if brake_point is None or _finite(sample.get("min_speed_kmh"), positive=True) is None:
+            if (
+                brake_point is None
+                or not 0.0 <= brake_point <= 1.0
+                or _finite(sample.get("min_speed_kmh"), positive=True) is None
+            ):
                 continue
             candidates = sorted(
                 (

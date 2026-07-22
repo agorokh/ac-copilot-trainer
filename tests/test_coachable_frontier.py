@@ -13,6 +13,7 @@ from tools.ac_harness.alien_line import build_alien_line_artifact, save_alien_li
 from tools.ac_harness.plant_id import REQUIRED_PLANT_CONSTANTS
 from tools.ai_sidecar.coachable_frontier import (
     FrontierError,
+    _default_fast_lane_path,
     _driver_samples_by_reference,
     _match_corners,
     alien_lap_trace,
@@ -193,6 +194,35 @@ def test_ambiguous_brake_point_sample_is_not_assigned() -> None:
     matched = _driver_samples_by_reference(profile, {0: 0.10, 1: 0.16})
 
     assert matched == {0: [], 1: []}
+
+
+@pytest.mark.parametrize("brake_point", [-0.01, 1.01, 3.0])
+def test_out_of_range_brake_point_sample_is_not_assigned(brake_point: float) -> None:
+    profile = {
+        "corner_history": {
+            "source-corner": {
+                "corner_samples_by_lap_uuid": {
+                    "malformed": {
+                        "min_speed_kmh": 90.0,
+                        "brake_point_spline": brake_point,
+                    }
+                }
+            }
+        }
+    }
+
+    assert _driver_samples_by_reference(profile, {0: 0.01}) == {0: []}
+
+
+@pytest.mark.parametrize(
+    ("track_id", "layout"),
+    [("../outside", ""), ("track", "../outside"), ("/absolute", "")],
+)
+def test_default_fast_lane_rejects_path_like_content_ids(
+    tmp_path: Path, track_id: str, layout: str
+) -> None:
+    with pytest.raises(FrontierError, match="alien_fast_lane_source_invalid"):
+        _default_fast_lane_path(tmp_path, track_id=track_id, layout=layout)
 
 
 def test_ambiguous_alien_apex_match_fails_closed() -> None:
