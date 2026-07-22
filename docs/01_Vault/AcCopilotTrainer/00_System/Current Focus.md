@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-21T15:10:00Z
+last_updated: 2026-07-22T05:30:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
@@ -43,6 +43,16 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-22):** PR [#646](https://github.com/agorokh/ac-copilot-trainer/pull/646) MERGED
+`4265845` (#630 **Parts C+D+E**): `WEDGED_INIT` verdict (init livelock no longer buckets as
+`never_live`), Car0 45 s TTL re-probe (loses-drivability sessions no longer STABLE), per-attempt
+`AttemptRecord` + `--trials/--no-hold/--json` measurement mode (#627 §9.2). **In flight:** #630
+**Part G** — PR [#647](https://github.com/agorokh/ac-copilot-trainer/pull/647) (runnable
+freeze-forensics capture driver, render-TID preference, §7.1-guarded S3; `--self-test`
+rig-verified) in the resolve-pr loop. After Part G merges, #630 has only the optional
+RELEASE→STABLE atomic action left; the rig payoff run remains: catch a real wedge with the
+promoted instrument to settle #627 §6.1.
 
 **Delivered (2026-07-21):** PR [#644](https://github.com/agorokh/ac-copilot-trainer/pull/644) MERGED
 `012577e` (#630 **Part F**). The validated freeze-forensics instrument is no longer trapped in
