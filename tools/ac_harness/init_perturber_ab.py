@@ -17,6 +17,8 @@ import argparse
 import json
 import math
 import random
+import shlex
+import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
@@ -25,7 +27,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
-from tools.ac_harness.resilient_launch import _repo_checkout_root, _resolve_report_path
+from tools.ac_harness.resilient_launch import repo_checkout_root, resolve_report_path
 
 PLAN_SCHEMA = "init-perturber-ab-plan/v1"
 ANALYSIS_SCHEMA = "init-perturber-ab-analysis/v1"
@@ -38,6 +40,7 @@ DEFAULT_RANDOMIZATION_SEED = 625
 DEFAULT_CAR = "ks_porsche_911_gt3_r_2016"
 DEFAULT_TRACK = "spa"
 DEFAULT_STABILITY_WINDOW = 140.0
+MIN_TRIALS_PER_ARM = 20
 _Z_95 = 1.959963984540054
 
 
@@ -80,33 +83,45 @@ def counterbalanced_sequence(
 ) -> tuple[str, ...]:
     """Return seeded AB/BA pairs so every adjacent pair contains one trial per arm.
 
-    The seed is persisted in the plan, making order allocation auditable and reproducible
-    without systematically assigning either condition to the earlier trial in a pair.
+    Pair directions are balanced (equal AB and BA counts when ``trials_per_arm`` is even;
+    differ by at most one when odd), then shuffled under the persisted seed so neither
+    condition is systematically scheduled earlier in the run.
     """
     if trials_per_arm <= 0:
         raise ValueError("trials_per_arm must be > 0")
+    ab_pairs = trials_per_arm // 2
+    ba_pairs = trials_per_arm - ab_pairs
+    pairs: list[tuple[str, str]] = [CONDITIONS] * ab_pairs + [
+        tuple(reversed(CONDITIONS))
+    ] * ba_pairs
     rng = random.Random(randomization_seed)
+    rng.shuffle(pairs)
     sequence: list[str] = []
-    for _pair_index in range(trials_per_arm):
-        pair = CONDITIONS if rng.getrandbits(1) == 0 else tuple(reversed(CONDITIONS))
+    for pair in pairs:
         sequence.extend(pair)
     return tuple(sequence)
 
 
 def build_plan(
-    trials_per_arm: int = 20,
+    trials_per_arm: int = MIN_TRIALS_PER_ARM,
     *,
     randomization_seed: int = DEFAULT_RANDOMIZATION_SEED,
     car: str = DEFAULT_CAR,
     track: str = DEFAULT_TRACK,
     stability_window: float = DEFAULT_STABILITY_WINDOW,
     generated_at_utc: str | None = None,
+    allow_undersized: bool = False,
 ) -> dict[str, Any]:
     """Build a reproducible experiment plan; settings remain operator-owned."""
     if not car.strip() or not track.strip():
         raise ValueError("car and track must not be blank")
     if not math.isfinite(stability_window) or stability_window <= 0:
         raise ValueError("stability_window must be finite and > 0")
+    if trials_per_arm < MIN_TRIALS_PER_ARM and not allow_undersized:
+        raise ValueError(
+            f"trials_per_arm must be >= {MIN_TRIALS_PER_ARM} "
+            "(undersized plans cannot satisfy the experiment endpoint)"
+        )
     sequence = counterbalanced_sequence(
         trials_per_arm,
         randomization_seed=randomization_seed,
@@ -199,9 +214,20 @@ def load_plan(path: Path) -> dict[str, Any]:
         raise ValueError("plan must contain exactly two trials per requested arm trial")
     if any(conditions.count(condition) != trials_per_arm for condition in CONDITIONS):
         raise ValueError("plan must contain trials_per_arm observations for each condition")
+    ab_first = 0
+    ba_first = 0
     for offset in range(0, len(conditions), 2):
-        if set(conditions[offset : offset + 2]) != set(CONDITIONS):
+        pair = conditions[offset : offset + 2]
+        if set(pair) != set(CONDITIONS):
             raise ValueError("plan must interleave one trial from each arm in every adjacent pair")
+        if pair[0] == "overlays_on":
+            ab_first += 1
+        else:
+            ba_first += 1
+    if trials_per_arm % 2 == 0 and ab_first != ba_first:
+        raise ValueError("plan pair directions must be balanced (equal AB and BA counts)")
+    if abs(ab_first - ba_first) > 1:
+        raise ValueError("plan pair directions must differ by at most one")
     return plan
 
 
@@ -269,6 +295,12 @@ def load_observations(
     stamps = [item.started_at_utc for item in observations]
     if stamps != sorted(stamps) or len(stamps) != len(set(stamps)):
         raise ValueError("report timestamps must be unique and increase in planned trial order")
+    uptimes = [item.uptime_h for item in observations]
+    if any(later < earlier for earlier, later in zip(uptimes, uptimes[1:], strict=True)):
+        raise ValueError(
+            "uptime_h must be nondecreasing across the run "
+            "(a mid-experiment reboot confounds the freeze endpoint)"
+        )
     return tuple(observations)
 
 
@@ -373,7 +405,20 @@ def _summarize(condition: str, observations: Sequence[Observation]) -> ArmSummar
     freeze_count = counts["froze"] + counts["wedged_init"]
     analyzable_total = len(arm) - counts["never_live"]
     if analyzable_total <= 0:
-        raise ValueError(f"no analyzable stable/freeze observations for {condition}")
+        # Plausible primary outcome when one overlay setting systematically prevents launch.
+        return ArmSummary(
+            condition=condition,
+            total=len(arm),
+            analyzable_total=0,
+            stable=counts["stable"],
+            froze=counts["froze"],
+            wedged_init=counts["wedged_init"],
+            never_live=counts["never_live"],
+            freeze_count=freeze_count,
+            freeze_rate=0.0,
+            ci95_low=0.0,
+            ci95_high=1.0,
+        )
     low, high = wilson_interval(freeze_count, analyzable_total)
     return ArmSummary(
         condition=condition,
@@ -391,34 +436,44 @@ def _summarize(condition: str, observations: Sequence[Observation]) -> ArmSummar
 
 
 def analyze(
-    observations: Sequence[Observation], *, minimum_per_arm: int = 20, alpha: float = DEFAULT_ALPHA
+    observations: Sequence[Observation],
+    *,
+    minimum_per_arm: int = MIN_TRIALS_PER_ARM,
+    alpha: float = DEFAULT_ALPHA,
 ) -> dict[str, Any]:
     if not 0.0 < alpha < 1.0:
         raise ValueError("alpha must be between 0 and 1")
+    # Never allow a dry-run / undersized plan to claim the experiment endpoint.
+    endpoint_floor = max(MIN_TRIALS_PER_ARM, minimum_per_arm)
     summaries = {condition: _summarize(condition, observations) for condition in CONDITIONS}
     on = summaries["overlays_on"]
     off = summaries["overlays_off"]
-    p_value = fisher_exact_two_sided(
-        on.freeze_count, on.analyzable_total, off.freeze_count, off.analyzable_total
-    )
-    risk_difference = off.freeze_rate - on.freeze_rate
-    if min(on.analyzable_total, off.analyzable_total) < minimum_per_arm:
+    if on.analyzable_total == 0 or off.analyzable_total == 0:
+        p_value = 1.0
+        risk_difference = 0.0
         conclusion = "insufficient_sample"
-    elif p_value >= alpha:
-        conclusion = "no_measurable_effect"
-    elif risk_difference < 0:
-        conclusion = "overlays_off_lower_freeze_rate"
-    elif risk_difference > 0:
-        conclusion = "overlays_off_higher_freeze_rate"
     else:
-        conclusion = "no_measurable_effect"
+        p_value = fisher_exact_two_sided(
+            on.freeze_count, on.analyzable_total, off.freeze_count, off.analyzable_total
+        )
+        risk_difference = off.freeze_rate - on.freeze_rate
+        if min(on.analyzable_total, off.analyzable_total) < endpoint_floor:
+            conclusion = "insufficient_sample"
+        elif p_value >= alpha:
+            conclusion = "no_measurable_effect"
+        elif risk_difference < 0:
+            conclusion = "overlays_off_lower_freeze_rate"
+        elif risk_difference > 0:
+            conclusion = "overlays_off_higher_freeze_rate"
+        else:
+            conclusion = "no_measurable_effect"
     uptimes = [item.uptime_h for item in observations]
     return {
         "schema": ANALYSIS_SCHEMA,
         "issue": 625,
         "primary_endpoint": "froze + wedged_init among stable/freeze-classified attempts",
         "alpha": alpha,
-        "minimum_per_arm": minimum_per_arm,
+        "minimum_per_arm": endpoint_floor,
         "arms": {condition: asdict(summary) for condition, summary in summaries.items()},
         "risk_difference_off_minus_on": risk_difference,
         "fisher_exact_two_sided_p": p_value,
@@ -470,7 +525,40 @@ def _write_new_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _output_path(raw: Path) -> Path:
-    return _resolve_report_path(raw, approved_roots=(_repo_checkout_root(),))
+    return resolve_report_path(raw, approved_roots=(repo_checkout_root(),))
+
+
+def _shell_quote(token: str) -> str:
+    """Quote one argv token for paste onto the operator's launch host shell."""
+    if sys.platform == "win32":
+        return subprocess.list2cmdline([token])
+    return shlex.quote(token)
+
+
+def _format_trial_command(
+    *,
+    car: str,
+    track: str,
+    stability_window: float,
+    report_name: str,
+) -> str:
+    """Build a pasteable launch line using plan-directory-relative report names."""
+    parts = [
+        "python",
+        "-m",
+        "tools.ac_harness.resilient_launch",
+        "--car",
+        car,
+        "--track",
+        track,
+        "--stability-window",
+        f"{stability_window:g}",
+        "--trials",
+        "1",
+        "--json",
+        report_name,
+    ]
+    return " ".join(_shell_quote(part) for part in parts)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -478,7 +566,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     plan_parser = subparsers.add_parser("plan", help="write an interleaved A/B launch plan")
     plan_parser.add_argument("--out", required=True, type=Path)
-    plan_parser.add_argument("--trials-per-arm", type=int, default=20)
+    plan_parser.add_argument(
+        "--trials-per-arm",
+        type=int,
+        default=MIN_TRIALS_PER_ARM,
+        help=f"analyzable-floor target per arm (minimum {MIN_TRIALS_PER_ARM})",
+    )
     plan_parser.add_argument("--seed", type=int, default=DEFAULT_RANDOMIZATION_SEED)
     plan_parser.add_argument("--car", default=DEFAULT_CAR)
     plan_parser.add_argument("--track", default=DEFAULT_TRACK)
@@ -504,18 +597,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "OPERATOR GATE: explicitly approve and apply both Steam overlay and NVIDIA "
                 "ShadowPlay settings; reboot once before trial 001 and restore both after the run."
             )
+            print(
+                "Paste each command on the rig after "
+                f"cd {_shell_quote(str(destination.parent))} "
+                "(report paths are relative to that directory)."
+            )
             for trial in plan["trials"]:
-                report_path = destination.parent / trial["report"]
                 print(f"\n{trial['trial']:03d} {trial['condition']}")
                 print(
-                    f"python -m tools.ac_harness.resilient_launch --car {args.car} "
-                    f"--track {args.track} --stability-window {args.stability_window:g} "
-                    f"--trials 1 --json {report_path}"
+                    _format_trial_command(
+                        car=args.car,
+                        track=args.track,
+                        stability_window=args.stability_window,
+                        report_name=trial["report"],
+                    )
                 )
             return 0
         plan = load_plan(args.plan)
         observations = load_observations(plan, args.reports_dir)
-        result = analyze(observations, minimum_per_arm=int(plan["trials_per_arm"]))
+        result = analyze(
+            observations,
+            minimum_per_arm=max(MIN_TRIALS_PER_ARM, int(plan["trials_per_arm"])),
+        )
         if args.json_path is not None:
             destination = _output_path(args.json_path)
             _write_new_json(destination, result)

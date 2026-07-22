@@ -720,7 +720,7 @@ def _machine_uptime_hours() -> float | None:  # pragma: no cover - rig-only
         return None
 
 
-def _repo_checkout_root() -> Path:
+def repo_checkout_root() -> Path:
     """The checkout this module runs from — a FIXED approved output root, unlike the CWD.
 
     Anchoring on the module's own location (``tools/ac_harness/`` → two parents up) keeps the
@@ -731,7 +731,7 @@ def _repo_checkout_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _resolve_report_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
+def resolve_report_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
     """Resolve the ``--json`` destination and require it inside an approved output root.
 
     #646 review: an absolute path or a ``..`` traversal would let this rig tool create parent
@@ -752,6 +752,11 @@ def _resolve_report_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
         f"--json destination {resolved} is outside every approved output root "
         f"({', '.join(str(root) for root in approved_roots)})"
     )
+
+
+# Back-compat aliases for callers/tests that still use the private names.
+_repo_checkout_root = repo_checkout_root
+_resolve_report_path = resolve_report_path
 
 
 def _write_report_json(report: LaunchReport, path: Path) -> bool:  # pragma: no cover - rig-only
@@ -1498,8 +1503,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
     if args.json_path is not None:
         try:
-            args.json_path = _resolve_report_path(
-                args.json_path, approved_roots=(lock_path.parent, _repo_checkout_root())
+            args.json_path = resolve_report_path(
+                args.json_path, approved_roots=(lock_path.parent, repo_checkout_root())
             )
         except ValueError as exc:
             _log(f"launch aborted: {exc}")

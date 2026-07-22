@@ -7,6 +7,7 @@ import pytest
 
 from tools.ac_harness.init_perturber_ab import (
     ANALYSIS_SCHEMA,
+    MIN_TRIALS_PER_ARM,
     REPORT_SCHEMA,
     Observation,
     analyze,
@@ -60,12 +61,14 @@ def test_counterbalanced_sequence_interleaves_every_pair_and_is_seeded() -> None
         set(sequence[offset : offset + 2]) == {"overlays_on", "overlays_off"}
         for offset in range(0, len(sequence), 2)
     )
+    ab_first = sum(1 for offset in range(0, len(sequence), 2) if sequence[offset] == "overlays_on")
+    assert ab_first == 10
     assert sequence == counterbalanced_sequence(20)
     assert sequence != counterbalanced_sequence(20, randomization_seed=626)
 
 
 def test_plan_records_operator_gate_and_plain_report_names() -> None:
-    plan = build_plan(2, generated_at_utc="2026-07-22T12:00:00Z")
+    plan = build_plan(2, generated_at_utc="2026-07-22T12:00:00Z", allow_undersized=True)
     assert plan["operator_owned_settings"] is True
     assert plan["protocol"]["fresh_reboot_before_run"] is True
     assert plan["protocol"]["restore_settings_after_run"] is True
@@ -88,8 +91,13 @@ def test_plan_records_operator_gate_and_plain_report_names() -> None:
     assert plan["trials"][0]["report"] == f"trial-001-{plan['trials'][0]['condition']}.json"
 
 
+def test_build_plan_rejects_undersized_experiment() -> None:
+    with pytest.raises(ValueError, match=str(MIN_TRIALS_PER_ARM)):
+        build_plan(MIN_TRIALS_PER_ARM - 1)
+
+
 def test_load_plan_rejects_non_interleaved_pair(tmp_path: Path) -> None:
-    plan = build_plan(2)
+    plan = build_plan(2, allow_undersized=True)
     plan["trials"][1]["condition"] = plan["trials"][0]["condition"]
     path = tmp_path / "plan.json"
     path.write_text(json.dumps(plan), encoding="utf-8")
@@ -98,7 +106,7 @@ def test_load_plan_rejects_non_interleaved_pair(tmp_path: Path) -> None:
 
 
 def test_report_summary_must_match_attempt_verdict(tmp_path: Path) -> None:
-    plan = build_plan(1)
+    plan = build_plan(1, allow_undersized=True)
     first = plan["trials"][0]
     path = tmp_path / first["report"]
     _write_report(
@@ -115,7 +123,7 @@ def test_report_summary_must_match_attempt_verdict(tmp_path: Path) -> None:
 
 
 def test_observations_require_complete_reports_uptime_and_order(tmp_path: Path) -> None:
-    plan = build_plan(1)
+    plan = build_plan(1, allow_undersized=True)
     _write_report(
         tmp_path / plan["trials"][0]["report"],
         verdict="stable",
@@ -143,6 +151,24 @@ def test_observations_require_complete_reports_uptime_and_order(tmp_path: Path) 
         uptime_h=None,
     )
     with pytest.raises(ValueError, match="uptime_h"):
+        load_observations(plan, tmp_path)
+
+
+def test_observations_reject_mid_run_reboot(tmp_path: Path) -> None:
+    plan = build_plan(1, allow_undersized=True)
+    _write_report(
+        tmp_path / plan["trials"][0]["report"],
+        verdict="stable",
+        started_at_utc="2026-07-22T12:00:00Z",
+        uptime_h=4.19,
+    )
+    _write_report(
+        tmp_path / plan["trials"][1]["report"],
+        verdict="froze",
+        started_at_utc="2026-07-22T12:01:00Z",
+        uptime_h=0.10,
+    )
+    with pytest.raises(ValueError, match="nondecreasing|reboot"):
         load_observations(plan, tmp_path)
 
 
@@ -244,3 +270,50 @@ def test_analysis_detects_material_lower_off_rate() -> None:
     assert result["risk_difference_off_minus_on"] == pytest.approx(-0.6)
     assert result["conclusion"] == "overlays_off_lower_freeze_rate"
     assert result["paired_sensitivity"]["exact_two_sided_p"] < 0.001
+
+
+def test_undersized_significant_run_stays_insufficient_sample() -> None:
+    """A dry-run with n=5/arm must not claim the experiment endpoint even if Fisher is tiny."""
+    observations: list[Observation] = []
+    for _index in range(5):
+        for condition, verdict in (
+            ("overlays_on", "froze"),
+            ("overlays_off", "stable"),
+        ):
+            observations.append(
+                Observation(
+                    trial=len(observations) + 1,
+                    condition=condition,
+                    verdict=verdict,
+                    started_at_utc=f"2026-07-22T12:{len(observations):02d}:00Z",
+                    elapsed_s=10.0,
+                    uptime_h=1.0 + len(observations) / 60,
+                )
+            )
+    result = analyze(observations, minimum_per_arm=5)
+    assert result["minimum_per_arm"] == MIN_TRIALS_PER_ARM
+    assert result["fisher_exact_two_sided_p"] < 0.01
+    assert result["conclusion"] == "insufficient_sample"
+
+
+def test_all_never_live_arm_reports_insufficient_sample() -> None:
+    observations: list[Observation] = []
+    for _index in range(20):
+        for condition, verdict in (
+            ("overlays_on", "never_live"),
+            ("overlays_off", "stable"),
+        ):
+            observations.append(
+                Observation(
+                    trial=len(observations) + 1,
+                    condition=condition,
+                    verdict=verdict,
+                    started_at_utc=f"2026-07-22T12:{len(observations):02d}:00Z",
+                    elapsed_s=10.0,
+                    uptime_h=1.0 + len(observations) / 60,
+                )
+            )
+    result = analyze(observations)
+    assert result["arms"]["overlays_on"]["analyzable_total"] == 0
+    assert result["arms"]["overlays_on"]["never_live"] == 20
+    assert result["conclusion"] == "insufficient_sample"
