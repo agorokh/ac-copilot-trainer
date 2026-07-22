@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-22T08:54:43Z
+last_updated: 2026-07-22T09:52:46Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/mcp-preflight-guard-2026-07-20.md
@@ -106,6 +106,48 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-07-22) — #529 P4 evidence-gated setup scientist (#654, PR #659 MERGED)
+
+**PR [#659](https://github.com/agorokh/ac-copilot-trainer/pull/659) MERGED** at
+`2026-07-22T09:51:41Z` as squash
+[`cc9da82`](https://github.com/agorokh/ac-copilot-trainer/commit/cc9da82b4942f34f9f430d57091f2163694b4fde);
+issue [#654](https://github.com/agorokh/ac-copilot-trainer/issues/654) is **CLOSED**. The optional
+`tools.ac_harness.auto_alien --scientist` path now turns a named self-play failure or pace plateau
+into at most three bounded physical hypotheses and schema-validated, one-parameter setup
+experiments. Deterministic code—not proposal prose—creates immutable candidate INIs beside the
+baseline under AC Documents and runs every candidate through the normal auto-alien identification,
+drive, archive, and keep-last-valid oracle.
+
+Promotion requires the full requested baseline and candidate lap counts, same-combo archives,
+exactly one changed setup parameter, and the existing uncertainty-aware significance comparison.
+Incomplete, invalid, or confounded batches retain the previous setup and cannot create a durable
+falsification. Completed plans/outcomes/verdicts live under
+`journal/alien_scientist/runs/`; the append-only `experiments.jsonl` ledger suppresses only a
+measured falsified physical adjustment (parameter + direction) for the same mechanical, aero,
+tyre, and track-archetype scope. State and candidate destinations reject symlink/junction escape,
+baseline drift, conflicts, non-finite or out-of-schema proposals, and incomplete evidence.
+
+**Review hardening:** three actionable Codex threads were fixed on `a5638d0`: enforce every
+requested baseline/candidate lap, remove the proposal-controlled ID from the suppression key, and
+contain all state reads/writes beneath the canonical AC Documents scientist root. All threads were
+replied to and resolved; the enforce-mode resolution gate reported no substantive findings. The
+initial hosted failure was only a non-conventional PR title and was corrected before the final run.
+
+**Verification:** focused scientist/alien/setup parity passed at **197 tests**; full local parity
+passed at **3,291 passed, 89 skipped**, `ci-fast: OK`. Hosted `build` (5m13s), `Canonical docs
+exist`, and `conformance` passed on exact head `a5638d0`. Post-merge classification found no
+migration, dependency, workflow, required-environment, or immediate operator-action flags. This
+session ran on macOS, so it did **not** execute a real Assetto Corsa/Windows scientist batch.
+
+**Resume here / what remains on EPIC [#529](https://github.com/agorokh/ac-copilot-trainer/issues/529):**
+
+- P4 (#654) and P5 (#655) are code-, review-, and local-evidence-complete. Do not reimplement them.
+- Run the remaining Windows-rig/cross-combo performance gates: prove the alien pipeline on a fresh
+  car/track combination, execute at least one real scientist baseline/candidate batch under AC
+  Documents, and observe whether the promoted frontier improves real pace/coaching.
+- Keep parent #529 **OPEN** until those reality gates are captured; unit/hosted CI is not a claim of
+  alien pace or real-driver improvement.
+
 ## Delivered (2026-07-22) — #529 P5 coachable alien frontier (#655, PR #656 MERGED)
 
 **PR [#656](https://github.com/agorokh/ac-copilot-trainer/pull/656) MERGED** at
@@ -136,16 +178,6 @@ fixture corners without replacing demonstrated technique. This was not a Windows
 **Post-merge classification:** `.env.example` changed only for optional
 `AC_COPILOT_ALIEN_LINE` / source override configuration. No migration, dependency, workflow,
 required environment, or immediate operator action exists.
-
-**Resume here / what remains on EPIC [#529](https://github.com/agorokh/ac-copilot-trainer/issues/529):**
-
-- Implement P4 in [#654](https://github.com/agorokh/ac-copilot-trainer/issues/654): the
-  evidence-gated scientist loop over alien self-play and one-parameter setup experiments, with
-  durable falsified-constraint suppression and keep-last-valid promotion.
-- Run the remaining cross-combo/live performance gates on the rig. P5 is code- and
-  evidence-loader-complete, but no claim is made that a new combo has reached alien pace or that
-  the personalized frontier has improved a real driver's lap yet.
-- Keep parent #529 **OPEN** until P4 and those performance gates are evidenced.
 
 ## Delivered (2026-07-22) — session UUID replay scoping (#622, PR #652 MERGED)
 
