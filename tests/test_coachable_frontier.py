@@ -14,10 +14,12 @@ from tools.ac_harness.plant_id import REQUIRED_PLANT_CONSTANTS
 from tools.ai_sidecar.coachable_frontier import (
     FrontierError,
     _driver_samples_by_reference,
+    _match_corners,
     alien_lap_trace,
     load_verified_alien_evidence,
 )
 from tools.ai_sidecar.coaching_runtime import build_coach_runtime
+from tools.ai_sidecar.track_reference import CornerReference
 
 _REFERENCE = Path(__file__).parent / "fixtures" / "magione_gt3r_reference.json"
 _EXPECTED_PROVENANCE = {
@@ -191,6 +193,17 @@ def test_ambiguous_brake_point_sample_is_not_assigned() -> None:
     matched = _driver_samples_by_reference(profile, {0: 0.10, 1: 0.16})
 
     assert matched == {0: [], 1: []}
+
+
+def test_ambiguous_alien_apex_match_fails_closed() -> None:
+    reference = CornerReference(0, 0.13, 0.10, 0.16, 90.0)
+    alien_refs = [
+        CornerReference(0, 0.10, 0.08, 0.12, 100.0),
+        CornerReference(1, 0.16, 0.14, 0.18, 140.0),
+    ]
+
+    with pytest.raises(FrontierError, match="alien_corner_ambiguous"):
+        _match_corners([reference], alien_refs)
 
 
 def test_alien_trace_uses_consistent_open_polyline_distance() -> None:

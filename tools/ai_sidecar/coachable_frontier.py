@@ -23,7 +23,7 @@ _SCHEMA_VERSION = 1
 _ENVELOPE_TOL = 1e-3
 _APEX_MATCH_TOL = 0.08
 _BRAKE_POINT_MATCH_TOL = 0.04
-_BRAKE_POINT_UNIQUE_GAP = 0.01
+_MATCH_UNIQUE_GAP = 0.01
 _GAIN_BY_LEVEL_KMH = {
     "unknown": 1.5,
     "novice": 2.0,
@@ -334,6 +334,8 @@ def _match_corners(
         )
         if not candidates or candidates[0][0] > _APEX_MATCH_TOL:
             raise FrontierError("alien_corner_unmatched")
+        if len(candidates) > 1 and candidates[1][0] - candidates[0][0] < _MATCH_UNIQUE_GAP:
+            raise FrontierError("alien_corner_ambiguous")
         _, alien_index = candidates[0]
         unused.remove(alien_index)
         alien_ref = alien_refs[alien_index]
@@ -387,8 +389,7 @@ def _driver_samples_by_reference(
             )
             nearest_is_usable = candidates and candidates[0][0] <= _BRAKE_POINT_MATCH_TOL
             nearest_is_unique = (
-                len(candidates) == 1
-                or candidates[1][0] - candidates[0][0] >= _BRAKE_POINT_UNIQUE_GAP
+                len(candidates) == 1 or candidates[1][0] - candidates[0][0] >= _MATCH_UNIQUE_GAP
             )
             if nearest_is_usable and nearest_is_unique:
                 out[candidates[0][1]].append(sample)
