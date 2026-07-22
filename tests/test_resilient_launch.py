@@ -1069,8 +1069,25 @@ class TestResolveReportPath:
         from tools.ac_harness.resilient_launch import _resolve_report_path
 
         monkeypatch.chdir(tmp_path)
-        resolved = _resolve_report_path(Path(".scratch/run.json"), approved_roots=(Path.cwd(),))
+        resolved = _resolve_report_path(Path(".scratch/run.json"), approved_roots=(tmp_path,))
         assert resolved == (tmp_path / ".scratch" / "run.json").resolve()
+
+    def test_relative_path_from_an_unapproved_cwd_is_rejected(self, tmp_path, monkeypatch) -> None:
+        """#646 review round 2 — the caller's CWD is not a root: cd-ing to Downloads and passing
+        a bare filename must not become a write there."""
+        from tools.ac_harness.resilient_launch import _resolve_report_path
+
+        downloads = tmp_path / "Downloads"
+        downloads.mkdir()
+        monkeypatch.chdir(downloads)
+        with pytest.raises(ValueError, match="approved output root"):
+            _resolve_report_path(Path("report.json"), approved_roots=(tmp_path / "approved",))
+
+    def test_repo_checkout_root_is_the_module_checkout(self) -> None:
+        from tools.ac_harness.resilient_launch import _repo_checkout_root
+
+        root = _repo_checkout_root()
+        assert (root / "tools" / "ac_harness" / "resilient_launch.py").is_file()
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf"])

@@ -720,13 +720,25 @@ def _machine_uptime_hours() -> float | None:  # pragma: no cover - rig-only
         return None
 
 
+def _repo_checkout_root() -> Path:
+    """The checkout this module runs from — a FIXED approved output root, unlike the CWD.
+
+    Anchoring on the module's own location (``tools/ac_harness/`` → two parents up) keeps the
+    established ``.scratch`` measurement-artifact workflow working from any invocation directory,
+    while an arbitrary caller CWD (e.g. a Downloads directory) is never trusted as a write root
+    (#646 review — the CWD root was caller-controlled and therefore no boundary at all).
+    """
+    return Path(__file__).resolve().parents[2]
+
+
 def _resolve_report_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
     """Resolve the ``--json`` destination and require it inside an approved output root.
 
     #646 review: an absolute path or a ``..`` traversal would let this rig tool create parent
     directories and overwrite files at arbitrary writable locations. The approved roots are the
-    per-user Harness root (where the rig lock and generated presets already live) and the current
-    working directory (the checkout — gitignored ``.scratch`` measurement artifacts).
+    per-user Harness root (where the rig lock and generated presets already live) and the repo
+    checkout root (gitignored ``.scratch`` measurement artifacts). A relative path still resolves
+    against the caller's CWD — but it only passes when that resolution lands inside a fixed root.
     """
     resolved = raw.expanduser()
     if not resolved.is_absolute():
@@ -1487,7 +1499,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     if args.json_path is not None:
         try:
             args.json_path = _resolve_report_path(
-                args.json_path, approved_roots=(lock_path.parent, Path.cwd())
+                args.json_path, approved_roots=(lock_path.parent, _repo_checkout_root())
             )
         except ValueError as exc:
             _log(f"launch aborted: {exc}")
@@ -1678,7 +1690,13 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 f"trials complete: stable {report.stable}/{report.attempts} "
                 f"({report._counts()}); hard kills between trials — see #627 §6.5"
             )
-            _make_rig_safe(acs_present, release_requested=release_requested)
+            rig_safe = _make_rig_safe(acs_present, release_requested=release_requested)
+            if not rig_safe:
+                # The advertised end-of-run teardown failed: a live (possibly wedged) acs.exe is
+                # about to outlast the released rig lock. A measurement run must not read as
+                # successful over that (#646 review P1, round 2).
+                _log("TRIALS FAILED: end-of-run teardown could not confirm acs.exe exit")
+                return 1
             if not report_written:
                 # In measurement mode the machine-readable record IS the deliverable. An
                 # automated run must not read as successful when the requested record was never
