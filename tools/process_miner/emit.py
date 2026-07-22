@@ -214,45 +214,6 @@ def _build_rule_markdown(
     return title_human, body
 
 
-_PM_LEARNED_LINE = re.compile(
-    r"^-\s*\(process-miner\)\s+New learned rule file\(s\):\s*.*$",
-)
-
-
-def _merge_agents_learned_paths(repo_root: Path, agents_md_path: Path, written: list[str]) -> str:
-    """Append a line inside the process-miner learned block (preserve existing block content)."""
-    if not written:
-        return ""
-    agents_file = repo_root / agents_md_path
-    if not agents_file.is_file():
-        return ""
-    new_line = "- (process-miner) New learned rule file(s): " + ", ".join(sorted(set(written)))
-    start_marker = "<!-- process-miner:learned:start -->"
-    end_marker = "<!-- process-miner:learned:end -->"
-    text = agents_file.read_text(encoding="utf-8")
-    if start_marker in text and end_marker in text:
-        si = text.index(start_marker) + len(start_marker)
-        ei = text.index(end_marker)
-        inner = text[si:ei]
-        kept: list[str] = []
-        for ln in inner.splitlines():
-            if _PM_LEARNED_LINE.match(ln.strip()):
-                continue
-            kept.append(ln)
-        body_inner = "\n".join(kept).rstrip("\n")
-        chunk = f"\n{body_inner}\n{new_line}\n" if body_inner else f"\n{new_line}\n"
-        text = text[:si] + chunk + text[ei:]
-    else:
-        block = f"\n{start_marker}\n{new_line}\n{end_marker}\n"
-        marker = "## Learned Workspace Facts"
-        if marker in text:
-            text = text.replace(marker, marker + block, 1)
-        else:
-            text = text.rstrip() + "\n" + block
-    agents_file.write_text(text, encoding="utf-8")
-    return f"updated {agents_file}"
-
-
 def emit_learned_artifacts(
     result: AnalysisResult,
     *,
@@ -260,12 +221,10 @@ def emit_learned_artifacts(
     repo_root: Path,
     min_occurrences: int = 3,
     min_distinct_prs: int = 2,
-    agents_md_path: Path | None = None,
     scope: str = "S3",
     domain_tag: str | None = None,
     frequency_across_repos: int | None = None,
     source_repos: list[str] | None = None,
-    written_paths_out: list[str] | None = None,
     cross_repo_title_repo_count: int | None = None,
 ) -> tuple[str, int]:
     """Write learned rules under scoped subdirectories (#70).
@@ -304,7 +263,6 @@ def emit_learned_artifacts(
     claude_existing = _parse_existing_fingerprints(claude_root)
     cursor_existing = _parse_existing_fingerprints(repo_root / CURSOR_LEARNED)
 
-    written: list[str] = []
     clusters_written = 0
     new_file_count = 0
     skipped_dup = 0
@@ -373,8 +331,6 @@ def emit_learned_artifacts(
         slug = _slugify(cluster.title)
         fname = f"{slug}-{fp[:8]}.md"
         stem = Path(fname).stem
-        rel_claude = (CLAUDE_LEARNED / sub / fname).as_posix()
-        rel_cursor = (CURSOR_LEARNED / sub / f"{stem}.mdc").as_posix()
 
         wrote = False
         if not have_claude:
@@ -392,25 +348,10 @@ def emit_learned_artifacts(
             wrote = True
         if wrote:
             clusters_written += 1
-            if not have_claude:
-                written.append(rel_claude)
-                if written_paths_out is not None:
-                    written_paths_out.append(rel_claude)
-            if not have_cursor:
-                written.append(rel_cursor)
-                if written_paths_out is not None:
-                    written_paths_out.append(rel_cursor)
-
-    merge_msg = (
-        _merge_agents_learned_paths(repo_root, agents_md_path, written)
-        if agents_md_path and written
-        else ""
-    )
-    agents_note = f"; {merge_msg}" if merge_msg else ""
 
     summary = (
         f"emit: wrote {new_file_count} learned artifact file(s) across {clusters_written} "
-        f"cluster(s){agents_note}; "
+        "cluster(s); "
         f"skipped {skipped_small} below threshold; {skipped_pr} few-PR; {skipped_nit} nit-bar; "
         f"{skipped_boiler} boilerplate; {skipped_semantic} semantic-dedup; "
         f"{skipped_dup} duplicates (fingerprint)"
@@ -421,8 +362,6 @@ def emit_learned_artifacts(
 def emit_cross_repo_learned(
     agg: AggregateResult,
     repo_root: Path,
-    *,
-    agents_md_path: Path | None = None,
 ) -> tuple[str, int]:
     """Emit S0 universal and S2 domain rules from a fleet aggregate (#70)."""
     from tools.process_miner.aggregate import (
@@ -443,7 +382,6 @@ def emit_cross_repo_learned(
 
     total_written = 0
     parts: list[str] = []
-    acc_paths: list[str] = []
 
     for title_key in sorted(universal):
         repos = sorted(title_repos.get(title_key, ()))
@@ -469,12 +407,10 @@ def emit_cross_repo_learned(
             repo_root=repo_root,
             min_occurrences=3,
             min_distinct_prs=2,
-            agents_md_path=None,
             scope="S0",
             domain_tag=None,
             frequency_across_repos=len(repos),
             source_repos=repos,
-            written_paths_out=acc_paths,
             cross_repo_title_repo_count=len(repos),
         )
         parts.append(summary)
@@ -505,27 +441,16 @@ def emit_cross_repo_learned(
             repo_root=repo_root,
             min_occurrences=3,
             min_distinct_prs=2,
-            agents_md_path=None,
             scope="S2",
             domain_tag=dom,
             frequency_across_repos=len(repos),
             source_repos=repos,
-            written_paths_out=acc_paths,
             cross_repo_title_repo_count=len(repos),
         )
         parts.append(summary)
         total_written += n
 
-    merge_msg = (
-        _merge_agents_learned_paths(repo_root, agents_md_path, acc_paths)
-        if agents_md_path and acc_paths
-        else ""
-    )
-    agents_note = f"; {merge_msg}" if merge_msg else ""
-
-    merged = (
-        " | ".join(parts) if parts else "emit_cross_repo: no qualifying clusters"
-    ) + agents_note
+    merged = " | ".join(parts) if parts else "emit_cross_repo: no qualifying clusters"
     return merged, total_written
 
 

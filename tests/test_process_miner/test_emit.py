@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from tools.process_miner.emit import (
-    _merge_agents_learned_paths,
     _paths_to_globs,
     _rule_fingerprint,
     emit_learned_artifacts,
@@ -69,7 +68,6 @@ def test_emit_writes_and_skips_duplicates(tmp_path: Path) -> None:
         repo="o/r",
         repo_root=tmp_path,
         min_occurrences=3,
-        agents_md_path=None,
     )
     assert "wrote 2 learned artifact file(s) across 1 cluster(s)" in summary
     assert n_written == 2
@@ -94,7 +92,6 @@ def test_emit_writes_and_skips_duplicates(tmp_path: Path) -> None:
         repo="o/r",
         repo_root=tmp_path,
         min_occurrences=3,
-        agents_md_path=None,
     )
     assert "skipped" in summary2
     assert "duplicates" in summary2
@@ -139,7 +136,6 @@ def test_emit_skips_when_distinct_pr_count_too_low(tmp_path: Path) -> None:
         repo_root=tmp_path,
         min_occurrences=3,
         min_distinct_prs=2,
-        agents_md_path=None,
     )
     assert n == 0
     assert "few-PR" in summary
@@ -181,7 +177,6 @@ def test_emit_cross_repo_skips_local_volume_gates(tmp_path: Path) -> None:
         repo_root=tmp_path,
         min_occurrences=3,
         min_distinct_prs=2,
-        agents_md_path=None,
         cross_repo_title_repo_count=2,
     )
     assert n == 2
@@ -193,7 +188,6 @@ def test_emit_cross_repo_skips_local_volume_gates(tmp_path: Path) -> None:
         repo_root=tmp_path,
         min_occurrences=3,
         min_distinct_prs=2,
-        agents_md_path=None,
     )
     assert n_local == 0
     assert "below threshold" in summary_local
@@ -214,42 +208,9 @@ def test_emit_s2_raises_when_domain_unresolved(tmp_path: Path) -> None:
             repo="unknown/orphan-repo",
             repo_root=tmp_path,
             min_occurrences=3,
-            agents_md_path=None,
             scope="S2",
             domain_tag=None,
         )
-
-
-def test_merge_agents_learned_paths_replaces_prior_process_miner_line(tmp_path: Path) -> None:
-    agents = tmp_path / "AGENTS.md"
-    agents.write_text(
-        "# Title\n"
-        "<!-- process-miner:learned:start -->\n"
-        "- (process-miner) New learned rule file(s): stale.md\n"
-        "<!-- process-miner:learned:end -->\n",
-        encoding="utf-8",
-    )
-    _merge_agents_learned_paths(tmp_path, Path("AGENTS.md"), ["fresh.md"])
-    text = agents.read_text(encoding="utf-8")
-    assert text.count("(process-miner) New learned rule file(s):") == 1
-    assert "fresh.md" in text
-    assert "stale.md" not in text
-
-
-def test_merge_agents_learned_paths_appends_inside_block(tmp_path: Path) -> None:
-    agents = tmp_path / "AGENTS.md"
-    agents.write_text(
-        "# Title\n"
-        "<!-- process-miner:learned:start -->\n"
-        "- keep this line\n"
-        "<!-- process-miner:learned:end -->\n",
-        encoding="utf-8",
-    )
-    _merge_agents_learned_paths(tmp_path, Path("AGENTS.md"), [".claude/rules/learned/local/x.md"])
-    text = agents.read_text(encoding="utf-8")
-    assert "keep this line" in text
-    assert "New learned rule file(s)" in text
-    assert text.index("keep this line") < text.index("New learned rule file(s)")
 
 
 def test_emit_skips_nit_below_threshold(tmp_path: Path) -> None:
@@ -289,7 +250,6 @@ def test_emit_skips_nit_below_threshold(tmp_path: Path) -> None:
         repo="o/r",
         repo_root=tmp_path,
         min_occurrences=3,
-        agents_md_path=None,
     )
     assert n == 0
     assert "nit-bar" in summary

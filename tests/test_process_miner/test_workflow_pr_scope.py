@@ -1,9 +1,8 @@
 """Weekly process-miner PRs stay inside the zero-human merge contract.
 
-Spoke-adapted from template-repo tests/test_process_miner/test_workflow_pr_scope.py
-(gov-hub#289): the `--no-agents-md` assert is intentionally absent — this spoke's
-vendored miner CLI predates the flag, and purity is delivered by staging control
-alone (glob add-only + the fail-closed scope guard this file proves).
+Spoke-adapted from template-repo tests/test_process_miner/test_workflow_pr_scope.py.
+The vendored miner no longer accepts an AGENTS.md output path (gov-hub#290), while
+glob add-only staging and the fail-closed scope guard remain defense in depth.
 """
 
 from __future__ import annotations

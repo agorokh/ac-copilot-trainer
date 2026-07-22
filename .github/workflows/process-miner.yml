@@ -91,10 +91,9 @@ jobs:
           fi
           BRANCH="chore/miner-weekly-$(date -u +%Y%m%d)-${GITHUB_RUN_ID}"
           git checkout -b "$BRANCH"
-          # Rules-only, add-only staging (epic gov-hub#197: scope_pure_for_pr). The miner may
-          # still touch AGENTS.md / reports/process_miner in the runner workspace: reports are
-          # preserved as a workflow artifact above; AGENTS.md deltas are intentionally not
-          # emitted (the learned-rules mirrors are the sole rules channel).
+          # Rules-only, add-only staging (epic gov-hub#197: scope_pure_for_pr). Reports are
+          # preserved as a workflow artifact above; the learned-rules mirrors are the sole
+          # writable rules channel (gov-hub#290).
           git add -- ':(glob).claude/rules/learned/**/*.md' || true
           git add -- ':(glob).cursor/rules/learned/**/*.mdc' || true
           if git diff --cached --quiet; then
