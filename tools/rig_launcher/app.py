@@ -125,6 +125,7 @@ def config_from_args(args: argparse.Namespace) -> GamePointConfig:
         token=config.token,
         serial_port=config.serial_port,
         reference_archive=config.reference_archive,
+        alien_line=config.alien_line,
         voice_bank=config.voice_bank,
         voice_tts=config.voice_tts,
         setup_store=config.setup_store,

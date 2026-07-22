@@ -22,6 +22,7 @@ class LauncherSettings:
     sidecar_port: int | None = None
     external_bind: str | None = None
     reference_archive: str | None = None
+    alien_line: str | None = None
     voice_bank: str | None = None
     voice_tts: bool | None = None
     setup_store: str | None = None
@@ -46,6 +47,7 @@ class LauncherSettings:
             sidecar_port=_optional_int(payload.get("sidecar_port")),
             external_bind=_optional_text(payload.get("external_bind")),
             reference_archive=_optional_text(payload.get("reference_archive")),
+            alien_line=_optional_text(payload.get("alien_line")),
             voice_bank=_optional_text(payload.get("voice_bank")),
             voice_tts=_optional_bool(payload.get("voice_tts")),
             setup_store=_optional_text(payload.get("setup_store")),
@@ -139,6 +141,7 @@ def default_settings_payload() -> dict[str, object]:
     return {
         "_schema": SETTINGS_SCHEMA,
         "external_bind": "",
+        "alien_line": "",
         "reference_archive": "",
         "resilient_car": "",
         "resilient_cm_exe": "",

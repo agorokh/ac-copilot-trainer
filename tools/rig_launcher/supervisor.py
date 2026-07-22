@@ -149,6 +149,7 @@ class GamePointConfig:
     #: sidecar serves the screen over USB CDC — no Windows Mobile Hotspot needed.
     serial_port: str | None = None
     reference_archive: str | None = None
+    alien_line: str | None = None
     voice_bank: str | None = None
     voice_tts: bool = False
     setup_store: str | None = None
@@ -213,6 +214,10 @@ class GamePointConfig:
             reference_archive=_configured_text(
                 env_map.get("AC_COPILOT_REFERENCE_ARCHIVE"),
                 settings.reference_archive,
+            ),
+            alien_line=_configured_text(
+                env_map.get("AC_COPILOT_ALIEN_LINE"),
+                settings.alien_line,
             ),
             voice_bank=_configured_text(env_map.get("AC_COPILOT_VOICE_BANK"), settings.voice_bank),
             voice_tts=voice_tts,
@@ -394,6 +399,15 @@ class GamePointSupervisor:
             "AC_COPILOT_REFERENCE_ARCHIVE",
             _resolve_launcher_path(self.config.reference_archive, base=base),
         )
+        _put_if_present(
+            env,
+            "AC_COPILOT_ALIEN_LINE",
+            _resolve_launcher_path(self.config.alien_line, base=base),
+        )
+        if self.config.alien_line:
+            # An alien frontier is a Coach v2 feature; make the launcher setting operational rather
+            # than silently leaving the legacy observer active behind an undocumented prerequisite.
+            env["AC_COPILOT_COACH_V2"] = "1"
         _put_if_present(
             env,
             "AC_COPILOT_VOICE_BANK",
