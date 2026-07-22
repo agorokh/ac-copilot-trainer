@@ -36,7 +36,7 @@ import os
 import sys
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -74,6 +74,18 @@ class LaunchVerdict(StrEnum):
     FROZE = "froze"
     NEVER_LIVE = "never_live"
     WEDGED_INIT = "wedged_init"
+
+
+REPORT_SCHEMA = "resilient-launch-report/v1"
+TERMINAL_VERDICTS = frozenset(
+    {
+        LaunchVerdict.STABLE.value,
+        LaunchVerdict.FROZE.value,
+        LaunchVerdict.NEVER_LIVE.value,
+        LaunchVerdict.WEDGED_INIT.value,
+    }
+)
+FREEZE_VERDICTS = frozenset({LaunchVerdict.FROZE.value, LaunchVerdict.WEDGED_INIT.value})
 
 
 class _ContentManagerRestartTimeout(RuntimeError):
@@ -560,6 +572,7 @@ class LaunchReport:
     wedged_init: int = 0
     stable: int = 0
     attempts_log: tuple[AttemptRecord, ...] = field(default=())
+    launch: dict[str, object] | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -581,8 +594,8 @@ class LaunchReport:
 
     def as_dict(self) -> dict[str, object]:
         """JSON-serializable report — the machine-readable record #627 §9.2 asks for."""
-        return {
-            "schema": "resilient-launch-report/v1",
+        payload: dict[str, object] = {
+            "schema": REPORT_SCHEMA,
             "verdict": str(self.verdict),
             "attempts": self.attempts,
             "counts": {
@@ -593,6 +606,9 @@ class LaunchReport:
             },
             "attempts_log": [record.as_dict() for record in self.attempts_log],
         }
+        if self.launch is not None:
+            payload["launch"] = self.launch
+        return payload
 
 
 def _utc_stamp(epoch_seconds: float) -> str:
@@ -735,10 +751,10 @@ def resolve_report_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
     """Resolve the ``--json`` destination and require it inside an approved output root.
 
     #646 review: an absolute path or a ``..`` traversal would let this rig tool create parent
-    directories and overwrite files at arbitrary writable locations. The approved roots are the
-    per-user Harness root (where the rig lock and generated presets already live) and the repo
-    checkout root (gitignored ``.scratch`` measurement artifacts). A relative path still resolves
-    against the caller's CWD — but it only passes when that resolution lands inside a fixed root.
+    directories and overwrite files at arbitrary writable locations. Callers approve the per-user
+    Harness root and the checkout's gitignored ``.scratch`` tree — never the whole repo root.
+    A relative path still resolves against the caller's CWD — but it only passes when that
+    resolution lands inside a fixed root.
     """
     resolved = raw.expanduser()
     if not resolved.is_absolute():
@@ -765,12 +781,19 @@ def _write_report_json(report: LaunchReport, path: Path) -> bool:  # pragma: no 
     A failure never masks the verdict in the log — but in ``--trials`` mode the record IS the
     deliverable, so the caller converts ``False`` into a nonzero exit (#646 review P1) instead of
     letting an automated measurement run read as successful with no record produced.
+
+    Writes are exclusive (``open(..., "x")``): a completed trial report is immutable evidence and
+    must not be silently replaced by a retry (#657 / #625 A/B integrity).
     """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(report.as_dict(), indent=2) + "\n", encoding="utf-8")
+        with path.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(report.as_dict(), indent=2) + "\n")
         _log(f"report -> {path}")
         return True
+    except FileExistsError:
+        _log(f"report exists, refusing overwrite: {path}")
+        return False
     except OSError as exc:
         _log(f"WARNING: could not write report JSON {path}: {exc}")
         return False
@@ -1503,8 +1526,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
     if args.json_path is not None:
         try:
+            # Checkout writes are limited to gitignored ``.scratch`` — never the whole tree
+            # (tracked files / ``.git``) (#657 Qodo).
             args.json_path = resolve_report_path(
-                args.json_path, approved_roots=(lock_path.parent, repo_checkout_root())
+                args.json_path,
+                approved_roots=(lock_path.parent, repo_checkout_root() / ".scratch"),
             )
         except ValueError as exc:
             _log(f"launch aborted: {exc}")
@@ -1678,6 +1704,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         except _ContentManagerRestartTimeout as exc:
             _log(f"restart aborted: {exc}")
             return 1
+        report = replace(
+            report,
+            launch={
+                "car": args.car,
+                "track": args.track,
+                "stability_window": args.stability_window,
+                "trials_per_invocation": int(args.trials) if args.trials is not None else 1,
+            },
+        )
         report_written = True
         if args.json_path is not None:
             report_written = _write_report_json(report, args.json_path)

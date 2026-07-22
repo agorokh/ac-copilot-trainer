@@ -8,7 +8,6 @@ import pytest
 from tools.ac_harness.init_perturber_ab import (
     ANALYSIS_SCHEMA,
     MIN_TRIALS_PER_ARM,
-    REPORT_SCHEMA,
     Observation,
     analyze,
     build_plan,
@@ -20,6 +19,7 @@ from tools.ac_harness.init_perturber_ab import (
     render_markdown,
     wilson_interval,
 )
+from tools.ac_harness.resilient_launch import REPORT_SCHEMA
 
 
 def _write_report(
@@ -28,29 +28,33 @@ def _write_report(
     verdict: str,
     started_at_utc: str,
     uptime_h: float | None,
+    launch: dict[str, object] | None = None,
 ) -> None:
     counts = {"stable": 0, "froze": 0, "wedged_init": 0, "never_live": 0}
     counts[verdict] = 1
-    path.write_text(
-        json.dumps(
+    payload = {
+        "schema": REPORT_SCHEMA,
+        "verdict": verdict,
+        "attempts": 1,
+        "counts": counts,
+        "launch": launch
+        or {
+            "car": "ks_porsche_911_gt3_r_2016",
+            "track": "spa",
+            "stability_window": 140.0,
+            "trials_per_invocation": 1,
+        },
+        "attempts_log": [
             {
-                "schema": REPORT_SCHEMA,
+                "attempt": 1,
                 "verdict": verdict,
-                "attempts": 1,
-                "counts": counts,
-                "attempts_log": [
-                    {
-                        "attempt": 1,
-                        "verdict": verdict,
-                        "started_at_utc": started_at_utc,
-                        "elapsed_s": 12.5,
-                        "uptime_h": uptime_h,
-                    }
-                ],
+                "started_at_utc": started_at_utc,
+                "elapsed_s": 12.5,
+                "uptime_h": uptime_h,
             }
-        ),
-        encoding="utf-8",
-    )
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_counterbalanced_sequence_interleaves_every_pair_and_is_seeded() -> None:
@@ -101,7 +105,19 @@ def test_load_plan_rejects_non_interleaved_pair(tmp_path: Path) -> None:
     plan["trials"][1]["condition"] = plan["trials"][0]["condition"]
     path = tmp_path / "plan.json"
     path.write_text(json.dumps(plan), encoding="utf-8")
-    with pytest.raises(ValueError, match="condition|interleave"):
+    with pytest.raises(ValueError, match="condition|interleave|randomization_seed"):
+        load_plan(path)
+
+
+def test_load_plan_rejects_reordered_schedule(tmp_path: Path) -> None:
+    plan = build_plan(2, allow_undersized=True)
+    plan["trials"][0]["condition"], plan["trials"][1]["condition"] = (
+        plan["trials"][1]["condition"],
+        plan["trials"][0]["condition"],
+    )
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    with pytest.raises(ValueError, match="randomization_seed"):
         load_plan(path)
 
 
@@ -294,6 +310,45 @@ def test_undersized_significant_run_stays_insufficient_sample() -> None:
     assert result["minimum_per_arm"] == MIN_TRIALS_PER_ARM
     assert result["fisher_exact_two_sided_p"] < 0.01
     assert result["conclusion"] == "insufficient_sample"
+
+
+def test_duplicate_timestamps_accepted_when_uptime_strictly_increases(
+    tmp_path: Path,
+) -> None:
+    plan = build_plan(1, allow_undersized=True)
+    stamp = "2026-07-22T12:00:00Z"
+    _write_report(
+        tmp_path / plan["trials"][0]["report"],
+        verdict="stable",
+        started_at_utc=stamp,
+        uptime_h=1.0,
+    )
+    _write_report(
+        tmp_path / plan["trials"][1]["report"],
+        verdict="froze",
+        started_at_utc=stamp,
+        uptime_h=1.1,
+    )
+    observations = load_observations(plan, tmp_path)
+    assert len(observations) == 2
+
+
+def test_report_launch_must_match_plan(tmp_path: Path) -> None:
+    plan = build_plan(1, allow_undersized=True)
+    _write_report(
+        tmp_path / plan["trials"][0]["report"],
+        verdict="stable",
+        started_at_utc="2026-07-22T12:00:00Z",
+        uptime_h=1.0,
+        launch={
+            "car": "wrong_car",
+            "track": "spa",
+            "stability_window": 140.0,
+            "trials_per_invocation": 1,
+        },
+    )
+    with pytest.raises(ValueError, match="launch.car"):
+        load_observations(plan, tmp_path, require_complete=False)
 
 
 def test_all_never_live_arm_reports_insufficient_sample() -> None:

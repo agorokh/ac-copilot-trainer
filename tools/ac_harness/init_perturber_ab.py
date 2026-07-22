@@ -27,14 +27,17 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
-from tools.ac_harness.resilient_launch import repo_checkout_root, resolve_report_path
+from tools.ac_harness.resilient_launch import (
+    FREEZE_VERDICTS,
+    REPORT_SCHEMA,
+    TERMINAL_VERDICTS,
+    repo_checkout_root,
+    resolve_report_path,
+)
 
 PLAN_SCHEMA = "init-perturber-ab-plan/v1"
 ANALYSIS_SCHEMA = "init-perturber-ab-analysis/v1"
-REPORT_SCHEMA = "resilient-launch-report/v1"
 CONDITIONS = ("overlays_on", "overlays_off")
-TERMINAL_VERDICTS = frozenset({"stable", "froze", "wedged_init", "never_live"})
-FREEZE_VERDICTS = frozenset({"froze", "wedged_init"})
 DEFAULT_ALPHA = 0.05
 DEFAULT_RANDOMIZATION_SEED = 625
 DEFAULT_CAR = "ks_porsche_911_gt3_r_2016"
@@ -187,7 +190,8 @@ def load_plan(path: Path) -> dict[str, Any]:
     trials_per_arm = plan.get("trials_per_arm")
     if not isinstance(trials_per_arm, int) or trials_per_arm <= 0:
         raise ValueError("plan trials_per_arm must be a positive integer")
-    if not isinstance(plan.get("randomization_seed"), int):
+    seed = plan.get("randomization_seed")
+    if not isinstance(seed, int):
         raise ValueError("plan randomization_seed must be an integer")
     trials = plan.get("trials")
     if not isinstance(trials, list) or not trials:
@@ -214,6 +218,9 @@ def load_plan(path: Path) -> dict[str, Any]:
         raise ValueError("plan must contain exactly two trials per requested arm trial")
     if any(conditions.count(condition) != trials_per_arm for condition in CONDITIONS):
         raise ValueError("plan must contain trials_per_arm observations for each condition")
+    expected_sequence = counterbalanced_sequence(trials_per_arm, randomization_seed=seed)
+    if tuple(conditions) != expected_sequence:
+        raise ValueError("plan trial conditions do not match the persisted randomization_seed")
     ab_first = 0
     ba_first = 0
     for offset in range(0, len(conditions), 2):
@@ -231,7 +238,7 @@ def load_plan(path: Path) -> dict[str, Any]:
     return plan
 
 
-def _parse_report(path: Path, trial: PlannedTrial) -> Observation:
+def _parse_report(path: Path, trial: PlannedTrial, plan_launch: dict[str, Any]) -> Observation:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -255,6 +262,12 @@ def _parse_report(path: Path, trial: PlannedTrial) -> Observation:
         raise ValueError(f"report {path} summary does not match its attempt verdict")
     if record.get("attempt") != 1:
         raise ValueError(f"report {path} attempt number must be 1")
+    launch = report.get("launch")
+    if not isinstance(launch, dict):
+        raise ValueError(f"report {path} must record launch configuration")
+    for key in ("car", "track", "stability_window"):
+        if launch.get(key) != plan_launch.get(key):
+            raise ValueError(f"report {path} launch.{key}={launch.get(key)!r} does not match plan")
     if not isinstance(started_at_utc, str):
         raise ValueError(f"report {path} is missing started_at_utc")
     try:
@@ -279,6 +292,7 @@ def load_observations(
     plan: dict[str, Any], reports_dir: Path, *, require_complete: bool = True
 ) -> tuple[Observation, ...]:
     """Load one immutable report per planned trial and verify actual run order."""
+    plan_launch = _require_mapping(plan.get("launch"), where="plan launch")
     observations: list[Observation] = []
     missing: list[str] = []
     for raw in plan["trials"]:
@@ -287,20 +301,25 @@ def load_observations(
         if not report_path.is_file():
             missing.append(trial.report)
             continue
-        observations.append(_parse_report(report_path, trial))
+        observations.append(_parse_report(report_path, trial, plan_launch))
     if require_complete and missing:
         preview = ", ".join(missing[:3])
         suffix = "" if len(missing) <= 3 else f" (+{len(missing) - 3} more)"
         raise ValueError(f"experiment is incomplete; missing {preview}{suffix}")
     stamps = [item.started_at_utc for item in observations]
-    if stamps != sorted(stamps) or len(stamps) != len(set(stamps)):
-        raise ValueError("report timestamps must be unique and increase in planned trial order")
+    if stamps != sorted(stamps):
+        raise ValueError("report timestamps must increase in planned trial order")
     uptimes = [item.uptime_h for item in observations]
-    if any(later < earlier for earlier, later in zip(uptimes, uptimes[1:], strict=True)):
+    if any(later < earlier for earlier, later in zip(uptimes, uptimes[1:], strict=False)):
         raise ValueError(
             "uptime_h must be nondecreasing across the run "
             "(a mid-experiment reboot confounds the freeze endpoint)"
         )
+    # Second-resolution stamps may collide on fast never_live failures; when that happens,
+    # require strictly increasing uptime so trial order is still proven.
+    if len(stamps) != len(set(stamps)):
+        if any(later <= earlier for earlier, later in zip(uptimes, uptimes[1:], strict=False)):
+            raise ValueError("duplicate report timestamps require strictly increasing uptime_h")
     return tuple(observations)
 
 
@@ -525,7 +544,7 @@ def _write_new_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _output_path(raw: Path) -> Path:
-    return resolve_report_path(raw, approved_roots=(repo_checkout_root(),))
+    return resolve_report_path(raw, approved_roots=(repo_checkout_root() / ".scratch",))
 
 
 def _shell_quote(token: str) -> str:
@@ -535,14 +554,26 @@ def _shell_quote(token: str) -> str:
     return shlex.quote(token)
 
 
+def _checkout_relative_report_path(plan_path: Path, report_name: str) -> str:
+    """Return a checkout-relative report path so commands stay runnable from the repo root."""
+    checkout = repo_checkout_root().resolve(strict=False)
+    report_path = (plan_path.parent / report_name).resolve(strict=False)
+    try:
+        return report_path.relative_to(checkout).as_posix()
+    except ValueError as exc:
+        raise ValueError(
+            f"trial report {report_path} must stay under the checkout (.scratch)"
+        ) from exc
+
+
 def _format_trial_command(
     *,
     car: str,
     track: str,
     stability_window: float,
-    report_name: str,
+    report_path: str,
 ) -> str:
-    """Build a pasteable launch line using plan-directory-relative report names."""
+    """Build a pasteable launch line rooted at the checkout (so ``tools`` imports)."""
     parts = [
         "python",
         "-m",
@@ -556,7 +587,7 @@ def _format_trial_command(
         "--trials",
         "1",
         "--json",
-        report_name,
+        report_path,
     ]
     return " ".join(_shell_quote(part) for part in parts)
 
@@ -597,19 +628,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "OPERATOR GATE: explicitly approve and apply both Steam overlay and NVIDIA "
                 "ShadowPlay settings; reboot once before trial 001 and restore both after the run."
             )
+            checkout = repo_checkout_root()
             print(
                 "Paste each command on the rig after "
-                f"cd {_shell_quote(str(destination.parent))} "
-                "(report paths are relative to that directory)."
+                f"cd {_shell_quote(str(checkout))} "
+                "(keeps ``tools`` importable; report paths are checkout-relative under .scratch)."
+            )
+            print(
+                "If two adjacent trials are never_live, cold-restart Content Manager before "
+                "continuing — each printed command is a one-attempt process, so the in-process "
+                "stale-CM streak cannot accumulate across overlay changes."
             )
             for trial in plan["trials"]:
+                report_path = _checkout_relative_report_path(destination, trial["report"])
                 print(f"\n{trial['trial']:03d} {trial['condition']}")
                 print(
                     _format_trial_command(
                         car=args.car,
                         track=args.track,
                         stability_window=args.stability_window,
-                        report_name=trial["report"],
+                        report_path=report_path,
                     )
                 )
             return 0
