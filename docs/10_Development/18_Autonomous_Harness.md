@@ -173,6 +173,44 @@ provenance gates, and cache revalidation (a tampered refined profile fails the b
 and rebuilds); `--no-l3` artifacts are byte-identical to pre-#582 builds. Reality remains the
 judge: the #577 keep-last-valid oracle falsifies a refined profile the car cannot hold.
 
+### Evidence-gated setup scientist (#529 P4 / #654)
+
+The optional scientist composes the self-play and setup-intelligence paths; it does not give model
+text write access to setup files:
+
+```bash
+python -m tools.ac_harness.auto_alien \
+  --car ks_porsche_911_gt3_r_2016 --track magione \
+  --setup Copilot_Balanced_Fast --laps 2 --iterations 2 \
+  --scientist --scientist-trigger pace_plateau
+```
+
+- `--scientist` requires a resolved baseline setup, at least one self-play iteration, and at least
+  two timed laps per batch. It starts only from the newest batch that passes the normal auto-alien
+  validity oracle (timed, archived, AC-valid, zero recoveries).
+- A proposal is at most three physical hypotheses. The deterministic planner validates bounded
+  identifiers, a named mechanism, direction, current setup value, checked-in per-car spinner schema,
+  range, step, and read-only status. Each experiment changes exactly one `SECTION.VALUE`. Optional
+  `--scientist-proposals FILE` accepts a JSON array with `id`, `mechanism`, `parameter`, and
+  `direction` (`-1` or `1`); unsafe prose/data fails the stage and retains its traceback in
+  `alien_report.json`.
+- Candidates are immutable new `.ini` files beside the baseline under AC Documents; the baseline is
+  never overwritten. Each candidate goes through a nested normal auto-alien pipeline, including
+  identification, line/profile verification, and the same lap-validity oracle.
+- Promotion requires a single-parameter, unconfounded candidate batch that is faster with the
+  setup optimizer's measured uncertainty test. Invalid, confounded, or inconclusive batches keep
+  the previous setup. The report names the rejection and only a promoted result exposes
+  `recommended_setup`.
+- Completed plan, outcomes, and verdict persist under
+  `<AC user data>/journal/alien_scientist/runs/`; the append-only
+  `journal/alien_scientist/experiments.jsonl` ledger suppresses a falsified constraint for the same
+  mechanical platform, aero platform, tyre family, and track archetype. The four
+  `--scientist-*-platform` flags override conservative car/track-derived scope identities when the
+  operator has a better taxonomy.
+
+The existing `--setup` launch caveats still apply: a candidate that cannot reach a complete measured
+batch is an explicit scientist-stage failure, never a promotion or a plausible default.
+
 ## Composing downstream tasks (don't reinvent)
 
 - **Setup A/B**: run twice with different `--setup` names; compare the runs' lap archives with

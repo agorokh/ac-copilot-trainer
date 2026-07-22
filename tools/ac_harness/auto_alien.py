@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+import traceback
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -596,6 +597,199 @@ def run_selfplay(
     return selfplay
 
 
+def _scientist_baseline_outcome(selfplay: dict, base_outcome: dict | None) -> dict | None:
+    """Newest oracle-valid self-play outcome, falling back to the valid base batch."""
+    for entry in reversed(selfplay.get("iterations", [])):
+        if entry.get("valid") is True and entry.get("evidence_dir"):
+            outcome = load_stage_outcome(Path(entry["evidence_dir"]))
+            if outcome is not None:
+                return outcome
+    base = selfplay.get("base") if isinstance(selfplay.get("base"), dict) else {}
+    return base_outcome if base.get("valid") is True else None
+
+
+def _load_scientist_proposals(path: Path | None) -> list[dict] | None:
+    if path is None:
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"--scientist-proposals is unreadable: {exc}") from exc
+    if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+        raise ValueError("--scientist-proposals must contain a JSON array of objects")
+    return payload
+
+
+def run_scientist(
+    args: argparse.Namespace,
+    *,
+    run_stage: StageRunner,
+    evidence_root: Path,
+    user_dir: Path,
+    setup_ini: str | Path | None,
+    selfplay: dict,
+    base_outcome: dict | None,
+) -> dict:
+    """Plan and execute #529 P4 setup experiments through the normal auto-alien oracle."""
+    from tools.ac_harness.alien_scientist import (
+        LEDGER_NAME,
+        ScientistError,
+        build_plan,
+        evaluate_experiment,
+        load_ledger,
+        persist_completed_run,
+        state_root,
+        write_candidate_setup,
+    )
+    from tools.ai_sidecar.car_schema import load_latest_schema
+
+    result: dict = {"configured": True, "ok": False, "stage": "plan", "outcomes": []}
+    try:
+        if setup_ini is None:
+            raise ScientistError("scientist_requires_resolved_setup")
+        schema = load_latest_schema(args.car)
+        if schema is None:
+            raise ScientistError("scientist_car_schema_missing")
+        baseline_outcome = _scientist_baseline_outcome(selfplay, base_outcome)
+        if baseline_outcome is None:
+            raise ScientistError("scientist_valid_baseline_batch_missing")
+        baseline_payloads, load_errors = load_archive_payloads(stage_lap_archives(baseline_outcome))
+        baseline_payloads, foreign = combo_filter_payloads(
+            baseline_payloads,
+            car_id=args.car,
+            track_id=args.track,
+            layout=args.track_layout,
+        )
+        baseline_valid, baseline_reason = evaluate_selfplay_iteration(
+            0, baseline_outcome, baseline_payloads
+        )
+        if load_errors or foreign or not baseline_valid:
+            raise ScientistError(
+                "scientist_baseline_batch_unverifiable:"
+                f"{baseline_reason}:load_errors={len(load_errors)}:foreign={foreign}"
+            )
+        scope = {
+            "mechanical_platform": args.scientist_mechanical_platform or args.car,
+            "aero_platform": args.scientist_aero_platform or args.car,
+            "tyre_family": args.scientist_tyre_family or f"car:{args.car}",
+            "track_archetype": args.scientist_track_archetype or args.track,
+        }
+        stopped = str(selfplay.get("stopped") or "").strip()
+        trigger = args.scientist_trigger or (
+            "pace_plateau_after_selfplay" if stopped == "completed" else stopped or "pace_plateau"
+        )
+        ledger_path = state_root(user_dir) / LEDGER_NAME
+        plan = build_plan(
+            trigger=trigger,
+            combo={"car": args.car, "track": args.track, "layout": args.track_layout},
+            scope=scope,
+            baseline_payloads=baseline_payloads,
+            schema=schema,
+            ledger=load_ledger(ledger_path),
+            proposed_hypotheses=_load_scientist_proposals(args.scientist_proposals),
+            batch_size=args.scientist_batch_size,
+        )
+        result["plan"] = plan
+        result["stage"] = "execute"
+        for index, experiment in enumerate(plan["experiments"], 1):
+            candidate_path = write_candidate_setup(
+                setup_ini,
+                user_dir=user_dir,
+                plan_id=plan["plan_id"],
+                experiment=experiment,
+            )
+            candidate_root = evidence_root / "scientist" / f"candidate_{index:02d}"
+            candidate_args = argparse.Namespace(**vars(args))
+            candidate_args.setup = str(candidate_path)
+            candidate_args.force_identify = False
+            candidate_args.iterations = 0
+            candidate_args.scientist = False
+            candidate_args.scientist_proposals = None
+            candidate_args.evidence_dir = candidate_root
+            code, candidate_report = run_pipeline(candidate_args, run_stage=run_stage)
+            candidate_root.mkdir(parents=True, exist_ok=True)
+            (candidate_root / "alien_report.json").write_text(
+                json.dumps(candidate_report, indent=2), encoding="utf-8"
+            )
+            drive_stage = candidate_report.get("stages", {}).get("drive", {})
+            candidate_outcome = (
+                load_stage_outcome(Path(drive_stage["evidence_dir"]))
+                if drive_stage.get("evidence_dir")
+                else None
+            )
+            candidate_payloads, candidate_load_errors = load_archive_payloads(
+                stage_lap_archives(candidate_outcome)
+            )
+            candidate_payloads, candidate_foreign = combo_filter_payloads(
+                candidate_payloads,
+                car_id=args.car,
+                track_id=args.track,
+                layout=args.track_layout,
+            )
+            candidate_lap_times = stage_lap_times_ms(candidate_outcome)
+            if (
+                candidate_outcome is None
+                or not candidate_lap_times
+                or not candidate_payloads
+                or candidate_load_errors
+                or candidate_foreign
+            ):
+                raise ScientistError(
+                    "scientist_candidate_batch_incomplete:"
+                    f"exit={code}:timed_laps={len(candidate_lap_times)}:"
+                    f"archives={len(candidate_payloads)}:"
+                    f"load_errors={len(candidate_load_errors)}:foreign={candidate_foreign}"
+                )
+            candidate_valid, candidate_reason = evaluate_selfplay_iteration(
+                code, candidate_outcome, candidate_payloads
+            )
+            outcome = evaluate_experiment(
+                plan=plan,
+                experiment=experiment,
+                baseline_payloads=baseline_payloads,
+                candidate_payloads=candidate_payloads,
+                candidate_valid=candidate_valid,
+                candidate_reason=candidate_reason,
+            )
+            outcome["candidate_setup"] = str(candidate_path)
+            outcome["evidence_root"] = str(candidate_root)
+            if outcome.get("promoted"):
+                outcome["recommended_setup"] = str(candidate_path)
+            result["outcomes"].append(outcome)
+
+        result["stage"] = "persist"
+        run_path = persist_completed_run(
+            user_dir,
+            plan=plan,
+            outcomes=result["outcomes"],
+            created_utc=_utc_stamp(),
+        )
+        result["run_path"] = str(run_path)
+        result["ledger_path"] = str(ledger_path)
+        result["ok"] = True
+        result["stage"] = "completed"
+        return result
+    except Exception as exc:  # noqa: BLE001 - report must retain the complete failed-stage trace
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        result["traceback"] = traceback.format_exc()
+        # A later candidate failure must not erase earlier completed measurements. Persist only
+        # outcomes that reached evaluate_experiment; never record the incomplete candidate as a
+        # falsification (#654 state-consistency contract).
+        if result["outcomes"] and isinstance(result.get("plan"), dict):
+            try:
+                partial_path = persist_completed_run(
+                    user_dir,
+                    plan=result["plan"],
+                    outcomes=result["outcomes"],
+                    created_utc=_utc_stamp(),
+                )
+                result["partial_run_path"] = str(partial_path)
+                result["ledger_path"] = str(state_root(user_dir) / LEDGER_NAME)
+            except Exception as persist_exc:  # noqa: BLE001 - retain both failure traces
+                result["partial_persist_error"] = f"{type(persist_exc).__name__}: {persist_exc}"
+        return result
+
+
 def _passthrough_args(args: argparse.Namespace) -> list[str]:
     """CLI flags shared verbatim by both stages (combo identity + rig plumbing)."""
     out = ["--car", args.car, "--track", args.track]
@@ -778,6 +972,22 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="pipeline evidence root (default: .scratch/harness-evidence/<ts>_alien_...)",
     )
+    p.add_argument(
+        "--scientist",
+        action="store_true",
+        help="#529 P4: after self-play, run evidence-gated one-parameter setup experiments",
+    )
+    p.add_argument("--scientist-trigger", default=None, help="named failure or pace plateau")
+    p.add_argument(
+        "--scientist-proposals", type=Path, default=None, help="optional bounded JSON hypotheses"
+    )
+    p.add_argument(
+        "--scientist-batch-size", type=int, default=1, help="bounded candidate count (1-3)"
+    )
+    p.add_argument("--scientist-mechanical-platform", default=None)
+    p.add_argument("--scientist-aero-platform", default=None)
+    p.add_argument("--scientist-tyre-family", default=None)
+    p.add_argument("--scientist-track-archetype", default=None)
     return p
 
 
@@ -801,6 +1011,10 @@ def run_pipeline(
         raise ValueError(f"--laps must be >= 0 (got {args.laps})")
     if args.iterations < 0:
         raise ValueError(f"--iterations must be >= 0 (got {args.iterations})")
+    if args.scientist and (args.iterations < 1 or args.laps < 2 or not args.setup):
+        raise ValueError("--scientist requires --setup, --iterations >= 1, and --laps >= 2")
+    if not 1 <= args.scientist_batch_size <= 3:
+        raise ValueError("--scientist-batch-size must be between 1 and 3")
     # The BASE drive keeps the #572 one-shot gate: above-1 envelopes are reachable only through
     # the falsification-gated self-play ladder (per-iteration scale overrides), never by passing
     # a bare --ggv-scale > 1 (#579 Codex P1).
@@ -939,6 +1153,23 @@ def run_pipeline(
             f"auto-alien: selfplay done — {report['selfplay']['stopped']}"
             + (f"; best lap {best / 1000.0:.3f}s" if isinstance(best, int) else "")
         )
+        if args.scientist:
+            report["scientist"] = run_scientist(
+                args,
+                run_stage=run_stage,
+                evidence_root=evidence_root,
+                user_dir=user_dir,
+                setup_ini=setup_ini,
+                selfplay=report["selfplay"],
+                base_outcome=base_outcome,
+            )
+            if not report["scientist"].get("ok"):
+                report["error"] = (
+                    f"scientist stage {report['scientist'].get('stage')} failed: "
+                    f"{report['scientist'].get('error')}"
+                )
+                return 1, report
+            print(f"auto-alien: scientist done — {report['scientist']['run_path']}")
 
     report["ok"] = True
     return 0, report
