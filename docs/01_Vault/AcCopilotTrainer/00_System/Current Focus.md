@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-22T08:54:43Z
+last_updated: 2026-07-22T09:52:46Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
@@ -44,16 +44,18 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Delivered (2026-07-22):** PR [#656](https://github.com/agorokh/ac-copilot-trainer/pull/656)
-MERGED [`8e8bfbd`](https://github.com/agorokh/ac-copilot-trainer/commit/8e8bfbda7fecc429adaa1f14da2d8dfb5e23cba4)
-(#529 **P5**, issue #655 CLOSED). Coach v2 now consumes externally reverified alien-line evidence
-as a bounded, driver-level-aware minimum-speed frontier while the human reference retains all
-technique and cue timing. Driver history and alien corners are matched by unique spline geometry;
-unsafe or ambiguous evidence fails closed. Game Point propagates the optional path, automatically
-activates Coach v2, and public health omits personal metrics. Full parity: 3,270 passed, 89 skipped,
-83.55%; hosted checks and the 10-thread resolution gate were green. **Active #529 next:** issue
-[#654](https://github.com/agorokh/ac-copilot-trainer/issues/654) P4 scientist loop, then the
-remaining cross-combo/live pace gates. Do not close #529 on P5 alone.
+**Delivered (2026-07-22):** PR [#659](https://github.com/agorokh/ac-copilot-trainer/pull/659)
+MERGED [`cc9da82`](https://github.com/agorokh/ac-copilot-trainer/commit/cc9da82b4942f34f9f430d57091f2163694b4fde)
+(#529 **P4**, issue #654 CLOSED). The optional alien scientist converts named self-play failures or
+plateaus into bounded, schema-valid one-parameter setup candidates, executes them through the normal
+auto-alien oracle, promotes only complete uncertainty-significant gains, and durably suppresses
+measured falsified physical adjustments within the same platform/tyre/track scope. Immutable setup
+and scientist-state writes are contained beneath AC Documents and fail closed on drift, redirection,
+confounding, or incomplete evidence. Full parity: 3,291 passed, 89 skipped; hosted checks and the
+three-thread resolution gate were green. PR [#656](https://github.com/agorokh/ac-copilot-trainer/pull/656)
+already delivered P5's coachable alien frontier. **Active #529 next:** only the remaining real
+Windows-rig/cross-combo performance gates. Keep #529 open until those prove a fresh combo and real
+scientist/frontier value; P4/P5 code completion alone is not alien-pace evidence.
 
 **Delivered (2026-07-22):** PR [#646](https://github.com/agorokh/ac-copilot-trainer/pull/646) MERGED
 `4265845` (#630 **Parts C+D+E**): `WEDGED_INIT` verdict (init livelock no longer buckets as
