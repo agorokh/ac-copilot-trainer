@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-22T09:52:46Z
+last_updated: 2026-07-22T16:15:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
@@ -43,6 +43,16 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-22 PM):** PR [#647](https://github.com/agorokh/ac-copilot-trainer/pull/647)
+MERGED `c5d6e909b` — #630 **Part G** (runnable freeze-forensics capture driver; 6 review rounds).
+**#630 is fully delivered (Parts A–G).** The #627 night: freeze rate 6/10 at ~9.5 h uptime
+(reinstall did not fix it), **3 live wedges captured** — RIPs inside the `imul 0x147B`
+formatting RUNTIME_FUNCTION at sustained full-core burn (§6.1 answered), **upstream report
+filed**: [acc-extension-config#622](https://github.com/ac-custom-shaders-patch/acc-extension-config/issues/622).
+Next on the freeze thread: watch #622, next-boot uptime-vs-kill-count experiment, `lm` module
+map in capture records; #625 overlay A/B has a peer branch in flight. Detail:
+[[wedge-live-forensics-2026-07-22]].
 
 **Delivered (2026-07-22):** PR [#659](https://github.com/agorokh/ac-copilot-trainer/pull/659)
 MERGED [`cc9da82`](https://github.com/agorokh/ac-copilot-trainer/commit/cc9da82b4942f34f9f430d57091f2163694b4fde)

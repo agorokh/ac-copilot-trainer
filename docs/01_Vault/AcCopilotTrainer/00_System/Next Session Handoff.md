@@ -2,8 +2,10 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-22T09:52:46Z
+last_updated: 2026-07-22T16:15:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/wedge-live-forensics-2026-07-22.md
+  - AcCopilotTrainer/03_Investigations/issue-630-parts-cde-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/mcp-preflight-guard-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
@@ -105,6 +107,36 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-22) — #630 Part G capture driver MERGED + the #627 night: freeze reproduced, 3 live wedges captured, upstream report FILED
+
+**PR [#647](https://github.com/agorokh/ac-copilot-trainer/pull/647) MERGED** `2026-07-22T16:04Z` as
+squash [`c5d6e909b`](https://github.com/agorokh/ac-copilot-trainer/commit/c5d6e909b). The
+freeze-forensics capture driver is runnable end-to-end (`python -m tools.ac_harness.freeze_forensics`):
+S1 cycles → render-TID-preferring selection (`--tid` override for a second pass) → repeated
+noninvasive cdb RIP snapshots → §7.1-guarded S3 with **section-ownership proof** (an observed
+advance on either stream; alive-and-sole handover corpses refuse) → fresh end-of-capture burn
+resample before any verdict → machine-readable record (`freeze-forensics-capture/v1`).
+`find_cdb` gained the Store WinDbg app-execution alias rung (the only working cdb on this rig).
+**Six codex review rounds (19 threads), every finding real** — several validated against live
+wedges the same night. `--self-test` rig-verified; 48 off-rig tests.
+
+**#630 is now fully delivered (Parts A–G).** Only the optional RELEASE→STABLE atomic action was
+left unpicked.
+
+**The #627 night** (detail: [[wedge-live-forensics-2026-07-22]]):
+- Freeze rate **6/10 at 9.3–9.5 h uptime** vs 0/29 below 7.2 h (shipped `--trials` tool) — the
+  reinstall did NOT fix it (§6.2 settled).
+- **3 live wedges caught in 3 launches**; wedge #3 dual-pass put 6/8 RIPs in the CSP dll
+  formatting region (3 INSIDE the `imul 0x147B` RUNTIME_FUNCTION) at a sustained 2.87e9
+  cycles/s with gfx pinned and physics advancing — §6.1 answered with live evidence.
+- **Upstream CSP report filed (operator-authorized):**
+  [acc-extension-config#622](https://github.com/ac-custom-shaders-patch/acc-extension-config/issues/622)
+  — watch for maintainer questions; raw records + the 4.8 GB dump offered.
+
+**Resume here (rig freeze thread):** watch upstream #622; next-boot experiment separating uptime
+from kill-count; persist the cdb `lm` module map in capture records to name the `0x7ff910…`
+module; #625 (overlay A/B) has a peer branch in flight (`feat/issue-625-overlay-freeze-ab`).
 
 ## Delivered (2026-07-22) — #529 P4 evidence-gated setup scientist (#654, PR #659 MERGED)
 
@@ -253,10 +285,8 @@ capture driver is **Part G**.
 
 **Resume here / what remains on #630:**
 - ~~Parts C, D, E~~ — **DELIVERED** in PR [#646](https://github.com/agorokh/ac-copilot-trainer/pull/646) (`4265845`, 2026-07-22; see that delivery block above).
-- **Part G** — **IN FLIGHT**: PR [#647](https://github.com/agorokh/ac-copilot-trainer/pull/647)
-  (runnable `main()` S1→render-TID-preferring S2→S3 with §7.1 corpse guard + machine-readable
-  record; `--self-test` rig-verified exit 0; two codex rounds addressed — resolve-pr loop
-  continues, merge when cooldown-clean).
+- **Part G** — **DELIVERED**: PR [#647](https://github.com/agorokh/ac-copilot-trainer/pull/647)
+  MERGED `c5d6e909b` 2026-07-22 (see the Part G delivery block at the top of this handoff).
 - Optional: atomic RELEASE AC → STABLE AC for one-action wedge recovery.
 
 No migrations / new env / dep install. Rig next: catch a real wedge with the promoted instrument
