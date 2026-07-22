@@ -587,6 +587,7 @@ def build_capture_record(
     rationale: str,
     started_at_utc: str,
     elapsed_s: float,
+    selected_cycles: dict[str, float | None] | None = None,
 ) -> dict:
     """Assemble the machine-readable capture record (#627 §9.2 sibling for forensics runs).
 
@@ -601,6 +602,11 @@ def build_capture_record(
         "pid": pid,
         "selected_tid": tid,
         "tid_selection_reason": tid_reason,
+        # S1 vs end-of-capture rates for the selected thread: the burning-CPU input to the
+        # verdict is the FRESH rate (#647 review round 4 — a thread can burn during S1 then
+        # park in a wait while the RIP samples sit in a tiny wait-site window; observed live
+        # on the 2026-07-22 wedge #2 capture).
+        "selected_cycles_per_s": selected_cycles or {},
         "cycles_top": [
             {"tid": row["tid"], "cycles_per_s": round(row["cycles_per_s"], 1)}
             for row in list(cycles_rows)[:10]
@@ -786,17 +792,23 @@ def _resolve_record_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
     )
 
 
+#: upper bound for CLI durations — far above any useful capture, far below what breaks
+#: ``time.sleep`` (a finite-but-huge value like 1e308 raises OverflowError, not the OSError the
+#: capture path handles — #647 review round 4).
+_MAX_CLI_SECONDS = 86_400.0
+
+
 def _positive_float(value: str) -> float:
     parsed = float(value)
-    if not math.isfinite(parsed) or parsed <= 0:
-        raise argparse.ArgumentTypeError("must be finite and > 0")
+    if not math.isfinite(parsed) or parsed <= 0 or parsed > _MAX_CLI_SECONDS:
+        raise argparse.ArgumentTypeError(f"must be finite, > 0 and <= {_MAX_CLI_SECONDS:.0f}")
     return parsed
 
 
 def _non_negative_float(value: str) -> float:
     parsed = float(value)
-    if not math.isfinite(parsed) or parsed < 0:
-        raise argparse.ArgumentTypeError("must be finite and >= 0")
+    if not math.isfinite(parsed) or parsed < 0 or parsed > _MAX_CLI_SECONDS:
+        raise argparse.ArgumentTypeError(f"must be finite, >= 0 and <= {_MAX_CLI_SECONDS:.0f}")
     return parsed
 
 
@@ -872,6 +884,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         help="hot threads whose stacks are inspected for render-path hints (default 3)",
     )
     parser.add_argument(
+        "--tid",
+        type=_positive_int,
+        default=None,
+        help="sample THIS OS thread id for S2 instead of the render-preferred selection — the "
+        "second pass of a two-thread diagnosis (e.g. the hottest thread after the render "
+        "thread read as parked; 2026-07-22 capture: renderer at one wait RIP while an "
+        "unidentified hottest thread burned a full core)",
+    )
+    parser.add_argument(
         "--json",
         type=Path,
         default=None,
@@ -904,12 +925,24 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     started = time.monotonic()
     started_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started_wall))
 
+    acs_present = _acs_pids()
+    if len(acs_present) > 1:
+        # The acpmf_* sections are global singletons with ONE writer — with two acs.exe present
+        # there is no guarantee the selected process is that writer, so S1/S2 could describe one
+        # process while S3 describes the other: a plausible but invalid verdict (#647 review
+        # round 4). Refuse rather than guess; --pid does not disambiguate the sections.
+        print(
+            f"CAPTURE ABORTED: {len(acs_present)} acs.exe processes present "
+            f"({sorted(acs_present)}) — the global acpmf sections cannot be attributed to one "
+            "of them; close the extras and re-run"
+        )
+        return 2
     if args.pid is not None:
         # S3 always reads AC's GLOBAL acpmf sections, so all three signals must describe the
         # same process (#647 review round 2): sampling an unrelated busy pid's S1/S2 next to a
         # wedged AC's S3 would fabricate an "ACS livelock" out of two different processes.
         # Instrument validation against a non-AC process is --self-test's job.
-        if args.pid not in _acs_pids():
+        if args.pid not in acs_present:
             print(
                 f"CAPTURE ABORTED: --pid {args.pid} is not a running acs.exe process — S3 reads "
                 "AC's global acpmf sections, so S1/S2/S3 must describe the same process "
@@ -918,7 +951,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             return 2
         pid = args.pid
     else:
-        pid = _acs_pid()
+        pid = min(acs_present) if acs_present else None
     if pid is None:
         print("CAPTURE FAILED: no acs.exe process found")
         return 2
@@ -945,13 +978,22 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         if snapshot.rip is not None:
             candidate_rips.setdefault(row["tid"], []).append(snapshot.rip)
         s3_samples.append(_read_s3_once(pid))
-    tid, tid_reason = select_capture_tid(candidate_stacks)
+    if args.tid is not None:
+        known = {row["tid"] for row in rows}
+        if args.tid not in known:
+            print(f"CAPTURE FAILED: --tid {args.tid} is not a thread of pid {pid}")
+            return 2
+        tid, tid_reason = args.tid, "operator-selected via --tid"
+    else:
+        tid, tid_reason = select_capture_tid(candidate_stacks)
     hot_cycles = next(row["cycles_per_s"] for row in rows if row["tid"] == tid)
     print(f"capture: selected tid {tid} ({tid_reason}); {hot_cycles:.3g} cycles/s")
     # The rationale must name the thread the signals actually describe: when a render-stack
     # candidate outranked a hotter physics worker, "the hottest sampled thread" would be false
     # evidence in the record (#647 review round 3).
-    if "render-stack" in tid_reason:
+    if "operator-selected" in tid_reason:
+        thread_desc = f"the operator-selected thread (tid {tid}, --tid)"
+    elif "render-stack" in tid_reason:
         thread_desc = f"the selected render-stack thread (tid {tid}, not necessarily the hottest)"
     else:
         thread_desc = f"the hottest sampled thread (tid {tid})"
@@ -967,6 +1009,22 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             note = snapshot.raw if len(snapshot.raw) < 120 else snapshot.raw[:117] + "..."
             print(f"capture: S2 snapshot {index + 1} unconfirmed/unreadable ({note})")
         s3_samples.append(_read_s3_once(pid))
+
+    # Re-measure the selected thread at the END of the capture: the S1 rate is minutes stale by
+    # now, and a thread that burned during S1 then parked in a wait would otherwise be convicted
+    # as a livelock off wait-site RIPs (#647 review round 4; observed live on wedge #2).
+    final_cycles: float | None = None
+    try:
+        final_rows = sample_cycles(pid, min(2.0, args.cycles_window))
+        final_cycles = next((row["cycles_per_s"] for row in final_rows if row["tid"] == tid), None)
+    except OSError as exc:
+        print(f"capture: final cycle resample failed ({exc}); falling back to the S1 rate")
+    effective_cycles = final_cycles if final_cycles is not None else hot_cycles
+    selected_cycles = {
+        "s1": round(hot_cycles, 1),
+        "final": None if final_cycles is None else round(final_cycles, 1),
+    }
+    s3_samples.append(_read_s3_once(pid))
 
     s3 = evaluate_s3(s3_samples)
     refusal = s3_gate(s3)
@@ -984,6 +1042,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             rationale=refusal_rationale,
             started_at_utc=started_utc,
             elapsed_s=time.monotonic() - started,
+            selected_cycles=selected_cycles,
         )
         print(json.dumps(record, indent=2))
         if args.json_path is not None:
@@ -992,7 +1051,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         return 2
 
     verdict, rationale = classify_forensics(
-        burning_cpu=hot_cycles >= DEFAULT_BURNING_CYCLES_PER_S,
+        burning_cpu=effective_cycles >= DEFAULT_BURNING_CYCLES_PER_S,
         gfx_static=s3.gfx_static,
         phys_advancing=s3.phys_advancing,
         rips=rips,
@@ -1010,6 +1069,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         rationale=rationale,
         started_at_utc=started_utc,
         elapsed_s=time.monotonic() - started,
+        selected_cycles=selected_cycles,
     )
     print(json.dumps(record, indent=2))
     record_written = True

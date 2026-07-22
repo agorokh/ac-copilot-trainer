@@ -540,3 +540,40 @@ def test_acs_pid_picks_deterministically_from_the_process_set(monkeypatch) -> No
 
     monkeypatch.setattr(entry_launcher, "running_process_ids", lambda name, strict: frozenset())
     assert _acs_pid() is None
+
+
+def test_cli_duration_validators_reject_sleep_breaking_values() -> None:
+    """#647 review round 4 — a finite-but-huge duration (1e308) raises OverflowError from
+    time.sleep, bypassing the OSError handling; bound at the validator."""
+    import pytest
+
+    from tools.ac_harness.freeze_forensics import _non_negative_float, _positive_float
+
+    with pytest.raises(Exception, match="<="):
+        _positive_float("1e308")
+    with pytest.raises(Exception, match="<="):
+        _non_negative_float("1e308")
+    assert _positive_float("600") == 600.0
+
+
+def test_capture_record_carries_s1_and_final_selected_rates() -> None:
+    import json
+
+    from tools.ac_harness.freeze_forensics import build_capture_record, evaluate_s3
+
+    record = build_capture_record(
+        pid=1,
+        tid=2,
+        tid_reason="hottest",
+        cycles_rows=[],
+        candidate_stacks=[],
+        rips=[],
+        s3=evaluate_s3([(1, 1, True), (1, 2, True)]),
+        verdict="not_wedged",
+        rationale="r",
+        started_at_utc="2026-07-22T00:00:00Z",
+        elapsed_s=1.0,
+        selected_cycles={"s1": 2.9e9, "final": 1000.0},
+    )
+    payload = json.loads(json.dumps(record))
+    assert payload["selected_cycles_per_s"] == {"s1": 2.9e9, "final": 1000.0}
