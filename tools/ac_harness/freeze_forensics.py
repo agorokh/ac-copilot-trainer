@@ -724,13 +724,25 @@ def _self_test() -> int:  # pragma: no cover - rig-only
         proc.kill()
 
 
+def _repo_checkout_root() -> Path:
+    """The checkout this module runs from — a FIXED approved output root, unlike the CWD.
+
+    Anchoring on the module's own location (``tools/ac_harness/`` → two parents up) keeps the
+    ``.scratch`` capture-artifact workflow working from any invocation directory, while an
+    arbitrary caller CWD is never trusted as a write root (same boundary as PR #646's launcher
+    fix — a CWD root is caller-controlled and therefore no boundary at all).
+    """
+    return Path(__file__).resolve().parents[2]
+
+
 def _resolve_record_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
     """Resolve the ``--json`` destination and require it inside an approved output root.
 
     #647 review: an absolute path or ``..`` traversal would let this rig tool create parent
     directories and overwrite arbitrary writable locations. Approved roots are the per-user
-    Harness root (rig lock / presets) and the current working directory (the checkout's
-    gitignored ``.scratch`` capture artifacts).
+    Harness root (rig lock / presets) and the repo checkout root (gitignored ``.scratch``
+    capture artifacts). A relative path still resolves against the caller's CWD — but it only
+    passes when that resolution lands inside a fixed root.
     """
     resolved = raw.expanduser()
     if not resolved.is_absolute():
@@ -842,7 +854,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         try:
             args.json_path = _resolve_record_path(
                 args.json_path,
-                approved_roots=(default_rig_session_lock_path().parent, Path.cwd()),
+                approved_roots=(default_rig_session_lock_path().parent, _repo_checkout_root()),
             )
         except ValueError as exc:
             print(f"CAPTURE ABORTED: {exc}")

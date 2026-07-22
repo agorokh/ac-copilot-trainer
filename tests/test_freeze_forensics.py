@@ -480,3 +480,25 @@ def test_cli_validators_reject_degenerate_windows() -> None:
     assert _positive_float("2.5") == 2.5
     assert _non_negative_float("0") == 0.0
     assert _non_negative_int("0") == 0
+
+
+def test_record_path_from_an_unapproved_cwd_is_rejected(tmp_path, monkeypatch) -> None:
+    """The caller's CWD is not a root — same boundary as PR #646's launcher fix."""
+    from pathlib import Path
+
+    import pytest
+
+    from tools.ac_harness.freeze_forensics import _resolve_record_path
+
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    monkeypatch.chdir(downloads)
+    with pytest.raises(ValueError, match="approved output root"):
+        _resolve_record_path(Path("capture.json"), approved_roots=(tmp_path / "approved",))
+
+
+def test_repo_checkout_root_is_the_module_checkout() -> None:
+    from tools.ac_harness.freeze_forensics import _repo_checkout_root
+
+    root = _repo_checkout_root()
+    assert (root / "tools" / "ac_harness" / "freeze_forensics.py").is_file()
