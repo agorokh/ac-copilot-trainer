@@ -540,7 +540,8 @@ def evaluate_s3(samples: Sequence[tuple[int | None, int | None, bool]]) -> S3Res
     compared — ``acpmf_*`` sections outlive their creator, so a dead sim's pinned packet would
     read exactly like a wedge. ``gfx_static`` requires every retained graphics reading identical;
     any advance (or a regression = replaced session) means the session moved and the wedge claim
-    dies. ``phys_advancing`` is strictly monotonic growth from first to last retained reading.
+    dies. ``phys_advancing`` requires every ADJACENT retained pair to strictly increase — a
+    regression mid-stream is a section/session reset, not advancement.
     """
     gfx: list[int] = []
     phys: list[int] = []
@@ -555,7 +556,11 @@ def evaluate_s3(samples: Sequence[tuple[int | None, int | None, bool]]) -> S3Res
             phys.append(phys_packet)
     return S3Result(
         gfx_static=len(gfx) >= 2 and len(set(gfx)) == 1,
-        phys_advancing=len(phys) >= 2 and phys[-1] > phys[0],
+        # STRICTLY monotonic across every adjacent retained pair — an endpoint-only comparison
+        # would read a regression like 100, 5, 200 (a section/session reset) as "advancing" and
+        # let a discontinuous stream contribute the wedge signature (#647 review round 2).
+        phys_advancing=len(phys) >= 2
+        and all(later > earlier for earlier, later in zip(phys, phys[1:], strict=False)),
         acs_alive_throughout=bool(alive_flags) and all(alive_flags),
         gfx_readings=tuple(gfx),
         phys_readings=tuple(phys),
@@ -644,35 +649,49 @@ def _pid_alive(pid: int) -> bool:  # pragma: no cover - rig-only
 def _read_s3_once(pid: int) -> tuple[int | None, int | None, bool]:  # pragma: no cover - rig-only
     """One correlated ``(gfx_packet, phys_packet, target_alive)`` observation.
 
-    Liveness of the TARGET PID (not the image name — #647 review P1) is read immediately before
-    the shared-memory read so the §7.1 corpse guard in :func:`evaluate_s3` can discard readings
-    that were not correlated with the live target generation.
+    Liveness of the TARGET PID (not the image name — #647 review P1) is read immediately BEFORE
+    **and re-checked AFTER** the shared-memory reads (#647 review round 2): the target can exit
+    between the pre-check and the reads, in which case the persistent ``acpmf_*`` corpse would be
+    returned as a live-correlated observation. A reading only counts as alive when the target was
+    alive on both sides of it, so the §7.1 corpse guard in :func:`evaluate_s3` can trust the flag.
     """
     from tools.ac_harness.shared_memory import SharedMemoryReader, SharedMemoryUnavailable
 
-    alive = _pid_alive(pid)
+    alive_before = _pid_alive(pid)
+    gfx: int | None = None
+    phys: int | None = None
     try:
         reader = SharedMemoryReader(with_physics=True)
     except (SharedMemoryUnavailable, OSError):
-        return None, None, alive
+        return None, None, alive_before and _pid_alive(pid)
     try:
         graphics = reader.read_graphics()
         physics = reader.read_physics()
-        return graphics.packet_id, (physics.packet_id if physics else None), alive
+        gfx = graphics.packet_id
+        phys = physics.packet_id if physics else None
     except (SharedMemoryUnavailable, OSError):
-        return None, None, alive
+        pass
     finally:
         reader.close()
+    return gfx, phys, alive_before and _pid_alive(pid)
 
 
-def _acs_pid() -> int | None:  # pragma: no cover - rig-only
+def _acs_pids() -> frozenset[int]:  # pragma: no cover - rig-only
+    """Every running ``acs.exe`` pid (empty on enumeration failure)."""
     from tools.ac_harness.entry_launcher import running_process_ids
 
     try:
-        pids = running_process_ids("acs.exe", strict=True)
+        return frozenset(running_process_ids("acs.exe", strict=True))
     except OSError:
-        return None
-    return int(pids[0]) if pids else None
+        return frozenset()
+
+
+def _acs_pid() -> int | None:  # pragma: no cover - rig-only
+    # ``running_process_ids`` returns an unordered frozenset — it is not subscriptable, and
+    # ``min`` keeps the pick deterministic if more than one acs.exe is somehow present
+    # (#647 review round 2: ``pids[0]`` crashed the default no---pid path with a TypeError).
+    pids = _acs_pids()
+    return min(pids) if pids else None
 
 
 def _self_test() -> int:  # pragma: no cover - rig-only
@@ -804,7 +823,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         )
     )
     parser.add_argument(
-        "--pid", type=_positive_int, default=None, help="target pid (default: find acs.exe)"
+        "--pid",
+        type=_positive_int,
+        default=None,
+        help="target acs.exe pid (default: discover; a non-acs pid is rejected because S3 reads "
+        "AC's global shared memory)",
     )
     parser.add_argument(
         "--cycles-window",
@@ -864,9 +887,23 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     started = time.monotonic()
     started_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started_wall))
 
-    pid = args.pid if args.pid is not None else _acs_pid()
+    if args.pid is not None:
+        # S3 always reads AC's GLOBAL acpmf sections, so all three signals must describe the
+        # same process (#647 review round 2): sampling an unrelated busy pid's S1/S2 next to a
+        # wedged AC's S3 would fabricate an "ACS livelock" out of two different processes.
+        # Instrument validation against a non-AC process is --self-test's job.
+        if args.pid not in _acs_pids():
+            print(
+                f"CAPTURE ABORTED: --pid {args.pid} is not a running acs.exe process — S3 reads "
+                "AC's global acpmf sections, so S1/S2/S3 must describe the same process "
+                "(use --self-test to validate the instrument against a synthetic spinner)"
+            )
+            return 2
+        pid = args.pid
+    else:
+        pid = _acs_pid()
     if pid is None:
-        print("CAPTURE FAILED: no acs.exe process found (pass --pid to target another process)")
+        print("CAPTURE FAILED: no acs.exe process found")
         return 2
 
     s3_samples: list[tuple[int | None, int | None, bool]] = [_read_s3_once(pid)]

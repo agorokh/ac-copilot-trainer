@@ -502,3 +502,27 @@ def test_repo_checkout_root_is_the_module_checkout() -> None:
 
     root = _repo_checkout_root()
     assert (root / "tools" / "ac_harness" / "freeze_forensics.py").is_file()
+
+
+def test_s3_physics_regression_is_not_advancing() -> None:
+    """#647 review round 2 — an endpoint-only comparison read 100, 5, 200 as advancing; a
+    mid-stream regression is a section/session reset and must not feed the wedge signature."""
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3([(23, 100, True), (23, 5, True), (23, 200, True)])
+    assert result.phys_advancing is False
+
+
+def test_acs_pid_picks_deterministically_from_the_process_set(monkeypatch) -> None:
+    """#647 review round 2 — running_process_ids returns a frozenset; pids[0] was a TypeError
+    on the default no---pid path whenever acs.exe was actually running."""
+    import tools.ac_harness.entry_launcher as entry_launcher
+    from tools.ac_harness.freeze_forensics import _acs_pid
+
+    monkeypatch.setattr(
+        entry_launcher, "running_process_ids", lambda name, strict: frozenset({31337, 20001})
+    )
+    assert _acs_pid() == 20001
+
+    monkeypatch.setattr(entry_launcher, "running_process_ids", lambda name, strict: frozenset())
+    assert _acs_pid() is None
