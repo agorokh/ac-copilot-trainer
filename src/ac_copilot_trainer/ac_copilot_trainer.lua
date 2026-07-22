@@ -2503,7 +2503,12 @@ function script.update(dt)
       wsBridge = wsBridge,
       appVersion = APP_VERSION_UI,
     })
-    if lifecyclePublisher.publishSessionIfChanged({ car = car, sim = sim, wsBridge = wsBridge }) then
+    if lifecyclePublisher.publishSessionIfChanged({
+      car = car,
+      sim = sim,
+      sessionUuid = SESSION_UUID,
+      wsBridge = wsBridge,
+    }) then
       -- A re-emitted `session` means the car/track/session identity changed: follow with a
       -- fresh setup.active so the dashboard header never carries the previous session's
       -- setup name into the new identity (Codex on PR #547). Unresolved here publishes a
