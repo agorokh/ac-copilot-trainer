@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-21T15:10:00Z
+last_updated: 2026-07-22T05:30:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/mcp-preflight-guard-2026-07-20.md
@@ -106,6 +106,28 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-07-22) — #630 Parts C+D+E: honest launch verdicts + per-trial records (PR #646 MERGED)
+
+**PR [#646](https://github.com/agorokh/ac-copilot-trainer/pull/646) MERGED** `2026-07-22T05:22Z` as
+squash [`4265845`](https://github.com/agorokh/ac-copilot-trainer/commit/42658451f). All in
+`tools/ac_harness/resilient_launch.py` (+130-test suite):
+
+- **Part C** — new `WEDGED_INIT` verdict: acs.exe alive through the go-live budget with a
+  never-advancing render stream (≥2 alive samples — a single-sample timeout stays `NEVER_LIVE`).
+  A rendering-but-never-ready menu stays `NEVER_LIVE`; `WEDGED_INIT` resets the stale-CM restart
+  streak like `FROZE`. Freeze rates for #627 must count `WEDGED_INIT` with `FROZE`.
+- **Part D** — Car0 drivability is a 45 s TTL cache (`DEFAULT_CAR0_REPROBE_SECONDS`), not a
+  one-shot latch; a failed re-probe fails the attempt; a packet regression revokes cache + stamp.
+- **Part E** — `AttemptRecord` per attempt (verdict, UTC start, elapsed, uptime via
+  `GetTickCount64` with `c_ulonglong` restype); `LaunchReport.as_dict()`
+  (`resilient-launch-report/v1`); CLI `--trials N` (#627 §9.2 measurement mode — full
+  denominator, teardown-gated + report-write-gated exit), `--no-hold`, `--json PATH`
+  (destination confined to the Harness root / repo checkout root — caller CWD is NOT a root).
+
+**Three codex review rounds, every finding real** (signed-int uptime wrap, trials exiting 0 with
+no record / unsafe teardown, CWD as a non-boundary, Game Point routing rebutted with the
+rig-lock fact). Daemon: no App on this repo → gate vacuous.
+
 ## Delivered (2026-07-21) — #630 Part F: freeze-forensics instrument promoted (PR #644 MERGED)
 
 **PR [#644](https://github.com/agorokh/ac-copilot-trainer/pull/644) MERGED** `2026-07-21T15:02Z` as
@@ -123,12 +145,11 @@ advancing signature. Daemon was silent on several late SHAs (vacuous after coold
 capture driver is **Part G**.
 
 **Resume here / what remains on #630:**
-- **Part C** — init livelock buckets as `never_live`, not `froze` (understates freeze rate for #627).
-- **Part D** — Car0 drivability is a one-shot latch per attempt.
-- **Part E** — no machine-readable per-attempt record (#627 §9.2).
-- **Part G** — runnable `main()`: S1→S2→S3 + machine-readable record; prefer render-stack TID over
-  pure hottest-thread selection
-  ([comment](https://github.com/agorokh/ac-copilot-trainer/issues/630#issuecomment-5030577466)).
+- ~~Parts C, D, E~~ — **DELIVERED** in PR [#646](https://github.com/agorokh/ac-copilot-trainer/pull/646) (`4265845`, 2026-07-22; see that delivery block above).
+- **Part G** — **IN FLIGHT**: PR [#647](https://github.com/agorokh/ac-copilot-trainer/pull/647)
+  (runnable `main()` S1→render-TID-preferring S2→S3 with §7.1 corpse guard + machine-readable
+  record; `--self-test` rig-verified exit 0; two codex rounds addressed — resolve-pr loop
+  continues, merge when cooldown-clean).
 - Optional: atomic RELEASE AC → STABLE AC for one-action wedge recovery.
 
 No migrations / new env / dep install. Rig next: catch a real wedge with the promoted instrument

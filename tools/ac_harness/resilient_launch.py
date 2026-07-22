@@ -30,12 +30,13 @@ is unit-tested off-rig with no Assetto Corsa present.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import sys
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -51,15 +52,28 @@ DEFAULT_STALL_SAMPLES = 4
 DEFAULT_PAUSE_BUDGET = 300.0
 #: consecutive never_live attempts before cold-restarting Content Manager (#537/#558)
 NEVER_LIVE_BEFORE_CM_RESTART = 2
+#: seconds a cached Car0 drivability verdict stays valid before the handshake re-runs (#630
+#: Part D) — a one-shot latch would hold a session that LOSES drivability after go-live as
+#: STABLE for the rest of the window. Long enough that a 140 s window costs ~3 extra probes.
+DEFAULT_CAR0_REPROBE_SECONDS = 45.0
 
 
 class LaunchVerdict(StrEnum):
-    """Outcome of watching one launch attempt."""
+    """Outcome of watching one launch attempt.
+
+    ``NEVER_LIVE`` and ``WEDGED_INIT`` split what used to be one bucket (#630 Part C): the first
+    means **acs.exe never appeared** (or appeared and exited during load) — a launch-delivery
+    failure, usually Content Manager's; the second means **acs.exe appeared and burned the whole
+    go-live budget alive without ever publishing an advancing render stream** — the #627 init
+    livelock signature. Any freeze *rate* for #627 must count ``WEDGED_INIT`` with ``FROZE``, or
+    the init wedge disappears into launch-plumbing noise and the denominator means nothing.
+    """
 
     PENDING = "pending"
     STABLE = "stable"
     FROZE = "froze"
     NEVER_LIVE = "never_live"
+    WEDGED_INIT = "wedged_init"
 
 
 class _ContentManagerRestartTimeout(RuntimeError):
@@ -131,7 +145,13 @@ def classify(
     Semantics:
 
     * **go-live** is the first sample whose ``gfx_packet`` advanced over the previous sample while
-      ``acs_alive``. No go-live within ``go_live_timeout`` of the first sample → ``NEVER_LIVE``.
+      ``acs_alive``. No go-live within ``go_live_timeout`` of the first sample → ``WEDGED_INIT``
+      when ``acs.exe`` was observed alive during the wait AND its render stream never advanced
+      (it appeared and burned the whole budget without publishing — the #627 init livelock), else
+      ``NEVER_LIVE``: the process never appeared, appeared and exited during load, or rendered
+      happily without ever reaching readiness (a stuck pre-drive menu is launch plumbing, not a
+      wedge — putting it in the wedge bucket would pollute the #627 rate from the other side)
+      (#630 Part C).
     * after go-live, ``stall_samples`` consecutive samples with an unchanged ``gfx_packet`` while
       ``acs_alive`` → ``FROZE`` (this is the delayed init livelock the other launchers miss).
     * surviving ``stability_window`` seconds past go-live without stalling → ``STABLE``.
@@ -170,6 +190,8 @@ def classify(
     not_ready_run = 0
     paused_total = 0.0
     seen_acs_alive = False
+    seen_stream_advance = False
+    alive_pre_live_samples = 0
 
     for sample in samples:
         ready = sample.entry_ready is True and sample.drivable is True
@@ -198,7 +220,25 @@ def classify(
             if seen_acs_alive and not sample.acs_alive:
                 return LaunchVerdict.NEVER_LIVE
             seen_acs_alive = seen_acs_alive or sample.acs_alive
+            seen_stream_advance = seen_stream_advance or advanced
+            if sample.acs_alive:
+                alive_pre_live_samples += 1
             if sample.t - t0 >= go_live_timeout:
+                # #630 Part C — the go-live timeout has two very different causes and they must
+                # not share a bucket. acs.exe alive through the budget without EVER advancing its
+                # render stream is the init livelock (#627 §2 landing DURING session init — it
+                # never reaches a packet-advancing sample, so the FROZE branch below is
+                # unreachable for it). Everything else stays NEVER_LIVE: the process never
+                # appearing is launch plumbing (a cold/stale Content Manager); a crash during
+                # load exits via the early return above; and a stream that ADVANCED but never
+                # reached readiness is a stuck pre-drive menu — rendering, therefore not wedged.
+                # The wedge claim needs SUSTAINED evidence — at least two alive observations with
+                # no advance between any of them. A timeout whose only alive sample is the final
+                # one (e.g. a blocking readiness probe consumed the budget) proves nothing about
+                # publication and stays NEVER_LIVE. Only the proven never-published shape may
+                # count toward the #627 freeze rate.
+                if alive_pre_live_samples >= 2 and not seen_stream_advance:
+                    return LaunchVerdict.WEDGED_INIT
                 return LaunchVerdict.NEVER_LIVE
             # A regression BEFORE go-live is a hand-over, not a failure — there is no accumulated
             # stability to protect yet, so it is deliberately not checked here. Measured on the
@@ -337,19 +377,37 @@ class SectionOwnershipGate:
 
 
 class AttemptReadiness:
-    """Per-attempt readiness: section ownership plus the one-shot Car0 handshake.
+    """Per-attempt readiness: section ownership plus the TTL-cached Car0 handshake.
 
     These two pieces of state are coupled and must be revoked together. The Car0 result is cached
-    for the attempt so the (expensive, blocking) handshake runs once, but that cache is only valid
+    so the (expensive, blocking) handshake does not run every sample, but that cache is only valid
     for the generation it was probed against: if acs.exe dies and restarts inside one attempt, a
     stale ``True`` would let a brand-new session skip the handshake and be treated as drivable.
     Keeping the cache next to the gate that revokes ownership makes that invariant enforceable
     instead of a comment.
+
+    The cache additionally EXPIRES after ``reprobe_seconds`` (#630 Part D): a pure one-shot latch
+    meant a session that renders frames but loses Car0 drivability after go-live was still
+    declared STABLE, because the handshake could never run a second time. Expiry re-earns the
+    verdict on the live session within the stability window; a failed re-probe raises the same
+    :class:`_Car0NotDrivable` as the first. Pass ``reprobe_seconds=None`` to restore the one-shot
+    behavior (used by callers that must not touch CarControls again).
     """
 
-    def __init__(self, probe: Callable[[], bool]) -> None:
+    def __init__(
+        self,
+        probe: Callable[[], bool],
+        *,
+        reprobe_seconds: float | None = DEFAULT_CAR0_REPROBE_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if reprobe_seconds is not None and reprobe_seconds <= 0:
+            raise ValueError("reprobe_seconds must be > 0 or None")
         self._gate = SectionOwnershipGate()
         self._probe = probe
+        self._reprobe_seconds = reprobe_seconds
+        self._clock = clock
+        self._probed_at: float | None = None
         self.car0_ready: bool | None = None
 
     @property
@@ -368,11 +426,22 @@ class AttemptReadiness:
             # generation). Either way a later generation must re-run the handshake rather than
             # inherit this one's verdict.
             self.car0_ready = None
+            self._probed_at = None
             return None, None
-        if entry_ready is True and self.car0_ready is None:
-            self.car0_ready = self._probe()
-            if not self.car0_ready:
-                raise _Car0NotDrivable
+        if entry_ready is True:
+            expired = (
+                self.car0_ready is not None
+                and self._reprobe_seconds is not None
+                and self._probed_at is not None
+                and self._clock() - self._probed_at >= self._reprobe_seconds
+            )
+            if self.car0_ready is None or expired:
+                self.car0_ready = self._probe()
+                # Stamp AFTER the (blocking, up-to-5 s) probe returns so the TTL measures time
+                # since the verdict was current, not since the handshake started.
+                self._probed_at = self._clock()
+                if not self.car0_ready:
+                    raise _Car0NotDrivable
         return entry_ready, (self.car0_ready if entry_ready is True else None)
 
 
@@ -455,29 +524,79 @@ class StableSessionWatch:
 
 
 @dataclass(frozen=True)
+class AttemptRecord:
+    """One launch attempt's machine-readable outcome (#630 Part E, #627 §9.2).
+
+    #627 §9.2 requires every trial to be recorded with its verdict AND its conditions — the
+    per-launch freeze rate rises with accumulated uptime/launches, so a verdict without a
+    recorded denominator and uptime is unusable for rate measurement. ``uptime_h`` is machine
+    uptime at attempt start (``None`` when unavailable, e.g. off-rig tests).
+    """
+
+    attempt: int
+    verdict: LaunchVerdict
+    started_at_utc: str
+    elapsed_s: float
+    uptime_h: float | None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "attempt": self.attempt,
+            "verdict": str(self.verdict),
+            "started_at_utc": self.started_at_utc,
+            "elapsed_s": round(self.elapsed_s, 3),
+            "uptime_h": None if self.uptime_h is None else round(self.uptime_h, 4),
+        }
+
+
+@dataclass(frozen=True)
 class LaunchReport:
-    """Summary of a full retry run."""
+    """Summary of a full retry run, with the per-attempt log #627 §9.2 requires (#630 Part E)."""
 
     verdict: LaunchVerdict
     attempts: int
     froze: int
     never_live: int
+    wedged_init: int = 0
+    stable: int = 0
+    attempts_log: tuple[AttemptRecord, ...] = field(default=())
 
     @property
     def succeeded(self) -> bool:
         return self.verdict is LaunchVerdict.STABLE
 
+    def _counts(self) -> str:
+        return f"froze {self.froze}, wedged_init {self.wedged_init}, never_live {self.never_live}"
+
     def summary(self) -> str:
         if self.succeeded:
             return (
                 f"stable drivable session held on attempt {self.attempts} "
-                f"(froze {self.froze}, never_live {self.never_live}) — AC left LIVE"
+                f"({self._counts()}) — AC left LIVE"
             )
         return (
-            f"no stable session in {self.attempts} attempt(s) "
-            f"(froze {self.froze}, never_live {self.never_live}); "
+            f"no stable session in {self.attempts} attempt(s) ({self._counts()}); "
             "a reboot lowers the per-launch freeze rate — rerun after one"
         )
+
+    def as_dict(self) -> dict[str, object]:
+        """JSON-serializable report — the machine-readable record #627 §9.2 asks for."""
+        return {
+            "schema": "resilient-launch-report/v1",
+            "verdict": str(self.verdict),
+            "attempts": self.attempts,
+            "counts": {
+                "stable": self.stable,
+                "froze": self.froze,
+                "wedged_init": self.wedged_init,
+                "never_live": self.never_live,
+            },
+            "attempts_log": [record.as_dict() for record in self.attempts_log],
+        }
+
+
+def _utc_stamp(epoch_seconds: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch_seconds))
 
 
 def run_retry_loop(
@@ -486,39 +605,88 @@ def run_retry_loop(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     on_never_live_streak: Callable[[], None] | None = None,
     never_live_before_restart: int = NEVER_LIVE_BEFORE_CM_RESTART,
+    stop_on_stable: bool = True,
+    clock: Callable[[], float] = time.monotonic,
+    wall_clock: Callable[[], float] = time.time,
+    uptime_hours: Callable[[], float | None] | None = None,
 ) -> LaunchReport:
     """Drive attempts until one is ``STABLE`` or the budget is spent. Pure control flow.
 
     ``watch_attempt(attempt_number)`` performs one launch+watch and returns its verdict.
     ``on_never_live_streak`` is invoked once a run of ``never_live_before_restart`` consecutive
     ``NEVER_LIVE`` verdicts is seen — the hook the CLI uses to cold-restart a stale Content
-    Manager (#537/#558) rather than pointlessly re-sending the same URL.
+    Manager (#537/#558) rather than pointlessly re-sending the same URL. A ``WEDGED_INIT``
+    verdict resets that streak like ``FROZE`` does: acs.exe appeared, so CM delivered the launch
+    and restarting it would only add kill-churn (#627 §6.5).
+
+    With ``stop_on_stable=False`` every attempt in the budget runs regardless of verdict — the
+    rate-measurement mode #627 §9.2 needs (``--trials``). Every attempt is recorded in the
+    report's ``attempts_log`` with verdict, wall-clock start, elapsed seconds, and machine uptime
+    (#630 Part E).
     """
     if max_attempts <= 0:
         raise ValueError("max_attempts must be > 0")
     if never_live_before_restart <= 0:
         raise ValueError("never_live_before_restart must be > 0")
 
-    froze = never_live = 0
+    def read_uptime() -> float | None:
+        if uptime_hours is None:
+            return None
+        try:
+            return uptime_hours()
+        except OSError:
+            return None
+
+    records: list[AttemptRecord] = []
+    stable = froze = never_live = wedged_init = 0
     never_live_run = 0
     last_verdict = LaunchVerdict.NEVER_LIVE
+    attempts_run = 0
     for attempt in range(1, max_attempts + 1):
+        started_wall = wall_clock()
+        started = clock()
+        uptime = read_uptime()
         verdict = watch_attempt(attempt)
         if verdict is LaunchVerdict.PENDING:
             raise ValueError("watch_attempt returned a non-terminal PENDING verdict")
+        records.append(
+            AttemptRecord(
+                attempt=attempt,
+                verdict=verdict,
+                started_at_utc=_utc_stamp(started_wall),
+                elapsed_s=clock() - started,
+                uptime_h=uptime,
+            )
+        )
         last_verdict = verdict
+        attempts_run = attempt
         if verdict is LaunchVerdict.STABLE:
-            return LaunchReport(verdict, attempt, froze, never_live)
-        if verdict is LaunchVerdict.FROZE:
-            froze += 1
+            stable += 1
             never_live_run = 0
-        else:
+            if stop_on_stable:
+                break
+        elif verdict is LaunchVerdict.NEVER_LIVE:
             never_live += 1
             never_live_run += 1
             if never_live_run >= never_live_before_restart and on_never_live_streak is not None:
                 on_never_live_streak()
                 never_live_run = 0
-    return LaunchReport(last_verdict, max_attempts, froze, never_live)
+        else:
+            # FROZE and WEDGED_INIT both prove CM delivered a real acs.exe.
+            if verdict is LaunchVerdict.FROZE:
+                froze += 1
+            else:
+                wedged_init += 1
+            never_live_run = 0
+    return LaunchReport(
+        last_verdict,
+        attempts_run,
+        froze,
+        never_live,
+        wedged_init=wedged_init,
+        stable=stable,
+        attempts_log=tuple(records),
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -528,6 +696,79 @@ def run_retry_loop(
 
 def _log(msg: str) -> None:  # pragma: no cover - rig-only progress trace
     print(f"[resilient-launch {time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def _machine_uptime_hours() -> float | None:  # pragma: no cover - rig-only
+    """Machine uptime in hours via ``GetTickCount64`` — the #627 §9.2 per-trial condition.
+
+    The per-launch freeze rate rises with accumulated uptime (#627 §3.4), so a verdict recorded
+    without uptime cannot be compared across sessions. ``None`` off-Windows or on API failure.
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+
+    try:
+        tick_count = ctypes.windll.kernel32.GetTickCount64
+        # ctypes reads an undeclared return as a signed C int: this 64-bit millisecond count
+        # would go negative after ~24.9 days of uptime — exactly the long-uptime regime #627
+        # §3.4 needs measured (#646 review P1).
+        tick_count.restype = ctypes.c_ulonglong
+        tick_count.argtypes = []
+        return float(tick_count()) / 3_600_000.0
+    except (AttributeError, OSError):
+        return None
+
+
+def _repo_checkout_root() -> Path:
+    """The checkout this module runs from — a FIXED approved output root, unlike the CWD.
+
+    Anchoring on the module's own location (``tools/ac_harness/`` → two parents up) keeps the
+    established ``.scratch`` measurement-artifact workflow working from any invocation directory,
+    while an arbitrary caller CWD (e.g. a Downloads directory) is never trusted as a write root
+    (#646 review — the CWD root was caller-controlled and therefore no boundary at all).
+    """
+    return Path(__file__).resolve().parents[2]
+
+
+def _resolve_report_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
+    """Resolve the ``--json`` destination and require it inside an approved output root.
+
+    #646 review: an absolute path or a ``..`` traversal would let this rig tool create parent
+    directories and overwrite files at arbitrary writable locations. The approved roots are the
+    per-user Harness root (where the rig lock and generated presets already live) and the repo
+    checkout root (gitignored ``.scratch`` measurement artifacts). A relative path still resolves
+    against the caller's CWD — but it only passes when that resolution lands inside a fixed root.
+    """
+    resolved = raw.expanduser()
+    if not resolved.is_absolute():
+        resolved = Path.cwd() / resolved
+    resolved = resolved.resolve(strict=False)
+    for root in approved_roots:
+        anchored = root.resolve(strict=False)
+        if resolved == anchored or anchored in resolved.parents:
+            return resolved
+    raise ValueError(
+        f"--json destination {resolved} is outside every approved output root "
+        f"({', '.join(str(root) for root in approved_roots)})"
+    )
+
+
+def _write_report_json(report: LaunchReport, path: Path) -> bool:  # pragma: no cover - rig-only
+    """Write the machine-readable run record; report success so measurement runs can gate on it.
+
+    A failure never masks the verdict in the log — but in ``--trials`` mode the record IS the
+    deliverable, so the caller converts ``False`` into a nonzero exit (#646 review P1) instead of
+    letting an automated measurement run read as successful with no record produced.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(report.as_dict(), indent=2) + "\n", encoding="utf-8")
+        _log(f"report -> {path}")
+        return True
+    except OSError as exc:
+        _log(f"WARNING: could not write report JSON {path}: {exc}")
+        return False
 
 
 def _sample_now(
@@ -1182,6 +1423,32 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         default=1.0,
         help="seconds to wait for the machine-wide rig lock (default: 1.0)",
     )
+    parser.add_argument(
+        "--trials",
+        type=_positive_int,
+        default=None,
+        help=(
+            "measurement mode (#627 §9.2): run exactly N attempts regardless of verdict, record "
+            "verdict + uptime + launch index for every trial, tear the rig down at the end, and "
+            "exit 0 once all N verdicts are recorded. WARNING: hard-kills acs.exe between trials "
+            "(#627 §6.5) — the measurement itself may degrade the rig"
+        ),
+    )
+    parser.add_argument(
+        "--no-hold",
+        action="store_true",
+        help=(
+            "exit immediately after the stability gate instead of holding rig ownership: AC is "
+            "left LIVE but unowned (scripted/measurement use — a peer harness may claim it)"
+        ),
+    )
+    parser.add_argument(
+        "--json",
+        type=Path,
+        default=None,
+        dest="json_path",
+        help="write the machine-readable run report (per-attempt log included) to this path",
+    )
     parser.add_argument("--rig-lock-path", type=Path, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--rig-release-path", type=Path, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -1228,6 +1495,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
     lock_path = args.rig_lock_path or default_rig_session_lock_path()
     release_path = args.rig_release_path or (lock_path.parent / "rig-session.release")
+
+    if args.json_path is not None:
+        try:
+            args.json_path = _resolve_report_path(
+                args.json_path, approved_roots=(lock_path.parent, _repo_checkout_root())
+            )
+        except ValueError as exc:
+            _log(f"launch aborted: {exc}")
+            return 2
 
     def release_requested() -> bool:
         return release_path.exists()
@@ -1361,12 +1637,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     "Content Manager remained alive after the bounded shutdown wait"
                 )
 
+        trials_mode = args.trials is not None
         try:
             report = _run_with_safe_release(
                 lambda: run_retry_loop(
                     watch_attempt,
-                    max_attempts=args.max_attempts,
+                    max_attempts=args.trials if trials_mode else args.max_attempts,
                     on_never_live_streak=cold_restart_cm,
+                    stop_on_stable=not trials_mode,
+                    uptime_hours=_machine_uptime_hours,
                 ),
                 acs_present,
                 release_requested=release_requested,
@@ -1394,6 +1673,37 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         except _ContentManagerRestartTimeout as exc:
             _log(f"restart aborted: {exc}")
             return 1
+        report_written = True
+        if args.json_path is not None:
+            report_written = _write_report_json(report, args.json_path)
+        if trials_mode:
+            # #627 §9.2 — the deliverable of a measurement run is the recorded denominator, not a
+            # held session. Say every verdict out loud, leave the rig CLEAN (a stable final trial
+            # must not strand an unowned acs.exe), and exit 0 because the measurement completed.
+            for record in report.attempts_log:
+                uptime = "?" if record.uptime_h is None else f"{record.uptime_h:.3f}h"
+                _log(
+                    f"trial {record.attempt}/{args.trials}: {record.verdict} "
+                    f"elapsed={record.elapsed_s:.1f}s uptime={uptime}"
+                )
+            _log(
+                f"trials complete: stable {report.stable}/{report.attempts} "
+                f"({report._counts()}); hard kills between trials — see #627 §6.5"
+            )
+            rig_safe = _make_rig_safe(acs_present, release_requested=release_requested)
+            if not rig_safe:
+                # The advertised end-of-run teardown failed: a live (possibly wedged) acs.exe is
+                # about to outlast the released rig lock. A measurement run must not read as
+                # successful over that (#646 review P1, round 2).
+                _log("TRIALS FAILED: end-of-run teardown could not confirm acs.exe exit")
+                return 1
+            if not report_written:
+                # In measurement mode the machine-readable record IS the deliverable. An
+                # automated run must not read as successful when the requested record was never
+                # produced (#646 review P1) — the per-trial log lines above remain as salvage.
+                _log("TRIALS FAILED: the requested report JSON could not be written")
+                return 1
+            return 0
         _log(report.summary())
         if not report.succeeded:
             # A FROZE terminal verdict deliberately leaves acs.exe alive so the watcher can
@@ -1403,6 +1713,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             return 1
 
         phase_published = _publish_stable_phase(rig_lock.set_phase)
+
+        if args.no_hold:
+            # Scripted/measurement callers own their own lifecycle. AC is left LIVE; the rig lock
+            # releases in the finally block, so a peer harness may legitimately claim the session.
+            _log(
+                "stability gate passed; exiting without hold (--no-hold) — AC left LIVE, "
+                "rig ownership released"
+            )
+            return 0
 
         # The stable session belongs to this operator-facing launcher until AC exits. Releasing
         # the cross-worktree lock immediately after the gate would let a peer harness kill the
