@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -1036,6 +1037,40 @@ def test_positive_cli_types_reject_non_positive(parser, value, message):
 def test_rig_lock_timeout_cli_type_rejects_negative():
     with pytest.raises(argparse.ArgumentTypeError, match="finite and >= 0"):
         _non_negative_float("-0.1")
+
+
+class TestResolveReportPath:
+    """#646 review — the --json destination must stay inside an approved output root."""
+
+    def test_path_inside_an_approved_root_is_accepted(self, tmp_path) -> None:
+        from tools.ac_harness.resilient_launch import _resolve_report_path
+
+        target = tmp_path / "reports" / "run.json"
+        resolved = _resolve_report_path(target, approved_roots=(tmp_path,))
+        assert resolved == target.resolve()
+
+    def test_absolute_path_outside_every_root_is_rejected(self, tmp_path) -> None:
+        from tools.ac_harness.resilient_launch import _resolve_report_path
+
+        outside = tmp_path / "outside" / "run.json"
+        approved = tmp_path / "approved"
+        with pytest.raises(ValueError, match="approved output root"):
+            _resolve_report_path(outside, approved_roots=(approved,))
+
+    def test_dotdot_traversal_cannot_escape_the_root(self, tmp_path) -> None:
+        from tools.ac_harness.resilient_launch import _resolve_report_path
+
+        approved = tmp_path / "approved"
+        sneaky = approved / ".." / "escaped.json"
+        with pytest.raises(ValueError, match="approved output root"):
+            _resolve_report_path(sneaky, approved_roots=(approved,))
+
+    def test_relative_path_resolves_against_cwd(self, tmp_path, monkeypatch) -> None:
+        from tools.ac_harness.resilient_launch import _resolve_report_path
+
+        monkeypatch.chdir(tmp_path)
+        resolved = _resolve_report_path(Path(".scratch/run.json"), approved_roots=(Path.cwd(),))
+        assert resolved == (tmp_path / ".scratch" / "run.json").resolve()
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf"])

@@ -709,19 +709,54 @@ def _machine_uptime_hours() -> float | None:  # pragma: no cover - rig-only
     import ctypes
 
     try:
-        return float(ctypes.windll.kernel32.GetTickCount64()) / 3_600_000.0
+        tick_count = ctypes.windll.kernel32.GetTickCount64
+        # ctypes reads an undeclared return as a signed C int: this 64-bit millisecond count
+        # would go negative after ~24.9 days of uptime — exactly the long-uptime regime #627
+        # §3.4 needs measured (#646 review P1).
+        tick_count.restype = ctypes.c_ulonglong
+        tick_count.argtypes = []
+        return float(tick_count()) / 3_600_000.0
     except (AttributeError, OSError):
         return None
 
 
-def _write_report_json(report: LaunchReport, path: Path) -> None:  # pragma: no cover - rig-only
-    """Write the machine-readable run record; never let a report I/O failure mask the verdict."""
+def _resolve_report_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
+    """Resolve the ``--json`` destination and require it inside an approved output root.
+
+    #646 review: an absolute path or a ``..`` traversal would let this rig tool create parent
+    directories and overwrite files at arbitrary writable locations. The approved roots are the
+    per-user Harness root (where the rig lock and generated presets already live) and the current
+    working directory (the checkout — gitignored ``.scratch`` measurement artifacts).
+    """
+    resolved = raw.expanduser()
+    if not resolved.is_absolute():
+        resolved = Path.cwd() / resolved
+    resolved = resolved.resolve(strict=False)
+    for root in approved_roots:
+        anchored = root.resolve(strict=False)
+        if resolved == anchored or anchored in resolved.parents:
+            return resolved
+    raise ValueError(
+        f"--json destination {resolved} is outside every approved output root "
+        f"({', '.join(str(root) for root in approved_roots)})"
+    )
+
+
+def _write_report_json(report: LaunchReport, path: Path) -> bool:  # pragma: no cover - rig-only
+    """Write the machine-readable run record; report success so measurement runs can gate on it.
+
+    A failure never masks the verdict in the log — but in ``--trials`` mode the record IS the
+    deliverable, so the caller converts ``False`` into a nonzero exit (#646 review P1) instead of
+    letting an automated measurement run read as successful with no record produced.
+    """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(report.as_dict(), indent=2) + "\n", encoding="utf-8")
         _log(f"report -> {path}")
+        return True
     except OSError as exc:
         _log(f"WARNING: could not write report JSON {path}: {exc}")
+        return False
 
 
 def _sample_now(
@@ -1449,6 +1484,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     lock_path = args.rig_lock_path or default_rig_session_lock_path()
     release_path = args.rig_release_path or (lock_path.parent / "rig-session.release")
 
+    if args.json_path is not None:
+        try:
+            args.json_path = _resolve_report_path(
+                args.json_path, approved_roots=(lock_path.parent, Path.cwd())
+            )
+        except ValueError as exc:
+            _log(f"launch aborted: {exc}")
+            return 2
+
     def release_requested() -> bool:
         return release_path.exists()
 
@@ -1617,8 +1661,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         except _ContentManagerRestartTimeout as exc:
             _log(f"restart aborted: {exc}")
             return 1
+        report_written = True
         if args.json_path is not None:
-            _write_report_json(report, args.json_path)
+            report_written = _write_report_json(report, args.json_path)
         if trials_mode:
             # #627 §9.2 — the deliverable of a measurement run is the recorded denominator, not a
             # held session. Say every verdict out loud, leave the rig CLEAN (a stable final trial
@@ -1634,6 +1679,12 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 f"({report._counts()}); hard kills between trials — see #627 §6.5"
             )
             _make_rig_safe(acs_present, release_requested=release_requested)
+            if not report_written:
+                # In measurement mode the machine-readable record IS the deliverable. An
+                # automated run must not read as successful when the requested record was never
+                # produced (#646 review P1) — the per-trial log lines above remain as salvage.
+                _log("TRIALS FAILED: the requested report JSON could not be written")
+                return 1
             return 0
         _log(report.summary())
         if not report.succeeded:
