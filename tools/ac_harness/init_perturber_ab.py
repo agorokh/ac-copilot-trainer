@@ -329,15 +329,9 @@ def load_observations(
             "uptime_h must be nondecreasing across the run "
             "(a mid-experiment reboot confounds the freeze endpoint)"
         )
-    # Second-resolution stamps may collide on fast never_live failures; require strictly
-    # increasing uptime only for the adjacent pairs that share a stamp.
-    for earlier_stamp, later_stamp, earlier_up, later_up in zip(
-        stamps, stamps[1:], uptimes, uptimes[1:], strict=False
-    ):
-        if earlier_stamp == later_stamp and later_up <= earlier_up:
-            raise ValueError(
-                "duplicate adjacent report timestamps require strictly increasing uptime_h"
-            )
+    # Planned trial order + nondecreasing uptime already prove sequence/reboot safety.
+    # Equal second-resolution stamps (and equal rounded uptime_h) are allowed for fast
+    # adjacent never_live failures — distinct report files establish identity.
     return tuple(observations)
 
 

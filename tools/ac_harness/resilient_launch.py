@@ -1720,9 +1720,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             report_written = _write_report_json(report, args.json_path)
             if not report_written and not trials_mode:
                 # Exclusive create refused an existing path — do not exit 0 over stale evidence.
+                # Always tear down before returning: a STABLE session must not outlive the rig lock
+                # (#657 Qodo / daemon — peer harnesses must never inherit a live unowned acs.exe).
                 _log("launch aborted: the requested report JSON could not be written")
-                if not report.succeeded:
-                    _make_rig_safe(acs_present, release_requested=release_requested)
+                _make_rig_safe(acs_present, release_requested=release_requested)
                 return 1
         if trials_mode:
             # #627 §9.2 — the deliverable of a measurement run is the recorded denominator, not a

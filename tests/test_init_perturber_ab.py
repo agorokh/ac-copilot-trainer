@@ -318,22 +318,22 @@ def test_undersized_significant_run_stays_insufficient_sample() -> None:
     assert result["conclusion"] == "insufficient_sample"
 
 
-def test_duplicate_timestamps_accepted_when_uptime_strictly_increases(
+def test_duplicate_timestamps_accepted_with_equal_rounded_uptime(
     tmp_path: Path,
 ) -> None:
     plan = build_plan(1, allow_undersized=True)
     stamp = "2026-07-22T12:00:00Z"
     _write_report(
         tmp_path / plan["trials"][0]["report"],
-        verdict="stable",
+        verdict="never_live",
         started_at_utc=stamp,
         uptime_h=1.0,
     )
     _write_report(
         tmp_path / plan["trials"][1]["report"],
-        verdict="froze",
+        verdict="never_live",
         started_at_utc=stamp,
-        uptime_h=1.1,
+        uptime_h=1.0,
     )
     observations = load_observations(plan, tmp_path)
     assert len(observations) == 2
