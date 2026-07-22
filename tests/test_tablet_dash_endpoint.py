@@ -119,6 +119,18 @@ def test_dash_page_is_offline_kiosk_and_a133_safe() -> None:
         assert (_TABLET_DASH_FONTS_DIR / name).is_file(), f"vendored font missing: {name}"
 
 
+def test_session_review_replay_is_scoped_by_shared_session_uuid() -> None:
+    """#622: the actual shipped page must compare a replayed review's UUID with the live
+    lifecycle UUID, while retaining the additive "both known" compatibility rule."""
+    body = _TABLET_DASH_PAGE_PATH.read_text(encoding="utf-8")
+    assert "function identCompatible(carId, trackId, sessionUuid)" in body
+    assert "sessionUuid && S.sessionUuid" in body
+    assert "String(sessionUuid) !== String(S.sessionUuid)" in body
+    assert "identCompatible(p.car_id, p.track_id, p.session_uuid)" in body
+    assert "S.sessionUuid = p.session_uuid || null" in body
+    assert '+ "|" + String(p.session_uuid || "")' in body
+
+
 def test_dash_part_d_vitals_are_bound_end_to_end() -> None:
     """#531 Part D anti-dead-wiring guard.
 

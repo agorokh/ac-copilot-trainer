@@ -729,6 +729,32 @@ def test_wire_voice_builds_track_map_frame(tmp_path, monkeypatch):
     assert frame["payload"]["corners"][0]["label"] == "T1"
 
 
+def test_runtime_rewire_broadcasts_fresh_track_map(tmp_path, monkeypatch):
+    """#622 advisory: if voice/reference wiring moves in-process at runtime, connected
+    subscribers receive the rebuilt map instead of waiting for another subscribe."""
+    sent = _capture_broadcast(monkeypatch)
+    monkeypatch.setattr(server, "_observer", None)
+    monkeypatch.setattr(server, "_track_map_frame", None)
+    server._background_tasks.clear()
+    ref = tmp_path / "ref.json"
+    ref.write_text(json.dumps(_corner_archive()), encoding="utf-8")
+
+    async def _rewire():
+        monkeypatch.setattr(server, "_event_loop", asyncio.get_running_loop())
+        server._wire_voice(server.VoiceRuntimeConfig(reference_path=str(ref), bank_dir=None))
+        await asyncio.sleep(0)
+        pending = list(server._background_tasks)
+        if pending:
+            await asyncio.gather(*pending)
+
+    asyncio.run(_rewire())
+    assert len(sent) == 1
+    frame, exclude = sent[0]
+    assert exclude is None
+    assert frame["topic"] == "track.map"
+    assert frame == server._track_map_frame
+
+
 def test_rewire_without_geometry_clears_stale_track_map(tmp_path, monkeypatch):
     """A re-wire whose reference cannot supply geometry must not leave the previous
     track's map for late subscribers (Codex on PR #618)."""

@@ -110,6 +110,44 @@ def test_session_published_once_then_suppressed_until_change():
     assert out["sess"] == 0
 
 
+def test_session_uuid_is_published_and_part_of_change_identity():
+    """#622: a rolling same-car/track/index stint gets a new journal UUID and must emit a
+    distinguishable lifecycle frame even if reset/rearm ordering changes later."""
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("lifecycle_publisher"); M.reset()
+          local ws = make_ws()
+          local base = { sim = { currentSessionIndex = 0 }, sessionUuid = "stint-a", wsBridge = ws }
+          local r1 = M.publishSessionIfChanged(base)
+          local r2 = M.publishSessionIfChanged(base)
+          local r3 = M.publishSessionIfChanged({
+            sim = { currentSessionIndex = 0 }, sessionUuid = "stint-b", wsBridge = ws,
+          })
+          return { r1 = r1, r2 = r2, r3 = r3, n = #ws._calls,
+                   uuid1 = ws._calls[1].payload.session_uuid,
+                   uuid2 = ws._calls[2].payload.session_uuid }
+        end)()
+        """
+    )
+    assert out["r1"] is True
+    assert out["r2"] is False
+    assert out["r3"] is True
+    assert out["n"] == 2
+    assert out["uuid1"] == "stint-a"
+    assert out["uuid2"] == "stint-b"
+
+
+def test_entry_script_passes_active_session_uuid_to_lifecycle_frame():
+    source = (REPO / "src" / "ac_copilot_trainer" / "ac_copilot_trainer.lua").read_text(
+        encoding="utf-8"
+    )
+    call = source[source.index("lifecyclePublisher.publishSessionIfChanged") :]
+    call = call[: call.index("})") + 2]
+    assert "sessionUuid = SESSION_UUID" in call
+
+
 def test_session_retries_after_ws_recovers():
     # Regression: a session change while the WS is down must NOT mark the key as
     # sent, so the initial `session` frame is re-published once the WS comes up.

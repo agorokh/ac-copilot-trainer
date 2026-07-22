@@ -25,7 +25,7 @@ local TOPIC_SESSION = "session"
 local TOPIC_LAP = "lap"
 
 -- Module-level rate-limiter / change-detector state.
--- `session` is a pure CHANGE event: published when track/car/session-index changes, and
+-- `session` is a pure CHANGE event: published when track/car/session-index/session UUID changes, and
 -- re-armed by M.rearmSession() (WS reconnect) / M.reset() (stint reset). It is deliberately
 -- NOT coupled to the connection heartbeat — doing so spawned reconnect edge cases (duplicate
 -- on reset; ~1s re-emit delay). Reconnect re-arm is driven per-frame by the entry script via
@@ -135,7 +135,7 @@ end
 
 
 --- Publish `session` only when track/car/session-index changes since the last call.
----@param opts table  {car?, sim?, wsBridge}
+---@param opts table  {car?, sim?, sessionUuid?, wsBridge}
 ---@return boolean  true if a frame was actually published this call
 function M.publishSessionIfChanged(opts)
   if type(opts) ~= "table" then
@@ -148,7 +148,9 @@ function M.publishSessionIfChanged(opts)
   local trackId = _trackId()
   local carId = _carId(opts.car)
   local sessIdx = _sessionIndex(opts.sim)
+  local sessionUuid = opts.sessionUuid
   local key = tostring(trackId) .. "|" .. tostring(carId) .. "|" .. tostring(sessIdx)
+      .. "|" .. tostring(sessionUuid)
   if key == _lastSessionKey then
     return false
   end
@@ -160,6 +162,7 @@ function M.publishSessionIfChanged(opts)
     track_id = trackId,
     car_id = carId,
     session_index = sessIdx,
+    session_uuid = sessionUuid,
   }) == true
   if ok then
     _lastSessionKey = key

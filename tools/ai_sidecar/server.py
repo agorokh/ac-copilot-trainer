@@ -1334,6 +1334,29 @@ async def _broadcast_external(frame: dict[str, Any], *, exclude: Any) -> None:
     await _broadcast_targets(frame, targets=targets)
 
 
+def _schedule_external_broadcast(frame: dict[str, Any], *, label: str) -> bool:
+    """Schedule a sync producer's frame on the active server loop, if one exists.
+
+    ``_wire_voice`` normally runs before ``_run`` creates the loop, but keeping this bridge
+    makes a future runtime re-wire immediately visible to already-connected subscribers.
+    """
+    loop = _event_loop
+    if loop is None or loop.is_closed():
+        return False
+
+    def _schedule() -> None:
+        task = asyncio.ensure_future(_broadcast_external(frame, exclude=None))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+
+    try:
+        loop.call_soon_threadsafe(_schedule)
+    except RuntimeError:
+        logger.debug("%s broadcast skipped (event loop closed)", label)
+        return False
+    return True
+
+
 def _release_observer_feed(websocket: Any) -> None:
     """Release the observer feed + reset stream state when the owning producer disconnects.
 
@@ -2768,6 +2791,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                 map_payload = build_track_map(archive)
                 if map_payload is not None:
                     _track_map_frame = make_track_map(map_payload)
+                    _schedule_external_broadcast(_track_map_frame, label="track.map re-wire")
                     logger.info(
                         "track.map built from reference: %d outline points, %d corners",
                         len(map_payload.get("outline") or []),

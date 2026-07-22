@@ -331,8 +331,9 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     coach: null, coachAt: 0,        // coaching.snapshot payload
     setupName: null,                // setup.active .name
     carName: null, trackName: null, // setup.list.result identity
-    sessionIdent: null,             // "car|track|session" key (re-request setup data on change)
-    sessionCarId: null, sessionTrackId: null, // identity parts for replay-frame gating (#618 R3)
+    sessionIdent: null,             // "car|track|session|uuid" key (re-request setup data on change)
+    sessionCarId: null, sessionTrackId: null, sessionUuid: null,
+                                      // identity parts for replay-frame gating (#618 R3, #622)
     spinners: null,                 // setup.spinner.list.result .spinners
     fuelAtLap: null, burns: [],     // client-side fuel-per-lap (median of last 3 lap diffs)
     lastCue: null, cueAt: 0,        // latest coaching.cue payload + receive time (tier-2 micro)
@@ -745,7 +746,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
   // Identity gate for replayed sidecar frames (#618 R3): reject only a KNOWN mismatch —
   // when either side lacks an id, accept (a fresh tablet with no session yet must still
   // render the replayed map/review, and single-identity rigs are the common case).
-  function identCompatible(carId, trackId) {
+  function identCompatible(carId, trackId, sessionUuid) {
     if (carId && S.sessionCarId && String(carId) !== String(S.sessionCarId)) return false;
     // Track gate (#618 R4+R6): when BOTH ids are layout-qualified, compare in full — two
     // layouts of one venue have different geometry. Base-segment comparison applies only
@@ -755,6 +756,10 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       var qualified = a.indexOf("/") >= 0 && b.indexOf("/") >= 0;
       if (qualified ? a !== b : a.split("/")[0] !== b.split("/")[0]) return false;
     }
+    // UUID is additive/backward-compatible: only reject when BOTH producers carry one.
+    // This closes a reconnect replay from the prior same-car/track/session-index stint (#622).
+    if (sessionUuid && S.sessionUuid
+        && String(sessionUuid) !== String(S.sessionUuid)) return false;
     return true;
   }
   function resetMapDom() {
@@ -1178,11 +1183,11 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
           case "session.review":
             // Late-subscriber replay can deliver a PREVIOUS identity's cached review after
             // the session snapshot (#618 R3) — accept only when identity-compatible.
-            S.review = identCompatible(p.car_id, p.track_id) ? p : null;
+            S.review = identCompatible(p.car_id, p.track_id, p.session_uuid) ? p : null;
             reviewDirty = true;
             break;
           case "track.map":
-            if (identCompatible(p.car_id, p.track_id)) {
+            if (identCompatible(p.car_id, p.track_id, p.session_uuid)) {
               S.map = p; mapDirty = true;
             } else {
               // Full DOM reset on rejection (#618 R5): a dirty-flag alone leaves the
@@ -1199,7 +1204,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
             // Full identity key: a new track or session with the SAME car must also
             // re-request setup data (Codex P2 on PR #547), not just a car swap.
             var ident = String(p.car_id || "") + "|" + String(p.track_id || "")
-              + "|" + String(p.session_index === undefined ? "" : p.session_index);
+              + "|" + String(p.session_index === undefined ? "" : p.session_index)
+              + "|" + String(p.session_uuid || "");
             // Car/track delta computed BEFORE the identity parts update: a session_index-only
             // transition (practice→quali) must not drop the map (#618 R5 — track.map is only
             // replayed on subscribe and would stay blank for the rest of the connection).
@@ -1211,12 +1217,14 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               || String(S.sessionTrackId || "") !== String(p.track_id || ""));
             S.sessionCarId = p.car_id || null;
             S.sessionTrackId = p.track_id || null;
+            S.sessionUuid = p.session_uuid || null;
             // Replayed cached frames may have arrived BEFORE this session snapshot — drop
             // any that a known identity now contradicts (#618 R3).
-            if (S.review && !identCompatible(S.review.car_id, S.review.track_id)) {
+            if (S.review && !identCompatible(
+                S.review.car_id, S.review.track_id, S.review.session_uuid)) {
               S.review = null; reviewDirty = true;
             }
-            if (S.map && !identCompatible(S.map.car_id, S.map.track_id)) {
+            if (S.map && !identCompatible(S.map.car_id, S.map.track_id, S.map.session_uuid)) {
               S.map = null; resetMapDom();
             }
             if (ident !== S.sessionIdent) {
