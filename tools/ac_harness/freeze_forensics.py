@@ -532,10 +532,10 @@ def s3_gate(s3: S3Result) -> tuple[str, str] | None:
     if not s3.acs_alive_throughout:
         return (
             "capture_failed_liveness_gap",
-            "the target pid was not alive at every observation — the retained readings straddle "
-            "a process exit/restart, so the packet comparison may mix process generations and "
-            "fabricate (or mask) the wedge signature. Re-run against a continuously-live pid. "
-            "No verdict.",
+            "the target pid was not alive-and-sole-acs at every observation — the retained "
+            "readings straddle a process exit/restart or a second acs.exe appearing, so the "
+            "packet comparison may mix process generations (or writers) and fabricate (or mask) "
+            "the wedge signature. Re-run against a continuously-live, sole acs.exe. No verdict.",
         )
     return None
 
@@ -660,23 +660,32 @@ def _pid_alive(pid: int) -> bool:  # pragma: no cover - rig-only
 
 
 def _read_s3_once(pid: int) -> tuple[int | None, int | None, bool]:  # pragma: no cover - rig-only
-    """One correlated ``(gfx_packet, phys_packet, target_alive)`` observation.
+    """One correlated ``(gfx_packet, phys_packet, target_attributable)`` observation.
 
-    Liveness of the TARGET PID (not the image name — #647 review P1) is read immediately BEFORE
-    **and re-checked AFTER** the shared-memory reads (#647 review round 2): the target can exit
-    between the pre-check and the reads, in which case the persistent ``acpmf_*`` corpse would be
-    returned as a live-correlated observation. A reading only counts as alive when the target was
-    alive on both sides of it, so the §7.1 corpse guard in :func:`evaluate_s3` can trust the flag.
+    The flag is True only when the reading can be ATTRIBUTED to the target generation:
+
+    * target-pid liveness (not the image name — #647 review P1) read immediately BEFORE **and
+      re-checked AFTER** the shared-memory reads (round 2): the target can exit between the
+      pre-check and the reads, in which case the persistent ``acpmf_*`` corpse would be returned
+      as a live-correlated observation;
+    * the target is the SOLE ``acs.exe`` at both checks (round 5): the preflight uniqueness
+      guard runs once, but a second acs.exe starting mid-capture would take over the global
+      sections while the original pid stays alive — S3 would then describe the newcomer while
+      S1/S2 describe the target. A non-sole sample is discarded by the §7.1 guard in
+      :func:`evaluate_s3` exactly like a dead-correlated one.
     """
     from tools.ac_harness.shared_memory import SharedMemoryReader, SharedMemoryUnavailable
 
-    alive_before = _pid_alive(pid)
+    def attributable() -> bool:
+        return _pid_alive(pid) and _acs_pids() == frozenset({pid})
+
+    ok_before = attributable()
     gfx: int | None = None
     phys: int | None = None
     try:
         reader = SharedMemoryReader(with_physics=True)
     except (SharedMemoryUnavailable, OSError):
-        return None, None, alive_before and _pid_alive(pid)
+        return None, None, ok_before and attributable()
     try:
         graphics = reader.read_graphics()
         physics = reader.read_physics()
@@ -686,7 +695,7 @@ def _read_s3_once(pid: int) -> tuple[int | None, int | None, bool]:  # pragma: n
         pass
     finally:
         reader.close()
-    return gfx, phys, alive_before and _pid_alive(pid)
+    return gfx, phys, ok_before and attributable()
 
 
 def _acs_pids() -> frozenset[int]:  # pragma: no cover - rig-only
