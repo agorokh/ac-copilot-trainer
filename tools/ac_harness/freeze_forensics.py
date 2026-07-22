@@ -34,10 +34,14 @@ mistakes made in practice:
 
 from __future__ import annotations
 
+import argparse
 import ctypes
 import glob
+import json
+import os
 import re
 import subprocess
+import sys
 import time
 from collections.abc import Sequence
 from ctypes import wintypes
@@ -194,14 +198,25 @@ def selected_tid_confirmed(raw: str, tid: int) -> bool:
 def find_cdb() -> Path | None:  # pragma: no cover - rig-only
     """Locate ``cdb.exe`` without pinning a WinDbg version (a store update breaks a pinned path).
 
-    The Windows Kits debugger is preferred: the Store-packaged cdb under ``WindowsApps`` commonly
-    fails ``CreateProcess`` for a normal operator (package ACLs), so preferring it would leave RIP
-    sampling broken on machines that also have a working Kits install.
+    Preference order (#630 Part G — the middle rung is what the rig actually has):
+
+    1. The Windows Kits debugger — a plain executable with no package ACLs.
+    2. The Store WinDbg's **app-execution alias** (``%LOCALAPPDATA%\\Microsoft\\WindowsApps\\
+       cdbX64.exe``) — Windows creates it precisely so normal processes can launch the packaged
+       binary. On this rig the SDK is installed WITHOUT the Debuggers feature and the package
+       directory is ACL-opaque, so the alias is the only working entry point; the Part G
+       self-test read 0 confirmed RIPs before this rung existed.
+    3. The raw ``WindowsApps`` package glob — last because ``CreateProcess`` on it commonly fails
+       package ACLs for a normal operator.
     """
-    for pattern in (
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    candidates: list[str] = [
         r"C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe",
-        r"C:\Program Files\WindowsApps\Microsoft.WinDbg_*\amd64\cdb.exe",
-    ):
+    ]
+    if local_appdata:
+        candidates.append(str(Path(local_appdata) / "Microsoft" / "WindowsApps" / "cdbX64.exe"))
+    candidates.append(r"C:\Program Files\WindowsApps\Microsoft.WinDbg_*\amd64\cdb.exe")
+    for pattern in candidates:
         hits = sorted(glob.glob(pattern))
         if hits:
             return Path(hits[-1])
@@ -411,3 +426,374 @@ def cdb_snapshot(
         if grabbing and len(stack_lines) > 30:
             break
     return RipSample(time.time(), parse_rip(raw), "\n".join(stack_lines), raw)
+
+
+# --------------------------------------------------------------------------------------
+# Part G (#630) — the runnable capture driver: S1 → TID selection → S2 → S3 → verdict.
+# The evidence path used to live only in a bespoke .scratch harness, so during a real
+# freeze the operator had to rebuild it from the module docstring. The decision helpers
+# below are pure and unit-tested off-rig; ``main`` is the rig-only assembly.
+# --------------------------------------------------------------------------------------
+
+#: substrings that identify a RENDER-side stack. The #627 §2 signature keeps physics ADVANCING,
+#: so a legitimately busy physics worker can outrank a wedged (or blocked) renderer on cycles
+#: alone — S2 must target a render-stack thread when one is visible among the hot candidates.
+RENDER_STACK_HINTS: tuple[str, ...] = (
+    "accrenderingadv",  # CSP's renderer (OriginalFilename accRenderingAdv.dll)
+    "dwrite",  # the same module's on-disk alias in the game folder (#627 §3.5 caveat)
+    "d3d11",
+    "dxgi",
+    "nvwgf2um",  # NVIDIA D3D UMD
+)
+
+
+def select_capture_tid(candidates: Sequence[tuple[int, str]]) -> tuple[int, str]:
+    """Pick the S2 target from ``(tid, stack_text)`` candidates ordered hottest-first.
+
+    Prefers the hottest thread whose sampled stack shows the render path
+    (:data:`RENDER_STACK_HINTS`) over the merely hottest thread — the residual explicitly
+    flagged in :func:`classify_forensics`'s LIVELOCK reading. Falls back to the hottest
+    candidate when no stack matches (an unconfirmed cdb transcript has an empty stack and
+    simply never matches). Returns the tid plus a human-readable selection reason that the
+    capture record carries, so a later reader can audit *why* this thread was diagnosed.
+    """
+    if not candidates:
+        raise ValueError("candidates must not be empty")
+    for tid, stack in candidates:
+        lowered = stack.lower()
+        matched = [hint for hint in RENDER_STACK_HINTS if hint in lowered]
+        if matched:
+            return tid, f"render-stack hint(s) {matched} in sampled stack"
+    return candidates[0][0], "hottest thread (no render-stack hint in any sampled candidate stack)"
+
+
+@dataclass(frozen=True)
+class S3Result:
+    """The #627 §2 discriminator evaluated over a capture's shared-memory observations."""
+
+    gfx_static: bool
+    phys_advancing: bool
+    acs_alive_throughout: bool
+    gfx_readings: tuple[int, ...]
+    phys_readings: tuple[int, ...]
+
+    @property
+    def sufficient(self) -> bool:
+        """Whether the discriminator can be claimed at all (two comparable readings per stream)."""
+        return len(self.gfx_readings) >= 2 and len(self.phys_readings) >= 2
+
+
+def evaluate_s3(samples: Sequence[tuple[int | None, int | None, bool]]) -> S3Result:
+    """Evaluate ``(gfx_packet, phys_packet, acs_alive)`` observations. Pure — no I/O.
+
+    Trap §7.1 corpse guard: a reading taken while ``acs.exe`` is NOT alive is **discarded**, not
+    compared — ``acpmf_*`` sections outlive their creator, so a dead sim's pinned packet would
+    read exactly like a wedge. ``gfx_static`` requires every retained graphics reading identical;
+    any advance (or a regression = replaced session) means the session moved and the wedge claim
+    dies. ``phys_advancing`` is strictly monotonic growth from first to last retained reading.
+    """
+    gfx: list[int] = []
+    phys: list[int] = []
+    alive_flags: list[bool] = []
+    for gfx_packet, phys_packet, acs_alive in samples:
+        alive_flags.append(acs_alive)
+        if not acs_alive:
+            continue
+        if gfx_packet is not None:
+            gfx.append(gfx_packet)
+        if phys_packet is not None:
+            phys.append(phys_packet)
+    return S3Result(
+        gfx_static=len(gfx) >= 2 and len(set(gfx)) == 1,
+        phys_advancing=len(phys) >= 2 and phys[-1] > phys[0],
+        acs_alive_throughout=bool(alive_flags) and all(alive_flags),
+        gfx_readings=tuple(gfx),
+        phys_readings=tuple(phys),
+    )
+
+
+def build_capture_record(
+    *,
+    pid: int,
+    tid: int | None,
+    tid_reason: str,
+    cycles_rows: Sequence[dict],
+    candidate_stacks: Sequence[tuple[int, str]],
+    rips: Sequence[int],
+    s3: S3Result,
+    verdict: str,
+    rationale: str,
+    started_at_utc: str,
+    elapsed_s: float,
+) -> dict:
+    """Assemble the machine-readable capture record (#627 §9.2 sibling for forensics runs).
+
+    Everything a later reader needs to re-derive — or dispute — the verdict rides in the record:
+    the raw signals, the thread-selection reason, and the RIP set itself (hex, so it can be diffed
+    against a disassembly without re-parsing decimal).
+    """
+    return {
+        "schema": "freeze-forensics-capture/v1",
+        "started_at_utc": started_at_utc,
+        "elapsed_s": round(elapsed_s, 3),
+        "pid": pid,
+        "selected_tid": tid,
+        "tid_selection_reason": tid_reason,
+        "cycles_top": [
+            {"tid": row["tid"], "cycles_per_s": round(row["cycles_per_s"], 1)}
+            for row in list(cycles_rows)[:10]
+        ],
+        "candidate_stack_heads": [
+            {"tid": candidate_tid, "stack_head": stack.splitlines()[:6]}
+            for candidate_tid, stack in candidate_stacks
+        ],
+        "rips_hex": [hex(rip) for rip in rips],
+        "rip_span_bytes": rip_span(list(rips)),
+        "s3": {
+            "gfx_static": s3.gfx_static,
+            "phys_advancing": s3.phys_advancing,
+            "acs_alive_throughout": s3.acs_alive_throughout,
+            "gfx_readings": list(s3.gfx_readings),
+            "phys_readings": list(s3.phys_readings),
+            "sufficient": s3.sufficient,
+        },
+        "verdict": verdict,
+        "rationale": rationale,
+    }
+
+
+def _read_s3_once() -> tuple[int | None, int | None, bool]:  # pragma: no cover - rig-only
+    """One correlated ``(gfx_packet, phys_packet, acs_alive)`` observation.
+
+    Liveness is read immediately before the shared-memory read so the §7.1 corpse guard in
+    :func:`evaluate_s3` can discard readings that were not correlated with a live ``acs.exe``.
+    """
+    from tools.ac_harness.entry_launcher import running_process_ids
+    from tools.ac_harness.shared_memory import SharedMemoryReader, SharedMemoryUnavailable
+
+    try:
+        alive = bool(running_process_ids("acs.exe", strict=True))
+    except OSError:
+        alive = False
+    try:
+        reader = SharedMemoryReader(with_physics=True)
+    except (SharedMemoryUnavailable, OSError):
+        return None, None, alive
+    try:
+        graphics = reader.read_graphics()
+        physics = reader.read_physics()
+        return graphics.packet_id, (physics.packet_id if physics else None), alive
+    except (SharedMemoryUnavailable, OSError):
+        return None, None, alive
+    finally:
+        reader.close()
+
+
+def _acs_pid() -> int | None:  # pragma: no cover - rig-only
+    from tools.ac_harness.entry_launcher import running_process_ids
+
+    try:
+        pids = running_process_ids("acs.exe", strict=True)
+    except OSError:
+        return None
+    return int(pids[0]) if pids else None
+
+
+def _self_test() -> int:  # pragma: no cover - rig-only
+    """Validate the instrument against a known ground-truth spinner before trusting it.
+
+    This is the check that caught the instrument reading **0 cycles/s on a deliberate spinner**
+    (the venv ``python.exe`` shim re-spawns the real interpreter as a child, so sampling the
+    ``Popen`` pid measured a parked launcher). The worker prints its OWN pid, which resolves the
+    shim trap by construction. S1 must see the spin; S2 passes when >=2 confirmed RIP reads land
+    (a Python bytecode loop does not guarantee a <4 KiB C-level window, so span is reported, not
+    asserted).
+    """
+    spinner = "import os\nprint(os.getpid(), flush=True)\nwhile True:\n    pass\n"
+    proc = subprocess.Popen([sys.executable, "-c", spinner], stdout=subprocess.PIPE, text=True)
+    try:
+        assert proc.stdout is not None
+        worker_pid = int(proc.stdout.readline().strip())
+        print(f"self-test: spinner worker pid {worker_pid} (Popen pid {proc.pid})")
+        rows = sample_cycles(worker_pid, 2.0)
+        if not rows or rows[0]["cycles_per_s"] < DEFAULT_BURNING_CYCLES_PER_S:
+            observed = rows[0]["cycles_per_s"] if rows else 0.0
+            print(
+                "SELF-TEST FAIL (S1): a deliberate spinner read "
+                f"{observed:.3g} cycles/s — the instrument would call a spin a block. "
+                "Do not trust a capture from this machine state."
+            )
+            return 1
+        hot = rows[0]
+        print(f"self-test: S1 OK — hottest tid {hot['tid']} at {hot['cycles_per_s']:.3g} cycles/s")
+        rips: list[int] = []
+        for _ in range(2):
+            snapshot = cdb_snapshot(worker_pid, tid=hot["tid"], timeout=60.0)
+            if snapshot.rip is not None:
+                rips.append(snapshot.rip)
+        span = rip_span(rips)
+        if span is None:
+            print(
+                "SELF-TEST FAIL (S2): fewer than 2 confirmed RIP reads "
+                f"({len(rips)}) — cdb missing or the thread-switch marker never confirmed. "
+                "S1 is validated; RIP sampling is NOT."
+            )
+            return 1
+        print(
+            f"self-test: S2 OK — {len(rips)} confirmed RIP reads, span {span} bytes (informational)"
+        )
+        print("SELF-TEST OK: S1 spin detection and S2 RIP plumbing validated against ground truth")
+        return 0
+    finally:
+        proc.kill()
+
+
+def _write_record(record: dict, path: Path) -> None:  # pragma: no cover - rig-only
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        print(f"record -> {path}")
+    except OSError as exc:
+        print(f"WARNING: could not write capture record {path}: {exc}")
+
+
+def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-only entrypoint
+    parser = argparse.ArgumentParser(
+        description=(
+            "Freeze forensics capture (#627 §6.1): decide whether a wedged acs.exe is spinning, "
+            "blocked, or still computing — S1 cycle sampling, S2 noninvasive RIP snapshots, "
+            "S3 packet discriminator with the §7.1 corpse guard."
+        )
+    )
+    parser.add_argument("--pid", type=int, default=None, help="target pid (default: find acs.exe)")
+    parser.add_argument(
+        "--cycles-window", type=float, default=5.0, help="S1 sampling window seconds (default 5)"
+    )
+    parser.add_argument(
+        "--rip-samples",
+        type=int,
+        default=3,
+        help="S2 snapshots of the selected thread (default 3)",
+    )
+    parser.add_argument(
+        "--rip-interval",
+        type=float,
+        default=10.0,
+        help="seconds between S2 snapshots (default 10; wandering needs time to show)",
+    )
+    parser.add_argument(
+        "--candidates",
+        type=int,
+        default=3,
+        help="hot threads whose stacks are inspected for render-path hints (default 3)",
+    )
+    parser.add_argument(
+        "--json",
+        type=Path,
+        default=None,
+        dest="json_path",
+        help="also write the machine-readable capture record to this path",
+    )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="validate S1/S2 against a deliberate spinner and exit (no acs.exe involved)",
+    )
+    args = parser.parse_args(argv)
+
+    if args.self_test:
+        return _self_test()
+
+    started_wall = time.time()
+    started = time.monotonic()
+    started_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started_wall))
+
+    pid = args.pid if args.pid is not None else _acs_pid()
+    if pid is None:
+        print("CAPTURE FAILED: no acs.exe process found (pass --pid to target another process)")
+        return 2
+
+    s3_samples: list[tuple[int | None, int | None, bool]] = [_read_s3_once()]
+    print(f"capture: pid {pid}; S1 cycle sampling over {args.cycles_window:.1f}s ...")
+    rows = sample_cycles(pid, args.cycles_window)
+    if not rows:
+        print("CAPTURE FAILED: no thread cycle data (process gone or access denied)")
+        return 2
+    s3_samples.append(_read_s3_once())
+
+    candidate_stacks: list[tuple[int, str]] = []
+    candidate_rips: dict[int, list[int]] = {}
+    for row in rows[: max(1, args.candidates)]:
+        snapshot = cdb_snapshot(pid, tid=row["tid"])
+        candidate_stacks.append((row["tid"], snapshot.stack))
+        if snapshot.rip is not None:
+            candidate_rips.setdefault(row["tid"], []).append(snapshot.rip)
+        s3_samples.append(_read_s3_once())
+    tid, tid_reason = select_capture_tid(candidate_stacks)
+    hot_cycles = next(row["cycles_per_s"] for row in rows if row["tid"] == tid)
+    print(f"capture: selected tid {tid} ({tid_reason}); {hot_cycles:.3g} cycles/s")
+
+    rips: list[int] = list(candidate_rips.get(tid, []))
+    for index in range(max(0, args.rip_samples)):
+        if index or rips:
+            time.sleep(max(0.0, args.rip_interval))
+        snapshot = cdb_snapshot(pid, tid=tid)
+        if snapshot.rip is not None:
+            rips.append(snapshot.rip)
+        else:
+            note = snapshot.raw if len(snapshot.raw) < 120 else snapshot.raw[:117] + "..."
+            print(f"capture: S2 snapshot {index + 1} unconfirmed/unreadable ({note})")
+        s3_samples.append(_read_s3_once())
+
+    s3 = evaluate_s3(s3_samples)
+    if not s3.sufficient:
+        record = build_capture_record(
+            pid=pid,
+            tid=tid,
+            tid_reason=tid_reason,
+            cycles_rows=rows,
+            candidate_stacks=candidate_stacks,
+            rips=rips,
+            s3=s3,
+            verdict="capture_failed_insufficient_s3",
+            rationale=(
+                "fewer than two live-correlated readings per shared-memory stream — the §2 "
+                "discriminator cannot be claimed (dead process, unreadable sections, or the "
+                "§7.1 corpse guard discarded every sample). No verdict."
+            ),
+            started_at_utc=started_utc,
+            elapsed_s=time.monotonic() - started,
+        )
+        print(json.dumps(record, indent=2))
+        if args.json_path is not None:
+            _write_record(record, args.json_path)
+        return 2
+
+    verdict, rationale = classify_forensics(
+        burning_cpu=hot_cycles >= DEFAULT_BURNING_CYCLES_PER_S,
+        gfx_static=s3.gfx_static,
+        phys_advancing=s3.phys_advancing,
+        rips=rips,
+    )
+    record = build_capture_record(
+        pid=pid,
+        tid=tid,
+        tid_reason=tid_reason,
+        cycles_rows=rows,
+        candidate_stacks=candidate_stacks,
+        rips=rips,
+        s3=s3,
+        verdict=str(verdict),
+        rationale=rationale,
+        started_at_utc=started_utc,
+        elapsed_s=time.monotonic() - started,
+    )
+    print(json.dumps(record, indent=2))
+    if args.json_path is not None:
+        _write_record(record, args.json_path)
+    print(f"VERDICT: {verdict} — {rationale}")
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())

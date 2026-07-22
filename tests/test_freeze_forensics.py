@@ -238,3 +238,138 @@ def test_cdb_snapshot_thaws_target_after_timeout(monkeypatch) -> None:
     # Second call is the thaw: noninvasive attach + immediate detach.
     # Use str(Path) so the expected path matches production on Windows and POSIX.
     assert calls[1] == [str(cdb), "-pv", "-p", "1234", "-c", "qd"]
+
+
+# --------------------------------------------------------------------------------------
+# Part G — capture-driver decision helpers (pure; the assembly in main() is rig-only).
+# --------------------------------------------------------------------------------------
+
+
+def test_render_stack_candidate_beats_a_hotter_physics_thread() -> None:
+    """#630 Part G — a busy physics worker outranking a wedged renderer on cycles must lose."""
+    from tools.ac_harness.freeze_forensics import select_capture_tid
+
+    physics_stack = "00 ntdll!NtWaitForSingleObject\n01 acs!physicsWorker"
+    render_stack = "00 dwrite!hashLoop\n01 accRenderingAdv+0x1391c02"
+    tid, reason = select_capture_tid([(111, physics_stack), (222, render_stack)])
+    assert tid == 222
+    assert "render-stack hint" in reason
+
+
+def test_hottest_thread_is_the_fallback_when_no_stack_matches() -> None:
+    from tools.ac_harness.freeze_forensics import select_capture_tid
+
+    tid, reason = select_capture_tid([(111, "00 acs!physics"), (222, "00 ntdll!wait")])
+    assert tid == 111
+    assert "hottest thread" in reason
+
+
+def test_unconfirmed_candidate_stacks_never_match() -> None:
+    """An unconfirmed cdb transcript yields an empty stack — it must simply not match."""
+    from tools.ac_harness.freeze_forensics import select_capture_tid
+
+    tid, reason = select_capture_tid([(111, ""), (222, "")])
+    assert tid == 111
+    assert "hottest" in reason
+
+
+def test_select_capture_tid_rejects_empty_candidates() -> None:
+    import pytest
+
+    from tools.ac_harness.freeze_forensics import select_capture_tid
+
+    with pytest.raises(ValueError, match="candidates"):
+        select_capture_tid([])
+
+
+def test_s3_corpse_readings_are_discarded_not_compared() -> None:
+    """Trap §7.1 — a dead sim's pinned packet must not manufacture the wedge signature."""
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    # Every reading taken while acs is dead: the corpse holds gfx pinned and phys pinned.
+    result = evaluate_s3([(16_983, 121, False), (16_983, 121, False), (16_983, 121, False)])
+    assert result.gfx_readings == ()
+    assert result.phys_readings == ()
+    assert result.sufficient is False
+    assert result.gfx_static is False
+    assert result.acs_alive_throughout is False
+
+
+def test_s3_wedge_signature_from_live_readings() -> None:
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3([(23, 100, True), (23, 400, True), (23, 800, True)])
+    assert result.gfx_static is True
+    assert result.phys_advancing is True
+    assert result.acs_alive_throughout is True
+    assert result.sufficient is True
+
+
+def test_s3_recovered_session_is_not_static() -> None:
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3([(23, 100, True), (23, 400, True), (4233, 800, True)])
+    assert result.gfx_static is False  # the packet ADVANCED — the session recovered
+
+
+def test_s3_mixed_dead_and_live_readings_keep_only_live_ones() -> None:
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3(
+        [
+            (16_983, 9_999, False),  # corpse — discarded
+            (17, 100, True),
+            (17, 400, True),
+        ]
+    )
+    assert result.gfx_readings == (17, 17)
+    assert result.phys_readings == (100, 400)
+    assert result.gfx_static is True
+    assert result.phys_advancing is True
+    assert result.acs_alive_throughout is False  # honesty: the process was not alive throughout
+
+
+def test_s3_single_live_reading_is_insufficient() -> None:
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3([(23, 100, True)])
+    assert result.sufficient is False
+    assert result.gfx_static is False
+    assert result.phys_advancing is False
+
+
+def test_s3_unreadable_streams_are_not_observations() -> None:
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3([(None, None, True), (None, None, True)])
+    assert result.sufficient is False
+
+
+def test_capture_record_is_json_serializable_and_auditable() -> None:
+    import json
+
+    from tools.ac_harness.freeze_forensics import build_capture_record, evaluate_s3
+
+    s3 = evaluate_s3([(23, 100, True), (23, 400, True)])
+    record = build_capture_record(
+        pid=1234,
+        tid=222,
+        tid_reason="render-stack hint(s) ['dwrite'] in sampled stack",
+        cycles_rows=[{"tid": 222, "cycles_per_s": 2.85e9}, {"tid": 111, "cycles_per_s": 1.0e9}],
+        candidate_stacks=[(222, "00 dwrite!loop\n01 acs!frame\nline3\nline4\nline5\nline6\nline7")],
+        rips=[0x7FF000001000, 0x7FF000001020],
+        s3=s3,
+        verdict="livelock_confirmed",
+        rationale="test rationale",
+        started_at_utc="2026-07-21T00:00:00Z",
+        elapsed_s=42.5,
+    )
+    payload = json.loads(json.dumps(record))
+    assert payload["schema"] == "freeze-forensics-capture/v1"
+    assert payload["selected_tid"] == 222
+    assert payload["rips_hex"] == ["0x7ff000001000", "0x7ff000001020"]
+    assert payload["rip_span_bytes"] == 0x20
+    assert payload["s3"]["gfx_static"] is True
+    assert payload["s3"]["sufficient"] is True
+    # Stack heads are capped so the record stays a record, not a transcript dump.
+    assert len(payload["candidate_stack_heads"][0]["stack_head"]) == 6
