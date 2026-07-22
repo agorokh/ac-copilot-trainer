@@ -38,6 +38,7 @@ import argparse
 import ctypes
 import glob
 import json
+import math
 import os
 import re
 import subprocess
@@ -193,6 +194,34 @@ def selected_tid_confirmed(raw: str, tid: int) -> bool:
     """True only when the cdb transcript's post-switch marker names the requested OS thread."""
     match = _TID_RE.search(raw)
     return match is not None and int(match.group(1), 16) == tid
+
+
+#: ``lm`` module-list header. The snapshot script runs ``r; k; lm; qd`` and the stack collector
+#: must STOP here: the module listing names every loaded module — ``d3d11``, ``dxgi``,
+#: ``nvwgf2um`` are loaded in ANY AC process — so letting it ride in the "stack" text would make
+#: the render-hint match true for every candidate thread and neuter the render-TID preference
+#: entirely (#647 review P1).
+_LM_HEADER_RE = re.compile(r"^\s*start\s+end\s+module name\s*$", re.IGNORECASE)
+
+
+def extract_stack(raw: str) -> str:
+    """The ``k`` call-stack frames from a cdb transcript — and ONLY those.
+
+    Collection starts at the ``k`` header (``#`` / ``Child-SP``), stops at the ``lm`` module-list
+    header, and caps at ~30 frames so the sample stays a stack, not a transcript.
+    """
+    stack_lines: list[str] = []
+    grabbing = False
+    for line in raw.splitlines():
+        if _LM_HEADER_RE.match(line):
+            break
+        if line.strip().startswith("#") or "Child-SP" in line:
+            grabbing = True
+        if grabbing and line.strip():
+            stack_lines.append(line.rstrip())
+        if grabbing and len(stack_lines) > 30:
+            break
+    return "\n".join(stack_lines)
 
 
 def find_cdb() -> Path | None:  # pragma: no cover - rig-only
@@ -416,16 +445,7 @@ def cdb_snapshot(
         return RipSample(time.time(), None, "", f"cdb failed to start: {exc}")
     if not selected_tid_confirmed(raw, tid):
         return RipSample(time.time(), None, "", raw)
-    stack_lines: list[str] = []
-    grabbing = False
-    for line in raw.splitlines():
-        if line.strip().startswith("#") or "Child-SP" in line:
-            grabbing = True
-        if grabbing and line.strip():
-            stack_lines.append(line.rstrip())
-        if grabbing and len(stack_lines) > 30:
-            break
-    return RipSample(time.time(), parse_rip(raw), "\n".join(stack_lines), raw)
+    return RipSample(time.time(), parse_rip(raw), extract_stack(raw), raw)
 
 
 # --------------------------------------------------------------------------------------
@@ -481,6 +501,36 @@ class S3Result:
     def sufficient(self) -> bool:
         """Whether the discriminator can be claimed at all (two comparable readings per stream)."""
         return len(self.gfx_readings) >= 2 and len(self.phys_readings) >= 2
+
+
+def s3_gate(s3: S3Result) -> tuple[str, str] | None:
+    """Why S3 forbids classification, as ``(verdict_token, rationale)`` — or ``None`` when it may.
+
+    Two distinct refusals (#647 review P1 — ``acs_alive_throughout`` must actually gate):
+
+    * **insufficient** — fewer than two live-correlated readings per stream: nothing to compare.
+    * **liveness gap** — enough readings, but the target pid was NOT alive across the whole
+      capture. The retained readings then straddle a process exit/restart, and ``gfx_static`` +
+      ``phys_advancing`` computed across two different process generations (or a corpse gap) can
+      fabricate the exact wedge signature this instrument exists to prove. Mixed-generation
+      evidence is corrupted evidence — no verdict.
+    """
+    if not s3.sufficient:
+        return (
+            "capture_failed_insufficient_s3",
+            "fewer than two live-correlated readings per shared-memory stream — the §2 "
+            "discriminator cannot be claimed (dead process, unreadable sections, or the "
+            "§7.1 corpse guard discarded every sample). No verdict.",
+        )
+    if not s3.acs_alive_throughout:
+        return (
+            "capture_failed_liveness_gap",
+            "the target pid was not alive at every observation — the retained readings straddle "
+            "a process exit/restart, so the packet comparison may mix process generations and "
+            "fabricate (or mask) the wedge signature. Re-run against a continuously-live pid. "
+            "No verdict.",
+        )
+    return None
 
 
 def evaluate_s3(samples: Sequence[tuple[int | None, int | None, bool]]) -> S3Result:
@@ -562,19 +612,45 @@ def build_capture_record(
     }
 
 
-def _read_s3_once() -> tuple[int | None, int | None, bool]:  # pragma: no cover - rig-only
-    """One correlated ``(gfx_packet, phys_packet, acs_alive)`` observation.
+#: ``GetExitCodeProcess`` sentinel for a process that has not exited.
+_STILL_ACTIVE = 259
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
-    Liveness is read immediately before the shared-memory read so the §7.1 corpse guard in
-    :func:`evaluate_s3` can discard readings that were not correlated with a live ``acs.exe``.
+
+def _pid_alive(pid: int) -> bool:  # pragma: no cover - rig-only
+    """Whether the SPECIFIC target process is alive.
+
+    An image-name check cannot bind evidence to one process generation (#647 review P1):
+    ``acs.exe`` restarting mid-capture yields a same-named process whose readings must not be
+    mixed with the wedged generation's. Open the pid itself and ask.
     """
-    from tools.ac_harness.entry_launcher import running_process_ids
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.OpenProcess.restype = wintypes.HANDLE
+    k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return False
+    try:
+        exit_code = wintypes.DWORD(0)
+        if not k.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return False
+        return exit_code.value == _STILL_ACTIVE
+    finally:
+        k.CloseHandle(handle)
+
+
+def _read_s3_once(pid: int) -> tuple[int | None, int | None, bool]:  # pragma: no cover - rig-only
+    """One correlated ``(gfx_packet, phys_packet, target_alive)`` observation.
+
+    Liveness of the TARGET PID (not the image name — #647 review P1) is read immediately before
+    the shared-memory read so the §7.1 corpse guard in :func:`evaluate_s3` can discard readings
+    that were not correlated with the live target generation.
+    """
     from tools.ac_harness.shared_memory import SharedMemoryReader, SharedMemoryUnavailable
 
-    try:
-        alive = bool(running_process_ids("acs.exe", strict=True))
-    except OSError:
-        alive = False
+    alive = _pid_alive(pid)
     try:
         reader = SharedMemoryReader(with_physics=True)
     except (SharedMemoryUnavailable, OSError):
@@ -648,6 +724,56 @@ def _self_test() -> int:  # pragma: no cover - rig-only
         proc.kill()
 
 
+def _resolve_record_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
+    """Resolve the ``--json`` destination and require it inside an approved output root.
+
+    #647 review: an absolute path or ``..`` traversal would let this rig tool create parent
+    directories and overwrite arbitrary writable locations. Approved roots are the per-user
+    Harness root (rig lock / presets) and the current working directory (the checkout's
+    gitignored ``.scratch`` capture artifacts).
+    """
+    resolved = raw.expanduser()
+    if not resolved.is_absolute():
+        resolved = Path.cwd() / resolved
+    resolved = resolved.resolve(strict=False)
+    for root in approved_roots:
+        anchored = root.resolve(strict=False)
+        if resolved == anchored or anchored in resolved.parents:
+            return resolved
+    raise ValueError(
+        f"--json destination {resolved} is outside every approved output root "
+        f"({', '.join(str(root) for root in approved_roots)})"
+    )
+
+
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be finite and > 0")
+    return parsed
+
+
+def _non_negative_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0:
+        raise argparse.ArgumentTypeError("must be finite and >= 0")
+    return parsed
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be > 0")
+    return parsed
+
+
+def _non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return parsed
+
+
 def _write_record(record: dict, path: Path) -> None:  # pragma: no cover - rig-only
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -665,25 +791,31 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             "S3 packet discriminator with the §7.1 corpse guard."
         )
     )
-    parser.add_argument("--pid", type=int, default=None, help="target pid (default: find acs.exe)")
     parser.add_argument(
-        "--cycles-window", type=float, default=5.0, help="S1 sampling window seconds (default 5)"
+        "--pid", type=_positive_int, default=None, help="target pid (default: find acs.exe)"
+    )
+    parser.add_argument(
+        "--cycles-window",
+        type=_positive_float,
+        default=5.0,
+        help="S1 sampling window seconds (default 5; must be > 0 — a near-zero window turns "
+        "incidental cycle increments into an arbitrary burning-CPU rate)",
     )
     parser.add_argument(
         "--rip-samples",
-        type=int,
+        type=_non_negative_int,
         default=3,
         help="S2 snapshots of the selected thread (default 3)",
     )
     parser.add_argument(
         "--rip-interval",
-        type=float,
+        type=_non_negative_float,
         default=10.0,
         help="seconds between S2 snapshots (default 10; wandering needs time to show)",
     )
     parser.add_argument(
         "--candidates",
-        type=int,
+        type=_positive_int,
         default=3,
         help="hot threads whose stacks are inspected for render-path hints (default 3)",
     )
@@ -704,6 +836,18 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     if args.self_test:
         return _self_test()
 
+    if args.json_path is not None:
+        from tools.ac_harness.rig_lock import default_rig_session_lock_path
+
+        try:
+            args.json_path = _resolve_record_path(
+                args.json_path,
+                approved_roots=(default_rig_session_lock_path().parent, Path.cwd()),
+            )
+        except ValueError as exc:
+            print(f"CAPTURE ABORTED: {exc}")
+            return 2
+
     started_wall = time.time()
     started = time.monotonic()
     started_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started_wall))
@@ -713,40 +857,42 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         print("CAPTURE FAILED: no acs.exe process found (pass --pid to target another process)")
         return 2
 
-    s3_samples: list[tuple[int | None, int | None, bool]] = [_read_s3_once()]
+    s3_samples: list[tuple[int | None, int | None, bool]] = [_read_s3_once(pid)]
     print(f"capture: pid {pid}; S1 cycle sampling over {args.cycles_window:.1f}s ...")
     rows = sample_cycles(pid, args.cycles_window)
     if not rows:
         print("CAPTURE FAILED: no thread cycle data (process gone or access denied)")
         return 2
-    s3_samples.append(_read_s3_once())
+    s3_samples.append(_read_s3_once(pid))
 
     candidate_stacks: list[tuple[int, str]] = []
     candidate_rips: dict[int, list[int]] = {}
-    for row in rows[: max(1, args.candidates)]:
+    for row in rows[: args.candidates]:
         snapshot = cdb_snapshot(pid, tid=row["tid"])
         candidate_stacks.append((row["tid"], snapshot.stack))
         if snapshot.rip is not None:
             candidate_rips.setdefault(row["tid"], []).append(snapshot.rip)
-        s3_samples.append(_read_s3_once())
+        s3_samples.append(_read_s3_once(pid))
     tid, tid_reason = select_capture_tid(candidate_stacks)
     hot_cycles = next(row["cycles_per_s"] for row in rows if row["tid"] == tid)
     print(f"capture: selected tid {tid} ({tid_reason}); {hot_cycles:.3g} cycles/s")
 
     rips: list[int] = list(candidate_rips.get(tid, []))
-    for index in range(max(0, args.rip_samples)):
+    for index in range(args.rip_samples):
         if index or rips:
-            time.sleep(max(0.0, args.rip_interval))
+            time.sleep(args.rip_interval)
         snapshot = cdb_snapshot(pid, tid=tid)
         if snapshot.rip is not None:
             rips.append(snapshot.rip)
         else:
             note = snapshot.raw if len(snapshot.raw) < 120 else snapshot.raw[:117] + "..."
             print(f"capture: S2 snapshot {index + 1} unconfirmed/unreadable ({note})")
-        s3_samples.append(_read_s3_once())
+        s3_samples.append(_read_s3_once(pid))
 
     s3 = evaluate_s3(s3_samples)
-    if not s3.sufficient:
+    refusal = s3_gate(s3)
+    if refusal is not None:
+        verdict_token, refusal_rationale = refusal
         record = build_capture_record(
             pid=pid,
             tid=tid,
@@ -755,12 +901,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             candidate_stacks=candidate_stacks,
             rips=rips,
             s3=s3,
-            verdict="capture_failed_insufficient_s3",
-            rationale=(
-                "fewer than two live-correlated readings per shared-memory stream — the §2 "
-                "discriminator cannot be claimed (dead process, unreadable sections, or the "
-                "§7.1 corpse guard discarded every sample). No verdict."
-            ),
+            verdict=verdict_token,
+            rationale=refusal_rationale,
             started_at_utc=started_utc,
             elapsed_s=time.monotonic() - started,
         )

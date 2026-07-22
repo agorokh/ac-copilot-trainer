@@ -373,3 +373,110 @@ def test_capture_record_is_json_serializable_and_auditable() -> None:
     assert payload["s3"]["sufficient"] is True
     # Stack heads are capped so the record stays a record, not a transcript dump.
     assert len(payload["candidate_stack_heads"][0]["stack_head"]) == 6
+
+
+def test_extract_stack_excludes_the_lm_module_listing() -> None:
+    """#647 review P1 — d3d11/dxgi are loaded in EVERY AC process; letting the ``lm`` listing
+    into the stack text would make the render hints match every candidate and neuter the
+    render-TID preference."""
+    from tools.ac_harness.freeze_forensics import extract_stack, select_capture_tid
+
+    raw = (
+        "AC_TID=1a2b\n"
+        " # Child-SP          RetAddr               Call Site\n"
+        "00 0000005e`f16df620 00007ff9`1d2080c4     acs!physicsWorker+0x40\n"
+        "01 0000005e`f16df8e0 00007ff9`1d207f7a     ntdll!RtlUserThreadStart+0x21\n"
+        "start             end                 module name\n"
+        "00007ff9`1d000000 00007ff9`1e000000   d3d11      (deferred)\n"
+        "00007ff9`1f000000 00007ff9`20000000   nvwgf2umx  (deferred)\n"
+    )
+    stack = extract_stack(raw)
+    assert "physicsWorker" in stack
+    assert "d3d11" not in stack
+    assert "nvwgf2umx" not in stack
+    # The physics thread must NOT be selected as render-side off module-listing pollution.
+    tid, reason = select_capture_tid([(0x1A2B, stack)])
+    assert "hottest thread" in reason
+
+
+def test_s3_gate_refuses_a_liveness_gap() -> None:
+    """#647 review P1 — acs_alive_throughout must gate: mixed process generations can fabricate
+    the wedge signature from two healthy sessions."""
+    from tools.ac_harness.freeze_forensics import evaluate_s3, s3_gate
+
+    # Enough live readings on either side of a death to look like a wedge...
+    s3 = evaluate_s3([(23, 100, True), (16_983, 9_999, False), (23, 400, True)])
+    assert s3.sufficient is True
+    refusal = s3_gate(s3)
+    assert refusal is not None
+    token, rationale = refusal
+    assert token == "capture_failed_liveness_gap"
+    assert "generations" in rationale
+
+
+def test_s3_gate_refuses_insufficiency_first() -> None:
+    from tools.ac_harness.freeze_forensics import evaluate_s3, s3_gate
+
+    refusal = s3_gate(evaluate_s3([(23, 100, True)]))
+    assert refusal is not None
+    assert refusal[0] == "capture_failed_insufficient_s3"
+
+
+def test_s3_gate_passes_a_continuously_live_capture() -> None:
+    from tools.ac_harness.freeze_forensics import evaluate_s3, s3_gate
+
+    assert s3_gate(evaluate_s3([(23, 100, True), (23, 400, True)])) is None
+
+
+class TestResolveRecordPath:
+    """#647 review P2 — the --json destination must stay inside an approved output root."""
+
+    def test_inside_root_accepted(self, tmp_path) -> None:
+        from tools.ac_harness.freeze_forensics import _resolve_record_path
+
+        target = tmp_path / "captures" / "wedge.json"
+        assert _resolve_record_path(target, approved_roots=(tmp_path,)) == target.resolve()
+
+    def test_absolute_outside_rejected(self, tmp_path) -> None:
+        import pytest
+
+        from tools.ac_harness.freeze_forensics import _resolve_record_path
+
+        with pytest.raises(ValueError, match="approved output root"):
+            _resolve_record_path(tmp_path / "out.json", approved_roots=(tmp_path / "approved",))
+
+    def test_dotdot_traversal_rejected(self, tmp_path) -> None:
+        import pytest
+
+        from tools.ac_harness.freeze_forensics import _resolve_record_path
+
+        approved = tmp_path / "approved"
+        with pytest.raises(ValueError, match="approved output root"):
+            _resolve_record_path(approved / ".." / "escape.json", approved_roots=(approved,))
+
+
+def test_cli_validators_reject_degenerate_windows() -> None:
+    """#647 review P2 — --cycles-window 0 would turn incidental cycle increments into an
+    arbitrary burning-CPU rate; negatives raise from time.sleep mid-capture."""
+    import pytest
+
+    from tools.ac_harness.freeze_forensics import (
+        _non_negative_float,
+        _non_negative_int,
+        _positive_float,
+        _positive_int,
+    )
+
+    with pytest.raises(Exception, match="> 0"):
+        _positive_float("0")
+    with pytest.raises(Exception, match="finite"):
+        _positive_float("nan")
+    with pytest.raises(Exception, match=">= 0"):
+        _non_negative_float("-1")
+    with pytest.raises(Exception, match="> 0"):
+        _positive_int("0")
+    with pytest.raises(Exception, match=">= 0"):
+        _non_negative_int("-1")
+    assert _positive_float("2.5") == 2.5
+    assert _non_negative_float("0") == 0.0
+    assert _non_negative_int("0") == 0
