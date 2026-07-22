@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-22T05:30:00Z
+last_updated: 2026-07-22T05:42:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/mcp-preflight-guard-2026-07-20.md
@@ -105,6 +105,21 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-22) — static AGENTS learned pointer (PR #649 MERGED)
+
+**PR [#649](https://github.com/agorokh/ac-copilot-trainer/pull/649) MERGED** at
+`2026-07-22T05:40Z` as squash
+[`e70ce54`](https://github.com/agorokh/ac-copilot-trainer/commit/e70ce54348d77ccff10644fc7c44be7b4b986b4c).
+The process miner now emits only the paired `.claude/rules/learned/` and
+`.cursor/rules/learned/` artifacts. The stale AGENTS learned-block writer, CLI switches, and
+cross-repo plumbing are removed; the marker is an exact static pointer.
+
+Verification: hosted CI/policy/conformance green (including the Tk-capable hosted check), empty
+GraphQL thread set, full post-ready cooldown, post-merge 15-test regression set green, and an
+observed production-token scan clean. Fleet tracking remains governance-hub#290;
+governance-hub#266 is intentionally separate. No migrations, environment changes, dependency
+changes, rig actions, or runtime triggers.
 
 ## Delivered (2026-07-22) — #630 Parts C+D+E: honest launch verdicts + per-trial records (PR #646 MERGED)
 
