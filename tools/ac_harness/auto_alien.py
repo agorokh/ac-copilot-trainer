@@ -635,6 +635,7 @@ def run_scientist(
         LEDGER_NAME,
         ScientistError,
         build_plan,
+        ensure_state_root,
         evaluate_experiment,
         load_ledger,
         persist_completed_run,
@@ -663,10 +664,19 @@ def run_scientist(
         baseline_valid, baseline_reason = evaluate_selfplay_iteration(
             0, baseline_outcome, baseline_payloads
         )
-        if load_errors or foreign or not baseline_valid:
+        baseline_lap_times = stage_lap_times_ms(baseline_outcome)
+        if (
+            load_errors
+            or foreign
+            or not baseline_valid
+            or len(baseline_lap_times) < args.laps
+            or len(baseline_payloads) < args.laps
+        ):
             raise ScientistError(
                 "scientist_baseline_batch_unverifiable:"
-                f"{baseline_reason}:load_errors={len(load_errors)}:foreign={foreign}"
+                f"{baseline_reason}:requested_laps={args.laps}:"
+                f"timed_laps={len(baseline_lap_times)}:archives={len(baseline_payloads)}:"
+                f"load_errors={len(load_errors)}:foreign={foreign}"
             )
         scope = {
             "mechanical_platform": args.scientist_mechanical_platform or args.car,
@@ -678,14 +688,15 @@ def run_scientist(
         trigger = args.scientist_trigger or (
             "pace_plateau_after_selfplay" if stopped == "completed" else stopped or "pace_plateau"
         )
-        ledger_path = state_root(user_dir) / LEDGER_NAME
+        scientist_root = ensure_state_root(user_dir)
+        ledger_path = scientist_root / LEDGER_NAME
         plan = build_plan(
             trigger=trigger,
             combo={"car": args.car, "track": args.track, "layout": args.track_layout},
             scope=scope,
             baseline_payloads=baseline_payloads,
             schema=schema,
-            ledger=load_ledger(ledger_path),
+            ledger=load_ledger(ledger_path, allowed_root=scientist_root),
             proposed_hypotheses=_load_scientist_proposals(args.scientist_proposals),
             batch_size=args.scientist_batch_size,
         )
@@ -729,14 +740,15 @@ def run_scientist(
             candidate_lap_times = stage_lap_times_ms(candidate_outcome)
             if (
                 candidate_outcome is None
-                or not candidate_lap_times
-                or not candidate_payloads
+                or len(candidate_lap_times) < args.laps
+                or len(candidate_payloads) < args.laps
                 or candidate_load_errors
                 or candidate_foreign
             ):
                 raise ScientistError(
                     "scientist_candidate_batch_incomplete:"
-                    f"exit={code}:timed_laps={len(candidate_lap_times)}:"
+                    f"exit={code}:requested_laps={args.laps}:"
+                    f"timed_laps={len(candidate_lap_times)}:"
                     f"archives={len(candidate_payloads)}:"
                     f"load_errors={len(candidate_load_errors)}:foreign={candidate_foreign}"
                 )

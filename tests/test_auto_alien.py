@@ -835,7 +835,17 @@ def test_selfplay_late_persist_error_cannot_return_green(monkeypatch, tmp_path):
     assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "iter1"}'
 
 
-def test_scientist_executes_candidate_through_normal_pipeline_and_persists(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("baseline_laps", "candidate_laps", "expected_error"),
+    [
+        (((1, 100_000), (2, 101_000)), ((3, 90_000), (4, 91_000)), None),
+        (((1, 100_000), (2, 101_000)), ((3, 90_000),), "candidate_batch_incomplete"),
+        (((1, 100_000),), ((3, 90_000), (4, 91_000)), "baseline_batch_unverifiable"),
+    ],
+)
+def test_scientist_requires_requested_laps_before_persisting(
+    monkeypatch, tmp_path, baseline_laps, candidate_laps, expected_error
+):
     from tools.ai_sidecar import car_schema
     from tools.ai_sidecar.car_schema import CarSetupSchema
 
@@ -869,7 +879,7 @@ def test_scientist_executes_candidate_through_normal_pipeline_and_persists(monke
         }
 
     baseline_paths = []
-    for lap_n, lap_ms in ((1, 100_000), (2, 101_000)):
+    for lap_n, lap_ms in baseline_laps:
         path = tmp_path / f"baseline_lap_{lap_n}.json"
         path.write_text(
             _json.dumps(lap_payload(lap_n, lap_ms, wing=10, path=baseline_setup)),
@@ -877,7 +887,10 @@ def test_scientist_executes_candidate_through_normal_pipeline_and_persists(monke
         )
         baseline_paths.append(str(path))
     base_outcome = {
-        "report": {"lap_times_ms": [100_000, 101_000], "drive": {"recoveries": 0}},
+        "report": {
+            "lap_times_ms": [lap_ms for _, lap_ms in baseline_laps],
+            "drive": {"recoveries": 0},
+        },
         "lap_archives": baseline_paths,
     }
 
@@ -889,7 +902,7 @@ def test_scientist_executes_candidate_through_normal_pipeline_and_persists(monke
         drive_dir = Path(candidate_args.evidence_dir) / "drive"
         drive_dir.mkdir(parents=True)
         paths = []
-        for lap_n, lap_ms in ((3, 90_000), (4, 91_000)):
+        for lap_n, lap_ms in candidate_laps:
             path = drive_dir / f"lap_{lap_n}.json"
             path.write_text(
                 _json.dumps(lap_payload(lap_n, lap_ms, wing=9, path=Path(candidate_args.setup))),
@@ -900,7 +913,7 @@ def test_scientist_executes_candidate_through_normal_pipeline_and_persists(monke
             _json.dumps(
                 {
                     "report": {
-                        "lap_times_ms": [90_000, 91_000],
+                        "lap_times_ms": [lap_ms for _, lap_ms in candidate_laps],
                         "drive": {"recoveries": 0},
                     },
                     "lap_archives": paths,
@@ -934,9 +947,15 @@ def test_scientist_executes_candidate_through_normal_pipeline_and_persists(monke
         base_outcome=base_outcome,
     )
 
-    assert result["ok"] is True
-    assert result["outcomes"][0]["promoted"] is True
-    assert len(nested_calls) == 1
-    assert nested_calls[0].scientist is False
-    assert Path(result["run_path"]).is_file()
-    assert Path(result["ledger_path"]).is_file()
+    expected_nested_calls = 0 if expected_error == "baseline_batch_unverifiable" else 1
+    assert len(nested_calls) == expected_nested_calls
+    if nested_calls:
+        assert nested_calls[0].scientist is False
+    assert result["ok"] is (expected_error is None)
+    if expected_error is None:
+        assert result["outcomes"][0]["promoted"] is True
+        assert Path(result["run_path"]).is_file()
+        assert Path(result["ledger_path"]).is_file()
+    else:
+        assert expected_error in result["error"]
+        assert not (user_dir / "journal" / "alien_scientist" / "experiments.jsonl").exists()

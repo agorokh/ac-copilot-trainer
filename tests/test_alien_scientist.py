@@ -94,6 +94,14 @@ def test_falsified_constraint_is_suppressed_for_same_platform_scope() -> None:
                     "verdict": "falsified",
                 }
             ],
+            proposed_hypotheses=[
+                {
+                    "id": "renamed_same_adjustment",
+                    "mechanism": "different prose, identical physical adjustment",
+                    "parameter": "WING_2",
+                    "direction": -1,
+                }
+            ],
         )
 
 
@@ -136,7 +144,7 @@ def test_explicit_proposals_fail_closed_on_empty_unknown_or_duplicate() -> None:
         "direction": -1,
     }
     with pytest.raises(ScientistError, match="scientist_hypothesis_duplicate"):
-        build_plan(**common, proposed_hypotheses=[duplicate, duplicate])
+        build_plan(**common, proposed_hypotheses=[duplicate, {**duplicate, "id": "wing_renamed"}])
 
 
 @pytest.mark.parametrize(
@@ -332,3 +340,30 @@ def test_completed_run_rejects_unsafe_timestamp_and_empty_outcomes(tmp_path: Pat
             outcomes=[],
             created_utc="20260722T000001Z",
         )
+
+
+@pytest.mark.parametrize("redirect", ["scientist_root", "runs", "ledger"])
+def test_completed_run_rejects_state_symlink_redirection(tmp_path: Path, redirect: str) -> None:
+    user_dir = tmp_path / "Assetto Corsa"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    scientist_root = user_dir / "journal" / "alien_scientist"
+    if redirect == "scientist_root":
+        scientist_root.parent.mkdir(parents=True)
+        scientist_root.symlink_to(outside, target_is_directory=True)
+    else:
+        scientist_root.mkdir(parents=True)
+        target = scientist_root / ("runs" if redirect == "runs" else "experiments.jsonl")
+        external = outside if redirect == "runs" else outside / "experiments.jsonl"
+        if redirect == "ledger":
+            external.write_text("sentinel\n", encoding="utf-8")
+        target.symlink_to(external, target_is_directory=redirect == "runs")
+
+    with pytest.raises(ScientistError, match="scientist_state_path_unsafe"):
+        persist_completed_run(
+            user_dir,
+            plan=_plan(),
+            outcomes=[{"verdict": "rejected", "reason": "test"}],
+            created_utc="20260722T000002Z",
+        )
+    assert sorted(path.name for path in outside.iterdir()) in ([], ["experiments.jsonl"])

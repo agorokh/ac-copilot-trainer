@@ -62,6 +62,59 @@ def state_root(user_dir: str | Path) -> Path:
     return Path(user_dir) / STATE_DIR
 
 
+def ensure_state_root(user_dir: str | Path) -> Path:
+    """Create the state root while refusing symlinks/junctions below AC Documents."""
+    try:
+        base = Path(user_dir).resolve(strict=True)
+    except OSError as exc:
+        raise ScientistError("scientist_user_dir_unavailable") from exc
+    if not base.is_dir():
+        raise ScientistError("scientist_user_dir_unavailable")
+    current = base
+    for part in STATE_DIR.parts:
+        child = current / part
+        try:
+            child.mkdir()
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise ScientistError("scientist_state_path_unavailable") from exc
+        try:
+            if child.is_symlink() or not child.is_dir() or child.resolve(strict=True) != child:
+                raise ScientistError("scientist_state_path_unsafe")
+        except OSError as exc:
+            raise ScientistError("scientist_state_path_unsafe") from exc
+        current = child
+    return current
+
+
+def _validate_state_destination(path: Path, allowed_root: Path | None = None) -> Path:
+    """Return an absolute state path only when no existing component redirects elsewhere."""
+    logical = Path(os.path.abspath(path))
+    boundary = Path(os.path.abspath(allowed_root or logical.parent))
+    try:
+        resolved_boundary = boundary.resolve(strict=True)
+        resolved_parent = logical.parent.resolve(strict=True)
+        resolved_parent.relative_to(resolved_boundary)
+    except (OSError, ValueError) as exc:
+        raise ScientistError("scientist_state_path_unsafe") from exc
+    if (
+        resolved_boundary != boundary
+        or resolved_parent != logical.parent
+        or not logical.parent.is_dir()
+    ):
+        raise ScientistError("scientist_state_path_unsafe")
+    if logical.is_symlink():
+        raise ScientistError("scientist_state_path_unsafe")
+    if logical.exists():
+        try:
+            if not logical.is_file() or logical.resolve(strict=True) != logical:
+                raise ScientistError("scientist_state_path_unsafe")
+        except OSError as exc:
+            raise ScientistError("scientist_state_path_unsafe") from exc
+    return logical
+
+
 def scope_key(scope: Mapping[str, Any]) -> str:
     required = ("mechanical_platform", "aero_platform", "tyre_family", "track_archetype")
     normalized: dict[str, str] = {}
@@ -73,10 +126,15 @@ def scope_key(scope: Mapping[str, Any]) -> str:
     return _digest(normalized)
 
 
-def load_ledger(path: str | Path) -> list[dict[str, Any]]:
+def load_ledger(
+    path: str | Path, *, allowed_root: str | Path | None = None
+) -> list[dict[str, Any]]:
     ledger = Path(path)
     if not ledger.exists():
         return []
+    ledger = _validate_state_destination(
+        ledger, Path(allowed_root) if allowed_root is not None else None
+    )
     rows: list[dict[str, Any]] = []
     try:
         with ledger.open("r", encoding="utf-8") as handle:
@@ -95,9 +153,9 @@ def load_ledger(path: str | Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _exclusive_write_text(path: Path, text: str) -> None:
+def _exclusive_write_text(path: Path, text: str, *, allowed_root: Path) -> None:
     """Publish a new immutable artifact without replacing an existing peer artifact."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = _validate_state_destination(path, allowed_root)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     tmp = Path(tmp_name)
     try:
@@ -115,16 +173,21 @@ def _exclusive_write_text(path: Path, text: str) -> None:
         raise
 
 
-def append_ledger(path: str | Path, row: Mapping[str, Any]) -> None:
+def append_ledger(
+    path: str | Path,
+    row: Mapping[str, Any],
+    *,
+    allowed_root: str | Path | None = None,
+) -> None:
     """Append one completed experiment without rewriting peer/manual history."""
-    ledger = Path(path)
-    rows = load_ledger(ledger)
+    boundary = Path(allowed_root) if allowed_root is not None else None
+    ledger = _validate_state_destination(Path(path), boundary)
+    rows = load_ledger(ledger, allowed_root=boundary)
     experiment_id = str(row.get("experiment_id") or "")
     if not experiment_id:
         raise ScientistError("scientist_experiment_id_missing")
     if any(str(existing.get("experiment_id") or "") == experiment_id for existing in rows):
         raise ScientistError("scientist_experiment_already_recorded")
-    ledger.parent.mkdir(parents=True, exist_ok=True)
     data = (_stable_json(dict(row)) + "\n").encode("utf-8")
     try:
         fd = os.open(ledger, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
@@ -243,9 +306,7 @@ def build_plan(
             or direction not in (-1.0, 1.0)
         ):
             raise ScientistError("scientist_hypothesis_malformed")
-        constraint_key = _digest(
-            {"hypothesis_id": hypothesis_id, "parameter": parameter, "direction": direction}
-        )
+        constraint_key = _digest({"parameter": parameter, "direction": direction})
         if constraint_key in seen_constraints:
             raise ScientistError("scientist_hypothesis_duplicate")
         seen_constraints.add(constraint_key)
@@ -492,7 +553,16 @@ def persist_completed_run(
         raise ScientistError("scientist_created_utc_invalid")
     if not outcomes:
         raise ScientistError("scientist_completed_outcomes_missing")
-    root = state_root(user_dir)
+    root = ensure_state_root(user_dir)
+    runs_dir = root / "runs"
+    try:
+        runs_dir.mkdir()
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        raise ScientistError("scientist_state_path_unavailable") from exc
+    _validate_state_destination(runs_dir / ".boundary", root)
+    ledger_path = _validate_state_destination(root / LEDGER_NAME, root)
     run = {
         "schema_version": SCHEMA_VERSION,
         "created_utc": created_utc,
@@ -501,9 +571,12 @@ def persist_completed_run(
     }
     run_id = _digest(run)
     run["run_id"] = run_id
-    destination = root / "runs" / f"{created_utc}_{run_id}.json"
-    _exclusive_write_text(destination, json.dumps(run, indent=2, ensure_ascii=False) + "\n")
-    ledger_path = root / LEDGER_NAME
+    destination = runs_dir / f"{created_utc}_{run_id}.json"
+    _exclusive_write_text(
+        destination,
+        json.dumps(run, indent=2, ensure_ascii=False) + "\n",
+        allowed_root=root,
+    )
     for index, outcome in enumerate(outcomes):
         append_ledger(
             ledger_path,
@@ -519,5 +592,6 @@ def persist_completed_run(
                 "promoted": bool(outcome.get("promoted")),
                 "reason": outcome.get("reason"),
             },
+            allowed_root=root,
         )
     return destination
