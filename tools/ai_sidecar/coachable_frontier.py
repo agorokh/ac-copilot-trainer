@@ -23,6 +23,7 @@ _SCHEMA_VERSION = 1
 _ENVELOPE_TOL = 1e-3
 _APEX_MATCH_TOL = 0.08
 _BRAKE_POINT_MATCH_TOL = 0.04
+_BRAKE_POINT_UNIQUE_GAP = 0.01
 _GAIN_BY_LEVEL_KMH = {
     "unknown": 1.5,
     "novice": 2.0,
@@ -158,9 +159,11 @@ def alien_lap_trace(
         points.append((float(xyz[0]), float(xyz[1]), float(xyz[2])))
         speeds.append(parsed_speed)
 
+    # This trace is an open sampling of one lap.  Keep the first segment at zero so the
+    # cumulative numerator and total-distance denominator describe the same polyline.
     segment_m: list[float] = []
     for index, point in enumerate(points):
-        previous = points[index - 1]
+        previous = points[index - 1] if index else point
         segment_m.append(math.hypot(point[0] - previous[0], point[2] - previous[2]))
     total_m = sum(segment_m)
     if not math.isfinite(total_m) or total_m <= 1.0:
@@ -382,7 +385,12 @@ def _driver_samples_by_reference(
                 ),
                 key=lambda item: item[0],
             )
-            if candidates and candidates[0][0] <= _BRAKE_POINT_MATCH_TOL:
+            nearest_is_usable = candidates and candidates[0][0] <= _BRAKE_POINT_MATCH_TOL
+            nearest_is_unique = (
+                len(candidates) == 1
+                or candidates[1][0] - candidates[0][0] >= _BRAKE_POINT_UNIQUE_GAP
+            )
+            if nearest_is_usable and nearest_is_unique:
                 out[candidates[0][1]].append(sample)
     return out
 

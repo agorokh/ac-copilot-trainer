@@ -297,7 +297,14 @@ def public_voice_runtime_status() -> dict[str, object]:
         status["disabled_reason"] = _ABSOLUTE_PATH_RE.sub("<path>", reason)
     frontier = getattr(_coach_runtime, "frontier", None)
     if isinstance(frontier, dict):
-        public_frontier = dict(frontier)
+        # /health is deliberately unauthenticated, including on an external bind.  Expose only
+        # operational state here; per-corner targets, driver bests, level and source hashes are
+        # personal telemetry and remain in the authenticated/in-process runtime.
+        public_frontier = {
+            key: frontier[key]
+            for key in ("configured", "active", "source", "reason")
+            if key in frontier
+        }
         frontier_reason = str(public_frontier.get("reason") or "")
         # Frontier reasons on the unauthenticated health endpoint are stable machine codes only.
         # Never try to redact arbitrary exception text here: paths containing spaces can defeat a

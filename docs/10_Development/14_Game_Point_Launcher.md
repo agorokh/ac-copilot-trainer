@@ -103,8 +103,8 @@ re-runs corridor plus plant-envelope verification over the cached line and speed
 profile. Standard Steam and AC Documents locations need no extra settings.
 Non-standard layouts can override the sources with
 `AC_COPILOT_ALIEN_PLANT`, `AC_COPILOT_ALIEN_FAST_LANE`, or
-`AC_COPILOT_AC_ROOT`. Public health exposes stable reason codes only, never
-source paths or exception text.
+`AC_COPILOT_AC_ROOT`. Public health exposes activation, source, and stable reason
+codes only—never per-corner driver metrics, source hashes, paths, or exception text.
 Personalized targets use each raw profile sample's `brake_point_spline` as the
 corner identity; the per-lap ordinal is never trusted. Refresh older profiles
 with `python -m tools.ai_sidecar.driver_profile --lap-dir <journal/laps>` so

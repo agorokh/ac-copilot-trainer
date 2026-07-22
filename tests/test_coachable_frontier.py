@@ -11,7 +11,12 @@ import pytest
 from tests.test_alien_line import _circle_line, _l3_plant, _write_fast_lane
 from tools.ac_harness.alien_line import build_alien_line_artifact, save_alien_line_artifact
 from tools.ac_harness.plant_id import REQUIRED_PLANT_CONSTANTS
-from tools.ai_sidecar.coachable_frontier import FrontierError, load_verified_alien_evidence
+from tools.ai_sidecar.coachable_frontier import (
+    FrontierError,
+    _driver_samples_by_reference,
+    alien_lap_trace,
+    load_verified_alien_evidence,
+)
 from tools.ai_sidecar.coaching_runtime import build_coach_runtime
 
 _REFERENCE = Path(__file__).parent / "fixtures" / "magione_gt3r_reference.json"
@@ -167,6 +172,38 @@ def test_profile_corner_indices_are_ignored_in_favor_of_brake_geometry() -> None
     assert [corner["corner_index"] for corner in runtime.frontier["corners"]] == list(
         range(len(rows))
     )
+
+
+def test_ambiguous_brake_point_sample_is_not_assigned() -> None:
+    profile = {
+        "corner_history": {
+            "source-corner": {
+                "corner_samples_by_lap_uuid": {
+                    "ambiguous": {
+                        "min_speed_kmh": 90.0,
+                        "brake_point_spline": 0.13,
+                    }
+                }
+            }
+        }
+    }
+
+    matched = _driver_samples_by_reference(profile, {0: 0.10, 1: 0.16})
+
+    assert matched == {0: [], 1: []}
+
+
+def test_alien_trace_uses_consistent_open_polyline_distance() -> None:
+    reference = _reference()
+    trace = alien_lap_trace(
+        _alien_artifact(reference),
+        combo=(reference["car"]["id"], reference["track"]["id"], ""),
+        expected_plant_sha12=_EXPECTED_PROVENANCE["alien_expected_plant_sha12"],
+        expected_fast_lane_sha12=_EXPECTED_PROVENANCE["alien_expected_fast_lane_sha12"],
+    )
+
+    assert trace.spline[0] == 0.0
+    assert trace.spline[-1] == pytest.approx(1.0)
 
 
 def test_unverified_envelope_fails_closed() -> None:

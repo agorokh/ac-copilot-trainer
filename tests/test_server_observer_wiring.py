@@ -56,7 +56,9 @@ def test_public_voice_status_exposes_frontier_and_redacts_paths(monkeypatch):
             "active": False,
             "source": "reference",
             "reason": r"alien_load_failed: C:\Users\Jane Doe\Documents\alien.json",
-            "corners": [],
+            "driver_level": "advanced",
+            "plant_sha12": "abc123def456",  # pragma: allowlist secret
+            "corners": [{"driver_best_kmh": 123.4, "target_kmh": 125.0}],
         }
 
     monkeypatch.setattr(server, "_coach_runtime", _Coach())
@@ -64,6 +66,7 @@ def test_public_voice_status_exposes_frontier_and_redacts_paths(monkeypatch):
 
     assert status["coach_frontier"]["source"] == "reference"
     assert status["coach_frontier"]["reason"] == "alien_frontier_error"
+    assert set(status["coach_frontier"]) == {"configured", "active", "source", "reason"}
 
 
 async def _run_publish_cues(frame, *, exclude):
