@@ -299,8 +299,11 @@ def public_voice_runtime_status() -> dict[str, object]:
     if isinstance(frontier, dict):
         public_frontier = dict(frontier)
         frontier_reason = str(public_frontier.get("reason") or "")
-        if frontier_reason:
-            public_frontier["reason"] = _ABSOLUTE_PATH_RE.sub("<path>", frontier_reason)
+        # Frontier reasons on the unauthenticated health endpoint are stable machine codes only.
+        # Never try to redact arbitrary exception text here: paths containing spaces can defeat a
+        # token regex and leak a profile suffix. Unexpected text collapses to one opaque code.
+        if frontier_reason and not re.fullmatch(r"[a-z0-9_]+", frontier_reason):
+            public_frontier["reason"] = "alien_frontier_error"
         status["coach_frontier"] = public_frontier
     return status
 

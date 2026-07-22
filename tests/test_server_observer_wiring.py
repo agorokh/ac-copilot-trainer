@@ -55,7 +55,7 @@ def test_public_voice_status_exposes_frontier_and_redacts_paths(monkeypatch):
             "configured": True,
             "active": False,
             "source": "reference",
-            "reason": "alien_load_failed: /private/driver/alien.json",
+            "reason": r"alien_load_failed: C:\Users\Jane Doe\Documents\alien.json",
             "corners": [],
         }
 
@@ -63,7 +63,7 @@ def test_public_voice_status_exposes_frontier_and_redacts_paths(monkeypatch):
     status = server.public_voice_runtime_status()
 
     assert status["coach_frontier"]["source"] == "reference"
-    assert "/private/driver" not in status["coach_frontier"]["reason"]
+    assert status["coach_frontier"]["reason"] == "alien_frontier_error"
 
 
 async def _run_publish_cues(frame, *, exclude):

@@ -96,6 +96,14 @@ throttle, steering, and cue timing. Missing driver history retains reference
 targets; malformed, unverified, wrong-combo, unmatchable, or slower-than-driver
 alien evidence fails closed and reports the reason under
 `voice.coach_frontier` in `/health`.
+Before activation, the sidecar recomputes the plant provenance from the same
+filename under sibling `plant_id/`, hashes the current track `fast_lane.ai`, and
+re-runs corridor plus plant-envelope verification over the cached line and speed
+profile. Standard Steam and AC Documents locations need no extra settings.
+Non-standard layouts can override the sources with
+`AC_COPILOT_ALIEN_PLANT`, `AC_COPILOT_ALIEN_FAST_LANE`, or
+`AC_COPILOT_AC_ROOT`. Public health exposes stable reason codes only, never
+source paths or exception text.
 
 The launcher status row for `voice` is sourced from the sidecar `/health`
 payload when the sidecar is reachable. A stale bank, missing reference archive,

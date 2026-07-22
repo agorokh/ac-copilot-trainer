@@ -8,10 +8,12 @@ kept in memory; malformed, wrong-combo, unverified or unmatchable artifacts fail
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from tools.ai_sidecar.lap_dynamics import LapTrace
@@ -70,52 +72,63 @@ def _validate_identity(artifact: Mapping[str, Any], combo: tuple[str, str, str])
         _identity(artifact.get("layout")),
     )
     if actual != combo:
-        raise FrontierError(
-            "alien_combo_mismatch: "
-            f"expected={combo[0]}/{combo[1]}/{combo[2] or '-'} "
-            f"actual={actual[0]}/{actual[1]}/{actual[2] or '-'}"
-        )
+        raise FrontierError("alien_combo_mismatch")
 
 
-def _validate_provenance(artifact: Mapping[str, Any]) -> None:
+def _validate_provenance(
+    artifact: Mapping[str, Any],
+    *,
+    expected_plant_sha12: str,
+    expected_fast_lane_sha12: str,
+) -> None:
     provenance = artifact.get("plant_provenance")
     plant_sha = str(provenance.get("sha12") or "") if isinstance(provenance, Mapping) else ""
     lane_sha = str(artifact.get("fast_lane_sha12") or "")
-    if not _SHA12_RE.fullmatch(plant_sha):
-        raise FrontierError("alien_provenance_missing: plant_provenance.sha12")
-    if not _SHA12_RE.fullmatch(lane_sha):
-        raise FrontierError("alien_provenance_missing: fast_lane_sha12")
+    if not _SHA12_RE.fullmatch(expected_plant_sha12) or plant_sha != expected_plant_sha12:
+        raise FrontierError("alien_plant_provenance_mismatch")
+    if not _SHA12_RE.fullmatch(expected_fast_lane_sha12) or lane_sha != expected_fast_lane_sha12:
+        raise FrontierError("alien_fast_lane_provenance_mismatch")
 
 
 def _validate_envelope(artifact: Mapping[str, Any]) -> None:
     corridor = artifact.get("corridor")
     if not isinstance(corridor, Mapping):
-        raise FrontierError("alien_envelope_missing: corridor")
+        raise FrontierError("alien_envelope_missing")
     safe_util = _finite(corridor.get("max_ay_utilisation"))
     if safe_util is None or safe_util < 0.0 or safe_util > 1.0 + _ENVELOPE_TOL:
-        raise FrontierError(f"alien_envelope_unverified: safe_utilisation={safe_util}")
+        raise FrontierError("alien_envelope_unverified")
     if "l3" in artifact:
         l3 = artifact.get("l3")
         if not isinstance(l3, Mapping):
-            raise FrontierError("alien_envelope_unverified: malformed_l3")
+            raise FrontierError("alien_envelope_unverified")
         barrier_util = _finite(l3.get("max_ay_utilisation_vs_barrier"))
         if barrier_util is None or barrier_util < 0.0 or barrier_util > 1.0 + _ENVELOPE_TOL:
-            raise FrontierError(f"alien_envelope_unverified: barrier_utilisation={barrier_util}")
+            raise FrontierError("alien_envelope_unverified")
         qss_profile = artifact.get("v_target_qss_mps")
         if (
             not isinstance(qss_profile, Sequence)
             or isinstance(qss_profile, (str, bytes))
             or any(_finite(speed, positive=True) is None for speed in qss_profile)
         ):
-            raise FrontierError("alien_envelope_unverified: l3_missing_qss_profile")
+            raise FrontierError("alien_envelope_unverified")
 
 
-def alien_lap_trace(artifact: Mapping[str, Any], *, combo: tuple[str, str, str]) -> LapTrace:
+def alien_lap_trace(
+    artifact: Mapping[str, Any],
+    *,
+    combo: tuple[str, str, str],
+    expected_plant_sha12: str,
+    expected_fast_lane_sha12: str,
+) -> LapTrace:
     """Validate an alien artifact and expose its line/speed envelope as a :class:`LapTrace`."""
     if artifact.get("schema_version") != _SCHEMA_VERSION:
-        raise FrontierError(f"alien_schema_unsupported: {artifact.get('schema_version')!r}")
+        raise FrontierError("alien_schema_unsupported")
     _validate_identity(artifact, combo)
-    _validate_provenance(artifact)
+    _validate_provenance(
+        artifact,
+        expected_plant_sha12=expected_plant_sha12,
+        expected_fast_lane_sha12=expected_fast_lane_sha12,
+    )
     _validate_envelope(artifact)
 
     raw_line = artifact.get("line")
@@ -128,19 +141,19 @@ def alien_lap_trace(artifact: Mapping[str, Any], *, combo: tuple[str, str, str])
         or len(raw_line) < 5
         or len(raw_line) != len(raw_speed)
     ):
-        raise FrontierError("alien_profile_malformed: line/speed length mismatch")
+        raise FrontierError("alien_profile_malformed")
     if "l3" in artifact and len(artifact["v_target_qss_mps"]) != len(raw_speed):
-        raise FrontierError("alien_envelope_unverified: l3_qss_length_mismatch")
+        raise FrontierError("alien_envelope_unverified")
 
     points: list[tuple[float, float, float]] = []
     speeds: list[float] = []
-    for index, (point, speed) in enumerate(zip(raw_line, raw_speed, strict=True)):
+    for point, speed in zip(raw_line, raw_speed, strict=True):
         if not isinstance(point, Sequence) or isinstance(point, (str, bytes)) or len(point) < 3:
-            raise FrontierError(f"alien_profile_malformed: point[{index}]")
+            raise FrontierError("alien_profile_malformed")
         xyz = tuple(_finite(point[axis]) for axis in range(3))
         parsed_speed = _finite(speed, positive=True)
         if any(value is None for value in xyz) or parsed_speed is None:
-            raise FrontierError(f"alien_profile_malformed: non-finite sample[{index}]")
+            raise FrontierError("alien_profile_malformed")
         points.append((float(xyz[0]), float(xyz[1]), float(xyz[2])))
         speeds.append(parsed_speed)
 
@@ -150,7 +163,7 @@ def alien_lap_trace(artifact: Mapping[str, Any], *, combo: tuple[str, str, str])
         segment_m.append(math.hypot(point[0] - previous[0], point[2] - previous[2]))
     total_m = sum(segment_m)
     if not math.isfinite(total_m) or total_m <= 1.0:
-        raise FrontierError("alien_profile_malformed: degenerate line geometry")
+        raise FrontierError("alien_profile_malformed")
 
     spline: list[float] = []
     t_s: list[float] = []
@@ -177,11 +190,134 @@ def alien_lap_trace(artifact: Mapping[str, Any], *, combo: tuple[str, str, str])
     )
 
 
+def _default_fast_lane_path(ac_root: Path, *, track_id: str, layout: str) -> Path:
+    track_root = ac_root / "content" / "tracks" / track_id
+    return (
+        track_root / layout / "ai" / "fast_lane.ai"
+        if layout
+        else track_root / "ai" / "fast_lane.ai"
+    )
+
+
+def load_verified_alien_evidence(
+    path: str | Path,
+    *,
+    combo: tuple[str, str, str],
+    plant_path: str | Path | None = None,
+    fast_lane_path: str | Path | None = None,
+    ac_root: str | Path | None = None,
+) -> tuple[dict[str, Any], str, str]:
+    """Load and re-verify alien evidence against its current plant and lane inputs.
+
+    Hashes persisted inside the alien JSON are never accepted as self-attestation. The plant hash
+    is recomputed from the current sibling ``plant_id`` artifact, the lane hash from the current
+    ``fast_lane.ai`` bytes, and the cached line/profile is re-run through the same corridor and
+    plant-envelope verifier used by the autonomous driver.
+    """
+    artifact_path = Path(path)
+    try:
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise FrontierError("alien_artifact_unreadable") from None
+    if not isinstance(payload, dict):
+        raise FrontierError("alien_profile_malformed")
+    _validate_identity(payload, combo)
+
+    if plant_path is None:
+        if artifact_path.parent.name != "alien_line":
+            raise FrontierError("alien_plant_source_unresolved")
+        resolved_plant = artifact_path.parent.parent / "plant_id" / artifact_path.name
+    else:
+        resolved_plant = Path(plant_path)
+    try:
+        plant_artifact = json.loads(resolved_plant.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        raise FrontierError("alien_plant_source_unreadable") from None
+    if not isinstance(plant_artifact, dict):
+        raise FrontierError("alien_plant_source_invalid")
+    plant_combo = (
+        _identity(plant_artifact.get("car_id")),
+        _identity(plant_artifact.get("track_id")),
+        _identity(plant_artifact.get("layout")),
+    )
+    if plant_combo != combo or _identity(plant_artifact.get("setup")) != _identity(
+        payload.get("setup")
+    ):
+        raise FrontierError("alien_plant_source_identity_mismatch")
+
+    from tools.ac_harness.ai_line import load_ai_line
+    from tools.ac_harness.alien_line import (
+        fast_lane_sha12,
+        plant_provenance,
+        validate_corridor,
+        verify_alien_line_artifact,
+    )
+    from tools.ac_harness.ggv_profile import load_track_widths
+    from tools.ac_harness.plant_id import (
+        plant_ggv_model,
+        plant_ready_for_full_consumption,
+    )
+
+    if plant_ready_for_full_consumption(plant_artifact, require_friction_fit=True) is not None:
+        raise FrontierError("alien_plant_source_invalid")
+    plant = plant_ggv_model(plant_artifact)
+    if plant is None:
+        raise FrontierError("alien_plant_source_invalid")
+    expected_plant_sha12 = str(plant_provenance(plant_artifact)["sha12"])
+
+    resolved_lane = (
+        Path(fast_lane_path)
+        if fast_lane_path is not None
+        else _default_fast_lane_path(
+            (
+                Path(ac_root)
+                if ac_root is not None
+                else Path(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa")
+            ),
+            track_id=combo[1],
+            layout=combo[2],
+        )
+    )
+    try:
+        expected_fast_lane_sha12 = fast_lane_sha12(resolved_lane)
+        fast_line = load_ai_line(resolved_lane)
+        side_left, side_right = load_track_widths(resolved_lane)
+        validate_corridor(side_left, side_right, len(fast_line))
+    except (OSError, ValueError):
+        raise FrontierError("alien_fast_lane_source_invalid") from None
+
+    # Structural and external-provenance checks happen before the heavier geometric revalidation.
+    alien_lap_trace(
+        payload,
+        combo=combo,
+        expected_plant_sha12=expected_plant_sha12,
+        expected_fast_lane_sha12=expected_fast_lane_sha12,
+    )
+    params = payload.get("params") if isinstance(payload.get("params"), Mapping) else {}
+    margin_m = _finite(params.get("margin_m"))
+    if margin_m is None or margin_m < 0.0:
+        raise FrontierError("alien_build_params_invalid")
+    try:
+        reason = verify_alien_line_artifact(
+            payload,
+            fast_line,
+            side_left,
+            side_right,
+            plant,
+            margin_m=margin_m,
+        )
+    except (TypeError, ValueError, IndexError):
+        raise FrontierError("alien_content_revalidation_failed") from None
+    if reason is not None:
+        raise FrontierError("alien_content_revalidation_failed")
+    return payload, expected_plant_sha12, expected_fast_lane_sha12
+
+
 def _match_corners(
     references: Sequence[CornerReference], alien_refs: Sequence[CornerReference]
 ) -> list[AlienCorner]:
     if not references or not alien_refs:
-        raise FrontierError("alien_corners_unusable: no segmented corners")
+        raise FrontierError("alien_corners_unusable")
     unused = set(range(len(alien_refs)))
     matched: list[AlienCorner] = []
     for ref in references:
@@ -193,7 +329,7 @@ def _match_corners(
             key=lambda item: item[0],
         )
         if not candidates or candidates[0][0] > _APEX_MATCH_TOL:
-            raise FrontierError(f"alien_corner_unmatched: reference_corner={ref.index}")
+            raise FrontierError("alien_corner_unmatched")
         _, alien_index = candidates[0]
         unused.remove(alien_index)
         alien_ref = alien_refs[alien_index]
@@ -242,13 +378,20 @@ def derive_coachable_frontier(
     combo: tuple[str, str, str],
     profile: Mapping[str, Any] | None,
     driver_level: str,
+    expected_plant_sha12: str,
+    expected_fast_lane_sha12: str,
 ) -> dict[str, Any]:
     """Apply bounded personalized speed targets to ``references`` and return audit metadata.
 
     The function mutates only the newly-built in-memory references passed by the caller.  A failure
     occurs before any mutation, so callers can retain the demonstrated reference unchanged.
     """
-    alien_trace = alien_lap_trace(artifact, combo=combo)
+    alien_trace = alien_lap_trace(
+        artifact,
+        combo=combo,
+        expected_plant_sha12=expected_plant_sha12,
+        expected_fast_lane_sha12=expected_fast_lane_sha12,
+    )
     matches = _match_corners(references, build_references(alien_trace))
     rows = _corner_history(profile)
 
@@ -262,10 +405,7 @@ def derive_coachable_frontier(
         if driver_best is None:
             continue
         if driver_best >= match.ceiling_kmh:
-            raise FrontierError(
-                "driver_at_or_above_alien_ceiling: "
-                f"corner={ref.index} driver={driver_best:.1f} alien={match.ceiling_kmh:.1f}"
-            )
+            raise FrontierError("driver_at_or_above_alien_ceiling")
         cap = _gain_cap(driver_level, row)
         target = round(min(match.ceiling_kmh, driver_best + cap), 1)
         planned.append(

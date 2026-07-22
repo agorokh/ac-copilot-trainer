@@ -19,7 +19,6 @@ I/O — so it is unit-tested by feeding synthetic injected-mistake frame streams
 
 from __future__ import annotations
 
-import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
@@ -566,6 +565,8 @@ def build_coach_runtime(
     driver_profile_path: str | Path | None = None,
     alien_line_path: str | Path | None = None,
     alien_line_artifact: Mapping[str, Any] | None = None,
+    alien_expected_plant_sha12: str | None = None,
+    alien_expected_fast_lane_sha12: str | None = None,
 ) -> CoachRuntime | None:
     """Build a :class:`CoachRuntime` from a reference archive (same input as the observer)."""
     try:
@@ -616,23 +617,39 @@ def build_coach_runtime(
         "corners": [],
     }
     configured_alien = alien_line_path or os.environ.get("AC_COPILOT_ALIEN_LINE")
+    combo = _archive_combo(reference_archive)
     artifact = alien_line_artifact
-    if artifact is not None and not isinstance(artifact, Mapping):
+    if artifact is None and configured_alien:
+        from tools.ai_sidecar.coachable_frontier import (
+            FrontierError,
+            frontier_fallback,
+            load_verified_alien_evidence,
+        )
+
+        if combo is None:
+            frontier = frontier_fallback("reference_combo_missing")
+        else:
+            try:
+                artifact, alien_expected_plant_sha12, alien_expected_fast_lane_sha12 = (
+                    load_verified_alien_evidence(
+                        configured_alien,
+                        combo=combo,
+                        plant_path=os.environ.get("AC_COPILOT_ALIEN_PLANT"),
+                        fast_lane_path=os.environ.get("AC_COPILOT_ALIEN_FAST_LANE"),
+                        ac_root=os.environ.get("AC_COPILOT_AC_ROOT"),
+                    )
+                )
+            except FrontierError as exc:
+                frontier = frontier_fallback(str(exc))
+    elif artifact is not None and (
+        not isinstance(artifact, Mapping)
+        or not alien_expected_plant_sha12
+        or not alien_expected_fast_lane_sha12
+    ):
         from tools.ai_sidecar.coachable_frontier import frontier_fallback
 
-        frontier = frontier_fallback("alien_load_failed: artifact root must be an object")
+        frontier = frontier_fallback("alien_injected_evidence_unverified")
         artifact = None
-    if artifact is None and configured_alien:
-        try:
-            with Path(configured_alien).open(encoding="utf-8") as handle:
-                loaded = json.load(handle)
-            if not isinstance(loaded, Mapping):
-                raise ValueError("alien artifact root must be an object")
-            artifact = loaded
-        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
-            from tools.ai_sidecar.coachable_frontier import frontier_fallback
-
-            frontier = frontier_fallback(f"alien_load_failed: {exc}")
     if artifact is not None:
         from tools.ai_sidecar.coachable_frontier import (
             FrontierError,
@@ -640,7 +657,6 @@ def build_coach_runtime(
             frontier_fallback,
         )
 
-        combo = _archive_combo(reference_archive)
         if combo is None:
             frontier = frontier_fallback("reference_combo_missing")
         else:
@@ -651,6 +667,8 @@ def build_coach_runtime(
                     combo=combo,
                     profile=profile,
                     driver_level=policy.level,
+                    expected_plant_sha12=alien_expected_plant_sha12 or "",
+                    expected_fast_lane_sha12=alien_expected_fast_lane_sha12 or "",
                 )
             except FrontierError as exc:
                 frontier = frontier_fallback(str(exc))
