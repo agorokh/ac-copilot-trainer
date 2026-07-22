@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-22T05:42:00Z
+last_updated: 2026-07-22T06:55:16Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/mcp-preflight-guard-2026-07-20.md
@@ -105,6 +105,25 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-22) — session UUID replay scoping (#622, PR #652 MERGED)
+
+**PR [#652](https://github.com/agorokh/ac-copilot-trainer/pull/652) MERGED** at
+`2026-07-22T06:53Z` as squash
+[`28ad004`](https://github.com/agorokh/ac-copilot-trainer/commit/28ad00429914dab9f3c53d9a19b03c8051dfca8a);
+issue [#622](https://github.com/agorokh/ac-copilot-trainer/issues/622) is **CLOSED**.
+Lifecycle `session` frames now publish the active `session_uuid` and treat it as part of change
+detection. The tablet accepts legacy UUID-less producers but rejects replayed `session.review` and
+`track.map` frames when both the live and replay UUIDs are known and differ. A runtime voice/reference
+rewire also broadcasts the rebuilt `track.map` to already-connected peers.
+
+**Verification:** 68 focused tests passed; full local parity passed at **3,248 passed, 89 skipped**
+with `ci-fast: OK`; hosted CI, canonical-doc policy, and governance conformance passed on exact head
+`1b2a63b`; GraphQL returned zero review threads and the PR merged `MERGEABLE/CLEAN`. Operator-grade
+proof used the real sidecar at `/tablet/dash`: a cached `stint-old` review appeared, then a same
+car/track/session-index lifecycle frame carrying `stint-new` cleared it to the pending state. Post-
+merge classification reported no migrations, environment changes, dependency changes, or operator
+actions. **Nothing remains for #622.**
 
 ## Delivered (2026-07-22) — static AGENTS learned pointer (PR #649 MERGED)
 
@@ -391,7 +410,8 @@ COACH bound to `session.review`; MAP renders real reference geometry via the new
 topic; STINT gains real I/M/O tread temps + a fuel plan with a real race target
 (`session_laps_total`); durable dev feeder shipped. 19 Codex P2s + daemon HIGHs/MEDIUMs all
 fixed or evidence-rebutted (one daemon FP on Lua 0-truthiness rebutted with lupa-executed
-proof). Follow-up: [#622](https://github.com/agorokh/ac-copilot-trainer/issues/622).
+proof). Follow-up [#622](https://github.com/agorokh/ac-copilot-trainer/issues/622) was delivered by
+PR [#652](https://github.com/agorokh/ac-copilot-trainer/pull/652) (`28ad004`, 2026-07-22).
 Detail: [[issue-531-partf-pages-2026-07-16]].
 
 **Resume here:** (1) Part F rig-verify on the P7 — BLOCKED on the #619 font-cache reboot
