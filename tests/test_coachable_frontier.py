@@ -62,6 +62,13 @@ def _same_combo_profile(reference: dict) -> dict:
                 "best_min_speed_kmh": signature.min_speed_kmh,
                 "delta_min_speed_kmh": 1.0,
                 "avg_steer_reversals": 1.0,
+                "corner_samples_by_lap_uuid": {
+                    f"lap-{index}": {
+                        "min_speed_kmh": signature.min_speed_kmh,
+                        "brake_point_spline": signature.brake_point_spline,
+                        "steer_reversals": 1.0,
+                    }
+                },
             }
             for index, signature in baseline.ref_sigs.items()
         },
@@ -108,6 +115,8 @@ def test_steering_corrections_reduce_the_personalized_step() -> None:
     profile = _same_combo_profile(reference)
     for row in profile["corner_history"].values():
         row["avg_steer_reversals"] = 8.0
+        for sample in row["corner_samples_by_lap_uuid"].values():
+            sample["steer_reversals"] = 8.0
     runtime = build_coach_runtime(
         reference,
         driver_profile=profile,
@@ -139,6 +148,27 @@ def test_wrong_combo_fails_closed_with_explicit_reason() -> None:
     assert runtime.ref_sigs == baseline.ref_sigs
 
 
+def test_profile_corner_indices_are_ignored_in_favor_of_brake_geometry() -> None:
+    reference = _reference()
+    profile = _same_combo_profile(reference)
+    rows = list(profile["corner_history"].values())
+    for row, reversed_index in zip(rows, reversed(range(len(rows))), strict=True):
+        row["corner_index"] = reversed_index
+
+    runtime = build_coach_runtime(
+        reference,
+        driver_profile=profile,
+        alien_line_artifact=_alien_artifact(reference),
+        **_EXPECTED_PROVENANCE,
+    )
+
+    assert runtime is not None
+    assert runtime.frontier["active"] is True
+    assert [corner["corner_index"] for corner in runtime.frontier["corners"]] == list(
+        range(len(rows))
+    )
+
+
 def test_unverified_envelope_fails_closed() -> None:
     reference = _reference()
     artifact = _alien_artifact(reference)
@@ -161,6 +191,7 @@ def test_driver_above_alien_ceiling_keeps_reference_for_every_corner() -> None:
     profile = _same_combo_profile(reference)
     first_row = next(iter(profile["corner_history"].values()))
     first_row["best_min_speed_kmh"] = 400.0
+    next(iter(first_row["corner_samples_by_lap_uuid"].values()))["min_speed_kmh"] = 400.0
 
     runtime = build_coach_runtime(
         reference,

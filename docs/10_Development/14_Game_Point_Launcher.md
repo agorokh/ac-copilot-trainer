@@ -90,7 +90,8 @@ created ahead of time by calling `ensure_settings_file()` from
 Coach v2 can consume an issue #529 alien-line artifact through
 `AC_COPILOT_ALIEN_LINE` or the non-secret `alien_line` settings key. The launcher
 resolves relative paths against the Game Point data directory and passes the
-absolute path to the sidecar. The artifact supplies only a per-corner speed
+absolute path to the sidecar. Configuring it also activates Coach v2; there is
+no separate hidden prerequisite. The artifact supplies only a per-corner speed
 ceiling: the demonstrated reference archive remains authoritative for braking,
 throttle, steering, and cue timing. Missing driver history retains reference
 targets; malformed, unverified, wrong-combo, unmatchable, or slower-than-driver
@@ -104,6 +105,11 @@ Non-standard layouts can override the sources with
 `AC_COPILOT_ALIEN_PLANT`, `AC_COPILOT_ALIEN_FAST_LANE`, or
 `AC_COPILOT_AC_ROOT`. Public health exposes stable reason codes only, never
 source paths or exception text.
+Personalized targets use each raw profile sample's `brake_point_spline` as the
+corner identity; the per-lap ordinal is never trusted. Refresh older profiles
+with `python -m tools.ai_sidecar.driver_profile --lap-dir <journal/laps>` so
+their sample ledger carries this identity. Until then the frontier stays on the
+reference target rather than guessing.
 
 The launcher status row for `voice` is sourced from the sidecar `/health`
 payload when the sidecar is reachable. A stale bank, missing reference archive,

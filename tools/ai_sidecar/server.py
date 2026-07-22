@@ -2853,7 +2853,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                     tts_enabled=bool(voice_settings.tts_enabled),
                 )
                 logger.info("voice: realtime observer wired from reference %s", reference_path)
-            if os.environ.get("AC_COPILOT_COACH_V2") == "1":
+            if os.environ.get("AC_COPILOT_COACH_V2") == "1" or alien_line_path:
                 from tools.ai_sidecar.coaching_runtime import build_coach_runtime
 
                 coach_rt = build_coach_runtime(
@@ -2879,7 +2879,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                     # to the legacy v1 cues (that would make "v2 on" silently mean "v1 on").
                     set_realtime_observer(None)
                     logger.error(
-                        "voice: Coach v2 requested (AC_COPILOT_COACH_V2=1) but could not build "
+                        "voice: Coach v2 requested but could not build "
                         "from %s — coaching DISABLED (not falling back to v1)",
                         reference_path,
                     )

@@ -141,6 +141,7 @@ def test_sidecar_command_uses_env_for_token_and_voice(tmp_path: Path) -> None:
     assert env["AC_COPILOT_SIDECAR_TOKEN"] == "secret-token"
     assert env["AC_COPILOT_REFERENCE_ARCHIVE"] == str((tmp_path / "ref.json").resolve())
     assert env["AC_COPILOT_ALIEN_LINE"] == str((tmp_path / "alien.json").resolve())
+    assert env["AC_COPILOT_COACH_V2"] == "1"
     assert env["AC_COPILOT_VOICE_BANK"] == str((tmp_path / "voice-bank").resolve())
     assert env["AC_COPILOT_VOICE_TTS"] == "1"
 
@@ -1081,6 +1082,7 @@ def test_sidecar_environment_resolves_relative_voice_paths(tmp_path: Path) -> No
     assert env["AC_COPILOT_VOICE_BANK"] == str(bank_dir.resolve())
     assert env["AC_COPILOT_REFERENCE_ARCHIVE"] == str((tmp_path / "ref.json").resolve())
     assert env["AC_COPILOT_ALIEN_LINE"] == str((tmp_path / "alien/line.json").resolve())
+    assert env["AC_COPILOT_COACH_V2"] == "1"
 
 
 def test_close_terminates_supervised_sidecar(tmp_path: Path) -> None:

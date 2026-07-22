@@ -192,6 +192,26 @@ def test_wire_voice_builds_and_installs_observer_from_reference(tmp_path, monkey
     assert server._observer is not None
 
 
+def test_alien_line_configuration_activates_coach_v2_without_separate_flag(tmp_path, monkeypatch):
+    monkeypatch.delenv("AC_COPILOT_COACH_V2", raising=False)
+    monkeypatch.delenv("AC_COPILOT_ALIEN_LINE", raising=False)
+    monkeypatch.setattr(server, "_observer", None)
+    server.set_coach_runtime(None)
+    ref = tmp_path / "reference.json"
+    ref.write_text(json.dumps(_corner_archive()), encoding="utf-8")
+
+    server._wire_voice(
+        server.VoiceRuntimeConfig(
+            reference_path=str(ref),
+            bank_dir=None,
+            alien_line_path=str(tmp_path / "missing-alien.json"),
+        )
+    )
+
+    assert server._coach_runtime is not None
+    assert server._coach_runtime.frontier["reason"] == "alien_artifact_unreadable"
+
+
 def test_wire_voice_no_corners_reference_disables_observer(tmp_path, monkeypatch):
     # build_observer_from_reference returns None for a reference with no usable corners; _wire_voice
     # logs and leaves the observer UNINSTALLED (best-effort), never raising. The sentinel makes the

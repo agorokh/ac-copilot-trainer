@@ -603,6 +603,7 @@ def build_coach_runtime(
         {k: row[fi[k]] for k in ("spline", "speed", "brake", "throttle", "steer") if k in fi}
         for row in tr.get("samples") or []
     ]
+    ref_sigs = _reference_signatures(refs, anchors, ref_frames)
     # Pacing thresholds are env-tunable so the autonomous harness can verify PRIMEs in a few laps
     # (lower assess/hysteresis); production defaults stay conservative.
     profile = _profile_for_reference_combo(
@@ -667,13 +668,15 @@ def build_coach_runtime(
                     combo=combo,
                     profile=profile,
                     driver_level=policy.level,
+                    reference_brake_points={
+                        index: signature.brake_point_spline for index, signature in ref_sigs.items()
+                    },
                     expected_plant_sha12=alien_expected_plant_sha12 or "",
                     expected_fast_lane_sha12=alien_expected_fast_lane_sha12 or "",
                 )
             except FrontierError as exc:
                 frontier = frontier_fallback(str(exc))
 
-    ref_sigs = _reference_signatures(refs, anchors, ref_frames)
     # Only minimum speed is borrowed from the derived frontier. All other signature fields remain
     # the human reference technique, which is the central safety/coachability invariant for P5.
     for ref in refs:

@@ -22,6 +22,7 @@ from tools.ai_sidecar.track_reference import CornerReference, build_references
 _SCHEMA_VERSION = 1
 _ENVELOPE_TOL = 1e-3
 _APEX_MATCH_TOL = 0.08
+_BRAKE_POINT_MATCH_TOL = 0.04
 _GAIN_BY_LEVEL_KMH = {
     "unknown": 1.5,
     "novice": 2.0,
@@ -343,21 +344,46 @@ def _match_corners(
     return matched
 
 
-def _corner_history(profile: Mapping[str, Any] | None) -> dict[int, Mapping[str, Any]]:
+def _driver_samples_by_reference(
+    profile: Mapping[str, Any] | None,
+    reference_brake_points: Mapping[int, float | None],
+) -> dict[int, list[Mapping[str, Any]]]:
+    """Assign raw driver samples to the nearest reference brake point.
+
+    Profile ``corner_index`` is deliberately ignored: it is an enumeration of each source lap's
+    segmentation and can shift when a complex splits or merges. The per-lap brake-point spline is
+    the stable geometric identity. Old profiles without that field simply contribute no frontier
+    target until rebuilt, which is safer than borrowing another corner's speed.
+    """
     if not isinstance(profile, Mapping) or not isinstance(profile.get("corner_history"), Mapping):
         return {}
-    out: dict[int, Mapping[str, Any]] = {}
+    usable_refs = {
+        index: brake_point
+        for index, brake_point in reference_brake_points.items()
+        if brake_point is not None
+    }
+    out: dict[int, list[Mapping[str, Any]]] = {index: [] for index in usable_refs}
     for row in profile["corner_history"].values():
         if not isinstance(row, Mapping):
             continue
-        raw_index = row.get("corner_index")
-        if isinstance(raw_index, bool):
+        samples = row.get("corner_samples_by_lap_uuid")
+        if not isinstance(samples, Mapping):
             continue
-        try:
-            index = int(raw_index)
-        except (TypeError, ValueError):
-            continue
-        out[index] = row
+        for sample in samples.values():
+            if not isinstance(sample, Mapping):
+                continue
+            brake_point = _finite(sample.get("brake_point_spline"))
+            if brake_point is None or _finite(sample.get("min_speed_kmh"), positive=True) is None:
+                continue
+            candidates = sorted(
+                (
+                    (_circular_distance(brake_point, ref_brake), ref_index)
+                    for ref_index, ref_brake in usable_refs.items()
+                ),
+                key=lambda item: item[0],
+            )
+            if candidates and candidates[0][0] <= _BRAKE_POINT_MATCH_TOL:
+                out[candidates[0][1]].append(sample)
     return out
 
 
@@ -378,6 +404,7 @@ def derive_coachable_frontier(
     combo: tuple[str, str, str],
     profile: Mapping[str, Any] | None,
     driver_level: str,
+    reference_brake_points: Mapping[int, float | None],
     expected_plant_sha12: str,
     expected_fast_lane_sha12: str,
 ) -> dict[str, Any]:
@@ -393,20 +420,28 @@ def derive_coachable_frontier(
         expected_fast_lane_sha12=expected_fast_lane_sha12,
     )
     matches = _match_corners(references, build_references(alien_trace))
-    rows = _corner_history(profile)
+    samples_by_reference = _driver_samples_by_reference(profile, reference_brake_points)
 
     planned: list[tuple[CornerReference, float, dict[str, Any]]] = []
     for match in matches:
         ref = next(item for item in references if item.index == match.reference_index)
-        row = rows.get(ref.index)
-        if row is None:
+        samples = samples_by_reference.get(ref.index) or []
+        if not samples:
             continue
-        driver_best = _finite(row.get("best_min_speed_kmh"), positive=True)
-        if driver_best is None:
-            continue
+        driver_best = max(
+            speed
+            for sample in samples
+            if (speed := _finite(sample.get("min_speed_kmh"), positive=True)) is not None
+        )
         if driver_best >= match.ceiling_kmh:
             raise FrontierError("driver_at_or_above_alien_ceiling")
-        cap = _gain_cap(driver_level, row)
+        reversals = [
+            value
+            for sample in samples
+            if (value := _finite(sample.get("steer_reversals"))) is not None
+        ]
+        technique = {"avg_steer_reversals": sum(reversals) / len(reversals) if reversals else None}
+        cap = _gain_cap(driver_level, technique)
         target = round(min(match.ceiling_kmh, driver_best + cap), 1)
         planned.append(
             (

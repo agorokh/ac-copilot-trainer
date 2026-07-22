@@ -404,6 +404,10 @@ class GamePointSupervisor:
             "AC_COPILOT_ALIEN_LINE",
             _resolve_launcher_path(self.config.alien_line, base=base),
         )
+        if self.config.alien_line:
+            # An alien frontier is a Coach v2 feature; make the launcher setting operational rather
+            # than silently leaving the legacy observer active behind an undocumented prerequisite.
+            env["AC_COPILOT_COACH_V2"] = "1"
         _put_if_present(
             env,
             "AC_COPILOT_VOICE_BANK",

@@ -166,6 +166,9 @@ def test_profile_builds_session_pb_and_corner_history(tmp_path: Path, monkeypatc
     assert corner["valid_laps"] == 2
     assert corner["delta_min_speed_kmh"] == 4.0
     assert corner["avg_throttle"] == 0.45
+    assert {
+        sample["brake_point_spline"] for sample in corner["corner_samples_by_lap_uuid"].values()
+    } == {0.2}
 
 
 def test_existing_preferences_and_focus_survive_profile_rebuild(tmp_path: Path) -> None:
