@@ -67,10 +67,22 @@ def test_never_live_when_sim_never_renders():
     assert classify(samples, go_live_timeout=30.0) is LaunchVerdict.NEVER_LIVE
 
 
-def test_never_live_when_process_up_but_render_never_starts():
-    """acs is alive but the packet never advances — a stuck launch, not a live session."""
+def test_init_wedge_when_process_up_but_render_never_starts():
+    """#630 Part C — acs alive through the whole budget, stream never advances: the init wedge.
+
+    A main thread wedged inside ``accRenderingAdv.dll`` DURING session init never produces a
+    packet-advancing sample, so it can never reach the ``FROZE`` branch. Bucketing it as
+    ``never_live`` made every freeze rate computed from the ``FROZE`` bucket understate the #627
+    init livelock — this is the distinct verdict that fixes the denominator.
+    """
     samples = trace([(float(t), 7, True) for t in range(0, 40, 2)])
-    assert classify(samples, go_live_timeout=30.0) is LaunchVerdict.NEVER_LIVE
+    assert classify(samples, go_live_timeout=30.0) is LaunchVerdict.WEDGED_INIT
+
+
+def test_init_wedge_when_process_up_but_section_never_appears():
+    """acs alive the whole budget with NO readable shared memory is the same wedge shape."""
+    samples = trace([(float(t), None, True) for t in range(0, 40, 2)])
+    assert classify(samples, go_live_timeout=30.0) is LaunchVerdict.WEDGED_INIT
 
 
 def test_process_exit_after_first_appearing_fails_before_go_live_timeout():
@@ -473,14 +485,16 @@ def test_corpse_persisting_into_the_new_acs_lifetime_does_not_fail_the_launch() 
 
 def test_pre_go_live_regression_does_not_bypass_the_go_live_timeout() -> None:
     """Rebasing before go-live must not become an infinite grace period."""
-    # A stream that keeps resetting and never advances-while-ready must still time out.
+    # A stream that keeps resetting and never advances must still time out. acs.exe was alive
+    # through the whole budget without ever advancing its stream, so the timeout buckets as the
+    # init wedge (#630 Part C) — the essential property is that it times out at all.
     samples = [
         Sample(t=float(t), gfx_packet=1_000 - t, acs_alive=True, entry_ready=False, drivable=False)
         for t in range(0, 40, 2)
     ]
 
     assert classify(samples, go_live_timeout=30.0, stability_window=45.0) is (
-        LaunchVerdict.NEVER_LIVE
+        LaunchVerdict.WEDGED_INIT
     )
 
 
@@ -577,6 +591,80 @@ class TestAttemptReadiness:
         with pytest.raises(_Car0NotDrivable):
             readiness.observe(packet=300, entry_ready=True)
 
+    def test_cached_verdict_expires_and_reprobes(self) -> None:
+        """#630 Part D — the Car0 cache is a TTL, not a one-shot latch.
+
+        A session that renders frames but LOSES drivability after go-live was previously held as
+        STABLE forever, because the handshake could never run a second time within the attempt.
+        """
+        now = [0.0]
+        calls = []
+        readiness = AttemptReadiness(
+            lambda: (calls.append(1), True)[1], reprobe_seconds=45.0, clock=lambda: now[0]
+        )
+        self._earn_ownership(readiness)
+
+        readiness.observe(packet=300, entry_ready=True)
+        assert len(calls) == 1
+        now[0] = 44.0
+        readiness.observe(packet=400, entry_ready=True)
+        assert len(calls) == 1  # inside the TTL: cached
+        now[0] = 45.0
+        readiness.observe(packet=500, entry_ready=True)
+        assert len(calls) == 2  # TTL expired: the handshake re-earns the verdict
+
+    def test_expired_reprobe_failure_fails_the_attempt(self) -> None:
+        """Losing drivability mid-window must surface as _Car0NotDrivable, not stay STABLE."""
+        now = [0.0]
+        verdicts = iter([True, False])
+        readiness = AttemptReadiness(
+            lambda: next(verdicts), reprobe_seconds=10.0, clock=lambda: now[0]
+        )
+        self._earn_ownership(readiness)
+
+        ready, drivable = readiness.observe(packet=300, entry_ready=True)
+        assert (ready, drivable) == (True, True)
+        now[0] = 10.0
+        with pytest.raises(_Car0NotDrivable):
+            readiness.observe(packet=400, entry_ready=True)
+
+    def test_none_reprobe_seconds_restores_the_one_shot_latch(self) -> None:
+        now = [0.0]
+        calls = []
+        readiness = AttemptReadiness(
+            lambda: (calls.append(1), True)[1], reprobe_seconds=None, clock=lambda: now[0]
+        )
+        self._earn_ownership(readiness)
+
+        readiness.observe(packet=300, entry_ready=True)
+        now[0] = 10_000.0
+        readiness.observe(packet=400, entry_ready=True)
+        assert len(calls) == 1
+
+    def test_regression_resets_the_reprobe_clock_with_the_cache(self) -> None:
+        """A new generation must not inherit the old generation's TTL stamp."""
+        now = [0.0]
+        calls = []
+        readiness = AttemptReadiness(
+            lambda: (calls.append(1), True)[1], reprobe_seconds=45.0, clock=lambda: now[0]
+        )
+        self._earn_ownership(readiness)
+        readiness.observe(packet=300, entry_ready=True)
+        assert len(calls) == 1
+
+        now[0] = 44.0  # inside the TTL — but the session is replaced
+        assert readiness.observe(packet=5, entry_ready=True) == (None, None)
+        readiness.observe(packet=9, entry_ready=True)
+        assert len(calls) == 2  # re-earned by the new generation, stamped at t=44
+
+        now[0] = 88.0
+        readiness.observe(packet=20, entry_ready=True)
+        assert len(calls) == 2  # 44 s since the NEW stamp < 45 s TTL: cached
+
+    def test_rejects_non_positive_reprobe_seconds(self) -> None:
+        with pytest.raises(ValueError, match="reprobe_seconds"):
+            AttemptReadiness(lambda: True, reprobe_seconds=0.0)
+
 
 def test_empty_trace_is_pending():
     assert classify([]) is LaunchVerdict.PENDING
@@ -631,6 +719,84 @@ class TestRetryLoop:
     def test_rejects_pending_attempt_result(self):
         with pytest.raises(ValueError, match="non-terminal"):
             run_retry_loop(lambda _: LaunchVerdict.PENDING, max_attempts=1)
+
+    def test_init_wedge_breaks_the_never_live_streak(self):
+        """#630 Part C — WEDGED_INIT proves CM delivered an acs.exe; restarting CM is wrong."""
+        seq = [LaunchVerdict.NEVER_LIVE, LaunchVerdict.WEDGED_INIT, LaunchVerdict.NEVER_LIVE]
+        calls: list[int] = []
+        run_retry_loop(
+            lambda i: seq[i - 1],
+            max_attempts=3,
+            on_never_live_streak=lambda: calls.append(1),
+            never_live_before_restart=2,
+        )
+        assert calls == []
+
+    def test_init_wedge_is_counted_in_its_own_bucket(self):
+        seq = [LaunchVerdict.WEDGED_INIT, LaunchVerdict.FROZE, LaunchVerdict.STABLE]
+        report = run_retry_loop(lambda i: seq[i - 1], max_attempts=5)
+        assert report.succeeded
+        assert (report.froze, report.wedged_init, report.never_live, report.stable) == (1, 1, 0, 1)
+        assert "wedged_init 1" in report.summary()
+
+    def test_every_attempt_is_recorded_with_verdict_and_uptime(self):
+        """#630 Part E / #627 §9.2 — verdict + uptime + launch index for EVERY trial."""
+        seq = [LaunchVerdict.FROZE, LaunchVerdict.STABLE]
+        clock = iter([10.0, 15.5, 20.0, 26.25])  # start/end per attempt
+        uptimes = iter([2.1, 2.2])
+        report = run_retry_loop(
+            lambda i: seq[i - 1],
+            max_attempts=5,
+            clock=lambda: next(clock),
+            wall_clock=lambda: 1_700_000_000.0,
+            uptime_hours=lambda: next(uptimes),
+        )
+        assert [record.attempt for record in report.attempts_log] == [1, 2]
+        assert [record.verdict for record in report.attempts_log] == seq
+        assert [record.elapsed_s for record in report.attempts_log] == [5.5, 6.25]
+        assert [record.uptime_h for record in report.attempts_log] == [2.1, 2.2]
+        assert all("T" in record.started_at_utc for record in report.attempts_log)
+
+    def test_trials_mode_runs_every_attempt_past_a_stable(self):
+        """stop_on_stable=False is the #627 §9.2 rate-measurement mode: a full denominator."""
+        seq = [
+            LaunchVerdict.STABLE,
+            LaunchVerdict.FROZE,
+            LaunchVerdict.STABLE,
+            LaunchVerdict.WEDGED_INIT,
+        ]
+        report = run_retry_loop(lambda i: seq[i - 1], max_attempts=4, stop_on_stable=False)
+        assert report.attempts == 4
+        assert (report.stable, report.froze, report.wedged_init) == (2, 1, 1)
+        assert len(report.attempts_log) == 4
+        # The report verdict is the LAST verdict; "succeeded" is not the point of a measurement.
+        assert report.verdict is LaunchVerdict.WEDGED_INIT
+
+    def test_report_as_dict_is_json_serializable(self):
+        import json as json_module
+
+        report = run_retry_loop(
+            lambda i: LaunchVerdict.STABLE, max_attempts=1, uptime_hours=lambda: None
+        )
+        payload = json_module.loads(json_module.dumps(report.as_dict()))
+        assert payload["schema"] == "resilient-launch-report/v1"
+        assert payload["verdict"] == "stable"
+        assert payload["counts"] == {
+            "stable": 1,
+            "froze": 0,
+            "wedged_init": 0,
+            "never_live": 0,
+        }
+        assert payload["attempts_log"][0]["attempt"] == 1
+        assert payload["attempts_log"][0]["uptime_h"] is None
+
+    def test_uptime_reader_failure_does_not_fail_the_attempt(self):
+        def boom() -> float:
+            raise OSError("GetTickCount64 unavailable")
+
+        report = run_retry_loop(lambda i: LaunchVerdict.STABLE, max_attempts=1, uptime_hours=boom)
+        assert report.succeeded
+        assert report.attempts_log[0].uptime_h is None
 
 
 @pytest.mark.parametrize("stall_samples", [2, 3, 5])
