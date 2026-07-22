@@ -19,7 +19,16 @@ from tools.ac_harness.init_perturber_ab import (
     render_markdown,
     wilson_interval,
 )
-from tools.ac_harness.resilient_launch import REPORT_SCHEMA
+from tools.ac_harness.resilient_launch import DEFAULT_GO_LIVE_TIMEOUT, REPORT_SCHEMA
+
+_DEFAULT_LAUNCH = {
+    "car": "ks_porsche_911_gt3_r_2016",
+    "track": "spa",
+    "layout": None,
+    "stability_window": 140.0,
+    "go_live_timeout": DEFAULT_GO_LIVE_TIMEOUT,
+    "trials_per_invocation": 1,
+}
 
 
 def _write_report(
@@ -37,13 +46,7 @@ def _write_report(
         "verdict": verdict,
         "attempts": 1,
         "counts": counts,
-        "launch": launch
-        or {
-            "car": "ks_porsche_911_gt3_r_2016",
-            "track": "spa",
-            "stability_window": 140.0,
-            "trials_per_invocation": 1,
-        },
+        "launch": launch or dict(_DEFAULT_LAUNCH),
         "attempts_log": [
             {
                 "attempt": 1,
@@ -83,9 +86,12 @@ def test_plan_records_operator_gate_and_plain_report_names() -> None:
     assert plan["launch"] == {
         "car": "ks_porsche_911_gt3_r_2016",
         "track": "spa",
+        "layout": None,
         "stability_window": 140.0,
+        "go_live_timeout": DEFAULT_GO_LIVE_TIMEOUT,
         "trials_per_invocation": 1,
     }
+    assert plan["analyzable_minimum_per_arm"] == MIN_TRIALS_PER_ARM
     assert plan["randomization_seed"] == 625
     assert all(
         {plan["trials"][offset]["condition"], plan["trials"][offset + 1]["condition"]}
@@ -343,12 +349,38 @@ def test_report_launch_must_match_plan(tmp_path: Path) -> None:
         launch={
             "car": "wrong_car",
             "track": "spa",
+            "layout": None,
             "stability_window": 140.0,
+            "go_live_timeout": DEFAULT_GO_LIVE_TIMEOUT,
             "trials_per_invocation": 1,
         },
     )
     with pytest.raises(ValueError, match="launch.car"):
         load_observations(plan, tmp_path, require_complete=False)
+
+
+def test_overscheduled_plan_can_absorb_never_live() -> None:
+    """Scheduled n can exceed the analyzable floor so never_live does not auto-fail the run."""
+    observations: list[Observation] = []
+    for _index in range(21):
+        for condition, verdict in (
+            ("overlays_on", "never_live" if _index == 0 else "stable"),
+            ("overlays_off", "stable"),
+        ):
+            observations.append(
+                Observation(
+                    trial=len(observations) + 1,
+                    condition=condition,
+                    verdict=verdict,
+                    started_at_utc=f"2026-07-22T12:{len(observations):02d}:00Z",
+                    elapsed_s=10.0,
+                    uptime_h=1.0 + len(observations) / 60,
+                )
+            )
+    # 21 scheduled / arm, one never_live on overlays_on → 20 analyzable.
+    result = analyze(observations, minimum_per_arm=MIN_TRIALS_PER_ARM)
+    assert result["arms"]["overlays_on"]["analyzable_total"] == 20
+    assert result["conclusion"] == "no_measurable_effect"
 
 
 def test_all_never_live_arm_reports_insufficient_sample() -> None:

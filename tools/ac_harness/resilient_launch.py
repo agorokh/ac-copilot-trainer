@@ -1709,13 +1709,21 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             launch={
                 "car": args.car,
                 "track": args.track,
+                "layout": args.layout,
                 "stability_window": args.stability_window,
+                "go_live_timeout": args.go_live_timeout,
                 "trials_per_invocation": int(args.trials) if args.trials is not None else 1,
             },
         )
         report_written = True
         if args.json_path is not None:
             report_written = _write_report_json(report, args.json_path)
+            if not report_written and not trials_mode:
+                # Exclusive create refused an existing path — do not exit 0 over stale evidence.
+                _log("launch aborted: the requested report JSON could not be written")
+                if not report.succeeded:
+                    _make_rig_safe(acs_present, release_requested=release_requested)
+                return 1
         if trials_mode:
             # #627 §9.2 — the deliverable of a measurement run is the recorded denominator, not a
             # held session. Say every verdict out loud, leave the rig CLEAN (a stable final trial

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.ac_harness.resilient_launch import (
+    DEFAULT_GO_LIVE_TIMEOUT,
     FREEZE_VERDICTS,
     REPORT_SCHEMA,
     TERMINAL_VERDICTS,
@@ -111,15 +112,25 @@ def build_plan(
     randomization_seed: int = DEFAULT_RANDOMIZATION_SEED,
     car: str = DEFAULT_CAR,
     track: str = DEFAULT_TRACK,
+    layout: str | None = None,
     stability_window: float = DEFAULT_STABILITY_WINDOW,
+    go_live_timeout: float = DEFAULT_GO_LIVE_TIMEOUT,
     generated_at_utc: str | None = None,
     allow_undersized: bool = False,
 ) -> dict[str, Any]:
-    """Build a reproducible experiment plan; settings remain operator-owned."""
+    """Build a reproducible experiment plan; settings remain operator-owned.
+
+    ``trials_per_arm`` is the scheduled launch count (may exceed the analyzable floor so
+    ``never_live`` replacements can still reach :data:`MIN_TRIALS_PER_ARM` analyzable trials).
+    """
     if not car.strip() or not track.strip():
         raise ValueError("car and track must not be blank")
+    if layout is not None and not layout.strip():
+        raise ValueError("layout must not be blank when provided")
     if not math.isfinite(stability_window) or stability_window <= 0:
         raise ValueError("stability_window must be finite and > 0")
+    if not math.isfinite(go_live_timeout) or go_live_timeout <= 0:
+        raise ValueError("go_live_timeout must be finite and > 0")
     if trials_per_arm < MIN_TRIALS_PER_ARM and not allow_undersized:
         raise ValueError(
             f"trials_per_arm must be >= {MIN_TRIALS_PER_ARM} "
@@ -145,11 +156,14 @@ def build_plan(
         "issue": 625,
         "generated_at_utc": stamp,
         "trials_per_arm": trials_per_arm,
+        "analyzable_minimum_per_arm": MIN_TRIALS_PER_ARM,
         "randomization_seed": randomization_seed,
         "launch": {
             "car": car,
             "track": track,
+            "layout": layout,
             "stability_window": stability_window,
+            "go_live_timeout": go_live_timeout,
             "trials_per_invocation": 1,
         },
         "operator_owned_settings": True,
@@ -265,7 +279,7 @@ def _parse_report(path: Path, trial: PlannedTrial, plan_launch: dict[str, Any]) 
     launch = report.get("launch")
     if not isinstance(launch, dict):
         raise ValueError(f"report {path} must record launch configuration")
-    for key in ("car", "track", "stability_window"):
+    for key in ("car", "track", "layout", "stability_window", "go_live_timeout"):
         if launch.get(key) != plan_launch.get(key):
             raise ValueError(f"report {path} launch.{key}={launch.get(key)!r} does not match plan")
     if not isinstance(started_at_utc, str):
@@ -315,11 +329,15 @@ def load_observations(
             "uptime_h must be nondecreasing across the run "
             "(a mid-experiment reboot confounds the freeze endpoint)"
         )
-    # Second-resolution stamps may collide on fast never_live failures; when that happens,
-    # require strictly increasing uptime so trial order is still proven.
-    if len(stamps) != len(set(stamps)):
-        if any(later <= earlier for earlier, later in zip(uptimes, uptimes[1:], strict=False)):
-            raise ValueError("duplicate report timestamps require strictly increasing uptime_h")
+    # Second-resolution stamps may collide on fast never_live failures; require strictly
+    # increasing uptime only for the adjacent pairs that share a stamp.
+    for earlier_stamp, later_stamp, earlier_up, later_up in zip(
+        stamps, stamps[1:], uptimes, uptimes[1:], strict=False
+    ):
+        if earlier_stamp == later_stamp and later_up <= earlier_up:
+            raise ValueError(
+                "duplicate adjacent report timestamps require strictly increasing uptime_h"
+            )
     return tuple(observations)
 
 
@@ -570,7 +588,9 @@ def _format_trial_command(
     *,
     car: str,
     track: str,
+    layout: str | None,
     stability_window: float,
+    go_live_timeout: float,
     report_path: str,
 ) -> str:
     """Build a pasteable launch line rooted at the checkout (so ``tools`` imports)."""
@@ -582,13 +602,21 @@ def _format_trial_command(
         car,
         "--track",
         track,
-        "--stability-window",
-        f"{stability_window:g}",
-        "--trials",
-        "1",
-        "--json",
-        report_path,
     ]
+    if layout is not None:
+        parts.extend(["--layout", layout])
+    parts.extend(
+        [
+            "--stability-window",
+            f"{stability_window:g}",
+            "--go-live-timeout",
+            f"{go_live_timeout:g}",
+            "--trials",
+            "1",
+            "--json",
+            report_path,
+        ]
+    )
     return " ".join(_shell_quote(part) for part in parts)
 
 
@@ -606,7 +634,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     plan_parser.add_argument("--seed", type=int, default=DEFAULT_RANDOMIZATION_SEED)
     plan_parser.add_argument("--car", default=DEFAULT_CAR)
     plan_parser.add_argument("--track", default=DEFAULT_TRACK)
+    plan_parser.add_argument("--layout", default=None)
     plan_parser.add_argument("--stability-window", type=float, default=DEFAULT_STABILITY_WINDOW)
+    plan_parser.add_argument("--go-live-timeout", type=float, default=DEFAULT_GO_LIVE_TIMEOUT)
     analyze_parser = subparsers.add_parser("analyze", help="analyze completed one-trial reports")
     analyze_parser.add_argument("--plan", required=True, type=Path)
     analyze_parser.add_argument("--reports-dir", required=True, type=Path)
@@ -619,7 +649,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 randomization_seed=args.seed,
                 car=args.car,
                 track=args.track,
+                layout=args.layout,
                 stability_window=args.stability_window,
+                go_live_timeout=args.go_live_timeout,
             )
             destination = _output_path(args.out)
             _write_new_json(destination, plan)
@@ -627,6 +659,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(
                 "OPERATOR GATE: explicitly approve and apply both Steam overlay and NVIDIA "
                 "ShadowPlay settings; reboot once before trial 001 and restore both after the run."
+            )
+            print(
+                f"Endpoint floor is {MIN_TRIALS_PER_ARM} analyzable trials/arm "
+                f"(scheduled {args.trials_per_arm}/arm); over-schedule to absorb never_live."
             )
             checkout = repo_checkout_root()
             print(
@@ -646,17 +682,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                     _format_trial_command(
                         car=args.car,
                         track=args.track,
+                        layout=args.layout,
                         stability_window=args.stability_window,
+                        go_live_timeout=args.go_live_timeout,
                         report_path=report_path,
                     )
                 )
             return 0
         plan = load_plan(args.plan)
         observations = load_observations(plan, args.reports_dir)
-        result = analyze(
-            observations,
-            minimum_per_arm=max(MIN_TRIALS_PER_ARM, int(plan["trials_per_arm"])),
-        )
+        # Analyzable floor is fixed at MIN_TRIALS_PER_ARM so over-scheduling can absorb never_live.
+        result = analyze(observations, minimum_per_arm=MIN_TRIALS_PER_ARM)
         if args.json_path is not None:
             destination = _output_path(args.json_path)
             _write_new_json(destination, result)
