@@ -561,6 +561,19 @@ def evaluate_s3(samples: Sequence[tuple[int | None, int | None, bool]]) -> S3Res
             gfx.append(gfx_packet)
         if phys_packet is not None:
             phys.append(phys_packet)
+    # Section-ownership proof (#647 review round 6): ``acpmf_*`` outlives its creator and stays
+    # mapped ~6 s INTO a new acs.exe's lifetime, so alive-and-sole checks can all pass while the
+    # readings are the previous session's frozen corpse — which would produce a "normal"
+    # NOT_RENDER_WEDGE from corpse data. Only an observed ADVANCE (either stream, between
+    # retained readings) proves a live writer owns the sections; without one, every reading is
+    # discarded and the capture refuses as insufficient. A wedge still proves ownership through
+    # its ADVANCING physics stream, so this cannot mask the #627 signature.
+    ownership_proven = any(
+        later > earlier for earlier, later in zip(gfx, gfx[1:], strict=False)
+    ) or any(later > earlier for earlier, later in zip(phys, phys[1:], strict=False))
+    if not ownership_proven:
+        gfx = []
+        phys = []
     return S3Result(
         gfx_static=len(gfx) >= 2 and len(set(gfx)) == 1,
         # STRICTLY monotonic across every adjacent retained pair — an endpoint-only comparison
@@ -1023,11 +1036,27 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     # now, and a thread that burned during S1 then parked in a wait would otherwise be convicted
     # as a livelock off wait-site RIPs (#647 review round 4; observed live on wedge #2).
     final_cycles: float | None = None
+    resample_failed = False
     try:
         final_rows = sample_cycles(pid, min(2.0, args.cycles_window))
-        final_cycles = next((row["cycles_per_s"] for row in final_rows if row["tid"] == tid), None)
     except OSError as exc:
+        # A transient measurement failure is ambiguous — fall back to the S1 rate with the gap
+        # recorded (selected_cycles.final stays null). A MISSING ROW below is not ambiguous.
         print(f"capture: final cycle resample failed ({exc}); falling back to the S1 rate")
+        resample_failed = True
+        final_rows = []
+    if not resample_failed:
+        final_cycles = next((row["cycles_per_s"] for row in final_rows if row["tid"] == tid), None)
+        if final_cycles is None:
+            # The selected thread no longer exists (#647 review round 6): emitting a verdict
+            # about a vanished thread from stale S1 cycles + earlier RIPs could report a
+            # livelock after the suspect already completed. Refuse instead.
+            print(
+                f"CAPTURE FAILED: selected tid {tid} is no longer a thread of pid {pid} — "
+                "the sampled thread exited during the capture; its S1 rate and RIPs describe "
+                "a thread that no longer exists. No verdict."
+            )
+            return 2
     effective_cycles = final_cycles if final_cycles is not None else hot_cycles
     selected_cycles = {
         "s1": round(hot_cycles, 1),

@@ -577,3 +577,38 @@ def test_capture_record_carries_s1_and_final_selected_rates() -> None:
     )
     payload = json.loads(json.dumps(record))
     assert payload["selected_cycles_per_s"] == {"s1": 2.9e9, "final": 1000.0}
+
+
+def test_s3_alive_correlated_corpse_without_any_advance_is_discarded() -> None:
+    """#647 review round 6 — the ~6 s handover: a NEW acs is alive-and-sole while acpmf still
+    exposes the previous session's frozen corpse. Without an observed advance there is no proof
+    a live writer owns the sections, so nothing may be retained (refusal, not NOT_RENDER_WEDGE
+    from corpse data)."""
+    from tools.ac_harness.freeze_forensics import evaluate_s3, s3_gate
+
+    result = evaluate_s3([(16_983, 9_999, True), (16_983, 9_999, True), (16_983, 9_999, True)])
+    assert result.gfx_readings == ()
+    assert result.phys_readings == ()
+    assert result.sufficient is False
+    refusal = s3_gate(result)
+    assert refusal is not None and refusal[0] == "capture_failed_insufficient_s3"
+
+
+def test_s3_wedge_ownership_is_proven_by_advancing_physics() -> None:
+    """A render wedge still earns ownership through its ADVANCING physics stream."""
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3([(23, 100, True), (23, 400, True), (23, 800, True)])
+    assert result.gfx_static is True
+    assert result.phys_advancing is True
+    assert result.sufficient is True
+
+
+def test_s3_new_session_publishing_during_capture_reads_as_recovered() -> None:
+    """Handover that completes mid-capture: the new stream advances, so ownership is earned and
+    the verdict path honestly reads NOT_WEDGED (the session is rendering)."""
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3([(16_983, 9_999, True), (121, 50, True), (180, 90, True)])
+    assert result.sufficient is True
+    assert result.gfx_static is False  # gfx moved -> classify() returns NOT_WEDGED
