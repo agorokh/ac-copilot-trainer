@@ -189,7 +189,6 @@ def main() -> int:
         emit_summary, n = emit_cross_repo_learned(
             result,
             _REPO_ROOT,
-            agents_md_path=Path("AGENTS.md"),
         )
         print(emit_summary)
         print(

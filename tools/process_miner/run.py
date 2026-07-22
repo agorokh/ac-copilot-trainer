@@ -73,7 +73,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--emit-learned",
         action="store_true",
-        help="Emit .claude/.cursor learned rules and optional AGENTS.md bullets (Tier 1)",
+        help="Emit paired .claude/.cursor learned rules (Tier 1)",
     )
 
     parser.add_argument(
@@ -81,13 +81,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=3,
         help="Minimum cluster size to emit a learned rule (default: 3)",
-    )
-
-    parser.add_argument(
-        "--agents-md",
-        type=str,
-        default="AGENTS.md",
-        help="Path to AGENTS.md for optional Learned Workspace Facts bullets",
     )
 
     parser.add_argument(
@@ -320,7 +313,6 @@ def _main_run(args: argparse.Namespace, rules_out: list[int]) -> int:
             repo=args.repo,
             repo_root=repo_root,
             min_occurrences=args.min_rule_occurrences,
-            agents_md_path=Path(args.agents_md),
         )
         rules_out[0] = n_emitted
         print(summary)
