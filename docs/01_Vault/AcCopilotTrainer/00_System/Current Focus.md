@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-22T05:30:00Z
+last_updated: 2026-07-22T08:54:43Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
@@ -43,6 +43,17 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-22):** PR [#656](https://github.com/agorokh/ac-copilot-trainer/pull/656)
+MERGED [`8e8bfbd`](https://github.com/agorokh/ac-copilot-trainer/commit/8e8bfbda7fecc429adaa1f14da2d8dfb5e23cba4)
+(#529 **P5**, issue #655 CLOSED). Coach v2 now consumes externally reverified alien-line evidence
+as a bounded, driver-level-aware minimum-speed frontier while the human reference retains all
+technique and cue timing. Driver history and alien corners are matched by unique spline geometry;
+unsafe or ambiguous evidence fails closed. Game Point propagates the optional path, automatically
+activates Coach v2, and public health omits personal metrics. Full parity: 3,270 passed, 89 skipped,
+83.55%; hosted checks and the 10-thread resolution gate were green. **Active #529 next:** issue
+[#654](https://github.com/agorokh/ac-copilot-trainer/issues/654) P4 scientist loop, then the
+remaining cross-combo/live pace gates. Do not close #529 on P5 alone.
 
 **Delivered (2026-07-22):** PR [#646](https://github.com/agorokh/ac-copilot-trainer/pull/646) MERGED
 `4265845` (#630 **Parts C+D+E**): `WEDGED_INIT` verdict (init livelock no longer buckets as

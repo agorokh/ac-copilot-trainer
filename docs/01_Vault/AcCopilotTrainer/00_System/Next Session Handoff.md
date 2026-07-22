@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-22T06:55:16Z
+last_updated: 2026-07-22T08:54:43Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/mcp-preflight-guard-2026-07-20.md
@@ -105,6 +105,47 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-22) — #529 P5 coachable alien frontier (#655, PR #656 MERGED)
+
+**PR [#656](https://github.com/agorokh/ac-copilot-trainer/pull/656) MERGED** at
+`2026-07-22T08:54:43Z` as squash
+[`8e8bfbd`](https://github.com/agorokh/ac-copilot-trainer/commit/8e8bfbda7fecc429adaa1f14da2d8dfb5e23cba4);
+issue [#655](https://github.com/agorokh/ac-copilot-trainer/issues/655) is **CLOSED**. Coach v2 can
+now derive a bounded per-corner minimum-speed target from the verified alien line while retaining
+the human reference's brake, throttle, steering, and cue anchors. Targets are personalized from
+raw same-combo driver samples matched by brake-point geometry, capped by driver level and steering
+instability, and fail closed when identity, provenance, current plant/lane evidence, envelope,
+geometry, or driver history is unsafe. Game Point carries the optional artifact path and activates
+Coach v2 automatically; unauthenticated health exposes only non-personal activation/source/reason
+metadata.
+
+**Review hardening:** ten actionable threads were fixed before merge: current-source evidence
+revalidation, complete path redaction, geometry rather than ordinal driver identity, automatic
+Coach v2 activation, uniqueness gates for brake/apex matching, open-polyline spline normalization,
+public-health privacy, `[0,1]` spline-domain validation, and AC content-ID plus resolved-root path
+containment. Every thread was resolved after a full latest-SHA cooldown; the enforce resolution
+ledger was clean.
+
+**Verification:** full local parity passed at **3,270 passed, 89 skipped**, **83.55% coverage**,
+`ci-fast: OK`; hosted `build`, `Canonical docs exist`, and `conformance` checks passed on exact head
+`ed94f57`. Generated on-disk plant/lane evidence was reloaded and reverified, a mutated speed
+profile with unchanged embedded hashes was rejected, and a runtime smoke personalized all five
+fixture corners without replacing demonstrated technique. This was not a Windows-rig pace run.
+
+**Post-merge classification:** `.env.example` changed only for optional
+`AC_COPILOT_ALIEN_LINE` / source override configuration. No migration, dependency, workflow,
+required environment, or immediate operator action exists.
+
+**Resume here / what remains on EPIC [#529](https://github.com/agorokh/ac-copilot-trainer/issues/529):**
+
+- Implement P4 in [#654](https://github.com/agorokh/ac-copilot-trainer/issues/654): the
+  evidence-gated scientist loop over alien self-play and one-parameter setup experiments, with
+  durable falsified-constraint suppression and keep-last-valid promotion.
+- Run the remaining cross-combo/live performance gates on the rig. P5 is code- and
+  evidence-loader-complete, but no claim is made that a new combo has reached alien pace or that
+  the personalized frontier has improved a real driver's lap yet.
+- Keep parent #529 **OPEN** until P4 and those performance gates are evidenced.
 
 ## Delivered (2026-07-22) — session UUID replay scoping (#622, PR #652 MERGED)
 
