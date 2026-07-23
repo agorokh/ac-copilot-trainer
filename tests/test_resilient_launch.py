@@ -1955,6 +1955,30 @@ def test_an_armed_clock_expires_even_on_a_neutral_sample() -> None:
     assert watch.observe(gfx_packet=None, phys_packet=None, now=25.0) is True
 
 
+@pytest.mark.parametrize(
+    ("report_written", "intentional_release", "expected"),
+    [
+        (True, True, 0),
+        (True, False, 1),
+        (False, True, 1),
+        (False, False, 1),
+    ],
+)
+def test_stable_session_exit_code_requires_written_report(
+    report_written: bool, intentional_release: bool, expected: int
+) -> None:
+    """#657 Qodo — failed exclusive --json publish must not exit 0 after STABLE."""
+    from tools.ac_harness.resilient_launch import stable_session_exit_code
+
+    assert (
+        stable_session_exit_code(
+            report_written=report_written,
+            intentional_release=intentional_release,
+        )
+        == expected
+    )
+
+
 class TestWriteReportJson:
     """#657 — exclusive publish without destination tombstones; refuse overwrite."""
 

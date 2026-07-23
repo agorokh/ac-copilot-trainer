@@ -776,6 +776,17 @@ _repo_checkout_root = repo_checkout_root
 _resolve_report_path = resolve_report_path
 
 
+def stable_session_exit_code(*, report_written: bool, intentional_release: bool = True) -> int:
+    """Exit code after a STABLE gate when an optional ``--json`` artifact was requested.
+
+    A failed exclusive report publish must not claim success (#657 / #625), but the live session
+    still continues into hold / ``--no-hold`` — we do not tear down solely for a missing artifact.
+    """
+    if not report_written:
+        return 1
+    return 0 if intentional_release else 1
+
+
 def _write_report_json(report: LaunchReport, path: Path) -> bool:
     """Write the machine-readable run record; report success so measurement runs can gate on it.
 
@@ -1819,7 +1830,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 "stability gate passed; exiting without hold (--no-hold) — AC left LIVE, "
                 "rig ownership released"
             )
-            return 0 if report_written else 1
+            return stable_session_exit_code(report_written=report_written)
 
         # The stable session belongs to this operator-facing launcher until AC exits. Releasing
         # the cross-worktree lock immediately after the gate would let a peer harness kill the
@@ -1844,9 +1855,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 hold_timeout=30.0,
             )
             os._exit(1)
-        if not report_written:
-            return 1
-        return 0 if intentional_release else 1
+        return stable_session_exit_code(
+            report_written=report_written,
+            intentional_release=intentional_release,
+        )
     finally:
         if preset is not None:
             try:
