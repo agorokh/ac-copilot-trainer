@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from tools.ac_harness import init_perturber_ab as ab_mod
 from tools.ac_harness.init_perturber_ab import (
     ANALYSIS_SCHEMA,
     MIN_TRIALS_PER_ARM,
@@ -20,7 +21,6 @@ from tools.ac_harness.init_perturber_ab import (
     render_markdown,
     wilson_interval,
 )
-from tools.ac_harness import init_perturber_ab as ab_mod
 from tools.ac_harness.resilient_launch import DEFAULT_GO_LIVE_TIMEOUT, REPORT_SCHEMA
 
 _DEFAULT_LAUNCH = {
