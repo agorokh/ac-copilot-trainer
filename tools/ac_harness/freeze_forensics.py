@@ -211,6 +211,56 @@ def selected_tid_confirmed(raw: str, tid: int) -> bool:
 _LM_HEADER_RE = re.compile(r"^\s*start\s+end\s+module name\s*$", re.IGNORECASE)
 
 
+#: ``lm`` listing row: `start end module name` with backtick-separated 64-bit addresses, e.g.
+#: ``00007ff8`f0210000 00007ff8`f7590000   DWrite     (deferred)``. The trailing load state is
+#: ignored; the module name may contain no spaces (cdb prints the image name token).
+_LM_ROW_RE = re.compile(
+    r"^\s*([0-9a-f`]{8,17})\s+([0-9a-f`]{8,17})\s+(\S+)", re.IGNORECASE | re.MULTILINE
+)
+
+#: whole-transcript form of :data:`_LM_HEADER_RE` — that one is anchored for per-line ``match``
+#: in :func:`extract_stack`; searching a multi-line transcript needs MULTILINE anchors.
+_LM_HEADER_ML_RE = re.compile(r"^\s*start\s+end\s+module name\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def parse_lm(raw: str) -> list[dict]:
+    """Module rows from a cdb transcript's ``lm`` listing. Pure — no I/O (#662).
+
+    The snapshot script already runs ``lm`` on every attach; this parses what
+    :func:`extract_stack` deliberately excludes from the stack text. Returns
+    ``{"module", "base", "end"}`` rows (ints), sorted by base, deduplicated. A transcript
+    without an ``lm`` header yields ``[]`` — the header check prevents reading the ``k``
+    frame table (whose Child-SP/RetAddr columns would otherwise match the row regex).
+    """
+    header = _LM_HEADER_ML_RE.search(raw)
+    if header is None:
+        return []
+    rows: dict[int, dict] = {}
+    for match in _LM_ROW_RE.finditer(raw[header.end() :]):
+        try:
+            base = int(match.group(1).replace("`", ""), 16)
+            end = int(match.group(2).replace("`", ""), 16)
+        except ValueError:
+            continue
+        if end <= base:
+            continue
+        rows.setdefault(base, {"module": match.group(3), "base": base, "end": end})
+    return [rows[base] for base in sorted(rows)]
+
+
+def rebase_rip(rip: int, modules: Sequence[dict]) -> str:
+    """``module+0xRVA`` for a RIP inside a known module, else the raw hex address. Pure (#662).
+
+    This is what turns a capture record's opaque ``rips_hex`` into upstream-actionable
+    evidence — the 2026-07-22 wedge captures needed hand arithmetic against stack frames to
+    rebase RIPs into ``accRenderingAdv.dll``, and the second hot module went unnamed entirely.
+    """
+    for row in modules:
+        if row["base"] <= rip < row["end"]:
+            return f"{row['module']}+{hex(rip - row['base'])}"
+    return hex(rip)
+
+
 def extract_stack(raw: str) -> str:
     """The ``k`` call-stack frames from a cdb transcript — and ONLY those.
 
@@ -601,6 +651,7 @@ def build_capture_record(
     started_at_utc: str,
     elapsed_s: float,
     selected_cycles: dict[str, float | None] | None = None,
+    modules: Sequence[dict] = (),
 ) -> dict:
     """Assemble the machine-readable capture record (#627 §9.2 sibling for forensics runs).
 
@@ -609,7 +660,9 @@ def build_capture_record(
     against a disassembly without re-parsing decimal).
     """
     return {
-        "schema": "freeze-forensics-capture/v1",
+        # v1.1 (#662): adds `modules` (cdb lm map) + `rips_rebased` (module+RVA per RIP).
+        # Additive only — v1 consumers reading rips_hex/s3/verdict are unaffected.
+        "schema": "freeze-forensics-capture/v1.1",
         "started_at_utc": started_at_utc,
         "elapsed_s": round(elapsed_s, 3),
         "pid": pid,
@@ -629,6 +682,11 @@ def build_capture_record(
             for candidate_tid, stack in candidate_stacks
         ],
         "rips_hex": [hex(rip) for rip in rips],
+        "rips_rebased": [rebase_rip(rip, modules) for rip in rips],
+        "modules": [
+            {"module": row["module"], "base": hex(row["base"]), "end": hex(row["end"])}
+            for row in modules
+        ],
         "rip_span_bytes": rip_span(list(rips)),
         "s3": {
             "gfx_static": s3.gfx_static,
@@ -992,10 +1050,22 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         return 2
     s3_samples.append(_read_s3_once(pid))
 
+    # Module map accumulates from EVERY transcript (#662): each cdb attach already prints `lm`,
+    # and a module loading mid-capture appears in later listings — merging keeps them all.
+    lm_modules: dict[int, dict] = {}
+
+    def merge_lm(raw: str) -> None:
+        for module_row in parse_lm(raw):
+            lm_modules.setdefault(module_row["base"], module_row)
+
+    def sorted_modules() -> list[dict]:
+        return [lm_modules[base] for base in sorted(lm_modules)]
+
     candidate_stacks: list[tuple[int, str]] = []
     candidate_rips: dict[int, list[int]] = {}
     for row in rows[: args.candidates]:
         snapshot = cdb_snapshot(pid, tid=row["tid"])
+        merge_lm(snapshot.raw)
         candidate_stacks.append((row["tid"], snapshot.stack))
         if snapshot.rip is not None:
             candidate_rips.setdefault(row["tid"], []).append(snapshot.rip)
@@ -1025,6 +1095,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         if index or rips:
             time.sleep(args.rip_interval)
         snapshot = cdb_snapshot(pid, tid=tid)
+        merge_lm(snapshot.raw)
         if snapshot.rip is not None:
             rips.append(snapshot.rip)
         else:
@@ -1081,6 +1152,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             started_at_utc=started_utc,
             elapsed_s=time.monotonic() - started,
             selected_cycles=selected_cycles,
+            modules=sorted_modules(),
         )
         print(json.dumps(record, indent=2))
         if args.json_path is not None:
@@ -1108,6 +1180,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         started_at_utc=started_utc,
         elapsed_s=time.monotonic() - started,
         selected_cycles=selected_cycles,
+        modules=sorted_modules(),
     )
     print(json.dumps(record, indent=2))
     record_written = True
