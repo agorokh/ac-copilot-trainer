@@ -365,7 +365,7 @@ def test_capture_record_is_json_serializable_and_auditable() -> None:
         elapsed_s=42.5,
     )
     payload = json.loads(json.dumps(record))
-    assert payload["schema"] == "freeze-forensics-capture/v1"
+    assert payload["schema"] == "freeze-forensics-capture/v1.1"
     assert payload["selected_tid"] == 222
     assert payload["rips_hex"] == ["0x7ff000001000", "0x7ff000001020"]
     assert payload["rip_span_bytes"] == 0x20
@@ -612,3 +612,126 @@ def test_s3_new_session_publishing_during_capture_reads_as_recovered() -> None:
     result = evaluate_s3([(16_983, 9_999, True), (121, 50, True), (180, 90, True)])
     assert result.sufficient is True
     assert result.gfx_static is False  # gfx moved -> classify() returns NOT_WEDGED
+
+
+# --------------------------------------------------------------------------------------
+# #662 — lm module map in capture records.
+# --------------------------------------------------------------------------------------
+
+_LM_FIXTURE = (
+    "AC_TID=1a2b\n"
+    "rip=00007ff8`f16f0464 rsp=...\n"
+    " # Child-SP          RetAddr               Call Site\n"
+    "00 000000bf`676ff070 00007ff8`f1a6d084     DWrite!DWriteCreateFactory+0xacee73\n"
+    "start             end                 module name\n"
+    "00007ff7`10530000 00007ff7`17f00000   acs        (deferred)\n"
+    "00007ff8`f0210000 00007ff8`f7590000   DWrite     (deferred)\n"
+    "00007ff9`10000000 00007ff9`11000000   nvgpucomp64   (deferred)\n"
+    "00007ff9`88670000 00007ff9`88880000   ntdll      (pdb symbols)\n"
+)
+
+
+def test_parse_lm_reads_module_rows_after_the_header() -> None:
+    from tools.ac_harness.freeze_forensics import parse_lm
+
+    rows = parse_lm(_LM_FIXTURE)
+    assert [r["module"] for r in rows] == ["acs", "DWrite", "nvgpucomp64", "ntdll"]
+    assert rows[1]["base"] == 0x7FF8F0210000
+    assert rows[1]["end"] == 0x7FF8F7590000
+
+
+def test_parse_lm_without_header_reads_nothing() -> None:
+    """The k frame table's address columns must not be misread as module rows."""
+    from tools.ac_harness.freeze_forensics import parse_lm
+
+    no_lm = (
+        " # Child-SP          RetAddr               Call Site\n"
+        "00 000000bf`676ff070 00007ff8`f1a6d084     DWrite!x+0x1\n"
+    )
+    assert parse_lm(no_lm) == []
+
+
+def test_parse_lm_rejects_degenerate_ranges_and_dedups() -> None:
+    from tools.ac_harness.freeze_forensics import parse_lm
+
+    raw = (
+        "start             end                 module name\n"
+        "00007ff7`10530000 00007ff7`10530000   zero_len\n"
+        "00007ff7`20000000 00007ff7`10000000   inverted\n"
+        "00007ff8`f0210000 00007ff8`f7590000   DWrite\n"
+        "00007ff8`f0210000 00007ff8`f7590000   DWrite\n"
+    )
+    rows = parse_lm(raw)
+    assert [r["module"] for r in rows] == ["DWrite"]
+
+
+def test_rebase_rip_names_the_containing_module() -> None:
+    """The exact case from the 2026-07-22 wedge captures: RIPs needed hand arithmetic to
+    rebase into accRenderingAdv, and the 0x7ff910… module went unnamed."""
+    from tools.ac_harness.freeze_forensics import parse_lm, rebase_rip
+
+    modules = parse_lm(_LM_FIXTURE)
+    assert rebase_rip(0x7FF8F16F0464, modules) == "DWrite+0x14e0464"
+    assert rebase_rip(0x7FF9103A73B1, modules) == "nvgpucomp64+0x3a73b1"
+    # End is exclusive; base is inclusive.
+    assert rebase_rip(0x7FF8F0210000, modules) == "DWrite+0x0"
+    assert rebase_rip(0x7FF8F7590000, modules) != "DWrite+0x7380000"
+    # Outside every module: raw hex, never a wrong name.
+    assert rebase_rip(0x1234, modules) == "0x1234"
+
+
+def test_capture_record_v11_carries_modules_and_rebased_rips() -> None:
+    import json
+
+    from tools.ac_harness.freeze_forensics import (
+        build_capture_record,
+        evaluate_s3,
+        parse_lm,
+    )
+
+    record = build_capture_record(
+        pid=1,
+        tid=2,
+        tid_reason="hottest",
+        cycles_rows=[],
+        candidate_stacks=[],
+        rips=[0x7FF8F16F0464, 0x7FF9103A73B1],
+        s3=evaluate_s3([(1, 1, True), (1, 2, True)]),
+        verdict="not_wedged",
+        rationale="r",
+        started_at_utc="2026-07-22T00:00:00Z",
+        elapsed_s=1.0,
+        modules=parse_lm(_LM_FIXTURE),
+    )
+    payload = json.loads(json.dumps(record))
+    assert payload["schema"] == "freeze-forensics-capture/v1.1"
+    assert payload["rips_rebased"] == ["DWrite+0x14e0464", "nvgpucomp64+0x3a73b1"]
+    assert payload["modules"][1] == {
+        "module": "DWrite",
+        "base": "0x7ff8f0210000",
+        "end": "0x7ff8f7590000",
+    }
+
+
+def test_capture_record_without_modules_still_serializes() -> None:
+    """A capture whose transcripts never yielded an lm listing degrades additively."""
+    import json
+
+    from tools.ac_harness.freeze_forensics import build_capture_record, evaluate_s3
+
+    record = build_capture_record(
+        pid=1,
+        tid=2,
+        tid_reason="hottest",
+        cycles_rows=[],
+        candidate_stacks=[],
+        rips=[0x1000],
+        s3=evaluate_s3([]),
+        verdict="capture_failed_insufficient_s3",
+        rationale="r",
+        started_at_utc="2026-07-22T00:00:00Z",
+        elapsed_s=1.0,
+    )
+    payload = json.loads(json.dumps(record))
+    assert payload["modules"] == []
+    assert payload["rips_rebased"] == ["0x1000"]
