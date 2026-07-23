@@ -1348,7 +1348,7 @@ main: KPI PASS, false_green_rate 0.0%, 13/13 broken caught, 22 tests green, `mak
 
 ## Delivered (2026-07-04 UTC) — PR #503 MERGED (`76a3cf6`): #488 Part C+D degradation grain & setup linkage
 
-`/autonomous-deliver 488` (this session). **Closes EPIC #488**. 
+`/autonomous-deliver 488` (this session). **Closes EPIC #488**.
 Delivered the Parquet serialization and `coaching_lake` analytical tables to support ML training:
 - **Part C — Grain + serialization.** `lap_features` (per-lap scalar) and `stint_deg` (per-stint degradation slope) tables. Proper `laps_on_set`, fuel-correction, thermal window residence, and `dt` extraction. `--parquet` output with SchemaVer `1.1.0` and `union_by_name` backward compatibility.
 - **Part D — Setup⟷outcome linkage.** Reports mapping static setups to dynamic responses (running vs set camber in degrees; hot vs cold pressures). Correct unit translation from setup clicks to degrees (`set_camber_deg_*` via displayMultiplier fallback).

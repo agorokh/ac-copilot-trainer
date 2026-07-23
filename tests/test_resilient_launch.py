@@ -815,13 +815,16 @@ class TestRetryLoop:
         )
         payload = report.as_dict()
         assert payload["launch"] == launch
-        assert "launch" not in LaunchReport(
-            verdict=LaunchVerdict.STABLE,
-            attempts=1,
-            froze=0,
-            never_live=0,
-            stable=1,
-        ).as_dict()
+        assert (
+            "launch"
+            not in LaunchReport(
+                verdict=LaunchVerdict.STABLE,
+                attempts=1,
+                froze=0,
+                never_live=0,
+                stable=1,
+            ).as_dict()
+        )
 
     def test_uptime_reader_failure_does_not_fail_the_attempt(self):
         def boom() -> float:
@@ -2019,9 +2022,7 @@ class TestWriteReportJson:
         # No leftover temp siblings after a successful exclusive publish.
         assert list(tmp_path.glob(".trial.json.*.tmp")) == []
 
-    def test_fdopen_failure_closes_raw_fd_and_returns_false(
-        self, tmp_path, monkeypatch
-    ) -> None:
+    def test_fdopen_failure_closes_raw_fd_and_returns_false(self, tmp_path, monkeypatch) -> None:
         """#657 Qodo — mkstemp fd must not leak when fdopen raises."""
         from tools.ac_harness.resilient_launch import (
             LaunchReport,
