@@ -34,9 +34,10 @@ import json
 import math
 import os
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -74,6 +75,18 @@ class LaunchVerdict(StrEnum):
     FROZE = "froze"
     NEVER_LIVE = "never_live"
     WEDGED_INIT = "wedged_init"
+
+
+REPORT_SCHEMA = "resilient-launch-report/v1"
+TERMINAL_VERDICTS = frozenset(
+    {
+        LaunchVerdict.STABLE.value,
+        LaunchVerdict.FROZE.value,
+        LaunchVerdict.NEVER_LIVE.value,
+        LaunchVerdict.WEDGED_INIT.value,
+    }
+)
+FREEZE_VERDICTS = frozenset({LaunchVerdict.FROZE.value, LaunchVerdict.WEDGED_INIT.value})
 
 
 class _ContentManagerRestartTimeout(RuntimeError):
@@ -560,6 +573,7 @@ class LaunchReport:
     wedged_init: int = 0
     stable: int = 0
     attempts_log: tuple[AttemptRecord, ...] = field(default=())
+    launch: dict[str, object] | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -581,8 +595,8 @@ class LaunchReport:
 
     def as_dict(self) -> dict[str, object]:
         """JSON-serializable report — the machine-readable record #627 §9.2 asks for."""
-        return {
-            "schema": "resilient-launch-report/v1",
+        payload: dict[str, object] = {
+            "schema": REPORT_SCHEMA,
             "verdict": str(self.verdict),
             "attempts": self.attempts,
             "counts": {
@@ -593,6 +607,9 @@ class LaunchReport:
             },
             "attempts_log": [record.as_dict() for record in self.attempts_log],
         }
+        if self.launch is not None:
+            payload["launch"] = self.launch
+        return payload
 
 
 def _utc_stamp(epoch_seconds: float) -> str:
@@ -720,6 +737,11 @@ def _machine_uptime_hours() -> float | None:  # pragma: no cover - rig-only
         return None
 
 
+def repo_checkout_root() -> Path:
+    """The checkout this module runs from — used for import-root / relative plan paths (#657)."""
+    return Path(__file__).resolve().parents[2]
+
+
 def _scratch_root() -> Path:
     """The checkout's gitignored ``.scratch`` directory — the ONLY checkout-side approved root.
 
@@ -731,10 +753,10 @@ def _scratch_root() -> Path:
     ``--json`` destination that overwrites source files (#647 review round 3, applied here for
     parity — same boundary, same reason).
     """
-    return Path(__file__).resolve().parents[2] / ".scratch"
+    return repo_checkout_root() / ".scratch"
 
 
-def _resolve_report_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
+def resolve_report_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
     """Resolve the ``--json`` destination and require it inside an approved output root.
 
     #646 review: an absolute path or a ``..`` traversal would let this rig tool create parent
@@ -758,21 +780,91 @@ def _resolve_report_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
     )
 
 
-def _write_report_json(report: LaunchReport, path: Path) -> bool:  # pragma: no cover - rig-only
+# Back-compat aliases for callers/tests that still use the private names.
+_repo_checkout_root = repo_checkout_root
+_resolve_report_path = resolve_report_path
+
+
+def stable_session_exit_code(*, report_written: bool, intentional_release: bool = True) -> int:
+    """Exit code after a STABLE gate when an optional ``--json`` artifact was requested.
+
+    A failed exclusive report publish must not claim success (#657 / #625), but the live session
+    still continues into hold / ``--no-hold`` — we do not tear down solely for a missing artifact.
+    """
+    if not report_written:
+        return 1
+    return 0 if intentional_release else 1
+
+
+def _write_report_json(report: LaunchReport, path: Path) -> bool:
     """Write the machine-readable run record; report success so measurement runs can gate on it.
 
     A failure never masks the verdict in the log — but in ``--trials`` mode the record IS the
     deliverable, so the caller converts ``False`` into a nonzero exit (#646 review P1) instead of
     letting an automated measurement run read as successful with no record produced.
+
+    Publishes via a complete temp file + exclusive hardlink (Windows: exclusive rename). A finished
+    trial report is immutable evidence and must not be silently replaced (#657 / #625 A/B). The
+    destination is never created until the payload is fully written, so a crash cannot leave an
+    empty ``open(..., "x")`` tombstone that blocks retries (#657 daemon).
     """
+    payload = json.dumps(report.as_dict(), indent=2) + "\n"
+    tmp: Path | None = None
+    fd: int | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(report.as_dict(), indent=2) + "\n", encoding="utf-8")
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=str(path.parent),
+        )
+        tmp = Path(tmp_name)
+        # Take ownership of ``fd`` before writing so an ``fdopen`` failure cannot leak it
+        # (#657 Qodo — raw descriptor must close even when the wrapper never runs).
+        handle = os.fdopen(fd, "w", encoding="utf-8", newline="\n")
+        fd = None
+        with handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            _log(f"report exists, refusing overwrite: {path}")
+            return False
+        except OSError as link_exc:
+            if sys.platform != "win32":
+                _log(f"WARNING: could not publish report JSON {path}: {link_exc}")
+                return False
+            # Windows rename fails when the destination already exists (exclusive publish).
+            try:
+                os.rename(tmp, path)
+            except FileExistsError:
+                _log(f"report exists, refusing overwrite: {path}")
+                return False
+            tmp = None
+        else:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError as cleanup_exc:
+                _log(f"WARNING: could not remove report temp {tmp}: {cleanup_exc}")
+            tmp = None
         _log(f"report -> {path}")
         return True
     except OSError as exc:
         _log(f"WARNING: could not write report JSON {path}: {exc}")
         return False
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError as cleanup_exc:
+                _log(f"WARNING: could not remove report temp {tmp}: {cleanup_exc}")
 
 
 def _sample_now(
@@ -1502,8 +1594,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
     if args.json_path is not None:
         try:
-            args.json_path = _resolve_report_path(
-                args.json_path, approved_roots=(lock_path.parent, _scratch_root())
+            # Checkout writes are limited to gitignored ``.scratch`` — never the whole tree
+            # (tracked files / ``.git``) (#647 / #657).
+            args.json_path = resolve_report_path(
+                args.json_path,
+                approved_roots=(lock_path.parent, _scratch_root()),
             )
         except ValueError as exc:
             _log(f"launch aborted: {exc}")
@@ -1677,9 +1772,28 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         except _ContentManagerRestartTimeout as exc:
             _log(f"restart aborted: {exc}")
             return 1
+        report = replace(
+            report,
+            launch={
+                "car": args.car,
+                "track": args.track,
+                "layout": args.layout,
+                "stability_window": args.stability_window,
+                "go_live_timeout": args.go_live_timeout,
+                "trials_per_invocation": int(args.trials) if args.trials is not None else 1,
+            },
+        )
         report_written = True
         if args.json_path is not None:
             report_written = _write_report_json(report, args.json_path)
+            if not report_written and not trials_mode:
+                # Do not tear down a STABLE session over a missing artifact — that contradicts
+                # --no-hold (leave AC LIVE for a peer) and kills the operator's earned session
+                # (#657 daemon HIGH). Exit nonzero later so we never claim a clean measurement.
+                _log(
+                    "WARNING: report JSON could not be written — continuing hold/--no-hold "
+                    "without claiming a clean measurement artifact"
+                )
         if trials_mode:
             # #627 §9.2 — the deliverable of a measurement run is the recorded denominator, not a
             # held session. Say every verdict out loud, leave the rig CLEAN (a stable final trial
@@ -1725,7 +1839,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 "stability gate passed; exiting without hold (--no-hold) — AC left LIVE, "
                 "rig ownership released"
             )
-            return 0
+            return stable_session_exit_code(report_written=report_written)
 
         # The stable session belongs to this operator-facing launcher until AC exits. Releasing
         # the cross-worktree lock immediately after the gate would let a peer harness kill the
@@ -1750,7 +1864,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 hold_timeout=30.0,
             )
             os._exit(1)
-        return 0 if intentional_release else 1
+        return stable_session_exit_code(
+            report_written=report_written,
+            intentional_release=intentional_release,
+        )
     finally:
         if preset is not None:
             try:

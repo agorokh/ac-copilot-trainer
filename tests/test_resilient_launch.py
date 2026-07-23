@@ -9,6 +9,8 @@ semantics against synthetic traces — no Assetto Corsa, no Windows shared memor
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -790,6 +792,39 @@ class TestRetryLoop:
         }
         assert payload["attempts_log"][0]["attempt"] == 1
         assert payload["attempts_log"][0]["uptime_h"] is None
+
+    def test_report_as_dict_includes_launch_provenance(self):
+        """#657 Qodo — observable ``launch`` field must stay covered by tests."""
+        from tools.ac_harness.resilient_launch import LaunchReport, LaunchVerdict
+
+        launch = {
+            "car": "ks_porsche_911_gt3_r_2016",
+            "track": "spa",
+            "layout": None,
+            "stability_window": 140.0,
+            "go_live_timeout": 80.0,
+            "trials_per_invocation": 1,
+        }
+        report = LaunchReport(
+            verdict=LaunchVerdict.STABLE,
+            attempts=1,
+            froze=0,
+            never_live=0,
+            stable=1,
+            launch=launch,
+        )
+        payload = report.as_dict()
+        assert payload["launch"] == launch
+        assert (
+            "launch"
+            not in LaunchReport(
+                verdict=LaunchVerdict.STABLE,
+                attempts=1,
+                froze=0,
+                never_live=0,
+                stable=1,
+            ).as_dict()
+        )
 
     def test_uptime_reader_failure_does_not_fail_the_attempt(self):
         def boom() -> float:
@@ -1930,3 +1965,98 @@ def test_an_armed_clock_expires_even_on_a_neutral_sample() -> None:
     watch.observe(gfx_packet=5000, phys_packet=9030, now=5.0)  # clock armed, anchored at t=0
     # Section goes unreadable and never comes back; the armed clock still expires.
     assert watch.observe(gfx_packet=None, phys_packet=None, now=25.0) is True
+
+
+@pytest.mark.parametrize(
+    ("report_written", "intentional_release", "expected"),
+    [
+        (True, True, 0),
+        (True, False, 1),
+        (False, True, 1),
+        (False, False, 1),
+    ],
+)
+def test_stable_session_exit_code_requires_written_report(
+    report_written: bool, intentional_release: bool, expected: int
+) -> None:
+    """#657 Qodo — failed exclusive --json publish must not exit 0 after STABLE."""
+    from tools.ac_harness.resilient_launch import stable_session_exit_code
+
+    assert (
+        stable_session_exit_code(
+            report_written=report_written,
+            intentional_release=intentional_release,
+        )
+        == expected
+    )
+
+
+class TestWriteReportJson:
+    """#657 — exclusive publish without destination tombstones; refuse overwrite."""
+
+    def test_writes_once_and_refuses_overwrite(self, tmp_path, monkeypatch) -> None:
+        from tools.ac_harness.resilient_launch import (
+            LaunchReport,
+            LaunchVerdict,
+            _write_report_json,
+        )
+
+        logs: list[str] = []
+        monkeypatch.setattr(
+            "tools.ac_harness.resilient_launch._log",
+            lambda message: logs.append(message),
+        )
+        path = tmp_path / "trial.json"
+        report = LaunchReport(
+            verdict=LaunchVerdict.STABLE,
+            attempts=1,
+            froze=0,
+            never_live=0,
+            stable=1,
+        )
+        assert _write_report_json(report, path) is True
+        assert path.is_file()
+        assert json.loads(path.read_text(encoding="utf-8"))["verdict"] == "stable"
+        assert _write_report_json(report, path) is False
+        assert any("refusing overwrite" in line for line in logs)
+        # No leftover temp siblings after a successful exclusive publish.
+        assert list(tmp_path.glob(".trial.json.*.tmp")) == []
+
+    def test_fdopen_failure_closes_raw_fd_and_returns_false(self, tmp_path, monkeypatch) -> None:
+        """#657 Qodo — mkstemp fd must not leak when fdopen raises."""
+        from tools.ac_harness.resilient_launch import (
+            LaunchReport,
+            LaunchVerdict,
+            _write_report_json,
+        )
+
+        closed: list[int] = []
+        real_fdopen = os.fdopen
+        real_close = os.close
+
+        def boom_fdopen(fd, *args, **kwargs):
+            raise OSError("fdopen refused")
+
+        def tracking_close(fd):
+            closed.append(fd)
+            return real_close(fd)
+
+        monkeypatch.setattr("tools.ac_harness.resilient_launch.os.fdopen", boom_fdopen)
+        monkeypatch.setattr("tools.ac_harness.resilient_launch.os.close", tracking_close)
+        monkeypatch.setattr(
+            "tools.ac_harness.resilient_launch._log",
+            lambda _message: None,
+        )
+        path = tmp_path / "trial.json"
+        report = LaunchReport(
+            verdict=LaunchVerdict.STABLE,
+            attempts=1,
+            froze=0,
+            never_live=0,
+            stable=1,
+        )
+        assert _write_report_json(report, path) is False
+        assert not path.exists()
+        assert closed, "raw mkstemp fd must be closed after fdopen failure"
+        # Restore builtins for any leftover handles in this process.
+        monkeypatch.setattr("tools.ac_harness.resilient_launch.os.fdopen", real_fdopen)

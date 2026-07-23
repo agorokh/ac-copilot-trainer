@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-22T18:30:00Z
+last_updated: 2026-07-23T07:13:27Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/pr-657-resolve-blocked-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/wedge-live-forensics-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/issue-630-parts-cde-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
@@ -108,6 +109,17 @@ relates_to:
 
 # Next session handoff
 
+## In flight (2026-07-23) — #625 overlay/init-perturber A/B, PR #657
+
+PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657) tip `8c11685`: required **CI green**,
+0 unresolved GraphQL threads, resolve-gate clean. Merge conflict with `main` resolved earlier
+(`9b2be2a`); CI format/lint tips `a83973e` + `8c11685`.
+
+**Do not merge yet — Codex rollback gate unavailable** (usage limits after full cooldown retries).
+Physical A/B still operator-gated. Resume: `/resolve-pr 657` after Codex quota resets. Detail:
+[[pr-657-resolve-blocked-2026-07-22]] / [[issue-625-init-perturber-ab-prepared-2026-07-22]].
+
+
 ## Delivered (2026-07-22 evening) — #662 module map MERGED; zero-kill uptime soak IN PROGRESS
 
 **PR [#663](https://github.com/agorokh/ac-copilot-trainer/pull/663) MERGED** as squash
@@ -125,8 +137,6 @@ High rate → uptime/environmental accumulation; low rate → kill-churn is the 
 (→ prioritize graceful teardown). Then, if a high-rate window exists: wedge captures with the
 merged v1.1 module map (+ xmm/operand value-capture is the next instrument extension).
 
-*(Peer branch `feat/issue-625-overlay-freeze-ab` got a new commit `fcca033` — overlay A/B still
-in flight, unowned by this thread.)*
 
 ## Delivered (2026-07-22) — #630 Part G capture driver MERGED + the #627 night: freeze reproduced, 3 live wedges captured, upstream report FILED
 
@@ -1334,7 +1344,7 @@ main: KPI PASS, false_green_rate 0.0%, 13/13 broken caught, 22 tests green, `mak
 
 ## Delivered (2026-07-04 UTC) — PR #503 MERGED (`76a3cf6`): #488 Part C+D degradation grain & setup linkage
 
-`/autonomous-deliver 488` (this session). **Closes EPIC #488**. 
+`/autonomous-deliver 488` (this session). **Closes EPIC #488**.
 Delivered the Parquet serialization and `coaching_lake` analytical tables to support ML training:
 - **Part C — Grain + serialization.** `lap_features` (per-lap scalar) and `stint_deg` (per-stint degradation slope) tables. Proper `laps_on_set`, fuel-correction, thermal window residence, and `dt` extraction. `--parquet` output with SchemaVer `1.1.0` and `union_by_name` backward compatibility.
 - **Part D — Setup⟷outcome linkage.** Reports mapping static setups to dynamic responses (running vs set camber in degrees; hot vs cold pressures). Correct unit translation from setup clicks to degrees (`set_camber_deg_*` via displayMultiplier fallback).

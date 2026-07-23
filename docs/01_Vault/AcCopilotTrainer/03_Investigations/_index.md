@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-07-15
+updated: 2026-07-22
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -13,6 +13,8 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [pr-657-resolve-blocked-2026-07-22.md](pr-657-resolve-blocked-2026-07-22.md) | PR #657 resolve-pr blocked on Codex usage limits + branch-specific GitHub Actions silence after `cc83191`. GraphQL threads/resolve-gate clean locally; physical A/B still operator-gated. |
+| [issue-625-init-perturber-ab-prepared-2026-07-22.md](issue-625-init-perturber-ab-prepared-2026-07-22.md) | #625/PR #657 prepared the statistically honest overlay A/B path: seeded adjacent pairs, immutable per-trial reports, uptime/order gates, Wilson + Fisher + paired exact analysis, and `never_live` excluded from the freeze endpoint. Focused + full CI green and exact math reconciled against SciPy. Physical run is gated on `pc` being powered on plus explicit operator authorization to toggle and restore Steam overlay + NVIDIA ShadowPlay. |
 | [issue-603-car-content-preflight-2026-07-15.md](issue-603-car-content-preflight-2026-07-15.md) | **#603 CLOSED** by PR #607 (`123a577`): `auto_drive` validates the effective packed/unpacked data source, root `lods.ini`, and referenced KN5 files before launch; fatal faults persist explicit non-drive evidence excluded from drive/sim-death denominators. Review hardening centralized lazy packed-first access in `CarDataSource`, preserved preset attribution, tolerated malformed encodings/inline comments, and aligned flat member semantics. Merged-main proof: 222 focused tests; healthy BMW exit 0; damaged Porsche exit 2 before launch. |
 | [issue-596-pit-stall-sim-death-2026-07-15.md](issue-596-pit-stall-sim-death-2026-07-15.md) | **#596 CLOSED** by PRs #598/#600 (`613fae2`): root cause of the 450–580 m flake was a stopped-high-gear downshift latch (`speed > 5` required before selecting a usable gear). Low-RPM downshift no longer needs motion; 2 Hz control traces + forced-recovery events make the failure durable. Pure `acs.exe` death gets one complete lock-held retry with every attempt retained. Live proof: 7 new natural runs across M3/Ferrari + Magione/Imola, 0 deaths/caps/stopped-high-gear samples; injected PID death recovered to a 2,295 m PASS. |
 | [issue-596-partc-actionable-reason-2026-07-15.md](issue-596-partc-actionable-reason-2026-07-15.md) | **PR #598 MERGED** (`9f1b9ca`) — #596 Part C makes every failed `auto_drive` report carry an actionable run-level reason plus failed pipeline checks. The reason is a computed property so PASS↔FAIL mutation cannot leave stale public state; drive veto text is the single source of truth for the boolean success gate. Parts A/B later shipped through #600; #596 is closed. |
