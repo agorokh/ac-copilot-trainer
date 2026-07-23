@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-22T16:15:00Z
+last_updated: 2026-07-22T18:30:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/wedge-live-forensics-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/issue-630-parts-cde-2026-07-22.md
@@ -107,6 +107,26 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-22 evening) — #662 module map MERGED; zero-kill uptime soak IN PROGRESS
+
+**PR [#663](https://github.com/agorokh/ac-copilot-trainer/pull/663) MERGED** as squash
+`0fec55372`; issue #662 CLOSED. Capture records are now `freeze-forensics-capture/v1.1`:
+`parse_lm` (cdb lm listing → module rows, merged from every attach), `rebase_rip`
+(`module+0xRVA` per RIP), additive fields `modules` + `rips_rebased`. The next wedge capture
+names the `0x7ff910…` mystery module without hand arithmetic. Clean review round (0 threads).
+
+**Experiment (c) in progress — do not launch AC on the rig until it completes:** post-reboot
+zero-kill soak (operator also unenrolled Windows Insider — flights stopped, but the BUILD stays
+26220 until next stable; do not attribute rate changes to the OS). At **9.3 h uptime with zero
+launches** run `python -m tools.ac_harness.resilient_launch --car ks_porsche_911_gt3_r_2016
+--track spa --trials 8 --json .scratch/freeze-forensics/trials-zerokill-<stamp>.json`.
+High rate → uptime/environmental accumulation; low rate → kill-churn is the accumulator
+(→ prioritize graceful teardown). Then, if a high-rate window exists: wedge captures with the
+merged v1.1 module map (+ xmm/operand value-capture is the next instrument extension).
+
+*(Peer branch `feat/issue-625-overlay-freeze-ab` got a new commit `fcca033` — overlay A/B still
+in flight, unowned by this thread.)*
 
 ## Delivered (2026-07-22) — #630 Part G capture driver MERGED + the #627 night: freeze reproduced, 3 live wedges captured, upstream report FILED
 
