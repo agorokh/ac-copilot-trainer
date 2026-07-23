@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -119,6 +119,15 @@ class CoachRuntime:
     track_length_m: float = _DEFAULT_TRACK_M
     ledger: CoachingLedger = field(default_factory=CoachingLedger)
     cue_policy: DriverCuePolicy = field(default_factory=default_cue_policy)
+    frontier: dict[str, Any] = field(
+        default_factory=lambda: {
+            "configured": False,
+            "active": False,
+            "source": "reference",
+            "reason": "not_configured",
+            "corners": [],
+        }
+    )
     _pass: dict[int, _PassState] = field(default_factory=dict)
     _last_spline: float | None = None
     _last_lap: float | None = None
@@ -554,6 +563,10 @@ def build_coach_runtime(
     lead_s: float = _DEFAULT_LEAD_S,
     driver_profile: Mapping[str, Any] | None = None,
     driver_profile_path: str | Path | None = None,
+    alien_line_path: str | Path | None = None,
+    alien_line_artifact: Mapping[str, Any] | None = None,
+    alien_expected_plant_sha12: str | None = None,
+    alien_expected_fast_lane_sha12: str | None = None,
 ) -> CoachRuntime | None:
     """Build a :class:`CoachRuntime` from a reference archive (same input as the observer)."""
     try:
@@ -597,6 +610,78 @@ def build_coach_runtime(
         _profile_for_runtime(driver_profile, driver_profile_path), reference_archive
     )
     policy = cue_policy_from_profile(profile)
+    frontier: dict[str, Any] = {
+        "configured": False,
+        "active": False,
+        "source": "reference",
+        "reason": "not_configured",
+        "corners": [],
+    }
+    configured_alien = alien_line_path or os.environ.get("AC_COPILOT_ALIEN_LINE")
+    combo = _archive_combo(reference_archive)
+    artifact = alien_line_artifact
+    if artifact is None and configured_alien:
+        from tools.ai_sidecar.coachable_frontier import (
+            FrontierError,
+            frontier_fallback,
+            load_verified_alien_evidence,
+        )
+
+        if combo is None:
+            frontier = frontier_fallback("reference_combo_missing")
+        else:
+            try:
+                artifact, alien_expected_plant_sha12, alien_expected_fast_lane_sha12 = (
+                    load_verified_alien_evidence(
+                        configured_alien,
+                        combo=combo,
+                        plant_path=os.environ.get("AC_COPILOT_ALIEN_PLANT"),
+                        fast_lane_path=os.environ.get("AC_COPILOT_ALIEN_FAST_LANE"),
+                        ac_root=os.environ.get("AC_COPILOT_AC_ROOT"),
+                    )
+                )
+            except FrontierError as exc:
+                frontier = frontier_fallback(str(exc))
+    elif artifact is not None and (
+        not isinstance(artifact, Mapping)
+        or not alien_expected_plant_sha12
+        or not alien_expected_fast_lane_sha12
+    ):
+        from tools.ai_sidecar.coachable_frontier import frontier_fallback
+
+        frontier = frontier_fallback("alien_injected_evidence_unverified")
+        artifact = None
+    if artifact is not None:
+        from tools.ai_sidecar.coachable_frontier import (
+            FrontierError,
+            derive_coachable_frontier,
+            frontier_fallback,
+        )
+
+        if combo is None:
+            frontier = frontier_fallback("reference_combo_missing")
+        else:
+            try:
+                frontier = derive_coachable_frontier(
+                    refs,
+                    artifact,
+                    combo=combo,
+                    profile=profile,
+                    driver_level=policy.level,
+                    reference_brake_points={
+                        index: signature.brake_point_spline for index, signature in ref_sigs.items()
+                    },
+                    expected_plant_sha12=alien_expected_plant_sha12 or "",
+                    expected_fast_lane_sha12=alien_expected_fast_lane_sha12 or "",
+                )
+            except FrontierError as exc:
+                frontier = frontier_fallback(str(exc))
+
+    # Only minimum speed is borrowed from the derived frontier. All other signature fields remain
+    # the human reference technique, which is the central safety/coachability invariant for P5.
+    for ref in refs:
+        if ref.coachable_apex_kmh is not None and ref.index in ref_sigs:
+            ref_sigs[ref.index] = replace(ref_sigs[ref.index], min_speed_kmh=ref.coachable_apex_kmh)
     ledger = CoachingLedger(
         hysteresis=_env_int("AC_COPILOT_COACH_HYSTERESIS", policy.hysteresis, min_value=1),
         assess_laps=_env_int("AC_COPILOT_COACH_ASSESS_LAPS", policy.assess_laps, min_value=0),
@@ -609,6 +694,7 @@ def build_coach_runtime(
         track_length_m=track_m,
         ledger=ledger,
         cue_policy=policy,
+        frontier=frontier,
     )
 
 

@@ -238,3 +238,500 @@ def test_cdb_snapshot_thaws_target_after_timeout(monkeypatch) -> None:
     # Second call is the thaw: noninvasive attach + immediate detach.
     # Use str(Path) so the expected path matches production on Windows and POSIX.
     assert calls[1] == [str(cdb), "-pv", "-p", "1234", "-c", "qd"]
+
+
+# --------------------------------------------------------------------------------------
+# Part G — capture-driver decision helpers (pure; the assembly in main() is rig-only).
+# --------------------------------------------------------------------------------------
+
+
+def test_render_stack_candidate_beats_a_hotter_physics_thread() -> None:
+    """#630 Part G — a busy physics worker outranking a wedged renderer on cycles must lose."""
+    from tools.ac_harness.freeze_forensics import select_capture_tid
+
+    physics_stack = "00 ntdll!NtWaitForSingleObject\n01 acs!physicsWorker"
+    render_stack = "00 dwrite!hashLoop\n01 accRenderingAdv+0x1391c02"
+    tid, reason = select_capture_tid([(111, physics_stack), (222, render_stack)])
+    assert tid == 222
+    assert "render-stack hint" in reason
+
+
+def test_hottest_thread_is_the_fallback_when_no_stack_matches() -> None:
+    from tools.ac_harness.freeze_forensics import select_capture_tid
+
+    tid, reason = select_capture_tid([(111, "00 acs!physics"), (222, "00 ntdll!wait")])
+    assert tid == 111
+    assert "hottest thread" in reason
+
+
+def test_unconfirmed_candidate_stacks_never_match() -> None:
+    """An unconfirmed cdb transcript yields an empty stack — it must simply not match."""
+    from tools.ac_harness.freeze_forensics import select_capture_tid
+
+    tid, reason = select_capture_tid([(111, ""), (222, "")])
+    assert tid == 111
+    assert "hottest" in reason
+
+
+def test_select_capture_tid_rejects_empty_candidates() -> None:
+    import pytest
+
+    from tools.ac_harness.freeze_forensics import select_capture_tid
+
+    with pytest.raises(ValueError, match="candidates"):
+        select_capture_tid([])
+
+
+def test_s3_corpse_readings_are_discarded_not_compared() -> None:
+    """Trap §7.1 — a dead sim's pinned packet must not manufacture the wedge signature."""
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    # Every reading taken while acs is dead: the corpse holds gfx pinned and phys pinned.
+    result = evaluate_s3([(16_983, 121, False), (16_983, 121, False), (16_983, 121, False)])
+    assert result.gfx_readings == ()
+    assert result.phys_readings == ()
+    assert result.sufficient is False
+    assert result.gfx_static is False
+    assert result.acs_alive_throughout is False
+
+
+def test_s3_wedge_signature_from_live_readings() -> None:
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3([(23, 100, True), (23, 400, True), (23, 800, True)])
+    assert result.gfx_static is True
+    assert result.phys_advancing is True
+    assert result.acs_alive_throughout is True
+    assert result.sufficient is True
+
+
+def test_s3_recovered_session_is_not_static() -> None:
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3([(23, 100, True), (23, 400, True), (4233, 800, True)])
+    assert result.gfx_static is False  # the packet ADVANCED — the session recovered
+
+
+def test_s3_mixed_dead_and_live_readings_keep_only_live_ones() -> None:
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3(
+        [
+            (16_983, 9_999, False),  # corpse — discarded
+            (17, 100, True),
+            (17, 400, True),
+        ]
+    )
+    assert result.gfx_readings == (17, 17)
+    assert result.phys_readings == (100, 400)
+    assert result.gfx_static is True
+    assert result.phys_advancing is True
+    assert result.acs_alive_throughout is False  # honesty: the process was not alive throughout
+
+
+def test_s3_single_live_reading_is_insufficient() -> None:
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3([(23, 100, True)])
+    assert result.sufficient is False
+    assert result.gfx_static is False
+    assert result.phys_advancing is False
+
+
+def test_s3_unreadable_streams_are_not_observations() -> None:
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3([(None, None, True), (None, None, True)])
+    assert result.sufficient is False
+
+
+def test_capture_record_is_json_serializable_and_auditable() -> None:
+    import json
+
+    from tools.ac_harness.freeze_forensics import build_capture_record, evaluate_s3
+
+    s3 = evaluate_s3([(23, 100, True), (23, 400, True)])
+    record = build_capture_record(
+        pid=1234,
+        tid=222,
+        tid_reason="render-stack hint(s) ['dwrite'] in sampled stack",
+        cycles_rows=[{"tid": 222, "cycles_per_s": 2.85e9}, {"tid": 111, "cycles_per_s": 1.0e9}],
+        candidate_stacks=[(222, "00 dwrite!loop\n01 acs!frame\nline3\nline4\nline5\nline6\nline7")],
+        rips=[0x7FF000001000, 0x7FF000001020],
+        s3=s3,
+        verdict="livelock_confirmed",
+        rationale="test rationale",
+        started_at_utc="2026-07-21T00:00:00Z",
+        elapsed_s=42.5,
+    )
+    payload = json.loads(json.dumps(record))
+    assert payload["schema"] == "freeze-forensics-capture/v1.1"
+    assert payload["selected_tid"] == 222
+    assert payload["rips_hex"] == ["0x7ff000001000", "0x7ff000001020"]
+    assert payload["rip_span_bytes"] == 0x20
+    assert payload["s3"]["gfx_static"] is True
+    assert payload["s3"]["sufficient"] is True
+    # Stack heads are capped so the record stays a record, not a transcript dump.
+    assert len(payload["candidate_stack_heads"][0]["stack_head"]) == 6
+
+
+def test_extract_stack_excludes_the_lm_module_listing() -> None:
+    """#647 review P1 — d3d11/dxgi are loaded in EVERY AC process; letting the ``lm`` listing
+    into the stack text would make the render hints match every candidate and neuter the
+    render-TID preference."""
+    from tools.ac_harness.freeze_forensics import extract_stack, select_capture_tid
+
+    raw = (
+        "AC_TID=1a2b\n"
+        " # Child-SP          RetAddr               Call Site\n"
+        "00 0000005e`f16df620 00007ff9`1d2080c4     acs!physicsWorker+0x40\n"
+        "01 0000005e`f16df8e0 00007ff9`1d207f7a     ntdll!RtlUserThreadStart+0x21\n"
+        "start             end                 module name\n"
+        "00007ff9`1d000000 00007ff9`1e000000   d3d11      (deferred)\n"
+        "00007ff9`1f000000 00007ff9`20000000   nvwgf2umx  (deferred)\n"
+    )
+    stack = extract_stack(raw)
+    assert "physicsWorker" in stack
+    assert "d3d11" not in stack
+    assert "nvwgf2umx" not in stack
+    # The physics thread must NOT be selected as render-side off module-listing pollution.
+    tid, reason = select_capture_tid([(0x1A2B, stack)])
+    assert "hottest thread" in reason
+
+
+def test_s3_gate_refuses_a_liveness_gap() -> None:
+    """#647 review P1 — acs_alive_throughout must gate: mixed process generations can fabricate
+    the wedge signature from two healthy sessions."""
+    from tools.ac_harness.freeze_forensics import evaluate_s3, s3_gate
+
+    # Enough live readings on either side of a death to look like a wedge...
+    s3 = evaluate_s3([(23, 100, True), (16_983, 9_999, False), (23, 400, True)])
+    assert s3.sufficient is True
+    refusal = s3_gate(s3)
+    assert refusal is not None
+    token, rationale = refusal
+    assert token == "capture_failed_liveness_gap"
+    assert "generations" in rationale
+
+
+def test_s3_gate_refuses_insufficiency_first() -> None:
+    from tools.ac_harness.freeze_forensics import evaluate_s3, s3_gate
+
+    refusal = s3_gate(evaluate_s3([(23, 100, True)]))
+    assert refusal is not None
+    assert refusal[0] == "capture_failed_insufficient_s3"
+
+
+def test_s3_gate_passes_a_continuously_live_capture() -> None:
+    from tools.ac_harness.freeze_forensics import evaluate_s3, s3_gate
+
+    assert s3_gate(evaluate_s3([(23, 100, True), (23, 400, True)])) is None
+
+
+class TestResolveRecordPath:
+    """#647 review P2 — the --json destination must stay inside an approved output root."""
+
+    def test_inside_root_accepted(self, tmp_path) -> None:
+        from tools.ac_harness.freeze_forensics import _resolve_record_path
+
+        target = tmp_path / "captures" / "wedge.json"
+        assert _resolve_record_path(target, approved_roots=(tmp_path,)) == target.resolve()
+
+    def test_absolute_outside_rejected(self, tmp_path) -> None:
+        import pytest
+
+        from tools.ac_harness.freeze_forensics import _resolve_record_path
+
+        with pytest.raises(ValueError, match="approved output root"):
+            _resolve_record_path(tmp_path / "out.json", approved_roots=(tmp_path / "approved",))
+
+    def test_dotdot_traversal_rejected(self, tmp_path) -> None:
+        import pytest
+
+        from tools.ac_harness.freeze_forensics import _resolve_record_path
+
+        approved = tmp_path / "approved"
+        with pytest.raises(ValueError, match="approved output root"):
+            _resolve_record_path(approved / ".." / "escape.json", approved_roots=(approved,))
+
+
+def test_cli_validators_reject_degenerate_windows() -> None:
+    """#647 review P2 — --cycles-window 0 would turn incidental cycle increments into an
+    arbitrary burning-CPU rate; negatives raise from time.sleep mid-capture."""
+    import pytest
+
+    from tools.ac_harness.freeze_forensics import (
+        _non_negative_float,
+        _non_negative_int,
+        _positive_float,
+        _positive_int,
+    )
+
+    with pytest.raises(Exception, match="> 0"):
+        _positive_float("0")
+    with pytest.raises(Exception, match="finite"):
+        _positive_float("nan")
+    with pytest.raises(Exception, match=">= 0"):
+        _non_negative_float("-1")
+    with pytest.raises(Exception, match="> 0"):
+        _positive_int("0")
+    with pytest.raises(Exception, match=">= 0"):
+        _non_negative_int("-1")
+    assert _positive_float("2.5") == 2.5
+    assert _non_negative_float("0") == 0.0
+    assert _non_negative_int("0") == 0
+
+
+def test_record_path_from_an_unapproved_cwd_is_rejected(tmp_path, monkeypatch) -> None:
+    """The caller's CWD is not a root — same boundary as PR #646's launcher fix."""
+    from pathlib import Path
+
+    import pytest
+
+    from tools.ac_harness.freeze_forensics import _resolve_record_path
+
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    monkeypatch.chdir(downloads)
+    with pytest.raises(ValueError, match="approved output root"):
+        _resolve_record_path(Path("capture.json"), approved_roots=(tmp_path / "approved",))
+
+
+def test_scratch_root_is_the_module_checkouts_scratch_dir() -> None:
+    """The checkout-side root is .scratch ONLY — a checkout-wide root would validate a --json
+    destination that overwrites source files (#647 review round 3)."""
+    from tools.ac_harness.freeze_forensics import _scratch_root
+
+    root = _scratch_root()
+    assert root.name == ".scratch"
+    assert (root.parent / "tools" / "ac_harness" / "freeze_forensics.py").is_file()
+
+
+def test_source_files_are_outside_the_scratch_root() -> None:
+    """--json <checkout>/tools/.../freeze_forensics.py must NOT validate."""
+    import pytest
+
+    from tools.ac_harness.freeze_forensics import _resolve_record_path, _scratch_root
+
+    source = _scratch_root().parent / "tools" / "ac_harness" / "freeze_forensics.py"
+    with pytest.raises(ValueError, match="approved output root"):
+        _resolve_record_path(source, approved_roots=(_scratch_root(),))
+
+
+def test_s3_physics_regression_is_not_advancing() -> None:
+    """#647 review round 2 — an endpoint-only comparison read 100, 5, 200 as advancing; a
+    mid-stream regression is a section/session reset and must not feed the wedge signature."""
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3([(23, 100, True), (23, 5, True), (23, 200, True)])
+    assert result.phys_advancing is False
+
+
+def test_acs_pid_picks_deterministically_from_the_process_set(monkeypatch) -> None:
+    """#647 review round 2 — running_process_ids returns a frozenset; pids[0] was a TypeError
+    on the default no---pid path whenever acs.exe was actually running."""
+    import tools.ac_harness.entry_launcher as entry_launcher
+    from tools.ac_harness.freeze_forensics import _acs_pid
+
+    monkeypatch.setattr(
+        entry_launcher, "running_process_ids", lambda name, strict: frozenset({31337, 20001})
+    )
+    assert _acs_pid() == 20001
+
+    monkeypatch.setattr(entry_launcher, "running_process_ids", lambda name, strict: frozenset())
+    assert _acs_pid() is None
+
+
+def test_cli_duration_validators_reject_sleep_breaking_values() -> None:
+    """#647 review round 4 — a finite-but-huge duration (1e308) raises OverflowError from
+    time.sleep, bypassing the OSError handling; bound at the validator."""
+    import pytest
+
+    from tools.ac_harness.freeze_forensics import _non_negative_float, _positive_float
+
+    with pytest.raises(Exception, match="<="):
+        _positive_float("1e308")
+    with pytest.raises(Exception, match="<="):
+        _non_negative_float("1e308")
+    assert _positive_float("600") == 600.0
+
+
+def test_capture_record_carries_s1_and_final_selected_rates() -> None:
+    import json
+
+    from tools.ac_harness.freeze_forensics import build_capture_record, evaluate_s3
+
+    record = build_capture_record(
+        pid=1,
+        tid=2,
+        tid_reason="hottest",
+        cycles_rows=[],
+        candidate_stacks=[],
+        rips=[],
+        s3=evaluate_s3([(1, 1, True), (1, 2, True)]),
+        verdict="not_wedged",
+        rationale="r",
+        started_at_utc="2026-07-22T00:00:00Z",
+        elapsed_s=1.0,
+        selected_cycles={"s1": 2.9e9, "final": 1000.0},
+    )
+    payload = json.loads(json.dumps(record))
+    assert payload["selected_cycles_per_s"] == {"s1": 2.9e9, "final": 1000.0}
+
+
+def test_s3_alive_correlated_corpse_without_any_advance_is_discarded() -> None:
+    """#647 review round 6 — the ~6 s handover: a NEW acs is alive-and-sole while acpmf still
+    exposes the previous session's frozen corpse. Without an observed advance there is no proof
+    a live writer owns the sections, so nothing may be retained (refusal, not NOT_RENDER_WEDGE
+    from corpse data)."""
+    from tools.ac_harness.freeze_forensics import evaluate_s3, s3_gate
+
+    result = evaluate_s3([(16_983, 9_999, True), (16_983, 9_999, True), (16_983, 9_999, True)])
+    assert result.gfx_readings == ()
+    assert result.phys_readings == ()
+    assert result.sufficient is False
+    refusal = s3_gate(result)
+    assert refusal is not None and refusal[0] == "capture_failed_insufficient_s3"
+
+
+def test_s3_wedge_ownership_is_proven_by_advancing_physics() -> None:
+    """A render wedge still earns ownership through its ADVANCING physics stream."""
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3([(23, 100, True), (23, 400, True), (23, 800, True)])
+    assert result.gfx_static is True
+    assert result.phys_advancing is True
+    assert result.sufficient is True
+
+
+def test_s3_new_session_publishing_during_capture_reads_as_recovered() -> None:
+    """Handover that completes mid-capture: the new stream advances, so ownership is earned and
+    the verdict path honestly reads NOT_WEDGED (the session is rendering)."""
+    from tools.ac_harness.freeze_forensics import evaluate_s3
+
+    result = evaluate_s3([(16_983, 9_999, True), (121, 50, True), (180, 90, True)])
+    assert result.sufficient is True
+    assert result.gfx_static is False  # gfx moved -> classify() returns NOT_WEDGED
+
+
+# --------------------------------------------------------------------------------------
+# #662 — lm module map in capture records.
+# --------------------------------------------------------------------------------------
+
+_LM_FIXTURE = (
+    "AC_TID=1a2b\n"
+    "rip=00007ff8`f16f0464 rsp=...\n"
+    " # Child-SP          RetAddr               Call Site\n"
+    "00 000000bf`676ff070 00007ff8`f1a6d084     DWrite!DWriteCreateFactory+0xacee73\n"
+    "start             end                 module name\n"
+    "00007ff7`10530000 00007ff7`17f00000   acs        (deferred)\n"
+    "00007ff8`f0210000 00007ff8`f7590000   DWrite     (deferred)\n"
+    "00007ff9`10000000 00007ff9`11000000   nvgpucomp64   (deferred)\n"
+    "00007ff9`88670000 00007ff9`88880000   ntdll      (pdb symbols)\n"
+)
+
+
+def test_parse_lm_reads_module_rows_after_the_header() -> None:
+    from tools.ac_harness.freeze_forensics import parse_lm
+
+    rows = parse_lm(_LM_FIXTURE)
+    assert [r["module"] for r in rows] == ["acs", "DWrite", "nvgpucomp64", "ntdll"]
+    assert rows[1]["base"] == 0x7FF8F0210000
+    assert rows[1]["end"] == 0x7FF8F7590000
+
+
+def test_parse_lm_without_header_reads_nothing() -> None:
+    """The k frame table's address columns must not be misread as module rows."""
+    from tools.ac_harness.freeze_forensics import parse_lm
+
+    no_lm = (
+        " # Child-SP          RetAddr               Call Site\n"
+        "00 000000bf`676ff070 00007ff8`f1a6d084     DWrite!x+0x1\n"
+    )
+    assert parse_lm(no_lm) == []
+
+
+def test_parse_lm_rejects_degenerate_ranges_and_dedups() -> None:
+    from tools.ac_harness.freeze_forensics import parse_lm
+
+    raw = (
+        "start             end                 module name\n"
+        "00007ff7`10530000 00007ff7`10530000   zero_len\n"
+        "00007ff7`20000000 00007ff7`10000000   inverted\n"
+        "00007ff8`f0210000 00007ff8`f7590000   DWrite\n"
+        "00007ff8`f0210000 00007ff8`f7590000   DWrite\n"
+    )
+    rows = parse_lm(raw)
+    assert [r["module"] for r in rows] == ["DWrite"]
+
+
+def test_rebase_rip_names_the_containing_module() -> None:
+    """The exact case from the 2026-07-22 wedge captures: RIPs needed hand arithmetic to
+    rebase into accRenderingAdv, and the 0x7ff910… module went unnamed."""
+    from tools.ac_harness.freeze_forensics import parse_lm, rebase_rip
+
+    modules = parse_lm(_LM_FIXTURE)
+    assert rebase_rip(0x7FF8F16F0464, modules) == "DWrite+0x14e0464"
+    assert rebase_rip(0x7FF9103A73B1, modules) == "nvgpucomp64+0x3a73b1"
+    # End is exclusive; base is inclusive.
+    assert rebase_rip(0x7FF8F0210000, modules) == "DWrite+0x0"
+    assert rebase_rip(0x7FF8F7590000, modules) != "DWrite+0x7380000"
+    # Outside every module: raw hex, never a wrong name.
+    assert rebase_rip(0x1234, modules) == "0x1234"
+
+
+def test_capture_record_v11_carries_modules_and_rebased_rips() -> None:
+    import json
+
+    from tools.ac_harness.freeze_forensics import (
+        build_capture_record,
+        evaluate_s3,
+        parse_lm,
+    )
+
+    record = build_capture_record(
+        pid=1,
+        tid=2,
+        tid_reason="hottest",
+        cycles_rows=[],
+        candidate_stacks=[],
+        rips=[0x7FF8F16F0464, 0x7FF9103A73B1],
+        s3=evaluate_s3([(1, 1, True), (1, 2, True)]),
+        verdict="not_wedged",
+        rationale="r",
+        started_at_utc="2026-07-22T00:00:00Z",
+        elapsed_s=1.0,
+        modules=parse_lm(_LM_FIXTURE),
+    )
+    payload = json.loads(json.dumps(record))
+    assert payload["schema"] == "freeze-forensics-capture/v1.1"
+    assert payload["rips_rebased"] == ["DWrite+0x14e0464", "nvgpucomp64+0x3a73b1"]
+    assert payload["modules"][1] == {
+        "module": "DWrite",
+        "base": "0x7ff8f0210000",
+        "end": "0x7ff8f7590000",
+    }
+
+
+def test_capture_record_without_modules_still_serializes() -> None:
+    """A capture whose transcripts never yielded an lm listing degrades additively."""
+    import json
+
+    from tools.ac_harness.freeze_forensics import build_capture_record, evaluate_s3
+
+    record = build_capture_record(
+        pid=1,
+        tid=2,
+        tid_reason="hottest",
+        cycles_rows=[],
+        candidate_stacks=[],
+        rips=[0x1000],
+        s3=evaluate_s3([]),
+        verdict="capture_failed_insufficient_s3",
+        rationale="r",
+        started_at_utc="2026-07-22T00:00:00Z",
+        elapsed_s=1.0,
+    )
+    payload = json.loads(json.dumps(record))
+    assert payload["modules"] == []
+    assert payload["rips_rebased"] == ["0x1000"]

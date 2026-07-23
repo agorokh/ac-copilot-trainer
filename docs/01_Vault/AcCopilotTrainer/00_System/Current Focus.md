@@ -2,9 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-22T07:45:00Z
+last_updated: 2026-07-23T06:20:00Z
 relates_to:
-  - AcCopilotTrainer/03_Investigations/issue-625-init-perturber-ab-prepared-2026-07-22.md
+  - AcCopilotTrainer/03_Investigations/pr-657-resolve-blocked-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
   - AcCopilotTrainer/03_Investigations/issue-628-acpmf-corpse-classify-2026-07-19.md
@@ -46,11 +46,35 @@ relates_to:
 **Repo:** ac-copilot-trainer.
 
 **In flight (2026-07-23):** issue [#625](https://github.com/agorokh/ac-copilot-trainer/issues/625),
-ready PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657). Overlay A/B driver is
-code-complete locally; resolve-pr blocked on Codex quota + missing hosted Actions on tips after
-`cc83191`. Physical run still needs `pc` + operator authorization for Steam/NVIDIA toggles. Do not
-merge until hosted CI + Codex gate + attached A/B stats. Detail:
-[[pr-657-resolve-blocked-2026-07-22]] / [[issue-625-init-perturber-ab-prepared-2026-07-22]].
+ready PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657) on
+`feat/issue-625-overlay-freeze-ab`. Overlay A/B driver is code-complete; resolve-pr blocked on
+Codex quota + missing hosted Actions on tips after `cc83191`. Physical run still needs `pc` +
+operator authorization for Steam/NVIDIA toggles. Do not merge until hosted CI + Codex gate +
+attached A/B stats. Detail: [[pr-657-resolve-blocked-2026-07-22]] /
+[[issue-625-init-perturber-ab-prepared-2026-07-22]].
+
+**Delivered (2026-07-22 PM):** PR [#647](https://github.com/agorokh/ac-copilot-trainer/pull/647)
+MERGED `c5d6e909b` — #630 **Part G** (runnable freeze-forensics capture driver; 6 review rounds).
+**#630 is fully delivered (Parts A–G).** The #627 night: freeze rate 6/10 at ~9.5 h uptime
+(reinstall did not fix it), **3 live wedges captured** — RIPs inside the `imul 0x147B`
+formatting RUNTIME_FUNCTION at sustained full-core burn (§6.1 answered), **upstream report
+filed**: [acc-extension-config#622](https://github.com/ac-custom-shaders-patch/acc-extension-config/issues/622).
+Next on the freeze thread: watch #622, next-boot uptime-vs-kill-count experiment, `lm` module
+map in capture records; #625 overlay A/B has a peer branch in flight. Detail:
+[[wedge-live-forensics-2026-07-22]].
+
+**Delivered (2026-07-22):** PR [#659](https://github.com/agorokh/ac-copilot-trainer/pull/659)
+MERGED [`cc9da82`](https://github.com/agorokh/ac-copilot-trainer/commit/cc9da82b4942f34f9f430d57091f2163694b4fde)
+(#529 **P4**, issue #654 CLOSED). The optional alien scientist converts named self-play failures or
+plateaus into bounded, schema-valid one-parameter setup candidates, executes them through the normal
+auto-alien oracle, promotes only complete uncertainty-significant gains, and durably suppresses
+measured falsified physical adjustments within the same platform/tyre/track scope. Immutable setup
+and scientist-state writes are contained beneath AC Documents and fail closed on drift, redirection,
+confounding, or incomplete evidence. Full parity: 3,291 passed, 89 skipped; hosted checks and the
+three-thread resolution gate were green. PR [#656](https://github.com/agorokh/ac-copilot-trainer/pull/656)
+already delivered P5's coachable alien frontier. **Active #529 next:** only the remaining real
+Windows-rig/cross-combo performance gates. Keep #529 open until those prove a fresh combo and real
+scientist/frontier value; P4/P5 code completion alone is not alien-pace evidence.
 
 **Delivered (2026-07-22):** PR [#646](https://github.com/agorokh/ac-copilot-trainer/pull/646) MERGED
 `4265845` (#630 **Parts C+D+E**): `WEDGED_INIT` verdict (init livelock no longer buckets as

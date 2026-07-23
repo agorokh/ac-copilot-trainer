@@ -738,24 +738,33 @@ def _machine_uptime_hours() -> float | None:  # pragma: no cover - rig-only
 
 
 def repo_checkout_root() -> Path:
-    """The checkout this module runs from — a FIXED approved output root, unlike the CWD.
+    """The checkout this module runs from — used for import-root / relative plan paths (#657)."""
+    return Path(__file__).resolve().parents[2]
+
+
+def _scratch_root() -> Path:
+    """The checkout's gitignored ``.scratch`` directory — the ONLY checkout-side approved root.
 
     Anchoring on the module's own location (``tools/ac_harness/`` → two parents up) keeps the
     established ``.scratch`` measurement-artifact workflow working from any invocation directory,
     while an arbitrary caller CWD (e.g. a Downloads directory) is never trusted as a write root
-    (#646 review — the CWD root was caller-controlled and therefore no boundary at all).
+    (#646 review — the CWD root was caller-controlled and therefore no boundary at all). Scoped
+    to ``.scratch`` rather than the whole checkout because a checkout-wide root would validate a
+    ``--json`` destination that overwrites source files (#647 review round 3, applied here for
+    parity — same boundary, same reason).
     """
-    return Path(__file__).resolve().parents[2]
+    return repo_checkout_root() / ".scratch"
 
 
 def resolve_report_path(raw: Path, approved_roots: Sequence[Path]) -> Path:
     """Resolve the ``--json`` destination and require it inside an approved output root.
 
     #646 review: an absolute path or a ``..`` traversal would let this rig tool create parent
-    directories and overwrite files at arbitrary writable locations. Callers approve the per-user
-    Harness root and the checkout's gitignored ``.scratch`` tree — never the whole repo root.
-    A relative path still resolves against the caller's CWD — but it only passes when that
-    resolution lands inside a fixed root.
+    directories and overwrite files at arbitrary writable locations. The approved roots are the
+    per-user Harness root (where the rig lock and generated presets already live) and the
+    checkout's gitignored ``.scratch`` directory (measurement artifacts) — never the whole
+    checkout, which would allow overwriting source. A relative path still resolves against the
+    caller's CWD — but it only passes when that resolution lands inside a fixed root.
     """
     resolved = raw.expanduser()
     if not resolved.is_absolute():
@@ -1586,10 +1595,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     if args.json_path is not None:
         try:
             # Checkout writes are limited to gitignored ``.scratch`` — never the whole tree
-            # (tracked files / ``.git``) (#657 Qodo).
+            # (tracked files / ``.git``) (#647 / #657).
             args.json_path = resolve_report_path(
                 args.json_path,
-                approved_roots=(lock_path.parent, repo_checkout_root() / ".scratch"),
+                approved_roots=(lock_path.parent, _scratch_root()),
             )
         except ValueError as exc:
             _log(f"launch aborted: {exc}")

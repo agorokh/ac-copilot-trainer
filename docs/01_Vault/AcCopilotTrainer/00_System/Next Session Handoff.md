@@ -2,9 +2,11 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-22T07:45:00Z
+last_updated: 2026-07-23T06:20:00Z
 relates_to:
-  - AcCopilotTrainer/03_Investigations/issue-625-init-perturber-ab-prepared-2026-07-22.md
+  - AcCopilotTrainer/03_Investigations/pr-657-resolve-blocked-2026-07-22.md
+  - AcCopilotTrainer/03_Investigations/wedge-live-forensics-2026-07-22.md
+  - AcCopilotTrainer/03_Investigations/issue-630-parts-cde-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/mcp-preflight-guard-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
@@ -112,15 +114,136 @@ relates_to:
 PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657) is **ready** (not draft) on
 `feat/issue-625-overlay-freeze-ab`. Driver is code-complete: seeded adjacent A/B pairs, 20 analyzable
 launches/arm, immutable one-trial reports under `.scratch`, Wilson/Fisher/paired sensitivity, honest
-`never_live` separation. Latest resolve round fixes daemon HIGH: STABLE/`--no-hold` survive a failed
-`--json` write; exclusive report publish is atomic (temp+link); plan paste uses Windows
-`list2cmdline` without planner-host absolute `cd`.
+`never_live` separation. Latest resolve round: merge `origin/main` (keep `_scratch_root` boundary +
+public `repo_checkout_root` / `resolve_report_path` / exclusive report publish / `stable_session_exit_code`).
 
 **Do not merge yet.** (1) Hosted Actions have not run on tips after `cc83191` — branch-specific
 delivery gap. (2) Codex rollback gate blocked by usage limits. (3) Physical A/B still operator-gated.
 Resume: `/resolve-pr 657` after Codex quota + Actions delivery; then power on `pc`, authorize overlay
 toggles, run schedule, attach stats to #625. Detail: [[pr-657-resolve-blocked-2026-07-22]] and
 [[issue-625-init-perturber-ab-prepared-2026-07-22]].
+
+
+## Delivered (2026-07-22 evening) — #662 module map MERGED; zero-kill uptime soak IN PROGRESS
+
+**PR [#663](https://github.com/agorokh/ac-copilot-trainer/pull/663) MERGED** as squash
+`0fec55372`; issue #662 CLOSED. Capture records are now `freeze-forensics-capture/v1.1`:
+`parse_lm` (cdb lm listing → module rows, merged from every attach), `rebase_rip`
+(`module+0xRVA` per RIP), additive fields `modules` + `rips_rebased`. The next wedge capture
+names the `0x7ff910…` mystery module without hand arithmetic. Clean review round (0 threads).
+
+**Experiment (c) in progress — do not launch AC on the rig until it completes:** post-reboot
+zero-kill soak (operator also unenrolled Windows Insider — flights stopped, but the BUILD stays
+26220 until next stable; do not attribute rate changes to the OS). At **9.3 h uptime with zero
+launches** run `python -m tools.ac_harness.resilient_launch --car ks_porsche_911_gt3_r_2016
+--track spa --trials 8 --json .scratch/freeze-forensics/trials-zerokill-<stamp>.json`.
+High rate → uptime/environmental accumulation; low rate → kill-churn is the accumulator
+(→ prioritize graceful teardown). Then, if a high-rate window exists: wedge captures with the
+merged v1.1 module map (+ xmm/operand value-capture is the next instrument extension).
+
+
+## Delivered (2026-07-22) — #630 Part G capture driver MERGED + the #627 night: freeze reproduced, 3 live wedges captured, upstream report FILED
+
+**PR [#647](https://github.com/agorokh/ac-copilot-trainer/pull/647) MERGED** `2026-07-22T16:04Z` as
+squash [`c5d6e909b`](https://github.com/agorokh/ac-copilot-trainer/commit/c5d6e909b). The
+freeze-forensics capture driver is runnable end-to-end (`python -m tools.ac_harness.freeze_forensics`):
+S1 cycles → render-TID-preferring selection (`--tid` override for a second pass) → repeated
+noninvasive cdb RIP snapshots → §7.1-guarded S3 with **section-ownership proof** (an observed
+advance on either stream; alive-and-sole handover corpses refuse) → fresh end-of-capture burn
+resample before any verdict → machine-readable record (`freeze-forensics-capture/v1`).
+`find_cdb` gained the Store WinDbg app-execution alias rung (the only working cdb on this rig).
+**Six codex review rounds (19 threads), every finding real** — several validated against live
+wedges the same night. `--self-test` rig-verified; 48 off-rig tests.
+
+**#630 is now fully delivered (Parts A–G).** Only the optional RELEASE→STABLE atomic action was
+left unpicked.
+
+**The #627 night** (detail: [[wedge-live-forensics-2026-07-22]]):
+- Freeze rate **6/10 at 9.3–9.5 h uptime** vs 0/29 below 7.2 h (shipped `--trials` tool) — the
+  reinstall did NOT fix it (§6.2 settled).
+- **3 live wedges caught in 3 launches**; wedge #3 dual-pass put 6/8 RIPs in the CSP dll
+  formatting region (3 INSIDE the `imul 0x147B` RUNTIME_FUNCTION) at a sustained 2.87e9
+  cycles/s with gfx pinned and physics advancing — §6.1 answered with live evidence.
+- **Upstream CSP report filed (operator-authorized):**
+  [acc-extension-config#622](https://github.com/ac-custom-shaders-patch/acc-extension-config/issues/622)
+  — watch for maintainer questions; raw records + the 4.8 GB dump offered.
+
+**Resume here (rig freeze thread):** watch upstream #622; next-boot experiment separating uptime
+from kill-count; persist the cdb `lm` module map in capture records to name the `0x7ff910…`
+module; #625 (overlay A/B) has a peer branch in flight (`feat/issue-625-overlay-freeze-ab`).
+
+## Delivered (2026-07-22) — #529 P4 evidence-gated setup scientist (#654, PR #659 MERGED)
+
+**PR [#659](https://github.com/agorokh/ac-copilot-trainer/pull/659) MERGED** at
+`2026-07-22T09:51:41Z` as squash
+[`cc9da82`](https://github.com/agorokh/ac-copilot-trainer/commit/cc9da82b4942f34f9f430d57091f2163694b4fde);
+issue [#654](https://github.com/agorokh/ac-copilot-trainer/issues/654) is **CLOSED**. The optional
+`tools.ac_harness.auto_alien --scientist` path now turns a named self-play failure or pace plateau
+into at most three bounded physical hypotheses and schema-validated, one-parameter setup
+experiments. Deterministic code—not proposal prose—creates immutable candidate INIs beside the
+baseline under AC Documents and runs every candidate through the normal auto-alien identification,
+drive, archive, and keep-last-valid oracle.
+
+Promotion requires the full requested baseline and candidate lap counts, same-combo archives,
+exactly one changed setup parameter, and the existing uncertainty-aware significance comparison.
+Incomplete, invalid, or confounded batches retain the previous setup and cannot create a durable
+falsification. Completed plans/outcomes/verdicts live under
+`journal/alien_scientist/runs/`; the append-only `experiments.jsonl` ledger suppresses only a
+measured falsified physical adjustment (parameter + direction) for the same mechanical, aero,
+tyre, and track-archetype scope. State and candidate destinations reject symlink/junction escape,
+baseline drift, conflicts, non-finite or out-of-schema proposals, and incomplete evidence.
+
+**Review hardening:** three actionable Codex threads were fixed on `a5638d0`: enforce every
+requested baseline/candidate lap, remove the proposal-controlled ID from the suppression key, and
+contain all state reads/writes beneath the canonical AC Documents scientist root. All threads were
+replied to and resolved; the enforce-mode resolution gate reported no substantive findings. The
+initial hosted failure was only a non-conventional PR title and was corrected before the final run.
+
+**Verification:** focused scientist/alien/setup parity passed at **197 tests**; full local parity
+passed at **3,291 passed, 89 skipped**, `ci-fast: OK`. Hosted `build` (5m13s), `Canonical docs
+exist`, and `conformance` passed on exact head `a5638d0`. Post-merge classification found no
+migration, dependency, workflow, required-environment, or immediate operator-action flags. This
+session ran on macOS, so it did **not** execute a real Assetto Corsa/Windows scientist batch.
+
+**Resume here / what remains on EPIC [#529](https://github.com/agorokh/ac-copilot-trainer/issues/529):**
+
+- P4 (#654) and P5 (#655) are code-, review-, and local-evidence-complete. Do not reimplement them.
+- Run the remaining Windows-rig/cross-combo performance gates: prove the alien pipeline on a fresh
+  car/track combination, execute at least one real scientist baseline/candidate batch under AC
+  Documents, and observe whether the promoted frontier improves real pace/coaching.
+- Keep parent #529 **OPEN** until those reality gates are captured; unit/hosted CI is not a claim of
+  alien pace or real-driver improvement.
+
+## Delivered (2026-07-22) — #529 P5 coachable alien frontier (#655, PR #656 MERGED)
+
+**PR [#656](https://github.com/agorokh/ac-copilot-trainer/pull/656) MERGED** at
+`2026-07-22T08:54:43Z` as squash
+[`8e8bfbd`](https://github.com/agorokh/ac-copilot-trainer/commit/8e8bfbda7fecc429adaa1f14da2d8dfb5e23cba4);
+issue [#655](https://github.com/agorokh/ac-copilot-trainer/issues/655) is **CLOSED**. Coach v2 can
+now derive a bounded per-corner minimum-speed target from the verified alien line while retaining
+the human reference's brake, throttle, steering, and cue anchors. Targets are personalized from
+raw same-combo driver samples matched by brake-point geometry, capped by driver level and steering
+instability, and fail closed when identity, provenance, current plant/lane evidence, envelope,
+geometry, or driver history is unsafe. Game Point carries the optional artifact path and activates
+Coach v2 automatically; unauthenticated health exposes only non-personal activation/source/reason
+metadata.
+
+**Review hardening:** ten actionable threads were fixed before merge: current-source evidence
+revalidation, complete path redaction, geometry rather than ordinal driver identity, automatic
+Coach v2 activation, uniqueness gates for brake/apex matching, open-polyline spline normalization,
+public-health privacy, `[0,1]` spline-domain validation, and AC content-ID plus resolved-root path
+containment. Every thread was resolved after a full latest-SHA cooldown; the enforce resolution
+ledger was clean.
+
+**Verification:** full local parity passed at **3,270 passed, 89 skipped**, **83.55% coverage**,
+`ci-fast: OK`; hosted `build`, `Canonical docs exist`, and `conformance` checks passed on exact head
+`ed94f57`. Generated on-disk plant/lane evidence was reloaded and reverified, a mutated speed
+profile with unchanged embedded hashes was rejected, and a runtime smoke personalized all five
+fixture corners without replacing demonstrated technique. This was not a Windows-rig pace run.
+
+**Post-merge classification:** `.env.example` changed only for optional
+`AC_COPILOT_ALIEN_LINE` / source override configuration. No migration, dependency, workflow,
+required environment, or immediate operator action exists.
 
 ## Delivered (2026-07-22) — session UUID replay scoping (#622, PR #652 MERGED)
 
@@ -196,10 +319,8 @@ capture driver is **Part G**.
 
 **Resume here / what remains on #630:**
 - ~~Parts C, D, E~~ — **DELIVERED** in PR [#646](https://github.com/agorokh/ac-copilot-trainer/pull/646) (`4265845`, 2026-07-22; see that delivery block above).
-- **Part G** — **IN FLIGHT**: PR [#647](https://github.com/agorokh/ac-copilot-trainer/pull/647)
-  (runnable `main()` S1→render-TID-preferring S2→S3 with §7.1 corpse guard + machine-readable
-  record; `--self-test` rig-verified exit 0; two codex rounds addressed — resolve-pr loop
-  continues, merge when cooldown-clean).
+- **Part G** — **DELIVERED**: PR [#647](https://github.com/agorokh/ac-copilot-trainer/pull/647)
+  MERGED `c5d6e909b` 2026-07-22 (see the Part G delivery block at the top of this handoff).
 - Optional: atomic RELEASE AC → STABLE AC for one-action wedge recovery.
 
 No migrations / new env / dep install. Rig next: catch a real wedge with the promoted instrument

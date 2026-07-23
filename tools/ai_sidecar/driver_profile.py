@@ -32,6 +32,10 @@ CORNER_SAMPLE_FIELDS = (
     "entry_speed_kmh",
     "min_speed_kmh",
     "exit_speed_kmh",
+    # Geometric corner identity. ``corner_index`` is only an enumeration of one lap's
+    # segmentation and can drift when an esses splits/merges; runtime personalization matches
+    # individual samples by this spline instead (#655 review).
+    "brake_point_spline",
     "trail_brake_ratio",
     "throttle_avg",
     "steer_reversals",

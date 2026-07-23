@@ -18,6 +18,7 @@ from tools.ac_harness.auto_alien import (
     needs_identification,
     resolve_drive_seconds,
     run_pipeline,
+    run_scientist,
     stage_lap_archives,
     stage_lap_times_ms,
 )
@@ -432,6 +433,24 @@ def test_pipeline_rejects_bad_selfplay_flags(monkeypatch, tmp_path):
             _args(tmp_path, "--iterations", "1", "--laps", "1", "--max-scale", "0.8"),
             run_stage=_Runner([0]),
         )
+    with pytest.raises(ValueError, match="--scientist requires"):
+        run_pipeline(_args(tmp_path, "--scientist"), run_stage=_Runner([0]))
+    with pytest.raises(ValueError, match="--scientist requires"):
+        run_pipeline(
+            _args(
+                tmp_path,
+                "--scientist",
+                "--setup",
+                "baseline",
+                "--iterations",
+                "1",
+                "--laps",
+                "1",
+            ),
+            run_stage=_Runner([0]),
+        )
+    with pytest.raises(ValueError, match="--scientist-batch-size"):
+        run_pipeline(_args(tmp_path, "--scientist-batch-size", "4"), run_stage=_Runner([0]))
 
 
 class _SelfplayHarness:
@@ -814,3 +833,129 @@ def test_selfplay_late_persist_error_cannot_return_green(monkeypatch, tmp_path):
     assert "late candidate read failed" in report["error"]
     # The candidate may already be on disk, so returning success would expose an unverified plant.
     assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "iter1"}'
+
+
+@pytest.mark.parametrize(
+    ("baseline_laps", "candidate_laps", "expected_error"),
+    [
+        (((1, 100_000), (2, 101_000)), ((3, 90_000), (4, 91_000)), None),
+        (((1, 100_000), (2, 101_000)), ((3, 90_000),), "candidate_batch_incomplete"),
+        (((1, 100_000),), ((3, 90_000), (4, 91_000)), "baseline_batch_unverifiable"),
+    ],
+)
+def test_scientist_requires_requested_laps_before_persisting(
+    monkeypatch, tmp_path, baseline_laps, candidate_laps, expected_error
+):
+    from tools.ai_sidecar import car_schema
+    from tools.ai_sidecar.car_schema import CarSetupSchema
+
+    user_dir = tmp_path / "Assetto Corsa"
+    baseline_setup = user_dir / "setups" / "car_a" / "trk" / "baseline.ini"
+    baseline_setup.parent.mkdir(parents=True)
+    baseline_setup.write_text("[WING_2]\nVALUE=10\n\n[FRONT_BIAS]\nVALUE=60\n", encoding="utf-8")
+    schema = CarSetupSchema.from_spinners_dump(
+        "car_a",
+        [
+            {"name": "WING_2", "min": 0, "max": 20, "step": 1},
+            {"name": "FRONT_BIAS", "min": 50, "max": 70, "step": 1},
+        ],
+    )
+    monkeypatch.setattr(car_schema, "load_latest_schema", lambda car: schema)
+
+    def lap_payload(lap_n: int, lap_ms: int, *, wing: int, path: Path) -> dict:
+        return {
+            "schema_version": 1,
+            "lap_uuid": f"lap-{wing}-{lap_n}",
+            "session_uuid": f"session-{wing}",
+            "exported_at": f"2026-07-22T00:00:0{lap_n}Z",
+            "car": {"id": "car_a"},
+            "track": {"id": "trk", "layout": None},
+            "lap": {"lap_n": lap_n, "lap_ms": lap_ms, "is_valid": True},
+            "setup": {
+                "hash": f"setup-{wing}",
+                "path": str(path),
+                "snapshot": {"WING_2.VALUE": wing, "FRONT_BIAS.VALUE": 60},
+            },
+        }
+
+    baseline_paths = []
+    for lap_n, lap_ms in baseline_laps:
+        path = tmp_path / f"baseline_lap_{lap_n}.json"
+        path.write_text(
+            _json.dumps(lap_payload(lap_n, lap_ms, wing=10, path=baseline_setup)),
+            encoding="utf-8",
+        )
+        baseline_paths.append(str(path))
+    base_outcome = {
+        "report": {
+            "lap_times_ms": [lap_ms for _, lap_ms in baseline_laps],
+            "drive": {"recoveries": 0},
+        },
+        "lap_archives": baseline_paths,
+    }
+
+    nested_calls = []
+
+    def fake_nested_pipeline(candidate_args, *, run_stage):
+        del run_stage
+        nested_calls.append(candidate_args)
+        drive_dir = Path(candidate_args.evidence_dir) / "drive"
+        drive_dir.mkdir(parents=True)
+        paths = []
+        for lap_n, lap_ms in candidate_laps:
+            path = drive_dir / f"lap_{lap_n}.json"
+            path.write_text(
+                _json.dumps(lap_payload(lap_n, lap_ms, wing=9, path=Path(candidate_args.setup))),
+                encoding="utf-8",
+            )
+            paths.append(str(path))
+        (drive_dir / "report.json").write_text(
+            _json.dumps(
+                {
+                    "report": {
+                        "lap_times_ms": [lap_ms for _, lap_ms in candidate_laps],
+                        "drive": {"recoveries": 0},
+                    },
+                    "lap_archives": paths,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return 0, {
+            "stages": {"drive": {"evidence_dir": str(drive_dir)}},
+            "ok": True,
+        }
+
+    monkeypatch.setattr(auto_alien, "run_pipeline", fake_nested_pipeline)
+    args = _args(
+        user_dir,
+        "--setup",
+        str(baseline_setup),
+        "--laps",
+        "2",
+        "--iterations",
+        "1",
+        "--scientist",
+    )
+    result = run_scientist(
+        args,
+        run_stage=lambda argv: 0,
+        evidence_root=tmp_path / "evidence",
+        user_dir=user_dir,
+        setup_ini=baseline_setup,
+        selfplay={"base": {"valid": True}, "iterations": [], "stopped": "pace plateau"},
+        base_outcome=base_outcome,
+    )
+
+    expected_nested_calls = 0 if expected_error == "baseline_batch_unverifiable" else 1
+    assert len(nested_calls) == expected_nested_calls
+    if nested_calls:
+        assert nested_calls[0].scientist is False
+    assert result["ok"] is (expected_error is None)
+    if expected_error is None:
+        assert result["outcomes"][0]["promoted"] is True
+        assert Path(result["run_path"]).is_file()
+        assert Path(result["ledger_path"]).is_file()
+    else:
+        assert expected_error in result["error"]
+        assert not (user_dir / "journal" / "alien_scientist" / "experiments.jsonl").exists()

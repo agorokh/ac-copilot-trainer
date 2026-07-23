@@ -49,6 +49,26 @@ def _reset_feed(monkeypatch):
     server._background_tasks.clear()
 
 
+def test_public_voice_status_exposes_frontier_and_redacts_paths(monkeypatch):
+    class _Coach:
+        frontier = {
+            "configured": True,
+            "active": False,
+            "source": "reference",
+            "reason": r"alien_load_failed: C:\Users\Jane Doe\Documents\alien.json",
+            "driver_level": "advanced",
+            "plant_sha12": "abc123def456",  # pragma: allowlist secret
+            "corners": [{"driver_best_kmh": 123.4, "target_kmh": 125.0}],
+        }
+
+    monkeypatch.setattr(server, "_coach_runtime", _Coach())
+    status = server.public_voice_runtime_status()
+
+    assert status["coach_frontier"]["source"] == "reference"
+    assert status["coach_frontier"]["reason"] == "alien_frontier_error"
+    assert set(status["coach_frontier"]) == {"configured", "active", "source", "reason"}
+
+
 async def _run_publish_cues(frame, *, exclude):
     await server._publish_coaching_cues(frame, exclude=exclude)
     pending = list(server._background_tasks)
@@ -173,6 +193,26 @@ def test_wire_voice_builds_and_installs_observer_from_reference(tmp_path, monkey
     ref.write_text(json.dumps(_corner_archive()), encoding="utf-8")
     server._wire_voice(server.VoiceRuntimeConfig(reference_path=str(ref), bank_dir=None))
     assert server._observer is not None
+
+
+def test_alien_line_configuration_activates_coach_v2_without_separate_flag(tmp_path, monkeypatch):
+    monkeypatch.delenv("AC_COPILOT_COACH_V2", raising=False)
+    monkeypatch.delenv("AC_COPILOT_ALIEN_LINE", raising=False)
+    monkeypatch.setattr(server, "_observer", None)
+    server.set_coach_runtime(None)
+    ref = tmp_path / "reference.json"
+    ref.write_text(json.dumps(_corner_archive()), encoding="utf-8")
+
+    server._wire_voice(
+        server.VoiceRuntimeConfig(
+            reference_path=str(ref),
+            bank_dir=None,
+            alien_line_path=str(tmp_path / "missing-alien.json"),
+        )
+    )
+
+    assert server._coach_runtime is not None
+    assert server._coach_runtime.frontier["reason"] == "alien_artifact_unreadable"
 
 
 def test_wire_voice_no_corners_reference_disables_observer(tmp_path, monkeypatch):

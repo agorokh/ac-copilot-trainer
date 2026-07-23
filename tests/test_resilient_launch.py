@@ -1115,11 +1115,20 @@ class TestResolveReportPath:
         with pytest.raises(ValueError, match="approved output root"):
             _resolve_report_path(Path("report.json"), approved_roots=(tmp_path / "approved",))
 
-    def test_repo_checkout_root_is_the_module_checkout(self) -> None:
-        from tools.ac_harness.resilient_launch import _repo_checkout_root
+    def test_scratch_root_is_the_module_checkouts_scratch_dir(self) -> None:
+        from tools.ac_harness.resilient_launch import _scratch_root
 
-        root = _repo_checkout_root()
-        assert (root / "tools" / "ac_harness" / "resilient_launch.py").is_file()
+        root = _scratch_root()
+        assert root.name == ".scratch"
+        assert (root.parent / "tools" / "ac_harness" / "resilient_launch.py").is_file()
+
+    def test_source_files_are_outside_the_scratch_root(self) -> None:
+        """--json <checkout>/tools/.../resilient_launch.py must NOT validate (#647 round 3)."""
+        from tools.ac_harness.resilient_launch import _resolve_report_path, _scratch_root
+
+        source = _scratch_root().parent / "tools" / "ac_harness" / "resilient_launch.py"
+        with pytest.raises(ValueError, match="approved output root"):
+            _resolve_report_path(source, approved_roots=(_scratch_root(),))
 
 
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
