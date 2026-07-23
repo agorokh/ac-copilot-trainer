@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-23T06:20:00Z
+last_updated: 2026-07-23T07:13:27Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-657-resolve-blocked-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/wedge-live-forensics-2026-07-22.md
@@ -111,17 +111,13 @@ relates_to:
 
 ## In flight (2026-07-23) — #625 overlay/init-perturber A/B, PR #657
 
-PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657) is **ready** (not draft) on
-`feat/issue-625-overlay-freeze-ab`. Driver is code-complete: seeded adjacent A/B pairs, 20 analyzable
-launches/arm, immutable one-trial reports under `.scratch`, Wilson/Fisher/paired sensitivity, honest
-`never_live` separation. Latest resolve round: merge `origin/main` (keep `_scratch_root` boundary +
-public `repo_checkout_root` / `resolve_report_path` / exclusive report publish / `stable_session_exit_code`).
+PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657) tip `8c11685`: required **CI green**,
+0 unresolved GraphQL threads, resolve-gate clean. Merge conflict with `main` resolved earlier
+(`9b2be2a`); CI format/lint tips `a83973e` + `8c11685`.
 
-**Do not merge yet.** (1) Hosted Actions have not run on tips after `cc83191` — branch-specific
-delivery gap. (2) Codex rollback gate blocked by usage limits. (3) Physical A/B still operator-gated.
-Resume: `/resolve-pr 657` after Codex quota + Actions delivery; then power on `pc`, authorize overlay
-toggles, run schedule, attach stats to #625. Detail: [[pr-657-resolve-blocked-2026-07-22]] and
-[[issue-625-init-perturber-ab-prepared-2026-07-22]].
+**Do not merge yet — Codex rollback gate unavailable** (usage limits after full cooldown retries).
+Physical A/B still operator-gated. Resume: `/resolve-pr 657` after Codex quota resets. Detail:
+[[pr-657-resolve-blocked-2026-07-22]] / [[issue-625-init-perturber-ab-prepared-2026-07-22]].
 
 
 ## Delivered (2026-07-22 evening) — #662 module map MERGED; zero-kill uptime soak IN PROGRESS

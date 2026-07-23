@@ -40,3 +40,9 @@ paragraphs.
 1. Confirm hosted CI fires on the latest tip (branch-specific Actions delivery).
 2. Fresh Codex atomic gate when quota allows.
 3. Re-run `/resolve-pr 657` until CI green + Codex settled + threads/ledger clean.
+
+## Update 2026-07-23
+
+Tip `8c11685`: hosted CI **green**; GraphQL threads 0; resolve-gate clean. Remaining blocker is
+**Codex usage limits** (no current-SHA review after `@codex review` + `sleep 600` retries). Escalated
+on the PR.
