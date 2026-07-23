@@ -43,20 +43,74 @@ jobs:
       - name: Bootstrap knowledge from canonical docs
         run: make bootstrap-knowledge
 
+      # gov-hub#266 + public-spoke resolution: cannot uses: private hub action cross-repo.
+      # Checkout hub at pin with fleet-bot token, run local-path composite (same pattern as
+      # steward-miner-rules, gov-hub#289 Change C).
+      - name: Mint fleet-bot token (read governance-hub for process-miner)
+        id: hub-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.FLEET_BOT_APP_ID }}
+          private-key: ${{ secrets.FLEET_BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: governance-hub
+      - name: Check out pinned governance-hub process-miner action
+        uses: actions/checkout@v7
+        with:
+          repository: agorokh/governance-hub
+          ref: 49cbd4b49cf6376d91c0b5a683d0396b1139d5a9  # pragma: allowlist secret (git SHA, not a secret)
+          token: ${{ steps.hub-token.outputs.token }}
+          path: .governance-hub
       - name: Run process miner
         id: mine
+        uses: ./.governance-hub/.github/actions/process-miner
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repo: ${{ github.repository }}
+          days: ${{ github.event.inputs.days || '30' }}
+          max-prs: "40"
+          emit-learned: "true"
+          no-agents-md: "true"
+          ingest-knowledge: "true"
+          distill: "false"
+          install-deps: "false"
+
+      - name: Verify hub producer contract
+        if: success()
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          DAYS_INPUT: ${{ github.event.inputs.days }}
+          HUB_ROOT: ${{ steps.mine.outputs.hub-root }}
+          LEARNED_COUNT: ${{ steps.mine.outputs.learned_artifact_files_count }}
         run: |
-          if [ -z "$DAYS_INPUT" ]; then DAYS=30; else DAYS="$DAYS_INPUT"; fi
-          python scripts/process_miner.py \
-            --repo "$REPO" \
-            --days "$DAYS" \
-            --emit-learned \
-            --ingest-knowledge \
-            --max-prs 40
+          set -euo pipefail
+          if [[ -z "${HUB_ROOT}" ]]; then
+            echo "::error::process-miner action did not emit hub-root (action failed to resolve)"
+            exit 1
+          fi
+          if [[ "${HUB_ROOT}" != /* ]]; then
+            echo "::error::hub-root '${HUB_ROOT}' is not an absolute path"
+            exit 1
+          fi
+          if [[ ! -f "${HUB_ROOT}/scripts/process_miner.py" || ! -d "${HUB_ROOT}/tools/process_miner" ]]; then
+            echo "::error::hub-root '${HUB_ROOT}' does not contain the canonical producer"
+            exit 1
+          fi
+          if [[ ! "${LEARNED_COUNT}" =~ ^[0-9]+$ ]]; then
+            echo "::error::learned_artifact_files_count is not an integer (got '${LEARNED_COUNT}')"
+            exit 1
+          fi
+          echo "Hub producer OK: hub-root=${HUB_ROOT} learned_artifact_files_count=${LEARNED_COUNT}"
+
+      - name: Restore spoke vendored miner tree
+        # Ephemeral hub overlay is torn down by the action; restore tracked vendored tree
+        # for local scripts/tests that still import tools.process_miner (gov-hub#266 residual).
+        if: always()
+        run: |
+          set -euo pipefail
+          if ! git restore --source=HEAD --worktree -- tools/process_miner scripts/process_miner.py 2>/dev/null; then
+            git checkout -- tools/process_miner scripts/process_miner.py 2>/dev/null || true
+          fi
+          git clean -fd -- tools/process_miner 2>/dev/null || true
+          echo "Spoke vendored miner tree restored (best-effort)."
 
       - name: Zero learned rules warning
         if: steps.mine.outputs.learned_artifact_files_count == '0'
