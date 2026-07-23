@@ -22,7 +22,7 @@ Resolve-pr for [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657) on
 
 ## Tip (keep in sync)
 
-Current resolve tip at last code push for this note: see PR head / branch tip (do not trust stale
+Current resolve tip: `c33c222` (`c33c2220d3364434adefbf75e73794009b0e4ad3`). Code fix series: `8156db2` (STABLE/--no-hold + atomic exclusive write + Win paste); `c33c222` (vault LF restore).
 short SHAs in older handoff paragraphs). Local series after `2bbfede` adds: STABLE/`--no-hold`
 survives JSON write failure; atomic exclusive report publish; Windows `list2cmdline` plan paste.
 
