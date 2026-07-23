@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-23T07:13:27Z
+last_updated: 2026-07-23T07:27:35Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-657-resolve-blocked-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/wedge-live-forensics-2026-07-22.md
@@ -109,15 +109,22 @@ relates_to:
 
 # Next session handoff
 
-## In flight (2026-07-23) — #625 overlay/init-perturber A/B, PR #657
+## Delivered (2026-07-23) — #625 init-perturber A/B driver MERGED (PR #657); physical A/B remains
 
-PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657) tip `8c11685`: required **CI green**,
-0 unresolved GraphQL threads, resolve-gate clean. Merge conflict with `main` resolved earlier
-(`9b2be2a`); CI format/lint tips `a83973e` + `8c11685`.
+**PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657) MERGED** as squash
+[`ce70add1e`](https://github.com/agorokh/ac-copilot-trainer/commit/ce70add1edaa700fefaabb27914fbb47a2edeaa2)
+(2026-07-23T07:26:36Z). Ships `tools/ac_harness/init_perturber_ab.py` — seeded adjacent A/B pairs,
+20 analyzable launches/arm, immutable one-trial reports under `.scratch`, Wilson/Fisher/paired
+sensitivity, honest `never_live` separation — plus resilient_launch helpers
+(`repo_checkout_root` / `_scratch_root` / exclusive report publish / `stable_session_exit_code`).
+Post-merge classify: **no** migrations/env/deps/workflow flags.
 
-**Do not merge yet — Codex rollback gate unavailable** (usage limits after full cooldown retries).
-Physical A/B still operator-gated. Resume: `/resolve-pr 657` after Codex quota resets. Detail:
-[[pr-657-resolve-blocked-2026-07-22]] / [[issue-625-init-perturber-ab-prepared-2026-07-22]].
+## What remains / resume here
+
+Issue [#625](https://github.com/agorokh/ac-copilot-trainer/issues/625) stays **OPEN** — code is not
+the experiment. Operator steps: power on `pc`, authorize Steam/NVIDIA overlay toggles, run the
+planned A/B schedule, attach stats/evidence to #625, then close. Detail:
+[[issue-625-init-perturber-ab-prepared-2026-07-22]] / [[pr-657-resolve-blocked-2026-07-22]].
 
 
 ## Delivered (2026-07-22 evening) — #662 module map MERGED; zero-kill uptime soak IN PROGRESS

@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-23T06:20:00Z
+last_updated: 2026-07-23T07:27:35Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-657-resolve-blocked-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
@@ -45,13 +45,14 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**In flight (2026-07-23):** issue [#625](https://github.com/agorokh/ac-copilot-trainer/issues/625),
-ready PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657) on
-`feat/issue-625-overlay-freeze-ab`. Overlay A/B driver is code-complete; resolve-pr blocked on
-Codex quota + missing hosted Actions on tips after `cc83191`. Physical run still needs `pc` +
-operator authorization for Steam/NVIDIA toggles. Do not merge until hosted CI + Codex gate +
-attached A/B stats. Detail: [[pr-657-resolve-blocked-2026-07-22]] /
+**Delivered (2026-07-23):** PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657)
+MERGED [`ce70add1e`](https://github.com/agorokh/ac-copilot-trainer/commit/ce70add1edaa700fefaabb27914fbb47a2edeaa2) — #625
+**driver** (honest init-perturber / overlay A/B experiment planner+analyzer). Issue #625 stays
+OPEN for the physical A/B on `pc` (operator-gated Steam/NVIDIA toggles + attached stats). Detail:
 [[issue-625-init-perturber-ab-prepared-2026-07-22]].
+
+**In flight (2026-07-23):** issue [#625](https://github.com/agorokh/ac-copilot-trainer/issues/625)
+physical overlay A/B run — code is on `main`; remaining work is the rig experiment + evidence.
 
 **Delivered (2026-07-22 PM):** PR [#647](https://github.com/agorokh/ac-copilot-trainer/pull/647)
 MERGED `c5d6e909b` — #630 **Part G** (runnable freeze-forensics capture driver; 6 review rounds).

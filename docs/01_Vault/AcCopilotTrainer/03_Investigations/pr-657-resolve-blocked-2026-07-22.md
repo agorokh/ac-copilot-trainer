@@ -1,6 +1,6 @@
 ---
 type: investigation
-status: active
+status: closed
 memory_tier: canonical
 created: 2026-07-22
 updated: 2026-07-23
@@ -46,3 +46,8 @@ paragraphs.
 Tip `8c11685`: hosted CI **green**; GraphQL threads 0; resolve-gate clean. Remaining blocker is
 **Codex usage limits** (no current-SHA review after `@codex review` + `sleep 600` retries). Escalated
 on the PR.
+
+## Post-merge (2026-07-23)
+
+PR #657 MERGED as squash `ce70add1e`. Resolve blockers (CI format/lint, Codex quota) no longer gate
+delivery of the driver. Remaining open work lives on issue #625 (physical A/B), not this PR.
