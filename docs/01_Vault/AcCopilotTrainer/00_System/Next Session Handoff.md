@@ -2,9 +2,10 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-23T07:27:35Z
+last_updated: 2026-07-23T07:15:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-657-resolve-blocked-2026-07-22.md
+  - AcCopilotTrainer/03_Investigations/stable-windows-soak-2026-07-23.md
   - AcCopilotTrainer/03_Investigations/wedge-live-forensics-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/issue-630-parts-cde-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
@@ -108,6 +109,19 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-23 early AM) — stable-Windows soak: §6.3 KILLED, accumulator = launch-cycle count
+
+Single boot on **26200.8894 stable 25H2** (Insider flight removed by the operator's unenroll):
+zero-kill soak to 9.3 h, then 20 launches — **1–7 clean, freezes at 8/11/14/16 (each exactly
+15.4 s), 17–20 clean** (5-min holds). §6.3 dead (4 freezes on stable Windows; upstream #622
+updated). Uptime correlation in §3.4 is really **accumulated launch/kill cycles**; accumulation
+is non-monotonic (bursty, or drained by longer holds — undecided). Accumulator is NOT in the AC
+install's disk state; CM (one long-lived process/boot) is the prime suspect container.
+Detail + next experiments (CM-restart reset, hold-duration, graceful-exit):
+[[stable-windows-soak-2026-07-23]] and the
+[#627 synthesis](https://github.com/agorokh/ac-copilot-trainer/issues/627#issuecomment-5059322044).
+
 
 ## Delivered (2026-07-23) — #625 init-perturber A/B driver MERGED (PR #657); physical A/B remains
 
