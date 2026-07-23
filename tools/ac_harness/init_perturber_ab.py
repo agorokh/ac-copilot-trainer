@@ -17,7 +17,6 @@ import argparse
 import json
 import math
 import random
-import shlex
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -560,10 +559,12 @@ def _output_path(raw: Path) -> Path:
 
 
 def _shell_quote(token: str) -> str:
-    """Quote one argv token for paste onto the operator's launch host shell."""
-    if sys.platform == "win32":
-        return subprocess.list2cmdline([token])
-    return shlex.quote(token)
+    """Quote one argv token for Windows cmd.exe paste (AC / the rig are Windows-only).
+
+    Plan generation often runs on a Mac/dev host; the printed lines are pasted onto ``pc``, so
+    host-local ``shlex.quote`` / absolute ``cd`` paths are wrong (#657 daemon).
+    """
+    return subprocess.list2cmdline([token])
 
 
 def _checkout_relative_report_path(plan_path: Path, report_name: str) -> str:
@@ -658,11 +659,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"Endpoint floor is {MIN_TRIALS_PER_ARM} analyzable trials/arm "
                 f"(scheduled {args.trials_per_arm}/arm); over-schedule to absorb never_live."
             )
-            checkout = repo_checkout_root()
             print(
-                "Paste each command on the rig after "
-                f"cd {_shell_quote(str(checkout))} "
-                "(keeps ``tools`` importable; report paths are checkout-relative under .scratch)."
+                "Paste each command on the Windows rig from that checkout's root "
+                "(cd to the rig's ac-copilot-trainer clone first; report paths are "
+                "checkout-relative under .scratch — never the planner host's absolute path)."
             )
             print(
                 "If two adjacent trials are never_live, cold-restart Content Manager before "

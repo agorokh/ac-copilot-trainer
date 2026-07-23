@@ -9,6 +9,7 @@ semantics against synthetic traces — no Assetto Corsa, no Windows shared memor
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 from pathlib import Path
 
@@ -1921,3 +1922,35 @@ def test_an_armed_clock_expires_even_on_a_neutral_sample() -> None:
     watch.observe(gfx_packet=5000, phys_packet=9030, now=5.0)  # clock armed, anchored at t=0
     # Section goes unreadable and never comes back; the armed clock still expires.
     assert watch.observe(gfx_packet=None, phys_packet=None, now=25.0) is True
+
+
+class TestWriteReportJson:
+    """#657 — exclusive publish without destination tombstones; refuse overwrite."""
+
+    def test_writes_once_and_refuses_overwrite(self, tmp_path, monkeypatch) -> None:
+        from tools.ac_harness.resilient_launch import (
+            LaunchReport,
+            LaunchVerdict,
+            _write_report_json,
+        )
+
+        logs: list[str] = []
+        monkeypatch.setattr(
+            "tools.ac_harness.resilient_launch._log",
+            lambda message: logs.append(message),
+        )
+        path = tmp_path / "trial.json"
+        report = LaunchReport(
+            verdict=LaunchVerdict.STABLE,
+            attempts=1,
+            froze=0,
+            never_live=0,
+            stable=1,
+        )
+        assert _write_report_json(report, path) is True
+        assert path.is_file()
+        assert json.loads(path.read_text(encoding="utf-8"))["verdict"] == "stable"
+        assert _write_report_json(report, path) is False
+        assert any("refusing overwrite" in line for line in logs)
+        # No leftover temp siblings after a successful exclusive publish.
+        assert list(tmp_path.glob(".trial.json.*.tmp")) == []

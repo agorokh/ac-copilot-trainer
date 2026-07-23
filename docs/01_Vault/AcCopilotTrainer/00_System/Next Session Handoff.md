@@ -107,22 +107,20 @@ relates_to:
 
 # Next session handoff
 
-## In flight (2026-07-22) — #625 overlay/init-perturber A/B, PR #657 draft
+## In flight (2026-07-23) — #625 overlay/init-perturber A/B, PR #657
 
-PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657) is a draft on
-`feat/issue-625-overlay-freeze-ab` (`535a3d4`). The statistically honest driver is code-complete and
-green: seeded adjacent A/B pairs, 20 analyzable launches per arm, immutable one-trial report ingest,
-uptime/order/summary checks, Wilson intervals, Fisher exact, paired exact sensitivity, and honest
-`never_live` separation. Full `make ci-fast`: **3,261 passed, 89 skipped**, 83.39% coverage. CLI plan
-and analysis were exercised through the actual module; exact math matched SciPy across 2,056 tables.
+PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657) is **ready** (not draft) on
+`feat/issue-625-overlay-freeze-ab`. Driver is code-complete: seeded adjacent A/B pairs, 20 analyzable
+launches/arm, immutable one-trial reports under `.scratch`, Wilson/Fisher/paired sensitivity, honest
+`never_live` separation. Latest resolve round fixes daemon HIGH: STABLE/`--no-hold` survive a failed
+`--json` write; exclusive report publish is atomic (temp+link); plan paste uses Windows
+`list2cmdline` without planner-host absolute `cd`.
 
-**Do not ready/merge yet.** Physical outcome proof remains. `pc` is offline; canonical WOL sent to
-both declared NICs but Tailscale stayed offline and SSH timed out. Issue #625 is still OPEN and its
-live body explicitly requires operator sign-off before toggling Steam overlay + NVIDIA ShadowPlay,
-with both restored afterward. Resume: power on `pc`; obtain that explicit authorization; fresh
-reboot; run the PR's printed interleaved schedule (>=20 analyzable/arm); restore both settings;
-attach counts + Wilson CI + Fisher p + paired sensitivity to #625; then ready/resolve/merge/post-
-merge. Detail: [[issue-625-init-perturber-ab-prepared-2026-07-22]].
+**Do not merge yet.** (1) Hosted Actions have not run on tips after `cc83191` — branch-specific
+delivery gap. (2) Codex rollback gate blocked by usage limits. (3) Physical A/B still operator-gated.
+Resume: `/resolve-pr 657` after Codex quota + Actions delivery; then power on `pc`, authorize overlay
+toggles, run schedule, attach stats to #625. Detail: [[pr-657-resolve-blocked-2026-07-22]] and
+[[issue-625-init-perturber-ab-prepared-2026-07-22]].
 
 ## Delivered (2026-07-22) — session UUID replay scoping (#622, PR #652 MERGED)
 

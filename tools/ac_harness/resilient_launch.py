@@ -34,6 +34,7 @@ import json
 import math
 import os
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -775,28 +776,59 @@ _repo_checkout_root = repo_checkout_root
 _resolve_report_path = resolve_report_path
 
 
-def _write_report_json(report: LaunchReport, path: Path) -> bool:  # pragma: no cover - rig-only
+def _write_report_json(report: LaunchReport, path: Path) -> bool:
     """Write the machine-readable run record; report success so measurement runs can gate on it.
 
     A failure never masks the verdict in the log — but in ``--trials`` mode the record IS the
     deliverable, so the caller converts ``False`` into a nonzero exit (#646 review P1) instead of
     letting an automated measurement run read as successful with no record produced.
 
-    Writes are exclusive (``open(..., "x")``): a completed trial report is immutable evidence and
-    must not be silently replaced by a retry (#657 / #625 A/B integrity).
+    Publishes via a complete temp file + exclusive hardlink (Windows: exclusive rename). A finished
+    trial report is immutable evidence and must not be silently replaced (#657 / #625 A/B). The
+    destination is never created until the payload is fully written, so a crash cannot leave an
+    empty ``open(..., "x")`` tombstone that blocks retries (#657 daemon).
     """
+    payload = json.dumps(report.as_dict(), indent=2) + "\n"
+    tmp: Path | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("x", encoding="utf-8") as handle:
-            handle.write(json.dumps(report.as_dict(), indent=2) + "\n")
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=str(path.parent),
+        )
+        tmp = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            _log(f"report exists, refusing overwrite: {path}")
+            return False
+        except OSError as link_exc:
+            if sys.platform != "win32":
+                _log(f"WARNING: could not publish report JSON {path}: {link_exc}")
+                return False
+            # Windows rename fails when the destination already exists (exclusive publish).
+            try:
+                os.rename(tmp, path)
+            except FileExistsError:
+                _log(f"report exists, refusing overwrite: {path}")
+                return False
+            tmp = None
+        else:
+            tmp.unlink(missing_ok=True)
+            tmp = None
         _log(f"report -> {path}")
         return True
-    except FileExistsError:
-        _log(f"report exists, refusing overwrite: {path}")
-        return False
     except OSError as exc:
         _log(f"WARNING: could not write report JSON {path}: {exc}")
         return False
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
 
 def _sample_now(
@@ -1719,12 +1751,13 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         if args.json_path is not None:
             report_written = _write_report_json(report, args.json_path)
             if not report_written and not trials_mode:
-                # Exclusive create refused an existing path — do not exit 0 over stale evidence.
-                # Always tear down before returning: a STABLE session must not outlive the rig lock
-                # (#657 Qodo / daemon — peer harnesses must never inherit a live unowned acs.exe).
-                _log("launch aborted: the requested report JSON could not be written")
-                _make_rig_safe(acs_present, release_requested=release_requested)
-                return 1
+                # Do not tear down a STABLE session over a missing artifact — that contradicts
+                # --no-hold (leave AC LIVE for a peer) and kills the operator's earned session
+                # (#657 daemon HIGH). Exit nonzero later so we never claim a clean measurement.
+                _log(
+                    "WARNING: report JSON could not be written — continuing hold/--no-hold "
+                    "without claiming a clean measurement artifact"
+                )
         if trials_mode:
             # #627 §9.2 — the deliverable of a measurement run is the recorded denominator, not a
             # held session. Say every verdict out loud, leave the rig CLEAN (a stable final trial
@@ -1770,7 +1803,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 "stability gate passed; exiting without hold (--no-hold) — AC left LIVE, "
                 "rig ownership released"
             )
-            return 0
+            return 0 if report_written else 1
 
         # The stable session belongs to this operator-facing launcher until AC exits. Releasing
         # the cross-worktree lock immediately after the gate would let a peer harness kill the
@@ -1795,6 +1828,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 hold_timeout=30.0,
             )
             os._exit(1)
+        if not report_written:
+            return 1
         return 0 if intentional_release else 1
     finally:
         if preset is not None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from tools.ac_harness.init_perturber_ab import (
     render_markdown,
     wilson_interval,
 )
+from tools.ac_harness import init_perturber_ab as ab_mod
 from tools.ac_harness.resilient_launch import DEFAULT_GO_LIVE_TIMEOUT, REPORT_SCHEMA
 
 _DEFAULT_LAUNCH = {
@@ -404,3 +406,22 @@ def test_all_never_live_arm_reports_insufficient_sample() -> None:
     assert result["arms"]["overlays_on"]["analyzable_total"] == 0
     assert result["arms"]["overlays_on"]["never_live"] == 20
     assert result["conclusion"] == "insufficient_sample"
+
+
+def test_plan_commands_use_windows_quoting_on_any_host(capsys, tmp_path, monkeypatch) -> None:
+    """#657 — plan paste target is the Windows rig, even when planning on macOS/Linux."""
+    from tools.ac_harness.init_perturber_ab import main
+
+    monkeypatch.setattr(ab_mod, "repo_checkout_root", lambda: tmp_path)
+    monkeypatch.setattr(ab_mod, "MIN_TRIALS_PER_ARM", 2)
+    out = tmp_path / ".scratch" / "plan.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    assert main(["plan", "--out", str(out), "--trials-per-arm", "2", "--seed", "1"]) == 0
+    printed = capsys.readouterr().out
+    assert "Windows rig" in printed
+    assert f"cd {tmp_path}" not in printed
+    assert "planner host's absolute path" in printed
+    # Spaces in tokens must use list2cmdline quoting, not shlex.
+    sample = ab_mod._shell_quote("path with spaces")
+    assert sample == subprocess.list2cmdline(["path with spaces"])
+    assert "'" not in sample  # shlex.quote would wrap with single quotes on POSIX
