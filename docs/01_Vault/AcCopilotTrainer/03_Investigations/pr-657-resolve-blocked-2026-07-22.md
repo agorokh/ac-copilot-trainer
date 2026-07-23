@@ -22,15 +22,17 @@ Resolve-pr for [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657) on
 
 ## Tip (keep in sync)
 
-Current resolve tip: `c33c222` (`c33c2220d3364434adefbf75e73794009b0e4ad3`). Code fix series: `8156db2` (STABLE/--no-hold + atomic exclusive write + Win paste); `c33c222` (vault LF restore).
-short SHAs in older handoff paragraphs). Local series after `2bbfede` adds: STABLE/`--no-hold`
-survives JSON write failure; atomic exclusive report publish; Windows `list2cmdline` plan paste.
+Current resolve tip is the PR head on `feat/issue-625-overlay-freeze-ab` (see GitHub). Landmark
+commits on this branch: `8156db2` (STABLE/`--no-hold` survives failed exclusive `--json` write;
+atomic exclusive report publish; Windows `list2cmdline` plan paste), `0dbd784` (Qodo fd-leak /
+index / OSError / launch tests). Prefer the live PR head over short SHAs in older handoff
+paragraphs.
 
 ## Evidence already in hand
 
 - GraphQL blocking threads: 0 unresolved (pre-push rounds).
 - Resolve-gate ledger: clean when last run locally.
-- Local `make ci-fast`: OK on the tip series before/after the daemon HIGH fix.
+- Local harness tests green on the tip series (156+ in resilient_launch + init_perturber_ab).
 - Physical A/B run remains operator-gated by design.
 
 ## Next

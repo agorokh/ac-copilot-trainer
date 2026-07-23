@@ -422,6 +422,19 @@ def test_write_new_json_maps_oserror_to_valueerror(tmp_path, monkeypatch) -> Non
         _write_new_json(target, {"ok": True})
 
 
+def test_write_new_json_is_exclusive_and_atomic(tmp_path) -> None:
+    """#657 Qodo — no destination tombstone; refuse overwrite of a complete artifact."""
+    from tools.ac_harness.init_perturber_ab import _write_new_json
+
+    path = tmp_path / "plan.json"
+    _write_new_json(path, {"schema": "test", "n": 1})
+    assert json.loads(path.read_text(encoding="utf-8")) == {"schema": "test", "n": 1}
+    assert list(tmp_path.glob(".plan.json.*.tmp")) == []
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        _write_new_json(path, {"schema": "test", "n": 2})
+    assert json.loads(path.read_text(encoding="utf-8"))["n"] == 1
+
+
 def test_plan_commands_use_windows_quoting_on_any_host(capsys, tmp_path, monkeypatch) -> None:
     """#657 — plan paste target is the Windows rig, even when planning on macOS/Linux."""
     from tools.ac_harness.init_perturber_ab import main

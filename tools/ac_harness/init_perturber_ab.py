@@ -16,9 +16,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import random
 import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -545,16 +547,59 @@ def render_markdown(analysis: dict[str, Any]) -> str:
 
 
 def _write_new_json(path: Path, payload: dict[str, Any]) -> None:
-    """Create a new JSON artifact exclusively; map filesystem errors to ``ValueError``."""
+    """Create a new JSON artifact exclusively; map filesystem errors to ``ValueError``.
+
+    Publishes via a complete temp file + exclusive hardlink (Windows: exclusive rename) so a
+    mid-write crash cannot leave a truncated destination that blocks retries (#657 Qodo).
+    """
+    text = json.dumps(payload, indent=2) + "\n"
+    tmp: Path | None = None
+    fd: int | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("x", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
-            handle.write("\n")
-    except FileExistsError as exc:
-        raise ValueError(f"refusing to overwrite existing artifact {path}") from exc
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=str(path.parent),
+        )
+        tmp = Path(tmp_name)
+        handle = os.fdopen(fd, "w", encoding="utf-8", newline="\n")
+        fd = None
+        with handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError as exc:
+            raise ValueError(f"refusing to overwrite existing artifact {path}") from exc
+        except OSError as link_exc:
+            if sys.platform != "win32":
+                raise ValueError(f"could not write artifact {path}: {link_exc}") from link_exc
+            try:
+                os.rename(tmp, path)
+            except FileExistsError as exc:
+                raise ValueError(f"refusing to overwrite existing artifact {path}") from exc
+            tmp = None
+        else:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            tmp = None
     except OSError as exc:
         raise ValueError(f"could not write artifact {path}: {exc}") from exc
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _output_path(raw: Path) -> Path:
