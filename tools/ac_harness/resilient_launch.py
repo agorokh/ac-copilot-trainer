@@ -790,6 +790,7 @@ def _write_report_json(report: LaunchReport, path: Path) -> bool:
     """
     payload = json.dumps(report.as_dict(), indent=2) + "\n"
     tmp: Path | None = None
+    fd: int | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(
@@ -798,7 +799,11 @@ def _write_report_json(report: LaunchReport, path: Path) -> bool:
             dir=str(path.parent),
         )
         tmp = Path(tmp_name)
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+        # Take ownership of ``fd`` before writing so an ``fdopen`` failure cannot leak it
+        # (#657 Qodo — raw descriptor must close even when the wrapper never runs).
+        handle = os.fdopen(fd, "w", encoding="utf-8", newline="\n")
+        fd = None
+        with handle:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
@@ -819,7 +824,10 @@ def _write_report_json(report: LaunchReport, path: Path) -> bool:
                 return False
             tmp = None
         else:
-            tmp.unlink(missing_ok=True)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError as cleanup_exc:
+                _log(f"WARNING: could not remove report temp {tmp}: {cleanup_exc}")
             tmp = None
         _log(f"report -> {path}")
         return True
@@ -827,8 +835,16 @@ def _write_report_json(report: LaunchReport, path: Path) -> bool:
         _log(f"WARNING: could not write report JSON {path}: {exc}")
         return False
     finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         if tmp is not None:
-            tmp.unlink(missing_ok=True)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError as cleanup_exc:
+                _log(f"WARNING: could not remove report temp {tmp}: {cleanup_exc}")
 
 
 def _sample_now(

@@ -408,6 +408,20 @@ def test_all_never_live_arm_reports_insufficient_sample() -> None:
     assert result["conclusion"] == "insufficient_sample"
 
 
+def test_write_new_json_maps_oserror_to_valueerror(tmp_path, monkeypatch) -> None:
+    """#657 Qodo — filesystem failures become clean CLI errors, not tracebacks."""
+    from tools.ac_harness.init_perturber_ab import _write_new_json
+
+    target = tmp_path / "blocked" / "out.json"
+
+    def boom_mkdir(*_args, **_kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "mkdir", boom_mkdir)
+    with pytest.raises(ValueError, match="could not write artifact"):
+        _write_new_json(target, {"ok": True})
+
+
 def test_plan_commands_use_windows_quoting_on_any_host(capsys, tmp_path, monkeypatch) -> None:
     """#657 — plan paste target is the Windows rig, even when planning on macOS/Linux."""
     from tools.ac_harness.init_perturber_ab import main

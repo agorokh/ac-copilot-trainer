@@ -545,13 +545,16 @@ def render_markdown(analysis: dict[str, Any]) -> str:
 
 
 def _write_new_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Create a new JSON artifact exclusively; map filesystem errors to ``ValueError``."""
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("x", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
             handle.write("\n")
     except FileExistsError as exc:
         raise ValueError(f"refusing to overwrite existing artifact {path}") from exc
+    except OSError as exc:
+        raise ValueError(f"could not write artifact {path}: {exc}") from exc
 
 
 def _output_path(raw: Path) -> Path:
@@ -693,7 +696,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"analysis -> {destination}")
         print(render_markdown(result))
         return 0
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
