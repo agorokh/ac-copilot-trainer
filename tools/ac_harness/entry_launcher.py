@@ -225,6 +225,34 @@ def _taskkill(
     return f"taskkill {process_name} exited {result.returncode}{suffix}"
 
 
+def _taskkill_soft(
+    process_name: str,
+    runner: Callable[..., subprocess.CompletedProcess],
+) -> str:
+    """Graceful ``taskkill`` (WM_CLOSE, no ``/F``); returns a human-readable detail string.
+
+    The #668 batteries measured why this exists: the #627 freeze accumulator arms with
+    launch/kill cycles, and hard-kill teardown moved onset from launch ~14 to launch ~8 —
+    graceful exits roughly double a boot's clean-launch budget. A wedged render pump cannot
+    process WM_CLOSE (observed: one WM_CLOSE hang immediately after a freeze burst), so this
+    is only ever a FIRST phase — the forced kill remains the fallback boundary.
+    """
+
+    if sys.platform != "win32":
+        return f"{process_name} graceful close skipped on {sys.platform}"
+    result = runner(
+        ["taskkill", "/IM", process_name],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return f"requested graceful close of {process_name}"
+    detail = (result.stderr or result.stdout or "").strip()
+    suffix = f": {detail}" if detail else ""
+    return f"graceful taskkill {process_name} exited {result.returncode}{suffix}"
+
+
 def running_process_ids(
     process_name: str,
     runner: Callable[..., subprocess.CompletedProcess] | None = None,
@@ -297,12 +325,20 @@ def terminate_process_tree_confirmed_absent(
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     log: Callable[[str], None] | None = None,
+    graceful_grace: float = 0.0,
 ) -> bool:
     """Kill one process tree and require consecutive strict absence observations.
 
     This is the shared rig-safety boundary for both human and autonomous launchers. Enumeration
     failure is unknown—not absence—and triggers the same best-effort taskkill as positive presence.
     A process already absent is not killed, but still needs ``absent_confirmations`` observations.
+
+    ``graceful_grace`` > 0 prepends a WM_CLOSE phase (#668): the first presence observation sends
+    a graceful ``taskkill`` (no ``/F``) and the forced kill is deferred until ``graceful_grace``
+    seconds have elapsed without absence. The confirmed-absent contract is unchanged — the forced
+    fallback and the overall ``timeout`` still bound the wait, so a wedged process (which cannot
+    pump WM_CLOSE) degrades to exactly the old behavior, ``graceful_grace`` later. Callers must
+    size ``timeout`` to leave room for the forced phase (``timeout > graceful_grace``).
     """
     if timeout <= 0:
         raise ValueError("process termination timeout must be > 0")
@@ -310,6 +346,10 @@ def terminate_process_tree_confirmed_absent(
         raise ValueError("process termination poll must be > 0")
     if absent_confirmations < 1:
         raise ValueError("absent_confirmations must be >= 1")
+    if graceful_grace < 0:
+        raise ValueError("graceful_grace must be >= 0")
+    if graceful_grace >= timeout:
+        raise ValueError("graceful_grace must leave room for the forced phase (< timeout)")
     emit = log or (lambda _message: None)
     if sys.platform != "win32":
         emit(f"cannot confirm {process_name} termination on unsupported platform {sys.platform}")
@@ -321,8 +361,11 @@ def terminate_process_tree_confirmed_absent(
             return bool(running_process_ids(process_name, strict=True))
 
     run = runner or subprocess.run
-    deadline = clock() + timeout
+    started = clock()
+    deadline = started + timeout
+    forced_after = started + graceful_grace
     absent_run = 0
+    soft_attempted = False
     kill_attempted = False
     while True:
         try:
@@ -336,7 +379,18 @@ def terminate_process_tree_confirmed_absent(
                 return True
         else:
             absent_run = 0
-            if not kill_attempted:
+            if graceful_grace > 0 and not soft_attempted:
+                try:
+                    emit(_taskkill_soft(process_name, run))
+                except OSError as exc:
+                    emit(f"failed to invoke graceful taskkill for {process_name}: {exc}")
+                soft_attempted = True
+            elif not kill_attempted and (graceful_grace <= 0 or clock() >= forced_after):
+                if soft_attempted:
+                    emit(
+                        f"{process_name} survived the {graceful_grace:.0f}s graceful grace — "
+                        "escalating to forced kill (wedged pumps cannot process WM_CLOSE)"
+                    )
                 try:
                     emit(_taskkill(process_name, run))
                 except OSError as exc:

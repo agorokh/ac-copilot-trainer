@@ -1472,7 +1472,7 @@ def test_make_rig_safe_attempts_cleanup_before_honoring_release(monkeypatch):
     def release_requested() -> bool:
         return True
 
-    def cleanup(_acs_alive, *, release_requested=None):
+    def cleanup(_acs_alive, *, release_requested=None, graceful_grace=0.0):
         callbacks.append(release_requested)
         return False
 
