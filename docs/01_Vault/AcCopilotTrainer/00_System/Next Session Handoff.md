@@ -2,9 +2,10 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-23T07:15:00Z
+last_updated: 2026-07-23T21:00:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-657-resolve-blocked-2026-07-22.md
+  - AcCopilotTrainer/03_Investigations/issue-668-graceful-battery-2026-07-23.md
   - AcCopilotTrainer/03_Investigations/stable-windows-soak-2026-07-23.md
   - AcCopilotTrainer/03_Investigations/wedge-live-forensics-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/issue-630-parts-cde-2026-07-22.md
@@ -109,6 +110,19 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-23 evening) — #668 CLOSED: launches arm the accumulator; graceful-first teardown MERGED
+
+Graceful battery (16 launches, WM_CLOSE): 1–13 stable, froze at 14–15 — **hard kills not
+necessary; launch cycles arm the #627 accumulator** (kills only accelerate onset ~2×;
+post-onset burst rate teardown-independent). **CM-restart probe: fresh CM froze twice → CM
+process state REFUTED.** Mitigation shipped: PR
+[#669](https://github.com/agorokh/ac-copilot-trainer/pull/669) MERGED `28107b688`
+(`graceful_grace` in the shared teardown boundary, verdict-gated STABLE-only, 20 s).
+Next suspects need BOOT-SCOPED arms (burst decay confounds within-boot probes): NVIDIA
+session state, session kernel objects, external acpmf holders (SimHub/MOZA — stop from boot,
+measure onset). Detail: [[issue-668-graceful-battery-2026-07-23]].
+
 
 ## Delivered (2026-07-23 early AM) — stable-Windows soak: §6.3 KILLED, accumulator = launch-cycle count
 
