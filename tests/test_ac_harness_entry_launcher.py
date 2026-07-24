@@ -685,3 +685,106 @@ def test_cli_cm_mode_requires_preset():
 def test_launcher_config_validates_retry_budget(kwargs: dict, match: str):
     with pytest.raises(ValueError, match=match):
         EntryLauncherConfig(**kwargs)
+
+
+def test_terminate_graceful_grace_soft_close_succeeds_without_forced_kill(monkeypatch):
+    """#668 — a healthy process honoring WM_CLOSE is never force-killed."""
+    clock = FakeClock()
+    observations = iter([True, True, False, False])
+    calls: list[list[str]] = []
+
+    def runner(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+
+    assert (
+        terminate_process_tree_confirmed_absent(
+            "acs.exe",
+            is_running=lambda: next(observations),
+            timeout=30.0,
+            poll=0.1,
+            runner=runner,
+            clock=clock,
+            sleep=clock.sleep,
+            graceful_grace=20.0,
+        )
+        is True
+    )
+    # Only the soft close ran — no /F anywhere.
+    assert calls == [["taskkill", "/IM", "acs.exe"]]
+
+
+def test_terminate_graceful_grace_escalates_to_forced_after_grace(monkeypatch):
+    """A wedged pump cannot process WM_CLOSE — past the grace the old forced boundary returns."""
+    clock = FakeClock()
+    calls: list[list[str]] = []
+    messages: list[str] = []
+    state = {"dead": False}
+
+    def runner(command, **_kwargs):
+        calls.append(command)
+        if "/F" in command:
+            state["dead"] = True
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+
+    assert (
+        terminate_process_tree_confirmed_absent(
+            "acs.exe",
+            is_running=lambda: not state["dead"],
+            timeout=10.0,
+            poll=0.5,
+            runner=runner,
+            clock=clock,
+            sleep=clock.sleep,
+            log=messages.append,
+            graceful_grace=2.0,
+        )
+        is True
+    )
+    assert calls[0] == ["taskkill", "/IM", "acs.exe"]
+    assert calls[1] == ["taskkill", "/IM", "acs.exe", "/F", "/T"]
+    assert len(calls) == 2
+    assert any("escalating to forced kill" in message for message in messages)
+
+
+def test_terminate_graceful_grace_zero_is_the_old_behavior(monkeypatch):
+    clock = FakeClock()
+    observations = iter([True, False, False])
+    calls: list[list[str]] = []
+
+    def runner(command, **_kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+
+    assert (
+        terminate_process_tree_confirmed_absent(
+            "acs.exe",
+            is_running=lambda: next(observations),
+            timeout=2.0,
+            poll=0.1,
+            runner=runner,
+            clock=clock,
+            sleep=clock.sleep,
+            graceful_grace=0.0,
+        )
+        is True
+    )
+    assert calls == [["taskkill", "/IM", "acs.exe", "/F", "/T"]]
+
+
+def test_terminate_graceful_grace_validation(monkeypatch):
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+    with pytest.raises(ValueError, match="graceful_grace"):
+        terminate_process_tree_confirmed_absent(
+            "acs.exe", is_running=lambda: False, graceful_grace=-1.0
+        )
+    with pytest.raises(ValueError, match="forced phase"):
+        terminate_process_tree_confirmed_absent(
+            "acs.exe", is_running=lambda: False, timeout=10.0, graceful_grace=10.0
+        )

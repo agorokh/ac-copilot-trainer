@@ -53,6 +53,12 @@ DEFAULT_STALL_SAMPLES = 4
 DEFAULT_PAUSE_BUDGET = 300.0
 #: consecutive never_live attempts before cold-restarting Content Manager (#537/#558)
 NEVER_LIVE_BEFORE_CM_RESTART = 2
+#: seconds a HEALTHY session gets to honor WM_CLOSE before the forced kill (#668): the freeze
+#: accumulator arms with launch/kill cycles, and hard-kill teardown moved onset from launch ~14
+#: to ~8 — graceful exits roughly double a boot's clean-launch budget. Grace applies ONLY after
+#: a STABLE verdict: a wedged pump cannot process WM_CLOSE (measured), so wedge cleanup stays
+#: immediate-forced and loses nothing.
+DEFAULT_GRACEFUL_EXIT_GRACE = 20.0
 #: seconds a cached Car0 drivability verdict stays valid before the handshake re-runs (#630
 #: Part D) — a one-shot latch would hold a session that LOSES drivability after go-live as
 #: STABLE for the rest of the window. Long enough that a 140 s window costs ~3 extra probes.
@@ -1097,6 +1103,7 @@ def _ensure_acs_gone(  # pragma: no cover - rig-only
     timeout: float = 15.0,
     poll: float = 1.0,
     release_requested: Callable[[], bool] | None = None,
+    graceful_grace: float = 0.0,
 ) -> bool:
     """Kill any surviving ``acs.exe`` and wait until it has really left the process table.
 
@@ -1104,6 +1111,11 @@ def _ensure_acs_gone(  # pragma: no cover - rig-only
     Content Manager's next start fail to reach LIVE. ``taskkill`` returning is not sufficient —
     the process can linger — so poll (bounded) until it is actually gone. The caller must abort
     rather than relaunch when this returns ``False``.
+
+    ``graceful_grace`` > 0 lets a HEALTHY session honor WM_CLOSE before the forced kill (#668 —
+    pass it only when the previous verdict proved the session could pump messages; a wedge gets
+    the immediate forced path). The overall timeout is extended by the grace so the forced
+    phase keeps its full window either way.
     """
     from tools.ac_harness.entry_launcher import terminate_process_tree_confirmed_absent
 
@@ -1118,9 +1130,10 @@ def _ensure_acs_gone(  # pragma: no cover - rig-only
     safe = terminate_process_tree_confirmed_absent(
         "acs.exe",
         is_running=observe,
-        timeout=timeout,
+        timeout=timeout + graceful_grace,
         poll=poll,
         absent_confirmations=2,
+        graceful_grace=graceful_grace,
         clock=time.monotonic,
         sleep=time.sleep,
         log=lambda message: _log(f"acs.exe cleanup: {message}"),
@@ -1266,8 +1279,14 @@ def _make_rig_safe(  # pragma: no cover - rig-only
     release_requested: Callable[[], bool] | None = None,
     allow_operator_release: bool = True,
     hold_timeout: float | None = None,
+    graceful_grace: float = 0.0,
 ) -> bool:
-    """Attempt cleanup before allowing a release to drop machine-wide ownership."""
+    """Attempt cleanup before allowing a release to drop machine-wide ownership.
+
+    ``graceful_grace`` flows to the first :func:`_ensure_acs_gone` attempt (#668) — pass it only
+    when the session being torn down is verdict-proven healthy. The unsafe-hold retry loop below
+    stays forced-only: by the time it runs, the graceful phase has already been given its chance.
+    """
     # A pre-stability release reaches this path with its durable sentinel still present. Do not
     # pass that callback into the first cleanup: _ensure_acs_gone would raise before taskkill and
     # let a live/wedged acs.exe outlast the rig lock. Only the subsequent unsafe-hold loop treats
@@ -1279,7 +1298,7 @@ def _make_rig_safe(  # pragma: no cover - rig-only
     if not initially_alive:
         return True
     try:
-        safe = _ensure_acs_gone(acs_alive)
+        safe = _ensure_acs_gone(acs_alive, graceful_grace=graceful_grace)
     except (KeyboardInterrupt, _OperatorRelease):
         if allow_operator_release:
             raise
@@ -1653,12 +1672,27 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             _log(f"launch aborted: Content Manager executable not found: {actuator.cm_exe}")
             return 1
 
+        # The previous attempt's verdict gates the #668 graceful-teardown grace: only a session
+        # that PROVED it could pump messages (STABLE) is asked to honor WM_CLOSE. One-element
+        # list so the closure can rebind it.
+        last_attempt_verdict: list[LaunchVerdict | None] = [None]
+
         def watch_attempt(attempt: int) -> LaunchVerdict:
             if release_requested():
                 raise _OperatorRelease
             _log(f"attempt {attempt}/{args.max_attempts}: launching via Content Manager")
-            # A wedged acs from the previous attempt must be GONE before relaunching.
-            if not _ensure_acs_gone(acs_present, release_requested=release_requested):
+            # A wedged acs from the previous attempt must be GONE before relaunching. A HEALTHY
+            # previous session (STABLE verdict — trials mode continues past those) gets the #668
+            # WM_CLOSE grace first: hard kills accelerate the freeze-accumulator's onset, and a
+            # wedge cannot pump WM_CLOSE anyway, so grace is verdict-gated rather than blanket.
+            grace = (
+                DEFAULT_GRACEFUL_EXIT_GRACE
+                if last_attempt_verdict[0] is LaunchVerdict.STABLE
+                else 0.0
+            )
+            if not _ensure_acs_gone(
+                acs_present, release_requested=release_requested, graceful_grace=grace
+            ):
                 raise _AcsCleanupTimeout("acs.exe remained alive after the bounded cleanup wait")
             # The previous attempt's real process sighting must not leak into the next attempt's
             # pre-spawn absence. Reset only AFTER cleanup has used that history to confirm the old
@@ -1721,6 +1755,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 # rendered attempt so it cannot advance the stale-CM/never-live restart streak.
                 verdict = LaunchVerdict.FROZE
             _log(f"attempt {attempt}: {verdict}")
+            last_attempt_verdict[0] = verdict
             return verdict
 
         def cold_restart_cm() -> None:
@@ -1808,7 +1843,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 f"trials complete: stable {report.stable}/{report.attempts} "
                 f"({report._counts()}); hard kills between trials — see #627 §6.5"
             )
-            rig_safe = _make_rig_safe(acs_present, release_requested=release_requested)
+            rig_safe = _make_rig_safe(
+                acs_present,
+                release_requested=release_requested,
+                # A stable FINAL trial left a healthy session — it gets the WM_CLOSE grace
+                # (#668); any other final verdict left a corpse/wedge and stays forced-only.
+                graceful_grace=(
+                    DEFAULT_GRACEFUL_EXIT_GRACE if report.verdict is LaunchVerdict.STABLE else 0.0
+                ),
+            )
             if not rig_safe:
                 # The advertised end-of-run teardown failed: a live (possibly wedged) acs.exe is
                 # about to outlast the released rig lock. A measurement run must not read as
