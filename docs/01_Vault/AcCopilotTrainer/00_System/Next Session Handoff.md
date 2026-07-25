@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-25T06:50:00Z
+last_updated: 2026-07-25T06:55:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-671-telemetry-tick-hello-gate-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-674-l4-l0-meta-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/issue-673-atelier-parta-remainder-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/backlog-reconcile-2026-07-24.md
@@ -113,6 +114,17 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-25) — #671 CLOSED: telemetry_tick hello gate MERGED
+
+**PR [#679](https://github.com/agorokh/ac-copilot-trainer/pull/679) MERGED** squash
+[`efca5ca`](https://github.com/agorokh/ac-copilot-trainer/commit/efca5ca11e245d0f453a2ecc46fbdbc531eb3b70)
+(2026-07-25T06:52:01Z). `ws_bridge.isExternalReady` / `sendClientFrame` share the PR #171
+v1 hello gate; `publishTelemetryTickIfDue` no longer bypasses it via raw `sendJson`. Observed:
+lupa 51/51 on hello-handshake + telemetry_publisher (gate / hello-retry / reconnect); local
+`make ci-fast` + hosted CI green. Post-merge Phase A could not `checkout main` in this
+worktree (`main` held by `xq36`) — vault ships from `origin/main` via this handoff PR.
+Detail: [[issue-671-telemetry-tick-hello-gate-2026-07-25]].
 
 ## Delivered (2026-07-25) — #674 CLOSED: L4 stint / Layer-0 env / META transfer MERGED
 

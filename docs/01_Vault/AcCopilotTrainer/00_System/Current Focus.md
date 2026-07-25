@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-25T06:50:00Z
+last_updated: 2026-07-25T06:55:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-671-telemetry-tick-hello-gate-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-674-l4-l0-meta-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/issue-673-atelier-parta-remainder-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/pr-657-resolve-blocked-2026-07-22.md
@@ -46,6 +47,12 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-25):** PR [#679](https://github.com/agorokh/ac-copilot-trainer/pull/679)
+MERGED [`efca5ca`](https://github.com/agorokh/ac-copilot-trainer/commit/efca5ca11e245d0f453a2ecc46fbdbc531eb3b70)
+— #671 gates `telemetry_tick` on `externalHelloAcked` via shared `isExternalReady` /
+`sendClientFrame` (PR #171 contract). Issue #671 CLOSED. Detail:
+[[issue-671-telemetry-tick-hello-gate-2026-07-25]].
 
 **Delivered (2026-07-25):** PR [#682](https://github.com/agorokh/ac-copilot-trainer/pull/682)
 MERGED [`7b7b00a`](https://github.com/agorokh/ac-copilot-trainer/commit/7b7b00acc725d04ba2aa74d428ba5ca7544f1c21)
