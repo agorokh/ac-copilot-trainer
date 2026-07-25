@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-23T21:00:00Z
+last_updated: 2026-07-24T20:20:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/backlog-reconcile-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/pr-657-resolve-blocked-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/issue-668-graceful-battery-2026-07-23.md
   - AcCopilotTrainer/03_Investigations/stable-windows-soak-2026-07-23.md
@@ -110,6 +111,34 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Backlog reconciled (2026-07-24) — all 12 open issues verified; two closes gated on extraction
+
+`/backlog-steward` ultracode sweep (12 evidence agents + dep-map + 6-agent adversarial
+panel) — full verdicts in
+[backlog-reconcile-2026-07-24](../03_Investigations/backlog-reconcile-2026-07-24.md),
+ledger in `.scratch/backlog-steward/ledger.json`. Headlines: **#619 close upheld 3–0**
+but only extract-then-close (3 residues incl. the live `telemetry_tick`-not-gated-on-
+`externalHelloAcked` bug are tracked nowhere else); **#432 close REFUTED 2–1**
+(`hud_settings.lua` Part-A scope never restyled → panel-amended to partially-delivered);
+**#401 + vault Roadmap.md both frozen at 2026-06-30** while every spawned epic delivered
+— rewrite both in one change first; **#627 brief is 4 evidence-generations stale**;
+**#625 must be redesigned to boot-scoped arms before running** (i.i.d. model refuted).
+New pitfall: [cross-issue-pointer-rot](../pitfalls/cross-issue-pointer-rot.md).
+Tier-3 substrate was DOWN all session — re-run prefetch next session and spot-check
+the #619/#432 verdicts. Watch: alien-line launches bypass #525 driver brake calibration
+(PR #656 side effect) — now owned by #675 Part 0.
+
+**EXECUTED (operator-approved, same day):** #619 CLOSED not-planned (residues → #671
+telemetry_tick hello-gate, #672 voice-endpoint hygiene); #432 CLOSED completed (code
+remainder → #673, on-glass photo → #86); new issues #674 (#529's unbuilt L4/L0/meta-prior
+layers) and #675 (Coach V2 successor of #522, incl. the calibration-bypass fix as Part 0);
+bodies rewritten in place: #627 (banner → pinned v2-state comment 5076668411), #625
+(boot-scoped redesign), #534 (gates → #117 / Part D dormant), #401 (full matrix flip);
+vault `Roadmap.md` rewritten as the declared state-consistency pair of #401;
+reconciliation comments on #531/#529/#522/#86/#381/#117. Open operator decisions:
+close-or-retitle #522 in favor of #675; #86 Part F decide-or-drop; #117 recommit-or-drop;
+#381 baked-clip A/B listen then close.
 
 ## Delivered (2026-07-23 evening) — #668 CLOSED: launches arm the accumulator; graceful-first teardown MERGED
 
