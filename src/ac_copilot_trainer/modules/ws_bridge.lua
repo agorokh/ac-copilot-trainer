@@ -1097,11 +1097,25 @@ function M.tick(simTime)
   tryOpen()
 end
 
+--- True when the external WS peer is registered for non-hello client frames.
+---
+--- Socket presence alone is not enough: the sidecar rejects every frame type
+--- other than `hello` until the peer is in `_external_peers` ("peer must send
+--- hello before other frame types"). Shared by `publishTopic`, `sendClientFrame`,
+--- and the setup/session helpers so those gates cannot drift apart (#671 / PR #171).
+---@return boolean
+function M.isExternalReady()
+  return sock ~= nil and externalHelloAcked == true
+end
+
 --- Send a JSON payload over the WebSocket.
 ---
 --- CSP's web.Socket is a polymorphic {close: fun()}|fun(data: binary) -- call
 --- it AS A FUNCTION to send data. We try the callable form first, then fall
 --- back to :send() / :write() for any non-CSP socket implementation.
+---
+--- Does NOT gate on `externalHelloAcked` — the hello retry path must keep
+--- using this entry point. Non-hello client→server frames use `sendClientFrame`.
 ---@param payload table|nil
 ---@return boolean  true if bytes were handed to the socket layer
 function M.sendJson(payload)
@@ -1146,6 +1160,21 @@ function M.sendJson(payload)
   return true
 end
 
+--- Send a non-hello client→server frame once the v1 external peer is registered.
+---
+--- Returns `false` (not-ready) without touching the socket when
+--- `isExternalReady()` is false — distinct from `sendJson`'s send-failure path
+--- so a permanently-unacked hello stays visible in WS-DIAG as missing sends
+--- rather than a broken socket (#671). Hello itself must keep using `sendJson`.
+---@param payload table|nil
+---@return boolean
+function M.sendClientFrame(payload)
+  if not M.isExternalReady() then
+    return false
+  end
+  return M.sendJson(payload)
+end
+
 --- Issue #86 Part C/D: external-client `state.snapshot` push.
 --- Wraps `M.sendJson` with the v1 envelope expected by the rig screen
 --- (`{v=1, type="state.snapshot", topic=<t>, payload=<p>}`). Returns
@@ -1157,13 +1186,15 @@ end
 function M.publishTopic(topic, payload)
   if type(topic) ~= "string" or topic == "" then return false end
   -- Only publish after the v1 hello handshake completes (a non-error v1 frame
-  -- seen, so we are in the sidecar's v1 `_external_peers`). Gate on the
-  -- v1-specific `externalHelloAcked`, NOT `sidecarConnected()`/`sidecarProtocolReady`
-  -- — the latter is also set by the legacy `protocol=1` flow, and a legacy reply
-  -- arriving before hello_ack would otherwise unblock this v1 publish path while
-  -- we are still unregistered, so the sidecar would reject the snapshot
-  -- ("peer must send hello before other frame types") (chatgpt-codex P1, PR #171).
-  if not (sock and externalHelloAcked) then return false end
+  -- seen, so we are in the sidecar's v1 `_external_peers`). Gate via
+  -- `isExternalReady()` (v1-specific `externalHelloAcked`), NOT
+  -- `sidecarConnected()`/`sidecarProtocolReady` — the latter is also set by the
+  -- legacy `protocol=1` flow, and a legacy reply arriving before hello_ack would
+  -- otherwise unblock this v1 publish path while we are still unregistered, so
+  -- the sidecar would reject the snapshot ("peer must send hello before other
+  -- frame types") (chatgpt-codex P1, PR #171). Shared with `sendClientFrame`
+  -- so topic and tick gates cannot drift (#671).
+  if not M.isExternalReady() then return false end
   return M.sendJson({
     v = PROTOCOL_VERSION,
     type = "state.snapshot",
@@ -1180,7 +1211,7 @@ function M.setSetupExperimentStorePath(storePath)
   setupExperimentStorePath = storePath
   setupExperimentStoreSent = false
   setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
-  if sock and externalHelloAcked then
+  if M.isExternalReady() then
     return M.sendSetupExperimentStorePath()
   end
   return true
@@ -1202,7 +1233,7 @@ end
 function M.sendSetupExperimentStorePath()
   if type(setupExperimentStorePath) ~= "string" or setupExperimentStorePath == "" then return false end
   if setupExperimentStoreSent then return true end
-  if not (sock and externalHelloAcked) then return false end
+  if not M.isExternalReady() then return false end
   if not localPathFramesAllowed() then return false end
   if setupExperimentStoreRetryFrames < SETUP_EXPERIMENT_STORE_RETRY_FRAMES then
     setupExperimentStoreRetryFrames = setupExperimentStoreRetryFrames + 1
@@ -1227,7 +1258,7 @@ end
 ---@return boolean
 function M.sendSetupExperimentRecord(archivePath)
   if type(archivePath) ~= "string" or archivePath == "" then return false end
-  if not (sock and externalHelloAcked) then return false end
+  if not M.isExternalReady() then return false end
   if not localPathFramesAllowed() then return false end
   return M.sendJson({
     v = PROTOCOL_VERSION,
@@ -1244,7 +1275,7 @@ end
 ---@return boolean
 function M.sendSessionReviewGenerate(lapDir, sessionUuid, referenceSource, referenceFile)
   if type(lapDir) ~= "string" or lapDir == "" then return false end
-  if not (sock and externalHelloAcked) then return false end
+  if not M.isExternalReady() then return false end
   if not localPathFramesAllowed() then return false end
   local payload = {
     v = PROTOCOL_VERSION,

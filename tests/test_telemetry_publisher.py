@@ -22,28 +22,58 @@ MODULES_DIR = REPO / "src" / "ac_copilot_trainer" / "modules"
 _STUB = r"""
 function make_ws()
   local calls = {}
+  local function sendJson(payload)
+    calls[#calls + 1] = { send = payload }
+    return true
+  end
   return {
     _calls = calls,
+    isExternalReady = function() return true end,
     publishTopic = function(topic, payload)
       calls[#calls + 1] = { topic = topic, payload = payload }
       return true
     end,
-    sendJson = function(payload)
-      calls[#calls + 1] = { send = payload }
-      return true
+    sendJson = sendJson,
+    sendClientFrame = function(payload)
+      return sendJson(payload)
     end,
   }
 end
 function make_ws_closed()
   local calls = {}
+  local function sendJson(payload)
+    calls[#calls + 1] = { send = payload }
+    return false
+  end
   return {
     _calls = calls,
+    isExternalReady = function() return false end,
     publishTopic = function(topic, payload)
       calls[#calls + 1] = { topic = topic, payload = payload }
       return false
     end,
-    sendJson = function(payload)
-      calls[#calls + 1] = { send = payload }
+    sendJson = sendJson,
+    sendClientFrame = function(payload)
+      return false
+    end,
+  }
+end
+function make_ws_unacked()
+  -- Connected socket, hello not acked (#671): sendJson would succeed, but the
+  -- publisher must not hand a telemetry_tick to the socket.
+  local calls = {}
+  local function sendJson(payload)
+    calls[#calls + 1] = { send = payload }
+    return true
+  end
+  return {
+    _calls = calls,
+    isExternalReady = function() return false end,
+    publishTopic = function(topic, payload)
+      return false
+    end,
+    sendJson = sendJson,
+    sendClientFrame = function(payload)
       return false
     end,
   }
@@ -352,6 +382,28 @@ def test_telemetry_tick_rate_limited_to_20hz():
     assert out["typ"] == "telemetry_tick"
     assert out["spline"] == 0.42
     assert out["lap"] == 2
+
+
+def test_telemetry_tick_suppressed_until_external_hello_acked():
+    # #671: due ticks must return false and leave the socket untouched while
+    # isExternalReady is false — even when raw sendJson would succeed.
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws_unacked()
+          local car = {
+            speedKmh = 120, rpm = 6000, gas = 0.5, brake = 0.0, steer = 0.1,
+            gear = 3, splinePosition = 0.42, lapCount = 2,
+          }
+          local r = M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws })
+          return { r = r, n = #ws._calls }
+        end)()
+        """
+    )
+    assert out["r"] is False
+    assert out["n"] == 0
 
 
 def test_telemetry_tick_carries_fuel_and_tyre_temps_when_available():
