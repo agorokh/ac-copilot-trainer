@@ -1,7 +1,10 @@
 -- Racing line: filled quads on track via CSP render.shaderedQuad (issue #39).
 -- Replaces render.quad / GL immediate mode (not in production CSP Lua).
+-- Racing Atelier palette (epic #432 Part A remainder — issue #673) — speed gradient
+-- endpoints derive from design_tokens.lua signal triad (clear / lift / brake).
 
 local ch = require("csp_helpers")
+local T = require("design_tokens")
 
 local M = {}
 
@@ -37,7 +40,7 @@ local function ensureQuadArgs()
     p2 = vec3(),
     p3 = vec3(),
     p4 = vec3(),
-    values = { gColor = rgbm(1, 1, 1, 0.8) },
+    values = { gColor = T.color("chalk", 0.8) },
     shader = RACING_LINE_SHADER,
   }
   if render.BlendMode and render.BlendMode.AlphaBlend then
@@ -57,18 +60,49 @@ local function distSq(ax, ay, az, bx, by, bz)
   return dx * dx + dy * dy + dz * dz
 end
 
+--- Token signal endpoints (built once from design_tokens HEX — never re-typed literals).
+local function _hexRgb(name)
+  local hex = T.HEX[name]
+  if type(hex) ~= "string" then
+    error("[COPILOT][racing_line] missing design token: " .. tostring(name), 2)
+  end
+  return tonumber(hex:sub(2, 3), 16) / 255,
+    tonumber(hex:sub(4, 5), 16) / 255,
+    tonumber(hex:sub(6, 7), 16) / 255
+end
+
+local CLEAR_R, CLEAR_G, CLEAR_B = _hexRgb("clear")
+local LIFT_R, LIFT_G, LIFT_B = _hexRgb("lift")
+local BRAKE_R, BRAKE_G, BRAKE_B = _hexRgb("brake")
+
+local function _lerp(a, b, t)
+  return a + (b - a) * t
+end
+
+--- Speed → color: slow=brake → mid=lift → fast=clear (Atelier signal triad).
 local function speedColor(speed)
   if speed > 150 then
-    return rgbm(0.1, 0.95, 0.2, 0.8)
+    return rgbm(CLEAR_R, CLEAR_G, CLEAR_B, 0.8)
   end
   if speed >= 80 then
     local t = (speed - 80) / 70
-    return rgbm(1.0 - t * 0.9, 0.75 + t * 0.2, 0.05 + t * 0.15, 0.8)
+    return rgbm(
+      _lerp(LIFT_R, CLEAR_R, t),
+      _lerp(LIFT_G, CLEAR_G, t),
+      _lerp(LIFT_B, CLEAR_B, t),
+      0.8
+    )
   end
   local t = math.max(0, speed / 80)
-  return rgbm(1.0, 0.15 + t * 0.6, 0.05, 0.8 + (1 - t) * 0.05)
+  return rgbm(
+    _lerp(BRAKE_R, LIFT_R, t),
+    _lerp(BRAKE_G, LIFT_G, t),
+    _lerp(BRAKE_B, LIFT_B, t),
+    0.8 + (1 - t) * 0.05
+  )
 end
 
+-- Cache built from token-derived speedColor (not hand-typed palette literals).
 local speedColorCache = {}
 for s = 0, 200, 5 do
   speedColorCache[s] = speedColor(s)

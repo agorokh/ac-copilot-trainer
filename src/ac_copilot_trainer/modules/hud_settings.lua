@@ -1,6 +1,16 @@
 -- Settings / admin window (issue #57 Part B): `ac.storage` controls + telemetry stats moved from main HUD.
+-- Racing Atelier palette (epic #432 Part A remainder — issue #673) — sourced from design_tokens.lua.
+
+local T = require("design_tokens")
 
 local M = {}
+
+local COLOR_TITLE = T.color("brass") -- house accent on the settings chrome
+local COLOR_SECTION = T.color("chalk") -- primary section headers
+local COLOR_LABEL = T.color("mute") -- stats / field labels
+local COLOR_META = T.color("dim") -- demoted / unavailable CSP controls
+local COLOR_OK = T.color("clear") -- sidecar connected
+local COLOR_WAIT = T.color("lift") -- waiting / not running caution
 
 ---@class HudSettingsStats
 ---@field telemetrySamples integer|nil
@@ -56,23 +66,23 @@ end
 
 local function drawStats(st)
   if st.throttleLapHint and st.throttleLapHint ~= "" then
-    ui.textColored("Throttle (last lap)", rgbm(0.75, 0.78, 0.85, 1))
+    ui.textColored("Throttle (last lap)", COLOR_LABEL)
     textWrappedMaybe(st.throttleLapHint)
   end
   if st.consistencyHud and st.consistencyHud ~= "" then
-    ui.textColored("Consistency", rgbm(0.75, 0.78, 0.85, 1))
+    ui.textColored("Consistency", COLOR_LABEL)
     textWrappedMaybe(st.consistencyHud)
   end
   if st.styleHud and st.styleHud ~= "" then
-    ui.textColored("Style vs reference", rgbm(0.75, 0.78, 0.85, 1))
+    ui.textColored("Style vs reference", COLOR_LABEL)
     textWrappedMaybe(st.styleHud)
   end
   if st.tireHud and st.tireHud ~= "" then
-    ui.textColored("Tires (last lap)", rgbm(0.75, 0.78, 0.85, 1))
+    ui.textColored("Tires (last lap)", COLOR_LABEL)
     textWrappedMaybe(st.tireHud)
   end
   if st.shiftProfile and st.shiftProfile ~= "" then
-    ui.textColored("Shift coaching", rgbm(0.75, 0.78, 0.85, 1))
+    ui.textColored("Shift coaching", COLOR_LABEL)
     textWrappedMaybe(st.shiftProfile)
   end
   if st.refAiDistanceM ~= nil and st.refAiDistanceM == st.refAiDistanceM then
@@ -99,16 +109,16 @@ function M.draw(vm)
     return
   end
 
-  ui.textColored("AC Copilot Trainer — Settings", rgbm(0.55, 0.6, 0.68, 1))
+  ui.textColored("AC Copilot Trainer — Settings", COLOR_TITLE)
   ui.separator()
 
-  ui.textColored("Display", rgbm(0.78, 0.8, 0.88, 1))
+  ui.textColored("Display", COLOR_SECTION)
   checkbox(cfg, "hudEnabled", "Show HUD/coaching windows", "strictTrue")
   checkbox(cfg, "racingLineEnabled", "Show racing line (3D)", "notFalse")
   checkbox(cfg, "brakeMarkersEnabled", "Show brake markers (3D)", "notFalse")
 
   ui.separator()
-  ui.textColored("Coaching", rgbm(0.78, 0.8, 0.88, 1))
+  ui.textColored("Coaching", COLOR_SECTION)
   if type(ui.slider) == "function" then
     pcall(function()
       local curA = math.max(50, math.min(500, tonumber(cfg.approachMeters) or 200))
@@ -133,7 +143,7 @@ function M.draw(vm)
     local curH = math.max(5, math.min(120, tonumber(cfg.coachingHoldSeconds) or 30))
     ui.text(string.format("Approach distance (m): %.0f", curA))
     ui.text(string.format("Post-lap coaching hold (s): %.0f", curH))
-    ui.textColored("Sliders not available in this CSP build.", rgbm(0.65, 0.65, 0.7, 1))
+    ui.textColored("Sliders not available in this CSP build.", COLOR_META)
   end
 
   local mode = tostring(cfg.racingLineMode or "best")
@@ -154,7 +164,7 @@ function M.draw(vm)
     end)
   else
     ui.text("Racing line source: " .. modePreview)
-    ui.textColored("Combo not available — edit racingLineMode in storage if needed.", rgbm(0.65, 0.65, 0.7, 1))
+    ui.textColored("Combo not available — edit racingLineMode in storage if needed.", COLOR_META)
   end
 
   local style = tostring(cfg.lineStyle or "tilt")
@@ -175,7 +185,7 @@ function M.draw(vm)
   end
 
   ui.separator()
-  ui.textColored("Focus practice (#44)", rgbm(0.78, 0.8, 0.88, 1))
+  ui.textColored("Focus practice (#44)", COLOR_SECTION)
   local stf = vm.focusPracticeUi
   if stf and type(stf) == "table" then
     local cur = stf.focusPracticeActive == true
@@ -193,7 +203,7 @@ function M.draw(vm)
   end
 
   ui.separator()
-  ui.textColored("AI sidecar", rgbm(0.78, 0.8, 0.88, 1))
+  ui.textColored("AI sidecar", COLOR_SECTION)
   do
     -- Issue #77 Part A: sidecar is now AUTO-LAUNCHED via os.runConsoleProcess
     -- from ws_bridge.lua. The URL is fixed at ws://127.0.0.1:8765 and managed
@@ -211,16 +221,16 @@ function M.draw(vm)
       if ok then connected = c end
     end
     if connected then
-      ui.textColored("Status: connected (LLM coaching active)", rgbm(0.55, 0.85, 0.55, 1))
+      ui.textColored("Status: connected (LLM coaching active)", COLOR_OK)
     elseif spawned then
-      ui.textColored("Status: process launched, waiting for handshake...", rgbm(0.85, 0.85, 0.45, 1))
+      ui.textColored("Status: process launched, waiting for handshake...", COLOR_WAIT)
     else
-      ui.textColored("Status: not running (will retry every 5s)", rgbm(0.85, 0.65, 0.45, 1))
+      ui.textColored("Status: not running (will retry every 5s)", COLOR_WAIT)
     end
   end
 
   ui.separator()
-  ui.textColored("Lap archive (issue #77)", rgbm(0.78, 0.8, 0.88, 1))
+  ui.textColored("Lap archive (issue #77)", COLOR_SECTION)
   do
     -- Append-only per-lap JSON archive (full trace + setup + corners + coaching).
     -- Builds the dataset for future analysis / RAG / training.
@@ -275,7 +285,7 @@ function M.draw(vm)
   end
 
   ui.separator()
-  ui.textColored("Reference lap", rgbm(0.78, 0.8, 0.88, 1))
+  ui.textColored("Reference lap", COLOR_SECTION)
   do
     ui.text(tostring(vm.referenceStatus or "Active reference: none"))
     local cur = cfg.useImportedReference == true
@@ -309,12 +319,12 @@ function M.draw(vm)
   end
 
   ui.separator()
-  ui.textColored("Diagnostics", rgbm(0.78, 0.8, 0.88, 1))
+  ui.textColored("Diagnostics", COLOR_SECTION)
   checkbox(cfg, "enableRenderDiagnostics", "Render diagnostics ([DIAG] UI + 3D probes)", "strictTrue")
   checkbox(cfg, "enableDraw3DDiagnostics", "Verbose Draw3D logging (~2s interval)", "strictTrue")
 
   ui.separator()
-  ui.textColored("Telemetry & stats", rgbm(0.78, 0.8, 0.88, 1))
+  ui.textColored("Telemetry & stats", COLOR_SECTION)
   if vm.stats and type(vm.stats) == "table" then
     drawStats(vm.stats)
   end

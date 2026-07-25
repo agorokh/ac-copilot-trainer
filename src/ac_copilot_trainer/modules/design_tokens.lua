@@ -6,8 +6,9 @@
 -- redundant-code-drift — do not hand-copy tokens into N runtimes without a conformance check).
 --
 -- HEX is kept as plain strings so the conformance test needs no Lua runtime. M.color()
--- builds a CSP rgbm on demand; hud.lua and coaching_overlay.lua call it at require
--- time to define module-level COLOR_* constants (rgbm is available when AC loads Lua apps).
+-- builds a CSP rgbm on demand; hud.lua, hud_settings.lua, coaching_overlay.lua, and
+-- racing_line.lua call it at require time to define module-level COLOR_* constants
+-- (rgbm is available when AC loads Lua apps).
 
 local M = {}
 
