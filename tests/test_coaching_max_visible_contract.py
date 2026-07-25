@@ -41,7 +41,10 @@ def test_normalization_bounds_match_lua_contract() -> None:
 def test_lua_single_normalizer_and_wiring() -> None:
     overlay = OVERLAY.read_text(encoding="utf-8")
     assert "function M.normalizedCoachingMaxVisibleHints" in overlay
-    assert "math.min(cap, #coachingLines)" in overlay
+    # Live consumer after #673: drawMainWindowStrip (legacy M.draw deleted).
+    assert "function M.drawMainWindowStrip" in overlay
+    assert "M.normalizedCoachingMaxVisibleHints(maxVis)" in overlay
+    assert "math.min(#lines, cap)" in overlay
     main = MAIN.read_text(encoding="utf-8")
     assert (
         "coachingOverlay.normalizedCoachingMaxVisibleHints(config.coachingMaxVisibleHints)" in main
