@@ -170,8 +170,10 @@ local config or firmware build.
   py -3 -m tools.ai_sidecar.serial_backpressure_probe --port COM6 --count 40
   ```
 
-  Expect `PASS drop=0` and `max_drain_ms` ≤ 33. Firmware emits
-  `[serial][bp] ok=… drop=… max_drain_ms=…` after a ≥8-frame drain burst.
+  Expect `PASS drop=0` (hard gate). `max_drain_ms` may be tens of ms when the
+  8 KiB RX ring is saturated — that is absorption working, not a drop.
+  Firmware emits `[serial][bp] ok=… drop=… max_drain_ms=…` after a ≥8-frame
+  drain burst.
 
 ## Layout
 

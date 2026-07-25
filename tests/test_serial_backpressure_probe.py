@@ -131,7 +131,7 @@ def test_run_burst_on_port_with_fake_serial() -> None:
         "COM_FAKE",
         count=16,
         settle_s=1.0,
-        max_drain_ms=33,
+        max_drain_ms=100,
         open_fn=opener,
     )
     assert stats.drop == 0

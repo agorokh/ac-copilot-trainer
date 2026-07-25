@@ -9,8 +9,15 @@ Usage (live COM port, sidecar stopped so this process owns the CDC)::
     python -m tools.ai_sidecar.serial_backpressure_probe --port COM6 --count 40
 
 The probe is intentionally **host-side only** — it does not change the protocol
-v1 envelope the sidecar already speaks. Exit 0 when ``drop=0`` and every observed
-``max_drain_ms`` is at or below ``--max-drain-ms`` (default 33 ≈ one 30 Hz tick).
+v1 envelope the sidecar already speaks. Exit 0 when ``drop=0`` (hard gate) and
+every observed ``max_drain_ms`` is at or below ``--max-drain-ms``.
+
+The default drain budget is **100 ms**, not one 16/33 ms LVGL tick: the 8 KiB
+CDC RX ring exists specifically so a multi-frame USB burst can land across a
+render gap and be drained on the next ``loop()`` without dropping. A saturated
+ring of ~20–25 coaching.snapshot frames typically drains in ~40–80 ms on the
+JC3248W535; that is absorption working, not a display stall. ``drop>0`` is the
+failure that matches the #677 Part B acceptance criterion.
 """
 
 from __future__ import annotations
@@ -126,7 +133,7 @@ def run_burst_on_port(
     count: int = 40,
     baud: int = DEFAULT_BAUD,
     settle_s: float = 2.0,
-    max_drain_ms: int = 33,
+    max_drain_ms: int = 100,
     open_fn: Callable[[str, int], Any] | None = None,
 ) -> BpStats:
     """Open ``port``, flood ``count`` snapshots, return the last parsed bp line."""
@@ -188,8 +195,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--max-drain-ms",
         type=int,
-        default=33,
-        help="fail if firmware reports a longer single-tick drain (default 33)",
+        default=100,
+        help=(
+            "fail if firmware reports a longer single-tick drain (default 100; "
+            "the 8 KiB ring is meant to absorb multi-frame bursts across a render gap)"
+        ),
     )
     p.add_argument("--settle-s", type=float, default=2.0)
     args = p.parse_args(argv)
