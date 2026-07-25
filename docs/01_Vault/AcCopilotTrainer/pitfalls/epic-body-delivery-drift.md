@@ -66,6 +66,18 @@ delivered/remaining split never moves**. Age is not the signal — *un-reconcile
 - Cheap manual check: `gh pr list --state merged --search "<epic-#> in:title,body"` vs the
   EPIC's checkbox state.
 
+## Variant: investigation briefs (steward sweep 2026-07-24)
+
+The same rake with higher stakes: a **"start here" investigation brief** (#627) tells readers
+to trust the body top-to-bottom, then every refutation (killed hypotheses §6.3, answered open
+questions §6.1/§6.2/§6.5, retracted disassembly §3.5, reframed mechanism §3.4) lands only in
+comments. Within days the authoritative-looking body misleads on environment, mechanism, and
+next steps. Same shape on #522 (headline "0/8" describes the *fixed* baseline) and #619 (body
+asserts a refuted mechanism plus an obsolete standing mitigation). **Rule:** any results
+comment that refutes a numbered body section must, in the same session, edit the body in place
+or pin a "v2 state" comment linked from the top. See
+[backlog-reconcile-2026-07-24](../03_Investigations/backlog-reconcile-2026-07-24.md).
+
 ## Upstream candidate
 
 EPIC-body delivery-drift is **domain-agnostic** — it applies to any repo that runs large
