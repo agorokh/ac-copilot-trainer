@@ -1,9 +1,10 @@
-"""Evidence-gated setup scientist for the alien self-play pipeline (#529 P4).
+"""Evidence-gated setup scientist for the alien self-play pipeline (#529 P4 / #674 META).
 
 The scientist proposes physical hypotheses; deterministic code validates the proposal, creates
 one-parameter setup candidates, and judges measured batches.  Model prose never writes a setup.
 Durable records live under Assetto Corsa Documents and suppress already-falsified constraints for
-the same platform/track scope.
+the same META scope (mechanical × aero × tyre family × track archetype). Cross-combo transfer
+reuses that single ``scope_key`` ledger — never a second prior store (#674).
 """
 
 from __future__ import annotations
@@ -115,7 +116,8 @@ def _validate_state_destination(path: Path, allowed_root: Path | None = None) ->
     return logical
 
 
-def scope_key(scope: Mapping[str, Any]) -> str:
+def normalized_scope(scope: Mapping[str, Any]) -> dict[str, str]:
+    """Validate and normalize the four META dimensions used for prior transfer."""
     required = ("mechanical_platform", "aero_platform", "tyre_family", "track_archetype")
     normalized: dict[str, str] = {}
     for key in required:
@@ -123,7 +125,74 @@ def scope_key(scope: Mapping[str, Any]) -> str:
         if not value or len(value) > 128:
             raise ScientistError(f"scientist_scope_missing_{key}")
         normalized[key] = value
-    return _digest(normalized)
+    return normalized
+
+
+def scope_key(scope: Mapping[str, Any]) -> str:
+    """Digest of the four META dimensions — the single key for same-scope and cross-combo priors."""
+    return _digest(normalized_scope(scope))
+
+
+def _combo_identity(combo: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(combo, Mapping):
+        return None
+    car = str(combo.get("car") or "").strip()
+    track = str(combo.get("track") or "").strip()
+    if not car or not track:
+        return None
+    layout = combo.get("layout")
+    if layout is not None:
+        layout = str(layout).strip() or None
+    return {"car": car, "track": track, "layout": layout}
+
+
+def meta_priors(
+    ledger: Sequence[Mapping[str, Any]],
+    *,
+    scope: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Falsified qualitative constraints transferable to any combo sharing ``scope``'s META key.
+
+    Legacy ledger rows that only carry ``scope_key`` remain usable; newer rows may also carry
+    ``scope`` / ``combo`` for provenance. One bookkeeping store — the experiments ledger.
+    """
+    scoped = scope_key(scope)
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in ledger:
+        if row.get("scope_key") != scoped or row.get("verdict") != "falsified":
+            continue
+        constraint = str(row.get("constraint_key") or "")
+        if not constraint or constraint in seen:
+            continue
+        seen.add(constraint)
+        source_combo = _combo_identity(
+            row.get("combo") if isinstance(row.get("combo"), Mapping) else None
+        )
+        out.append(
+            {
+                "constraint_key": constraint,
+                "scope_key": scoped,
+                "source_experiment_id": row.get("experiment_id"),
+                "source_combo": source_combo,
+                "reason": row.get("reason"),
+            }
+        )
+    return out
+
+
+def _transfer_mode(
+    *,
+    plan_combo: Mapping[str, Any] | None,
+    source_combo: Mapping[str, Any] | None,
+) -> str:
+    plan_id = _combo_identity(plan_combo)
+    source_id = _combo_identity(source_combo)
+    if plan_id is None or source_id is None:
+        return "same_scope"
+    if plan_id == source_id:
+        return "same_scope"
+    return "cross_combo"
 
 
 def load_ledger(
@@ -280,15 +349,14 @@ def build_plan(
     raw = list(proposed_hypotheses if explicit_proposals else _default_hypotheses(named_trigger))
     if not raw or len(raw) > MAX_HYPOTHESES:
         raise ScientistError("scientist_hypothesis_count_out_of_range")
-    scoped = scope_key(scope)
-    suppressed = {
-        str(row.get("constraint_key") or "")
-        for row in ledger
-        if row.get("scope_key") == scoped and row.get("verdict") == "falsified"
-    }
+    scope_norm = normalized_scope(scope)
+    scoped = scope_key(scope_norm)
+    plan_combo = _combo_identity(combo) or dict(combo)
+    priors = meta_priors(ledger, scope=scope_norm)
+    prior_by_constraint = {str(row["constraint_key"]): row for row in priors}
     hypotheses: list[dict[str, Any]] = []
     experiments: list[dict[str, Any]] = []
-    suppressed_rows: list[dict[str, str]] = []
+    suppressed_rows: list[dict[str, Any]] = []
     seen_constraints: set[str] = set()
     for proposal in raw:
         hypothesis_id = str(proposal.get("id") or "").strip()
@@ -318,9 +386,20 @@ def build_plan(
             "constraint_key": constraint_key,
         }
         hypotheses.append(hypothesis)
-        if constraint_key in suppressed:
+        prior = prior_by_constraint.get(constraint_key)
+        if prior is not None:
+            mode = _transfer_mode(plan_combo=plan_combo, source_combo=prior.get("source_combo"))
             suppressed_rows.append(
-                {"hypothesis_id": hypothesis_id, "constraint_key": constraint_key}
+                {
+                    "hypothesis_id": hypothesis_id,
+                    "constraint_key": constraint_key,
+                    "transfer": {
+                        "scope_key": scoped,
+                        "mode": mode,
+                        "source_experiment_id": prior.get("source_experiment_id"),
+                        "source_combo": prior.get("source_combo"),
+                    },
+                }
             )
             continue
         current = baseline_params.get(parameter)
@@ -357,9 +436,10 @@ def build_plan(
     plan_core = {
         "schema_version": SCHEMA_VERSION,
         "trigger": named_trigger,
-        "combo": dict(combo),
-        "scope": dict(scope),
+        "combo": plan_combo,
+        "scope": scope_norm,
         "scope_key": scoped,
+        "meta_priors": priors,
         "baseline_provenance": [
             {
                 "lap_uuid": payload.get("lap_uuid"),
@@ -577,21 +657,32 @@ def persist_completed_run(
         json.dumps(run, indent=2, ensure_ascii=False) + "\n",
         allowed_root=root,
     )
+    scope_payload = (
+        normalized_scope(plan["scope"]) if isinstance(plan.get("scope"), Mapping) else None
+    )
+    combo_payload = _combo_identity(
+        plan.get("combo") if isinstance(plan.get("combo"), Mapping) else None
+    )
     for index, outcome in enumerate(outcomes):
+        row: dict[str, Any] = {
+            "schema_version": SCHEMA_VERSION,
+            "experiment_id": f"{run_id}:{index}",
+            "created_utc": created_utc,
+            "run_path": str(destination),
+            "plan_id": plan.get("plan_id"),
+            "scope_key": plan.get("scope_key"),
+            "constraint_key": outcome.get("constraint_key"),
+            "verdict": outcome.get("verdict"),
+            "promoted": bool(outcome.get("promoted")),
+            "reason": outcome.get("reason"),
+        }
+        if scope_payload is not None:
+            row["scope"] = scope_payload
+        if combo_payload is not None:
+            row["combo"] = combo_payload
         append_ledger(
             ledger_path,
-            {
-                "schema_version": SCHEMA_VERSION,
-                "experiment_id": f"{run_id}:{index}",
-                "created_utc": created_utc,
-                "run_path": str(destination),
-                "plan_id": plan.get("plan_id"),
-                "scope_key": plan.get("scope_key"),
-                "constraint_key": outcome.get("constraint_key"),
-                "verdict": outcome.get("verdict"),
-                "promoted": bool(outcome.get("promoted")),
-                "reason": outcome.get("reason"),
-            },
+            row,
             allowed_root=root,
         )
     return destination
