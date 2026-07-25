@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-25T07:50:00Z
+last_updated: 2026-07-25T16:20:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-675-coach-v2-phase-slots-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-677-esp32-polish-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-671-telemetry-tick-hello-gate-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-674-l4-l0-meta-2026-07-24.md
@@ -115,6 +116,17 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-25) — #675 CLOSED: Coach V2 phase-slot / calibration / between-lap MERGED
+
+**PR [#687](https://github.com/agorokh/ac-copilot-trainer/pull/687) MERGED** squash
+[`13c60e4`](https://github.com/agorokh/ac-copilot-trainer/commit/13c60e43e58cdc34cb24f96dc4d5862b4690ea17)
+(2026-07-25T16:16:26Z). Alien-line / `AC_COPILOT_COACH_V2` brake calibration folds into
+`CoachRuntime`; prepare heads-ups RESLOT behind exit info clips; one validated between-lap
+`corner_advice`; off-pace reference suppresses PRIME/SAVE (`cue_suppress_reason` on `/health`).
+Observed: focused pytest 9/9 + hosted CI green; symbols confirmed on `origin/main`. Rig
+`semantic_timeliness --assert-coaching` not re-run this session. Detail:
+[[issue-675-coach-v2-phase-slots-2026-07-25]].
 
 ## Delivered (2026-07-25) — #677 CLOSED: ESP32 polish (NVS / backpressure / debug) MERGED
 

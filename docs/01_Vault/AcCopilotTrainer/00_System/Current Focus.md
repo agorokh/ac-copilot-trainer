@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-25T07:50:00Z
+last_updated: 2026-07-25T16:20:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-675-coach-v2-phase-slots-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-677-esp32-polish-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-671-telemetry-tick-hello-gate-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-674-l4-l0-meta-2026-07-24.md
@@ -49,6 +50,12 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
+**Delivered (2026-07-25):** PR [#687](https://github.com/agorokh/ac-copilot-trainer/pull/687)
+MERGED [`13c60e4`](https://github.com/agorokh/ac-copilot-trainer/commit/13c60e43e58cdc34cb24f96dc4d5862b4690ea17)
+— #675 Coach V2 successor (phase-slot RESLOT, v2 brake calibration, between-lap
+`corner_advice`, off-pace reference refusal). Issue #675 CLOSED. Detail:
+[[issue-675-coach-v2-phase-slots-2026-07-25]].
+
 **Delivered (2026-07-25):** PR [#680](https://github.com/agorokh/ac-copilot-trainer/pull/680)
 MERGED [`e3e427c`](https://github.com/agorokh/ac-copilot-trainer/commit/e3e427c2d2e48f2ae57130387e0a176833cd3f8b)
 — #677 ESP32 polish (NVS persist, serial backpressure probe, debug screen). Issue #677
@@ -80,7 +87,9 @@ OPEN for the physical A/B on `pc` (operator-gated Steam/NVIDIA toggles + attache
 [[issue-625-init-perturber-ab-prepared-2026-07-22]].
 
 **In flight (2026-07-25):** issue [#625](https://github.com/agorokh/ac-copilot-trainer/issues/625)
-physical overlay A/B — code on `main`. #529 live gates still blocked on #627. Next ICE: #675.
+physical overlay A/B — code on `main`. #529 live gates still blocked on #627. Next ICE after
+#675: voice-endpoint hygiene [#672](https://github.com/agorokh/ac-copilot-trainer/issues/672)
+or rig-gated #529/#627.
 
 **Delivered (2026-07-22 PM):** PR [#647](https://github.com/agorokh/ac-copilot-trainer/pull/647)
 MERGED `c5d6e909b` — #630 **Part G** (runnable freeze-forensics capture driver; 6 review rounds).
