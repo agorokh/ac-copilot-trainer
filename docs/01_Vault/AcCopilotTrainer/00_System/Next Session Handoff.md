@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-24T22:05:00Z
+last_updated: 2026-07-24T23:50:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-673-atelier-parta-remainder-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/backlog-reconcile-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/pr-657-resolve-blocked-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/issue-668-graceful-battery-2026-07-23.md
@@ -111,6 +112,16 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-24 night) — #673 CLOSED: Racing Atelier Part-A remainder MERGED
+
+PR [#681](https://github.com/agorokh/ac-copilot-trainer/pull/681) MERGED
+[`333ef93a9`](https://github.com/agorokh/ac-copilot-trainer/commit/333ef93a9a39742c2926d2d6f2af35c47cc95eb1)
+— `hud_settings` / `racing_line` / coaching-overlay polish all derive from `design_tokens`;
+dead cyan panels deleted; conformance tests lock the four Atelier surfaces. Observed:
+lupa Settings draw uses brass/chalk/mute token colors; `make ci-fast` + hosted CI green.
+Optional follow-up (non-blocking): in-sim Settings/`WINDOW_2` screenshot on the next rig visit.
+Detail: [[issue-673-atelier-parta-remainder-2026-07-24]].
 
 ## Backlog reconciled (2026-07-24) — all 12 open issues verified; two closes gated on extraction
 
