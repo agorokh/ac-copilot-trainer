@@ -4,8 +4,11 @@
 --   * `delta`       — live time delta vs the reference lap (reuses delta.deltaSecondsAtSpline).
 --   * `tire_temps`  — current per-wheel core temps {fl, fr, rl, rr}.
 --
--- M0 (#341): also emits client→server `telemetry_tick` frames (20 Hz) via `wsBridge.sendJson`
--- so the sidecar observer receives spline + lap from the in-game Lua producer.
+-- M0 (#341): also emits client→server `telemetry_tick` frames (20 Hz) via
+-- `wsBridge.sendClientFrame` (falls back to `sendJson` for test doubles) so the
+-- sidecar observer receives spline + lap from the in-game Lua producer. The tick
+-- path must share the v1 hello gate with `publishTopic` (#671) — ungated
+-- `sendJson` during reconnect storms reaches the sidecar before peer registration.
 -- Unlike the lifecycle topics (`lifecycle_publisher.lua`) these carry NO ordering contract and
 -- need no reconnect machinery — they are continuous streams like `coaching.snapshot`, so a
 -- (re)connected consumer simply gets the next sample within the publish interval. Both are
@@ -298,7 +301,9 @@ local function _physicsFlag(car, key)
 end
 
 
---- Publish client→server ``telemetry_tick`` at ~20 Hz (M0 #341). Requires ``wsBridge.sendJson``.
+--- Publish client→server ``telemetry_tick`` at ~20 Hz (M0 #341).
+--- Prefers ``wsBridge.sendClientFrame`` (hello-gated); falls back to ``sendJson``
+--- when the bridge exposes only that (lupa test doubles).
 ---@param opts table  {dt:number, car:any, wsBridge, lat_g?:number, long_g?:number, temps?:table, shiftProfile?:table}
 ---@return boolean
 function M.publishTelemetryTickIfDue(opts)
@@ -306,7 +311,16 @@ function M.publishTelemetryTickIfDue(opts)
     return false
   end
   local wsBridge = _wsReady(opts)
-  if not wsBridge or type(wsBridge.sendJson) ~= "function" then
+  if not wsBridge then
+    return false
+  end
+  -- Prefer the hello-gated client-frame path (#671); fall back to sendJson for
+  -- lupa doubles that only stub the raw sender.
+  local sendFn = wsBridge.sendClientFrame
+  if type(sendFn) ~= "function" then
+    sendFn = wsBridge.sendJson
+  end
+  if type(sendFn) ~= "function" then
     return false
   end
   local car = opts.car
@@ -318,6 +332,12 @@ function M.publishTelemetryTickIfDue(opts)
   local due, accum = _due(_tickAccum, tonumber(opts.dt) or 0, TICK_INTERVAL_SEC)
   _tickAccum = accum
   if not due then
+    return false
+  end
+  -- Gate before advancing seq / building payload so a reconnect-storm skip is an
+  -- explicit not-ready `false`, not a burned sequence or a sendJson failure (#671).
+  -- Real `ws_bridge` always exposes `isExternalReady`; test doubles without it stay open.
+  if type(wsBridge.isExternalReady) == "function" and not wsBridge.isExternalReady() then
     return false
   end
   _tickSeq = _tickSeq + 1
@@ -416,7 +436,7 @@ function M.publishTelemetryTickIfDue(opts)
   if absActive ~= nil then
     payload.abs_active = absActive
   end
-  return wsBridge.sendJson({
+  return sendFn({
     v = 1,
     type = "telemetry_tick",
     seq = _tickSeq,

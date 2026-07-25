@@ -387,3 +387,127 @@ def test_state_subscribe_without_session_does_not_request_replay():
     _inject(rt, {"v": 1, "type": "state.unsubscribe", "topics": ["session"]})
 
     assert rt.eval('require("ws_bridge").consumeSessionReplayRequest()') is False
+
+
+def test_send_client_frame_gated_until_hello_ack():
+    # #671: non-hello client frames (telemetry_tick) must share publishTopic's
+    # externalHelloAcked gate. Gate lives on sendClientFrame / isExternalReady —
+    # never inside sendJson, which the hello retry still uses.
+    rt = _runtime()
+    _open(rt)
+    assert rt.eval('require("ws_bridge").isExternalReady()') is False
+    sent_before = int(rt.eval("_ws_sent"))
+    assert (
+        rt.eval(
+            'require("ws_bridge").sendClientFrame({v=1, type="telemetry_tick", seq=1, payload={}})'
+        )
+        is False
+    )
+    assert int(rt.eval("_ws_sent")) == sent_before
+    # Hello retry still uses sendJson and must keep firing while gated.
+    rt.execute('local wb = require("ws_bridge"); for _ = 1, 30 do wb.tick(0) end')
+    assert int(rt.eval("_ws_sent")) > sent_before
+
+    _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
+    assert rt.eval('require("ws_bridge").isExternalReady()') is True
+    sent_ready = int(rt.eval("_ws_sent"))
+    assert (
+        rt.eval(
+            'require("ws_bridge").sendClientFrame({v=1, type="telemetry_tick", seq=1, payload={}})'
+        )
+        is True
+    )
+    assert int(rt.eval("_ws_sent")) == sent_ready + 1
+
+
+def test_telemetry_tick_publisher_respects_hello_gate_across_reconnect():
+    # #671 acceptance: due ticks stay silent until hello_ack; resume after ack;
+    # reconnect re-suppresses until the new hello is acked — same observable
+    # shape as publishTopic.
+    rt = _runtime()
+    _open(rt)
+    out = rt.eval(
+        r"""
+        (function()
+          local pub = require("telemetry_publisher"); pub.reset()
+          local wb = require("ws_bridge")
+          local car = {
+            speedKmh = 120, rpm = 6000, gas = 0.5, brake = 0.0, steer = 0.1,
+            gear = 3, splinePosition = 0.42, lapCount = 2,
+          }
+          local sent0 = _ws_sent
+          local r1 = pub.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = wb })
+          local sent1 = _ws_sent
+          return { r1 = r1, delta = sent1 - sent0, ready = wb.isExternalReady() }
+        end)()
+        """
+    )
+    assert out["ready"] is False
+    assert out["r1"] is False
+    assert out["delta"] == 0
+
+    _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
+    out2 = rt.eval(
+        r"""
+        (function()
+          local pub = require("telemetry_publisher")
+          local wb = require("ws_bridge")
+          local car = {
+            speedKmh = 120, rpm = 6000, gas = 0.5, brake = 0.0, steer = 0.1,
+            gear = 3, splinePosition = 0.42, lapCount = 2,
+          }
+          local sent0 = _ws_sent
+          local r = pub.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = wb })
+          return { r = r, delta = _ws_sent - sent0, ready = wb.isExternalReady() }
+        end)()
+        """
+    )
+    assert out2["ready"] is True
+    assert out2["r"] is True
+    assert out2["delta"] == 1
+
+    rt.execute("_ws_on_open()")
+    out3 = rt.eval(
+        r"""
+        (function()
+          local pub = require("telemetry_publisher")
+          local wb = require("ws_bridge")
+          local car = {
+            speedKmh = 120, rpm = 6000, gas = 0.5, brake = 0.0, steer = 0.1,
+            gear = 3, splinePosition = 0.42, lapCount = 2,
+          }
+          local sent0 = _ws_sent
+          local r = pub.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = wb })
+          return {
+            r = r,
+            delta = _ws_sent - sent0,
+            ready = wb.isExternalReady(),
+            topic = wb.publishTopic("coaching.snapshot", {}),
+          }
+        end)()
+        """
+    )
+    assert out3["ready"] is False
+    assert out3["r"] is False
+    assert out3["topic"] is False
+    # sent0 is sampled after onOpen's hello re-announce; a due tick must add nothing.
+    assert out3["delta"] == 0
+
+    _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
+    out4 = rt.eval(
+        r"""
+        (function()
+          local pub = require("telemetry_publisher")
+          local wb = require("ws_bridge")
+          local car = {
+            speedKmh = 120, rpm = 6000, gas = 0.5, brake = 0.0, steer = 0.1,
+            gear = 3, splinePosition = 0.42, lapCount = 2,
+          }
+          local sent0 = _ws_sent
+          local r = pub.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = wb })
+          return { r = r, delta = _ws_sent - sent0 }
+        end)()
+        """
+    )
+    assert out4["r"] is True
+    assert out4["delta"] == 1
