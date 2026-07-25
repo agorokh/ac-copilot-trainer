@@ -1193,9 +1193,11 @@ function M.publishTopic(topic, payload)
   -- otherwise unblock this v1 publish path while we are still unregistered, so
   -- the sidecar would reject the snapshot ("peer must send hello before other
   -- frame types") (chatgpt-codex P1, PR #171). Shared with `sendClientFrame`
-  -- so topic and tick gates cannot drift (#671).
+  -- so topic and tick gates cannot drift (#671). Early readiness probe avoids
+  -- allocating the envelope when gated; the actual send still goes through
+  -- `sendClientFrame` so every non-hello client frame shares one transport.
   if not M.isExternalReady() then return false end
-  return M.sendJson({
+  return M.sendClientFrame({
     v = PROTOCOL_VERSION,
     type = "state.snapshot",
     topic = topic,
@@ -1239,7 +1241,7 @@ function M.sendSetupExperimentStorePath()
     setupExperimentStoreRetryFrames = setupExperimentStoreRetryFrames + 1
     return false
   end
-  local ok = M.sendJson({
+  local ok = M.sendClientFrame({
     v = PROTOCOL_VERSION,
     type = "setup.experiment.store",
     store_path = setupExperimentStorePath,
@@ -1260,7 +1262,7 @@ function M.sendSetupExperimentRecord(archivePath)
   if type(archivePath) ~= "string" or archivePath == "" then return false end
   if not M.isExternalReady() then return false end
   if not localPathFramesAllowed() then return false end
-  return M.sendJson({
+  return M.sendClientFrame({
     v = PROTOCOL_VERSION,
     type = "setup.experiment.record",
     archive_path = archivePath,
@@ -1292,7 +1294,7 @@ function M.sendSessionReviewGenerate(lapDir, sessionUuid, referenceSource, refer
   if type(referenceFile) == "string" and referenceFile ~= "" then
     payload.reference_file = referenceFile
   end
-  return M.sendJson(payload)
+  return M.sendClientFrame(payload)
 end
 
 --- Issue #86 Part D: register a handler for an external `request` event
