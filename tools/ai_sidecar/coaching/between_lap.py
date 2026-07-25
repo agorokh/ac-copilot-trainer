@@ -52,8 +52,7 @@ def select_focus_corner(
             if (
                 st is not None
                 and st.root != RootError.NONE
-                and st.status
-                in (Status.ARMED, Status.PRIMED, Status.DETECTING, Status.HEALING)
+                and st.status in (Status.ARMED, Status.PRIMED, Status.DETECTING, Status.HEALING)
             ):
                 candidates.append(st)
         if candidates:
@@ -160,6 +159,4 @@ def select_between_lap_advice(
         st = ledger.state(corner)
         if st is not None and st.root != RootError.NONE:
             root = st.root
-    return compose_between_lap_advice(
-        corner=corner, root=root, refs=refs, use_ollama=use_ollama
-    )
+    return compose_between_lap_advice(corner=corner, root=root, refs=refs, use_ollama=use_ollama)
