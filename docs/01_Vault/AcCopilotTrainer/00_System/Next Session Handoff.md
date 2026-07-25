@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-24T20:20:00Z
+last_updated: 2026-07-24T22:05:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/backlog-reconcile-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/pr-657-resolve-blocked-2026-07-22.md
@@ -136,9 +136,14 @@ layers) and #675 (Coach V2 successor of #522, incl. the calibration-bypass fix a
 bodies rewritten in place: #627 (banner → pinned v2-state comment 5076668411), #625
 (boot-scoped redesign), #534 (gates → #117 / Part D dormant), #401 (full matrix flip);
 vault `Roadmap.md` rewritten as the declared state-consistency pair of #401;
-reconciliation comments on #531/#529/#522/#86/#381/#117. Open operator decisions:
-close-or-retitle #522 in favor of #675; #86 Part F decide-or-drop; #117 recommit-or-drop;
-#381 baked-clip A/B listen then close.
+reconciliation comments on #531/#529/#522/#86/#381/#117. Operator decisions RESOLVED
+(decision memo + council run fd7a43b2, same day): #522 CLOSED completed — requirement D
+folded into #675 Part 4; #86 Part F polish split to #677 (good-first-issue, non-blocking;
+epic gates solely on the on-device smoke); #117 kept open, deliberately deferred-until-#627
+(do not re-flag; revival = first post-#627 hardware session); #381 closes on the baked-clip
+A/B listen at the next rig visit (checklist in issue comment). Steward presentation rule
+recorded in AGENTS.md: decisions go to the operator as issue/options/benefits memos with
+council positions, never bare checklists.
 
 ## Delivered (2026-07-23 evening) — #668 CLOSED: launches arm the accumulator; graceful-first teardown MERGED
 
