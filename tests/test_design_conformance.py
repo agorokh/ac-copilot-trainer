@@ -207,11 +207,18 @@ class TestTransparency:
             r"if\s+rem\s*>=\s*fadeWindow\s+then\s*\n\s*return\s+1\.0",
             src,
         ), "computeAlpha should return 1.0 before fade window"
-        # Background: drawRectFilled with alpha 0.82 (M.draw) or 0.78 (strip).
+        # Live chrome uses tokenized carbon with a translucent alpha (#432 / #673).
+        carbon = re.search(
+            r'T\.color\(\s*["\']carbon["\']\s*,\s*(0\.\d+)\s*\)',
+            src,
+        )
+        assert carbon, 'COLOR_BG must use T.color("carbon", <alpha<1>)'
+        assert float(carbon.group(1)) < 1.0, (
+            f"Background carbon alpha should be < 1, got {carbon.group(1)}"
+        )
+        # Any remaining inline rgbm fills (alpha-scaled token copies) must also stay translucent.
         bg_matches = re.findall(r"drawRectFilled\(.*?rgbm\([^)]+\)", src)
-        assert bg_matches, "No drawRectFilled calls found"
         for m in bg_matches:
-            # Last number in rgbm(...) is alpha; extract it.
             nums = re.findall(r"[\d.]+", m.split("rgbm")[-1])
             if len(nums) >= 4:
                 alpha = float(nums[3])
