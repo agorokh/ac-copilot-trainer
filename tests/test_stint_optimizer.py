@@ -128,9 +128,7 @@ def test_unusable_plant_fails_loud() -> None:
             )
         )
     with pytest.raises(StintOptimizerError, match="stint_laps_remaining_invalid"):
-        plan_stint(
-            StintInputs(plant_artifact=_plant(), environment=None, laps_remaining=0)
-        )
+        plan_stint(StintInputs(plant_artifact=_plant(), environment=None, laps_remaining=0))
 
 
 def test_inner_loop_knobs_feed_refine_profile() -> None:

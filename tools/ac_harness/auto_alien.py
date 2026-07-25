@@ -231,9 +231,7 @@ def compose_stint_layers(
     try:
         prior = EnvironmentState.from_dict(environment_prior)
         environment = (
-            environment_from_archives(archive_payloads, prior=prior)
-            if archive_payloads
-            else prior
+            environment_from_archives(archive_payloads, prior=prior) if archive_payloads else prior
         )
         if environment is not None:
             block["environment"] = environment_for_plan(environment)
@@ -1068,8 +1066,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--stint",
         action="store_true",
-        help="#674 Layer-4: apply stint pace_scale to the base alien drive when a plant is ready "
-        "(environment/stint report blocks are attached whenever computable, even without this flag)",
+        help=(
+            "#674 Layer-4: apply stint pace_scale to the base alien drive when a plant is ready "
+            "(environment/stint report blocks attach whenever computable, even without this flag)"
+        ),
     )
     p.add_argument("--stint-laps", type=int, default=None, help="laps remaining for L4 planning")
     p.add_argument("--stint-fuel-start-l", type=float, default=30.0)

@@ -262,9 +262,7 @@ def update_environment(
         last_grip = history[-1].grip_multiplier
         if first_grip is not None and last_grip is not None:
             if abs(last_grip - first_grip) >= grip_drift:
-                reasons.append(
-                    f"grip_span={abs(last_grip - first_grip):.3f}>={grip_drift:.3f}"
-                )
+                reasons.append(f"grip_span={abs(last_grip - first_grip):.3f}>={grip_drift:.3f}")
 
     nonstationary = bool(reasons)
     return EnvironmentState(

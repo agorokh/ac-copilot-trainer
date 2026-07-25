@@ -113,12 +113,8 @@ def plan_stint(inputs: StintInputs) -> StintPlan:
     fuel_start = _finite(inputs.fuel_start_l, name="fuel_start_l", lo=0.0, hi=200.0)
     burn = _finite(inputs.fuel_burn_l_per_lap, name="fuel_burn_l_per_lap", lo=0.0, hi=20.0)
     temp_target = _finite(inputs.tyre_temp_target_c, name="tyre_temp_target_c", lo=40.0, hi=140.0)
-    temp_tol = _finite(
-        inputs.tyre_temp_tolerance_c, name="tyre_temp_tolerance_c", lo=0.5, hi=30.0
-    )
-    wear_budget = _finite(
-        inputs.wear_budget_fraction, name="wear_budget_fraction", lo=0.01, hi=1.0
-    )
+    temp_tol = _finite(inputs.tyre_temp_tolerance_c, name="tyre_temp_tolerance_c", lo=0.5, hi=30.0)
+    wear_budget = _finite(inputs.wear_budget_fraction, name="wear_budget_fraction", lo=0.01, hi=1.0)
     v_top = _finite(inputs.v_top_kmh, name="v_top_kmh", lo=40.0, hi=400.0)
 
     reasons: list[str] = []
@@ -126,9 +122,7 @@ def plan_stint(inputs: StintInputs) -> StintPlan:
     pace_scale = 1.0
     l3: L3Params | None = L3Params()
 
-    ready = plant_ready_for_full_consumption(
-        dict(inputs.plant_artifact), require_friction_fit=True
-    )
+    ready = plant_ready_for_full_consumption(dict(inputs.plant_artifact), require_friction_fit=True)
     if ready is not None:
         raise StintOptimizerError(f"stint_plant_unusable:{ready}")
     if plant_ggv_model(dict(inputs.plant_artifact)) is None:

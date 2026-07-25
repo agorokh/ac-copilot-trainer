@@ -166,7 +166,9 @@ def meta_priors(
         if not constraint or constraint in seen:
             continue
         seen.add(constraint)
-        source_combo = _combo_identity(row.get("combo") if isinstance(row.get("combo"), Mapping) else None)
+        source_combo = _combo_identity(
+            row.get("combo") if isinstance(row.get("combo"), Mapping) else None
+        )
         out.append(
             {
                 "constraint_key": constraint,
@@ -656,11 +658,11 @@ def persist_completed_run(
         allowed_root=root,
     )
     scope_payload = (
-        normalized_scope(plan["scope"])
-        if isinstance(plan.get("scope"), Mapping)
-        else None
+        normalized_scope(plan["scope"]) if isinstance(plan.get("scope"), Mapping) else None
     )
-    combo_payload = _combo_identity(plan.get("combo") if isinstance(plan.get("combo"), Mapping) else None)
+    combo_payload = _combo_identity(
+        plan.get("combo") if isinstance(plan.get("combo"), Mapping) else None
+    )
     for index, outcome in enumerate(outcomes):
         row: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
