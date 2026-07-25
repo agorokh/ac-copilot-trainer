@@ -13,6 +13,7 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [issue-677-esp32-polish-2026-07-25.md](issue-677-esp32-polish-2026-07-25.md) | **#677 CLOSED** by PR #680 (`e3e427c`): NVS last-screen + SE sort; USB CDC backpressure probe (primed baseline deltas, paced waves); hidden debug screen. Live COM6 `PASS drop=0 ok=48 last_drain_ms=20`. #86 still owns on-glass smoke. |
 | [issue-671-telemetry-tick-hello-gate-2026-07-25.md](issue-671-telemetry-tick-hello-gate-2026-07-25.md) | **#671 CLOSED** by PR #679 (`efca5ca`): `telemetry_tick` shares `publishTopic`'s v1 `externalHelloAcked` gate via `isExternalReady`/`sendClientFrame`; hello retry stays on raw `sendJson`. Lupa 51/51 observed (gate + reconnect). |
 | [issue-674-l4-l0-meta-2026-07-24.md](issue-674-l4-l0-meta-2026-07-24.md) | **#674 CLOSED** by PR #682 (`7b7b00a`): EPIC #529 offline layers — `env_observer` (L0 non-stationarity), `stint_optimizer` (L4 pace/fuel/wear → QSS+L3), META cross-combo falsified-constraint transfer on the existing `scope_key` ledger; `auto_alien --stint`. Live G1/G2/G3 remain on #529/#627. |
 | [issue-673-atelier-parta-remainder-2026-07-24.md](issue-673-atelier-parta-remainder-2026-07-24.md) | **#673 CLOSED** by PR #681 (`333ef93a9`): Settings + racing-line + coaching-overlay Part-A remainder derive from `design_tokens`; dead cyan panels deleted; conformance bans numeric `rgbm` palette literals. Lupa Settings draw observed brass/chalk/mute. |
