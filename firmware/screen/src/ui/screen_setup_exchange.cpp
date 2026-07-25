@@ -404,7 +404,8 @@ extern "C" lv_obj_t* screen_setup_exchange_create(void) {
     lv_obj_align(ctx->meta_track, LV_ALIGN_TOP_LEFT, 0, 22);
 
     ctx->status = lv_label_create(meta);
-    lv_obj_set_width(ctx->status, SCREEN_W - 2 * OUTER_PAD);
+    // Leave room for the SORT button (96 px) on the bottom-right (#677 review).
+    lv_obj_set_width(ctx->status, SCREEN_W - 2 * OUTER_PAD - 100);
     lv_label_set_long_mode(ctx->status, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(ctx->status, UI_FONT_MONO_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(ctx->status, UI_TX_MUTED, LV_PART_MAIN);

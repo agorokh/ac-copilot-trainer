@@ -123,8 +123,9 @@ def evaluate_bp_delta(
     *,
     max_drain_ms: int,
     require_frames: int,
+    peak_last_drain_ms: int | None = None,
 ) -> tuple[bool, str]:
-    """Gate on counter deltas + this-burst ``last_drain_ms``."""
+    """Gate on counter deltas + peak per-drain ``last_drain_ms`` in the burst."""
     d_ok = after.ok - before.ok
     d_drop = after.drop - before.drop
     d_parse = after.parse - before.parse
@@ -134,9 +135,15 @@ def evaluate_bp_delta(
         return False, f"parse drops delta={d_parse}"
     if d_ok < require_frames:
         return False, f"frames_ok delta={d_ok} < required {require_frames}"
-    drain = after.last_drain_ms if after.last_drain_ms is not None else after.max_drain_ms
+    if peak_last_drain_ms is not None:
+        drain = peak_last_drain_ms
+    elif after.last_drain_ms is not None:
+        drain = after.last_drain_ms
+    else:
+        # Fall back to a new max_drain_ms peak introduced by this burst.
+        drain = max(0, after.max_drain_ms - before.max_drain_ms) or after.max_drain_ms
     if drain > max_drain_ms:
-        return False, f"last_drain_ms={drain} > budget {max_drain_ms}"
+        return False, f"peak last_drain_ms={drain} > budget {max_drain_ms}"
     return True, "ok"
 
 
@@ -167,16 +174,51 @@ def _read_bp_until(
     return last
 
 
-def _write_waves(ser: Any, count: int, *, start_seq: int = 0, wave: int = 8) -> None:
+def _drain_host_rx(ser: Any, buf: bytearray, *, window_s: float) -> list[BpStats]:
+    """Read device→host during waits so firmware Serial.printf cannot block TX."""
+    found: list[BpStats] = []
+    end = time.monotonic() + window_s
+    while time.monotonic() < end:
+        waiting = getattr(ser, "in_waiting", 0) or 0
+        if waiting:
+            chunk = ser.read(waiting)
+            if chunk:
+                buf.extend(chunk)
+                while b"\n" in buf:
+                    line_b, _, rest = bytes(buf).partition(b"\n")
+                    buf[:] = rest
+                    try:
+                        line = line_b.decode("utf-8", errors="replace")
+                    except Exception:  # noqa: BLE001
+                        continue
+                    parsed = parse_bp_line(line)
+                    if parsed is not None:
+                        found.append(parsed)
+        else:
+            time.sleep(0.02)
+    return found
+
+
+def _write_waves(
+    ser: Any,
+    count: int,
+    *,
+    start_seq: int = 0,
+    wave: int = 8,
+    buf: bytearray | None = None,
+) -> list[BpStats]:
     # Keep each wave well under the 8 KiB CDC RX ring and wait for firmware
-    # drain + LVGL before the next write (pile-up → silent USB drops with
-    # drop=0/parse=0 — the classic #463 ring failure).
+    # drain + LVGL before the next write. Drain host RX during the wait so
+    # firmware `[serial][bp]` Serial.printf cannot stall the CDC TX path.
+    scratch = buf if buf is not None else bytearray()
+    seen: list[BpStats] = []
     for off in range(0, count, wave):
         n = min(wave, count - off)
         ser.write(build_burst(n, start_seq=start_seq + off))
         if hasattr(ser, "flush"):
             ser.flush()
-        time.sleep(0.35)
+        seen.extend(_drain_host_rx(ser, scratch, window_s=0.35))
+    return seen
 
 
 def run_burst_on_port(
@@ -207,22 +249,32 @@ def run_burst_on_port(
         buf = bytearray()
         # Priming wave establishes a true pre-measurement baseline (reviewer HIGH).
         prime = 8
-        _write_waves(ser, prime, start_seq=0, wave=prime)
-        baseline = _read_bp_until(ser, settle_s=max(1.0, settle_s * 0.5), buf=buf)
+        primed = _write_waves(ser, prime, start_seq=0, wave=prime, buf=buf)
+        baseline = (
+            primed[-1]
+            if primed
+            else _read_bp_until(ser, settle_s=max(1.0, settle_s * 0.5), buf=buf)
+        )
         if baseline is None:
             raise RuntimeError(
                 "no baseline [serial][bp] line after priming — is the #677 build flashed "
                 "and the sidecar stopped so this probe owns the CDC port?"
             )
 
-        _write_waves(ser, count, start_seq=prime, wave=8)
+        measured_lines = _write_waves(ser, count, start_seq=prime, wave=8, buf=buf)
         # Poll until the frames_ok delta covers the measured burst (or settle).
-        after: BpStats | None = None
+        after: BpStats | None = measured_lines[-1] if measured_lines else None
+        peak_drain = 0
+        for st in measured_lines:
+            if st.last_drain_ms is not None:
+                peak_drain = max(peak_drain, st.last_drain_ms)
         deadline = time.monotonic() + max(settle_s, count * 0.05 + 2.0)
         while time.monotonic() < deadline:
             got = _read_bp_until(ser, settle_s=0.4, buf=buf)
             if got is not None:
                 after = got
+                if got.last_drain_ms is not None:
+                    peak_drain = max(peak_drain, got.last_drain_ms)
                 if after.ok - baseline.ok >= count:
                     break
         if after is None:
@@ -233,6 +285,7 @@ def run_burst_on_port(
             after,
             max_drain_ms=max_drain_ms,
             require_frames=count,
+            peak_last_drain_ms=peak_drain or None,
         )
         if not ok:
             raise RuntimeError(
