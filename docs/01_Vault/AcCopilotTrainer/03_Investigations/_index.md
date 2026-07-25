@@ -13,6 +13,7 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [issue-671-telemetry-tick-hello-gate-2026-07-25.md](issue-671-telemetry-tick-hello-gate-2026-07-25.md) | **#671 CLOSED** by PR #679 (`efca5ca`): `telemetry_tick` shares `publishTopic`'s v1 `externalHelloAcked` gate via `isExternalReady`/`sendClientFrame`; hello retry stays on raw `sendJson`. Lupa 51/51 observed (gate + reconnect). |
 | [issue-674-l4-l0-meta-2026-07-24.md](issue-674-l4-l0-meta-2026-07-24.md) | **#674 CLOSED** by PR #682 (`7b7b00a`): EPIC #529 offline layers — `env_observer` (L0 non-stationarity), `stint_optimizer` (L4 pace/fuel/wear → QSS+L3), META cross-combo falsified-constraint transfer on the existing `scope_key` ledger; `auto_alien --stint`. Live G1/G2/G3 remain on #529/#627. |
 | [issue-673-atelier-parta-remainder-2026-07-24.md](issue-673-atelier-parta-remainder-2026-07-24.md) | **#673 CLOSED** by PR #681 (`333ef93a9`): Settings + racing-line + coaching-overlay Part-A remainder derive from `design_tokens`; dead cyan panels deleted; conformance bans numeric `rgbm` palette literals. Lupa Settings draw observed brass/chalk/mute. |
 | [pr-657-resolve-blocked-2026-07-22.md](pr-657-resolve-blocked-2026-07-22.md) | PR #657 resolve-pr blocked on Codex usage limits + branch-specific GitHub Actions silence after `cc83191`. GraphQL threads/resolve-gate clean locally; physical A/B still operator-gated. |
