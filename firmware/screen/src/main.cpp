@@ -54,7 +54,9 @@
 #include <esp_heap_caps.h>   // heap_caps_malloc / MALLOC_CAP_SPIRAM
 #include "board/JC3248W535_Touch.h"
 #include "ui/app_state.h"
+#include "ui/link_stats.h"
 #include "ui/nav.h"
+#include "ui/persist.h"
 #include "ui/screen_ac_copilot.h"
 #include "ui/screen_launcher.h"
 #include "ui/screen_pocket_technician.h"
@@ -184,6 +186,7 @@ static inline void disconnect_grace_evaluate() {
   if (ws_disconnected_pending_at != 0 &&
       (int32_t)(millis() - ws_disconnected_pending_at) >= 0) {
     app_state_set(APP_DISCONNECTED);
+    link_stats_set_linked(0);
     ws_disconnected_pending_at = 0;
     disconnect_already_surfaced = true;
   }
@@ -395,12 +398,15 @@ static void lvgl_bringup() {
   lv_indev_drv_register(&lv_indev_drv);
 
   ui_nav_init();
+  ui_persist_begin();  // issue #677 Part A — NVS before any screen restore
   app_state_set(APP_BOOTING);
   // Push the launcher immediately so the device shows real UI during the
   // boot/connection phase, not a blank LVGL default. The launcher header
   // pill reflects WiFi/WS state via `app_state_get()`. Critical for the
   // sidecar-unreachable failure mode (chatgpt-codex P1 on PR #91).
   ui_nav_push(launcher_create);
+  // Restore last active app screen across power cycles (#677 Part A).
+  ui_persist_restore_screen();
   lv_last_tick_ms = millis();
   lv_next_canvas_flush_ms = lv_last_tick_ms + 16;
 }
@@ -632,6 +638,7 @@ static void dispatch_phase2_message(const String& body) {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, body);
   if (err) {
+    link_stats_note_parse_drop();
     Serial.printf("[ws] parse err: %s\n", err.c_str());
     return;
   }
@@ -831,6 +838,7 @@ static void ws_on_message(WebsocketsMessage msg) {
 #else
   // Issue #86 Parts C/D: parse + dispatch. Tolerates malformed JSON by
   // logging once and dropping; never blocks the WS poll path.
+  link_stats_note_frame();
   dispatch_phase2_message(msg.data());
 #endif
 }
@@ -850,6 +858,7 @@ static void ws_on_event(WebsocketsEvent ev, String data) {
       // Cancel any pending disconnect threshold (Part B3 grace window).
       disconnect_grace_clear();
       app_state_set(APP_CONNECTED);
+      link_stats_set_linked(1);
       // Always promote to APP_LAUNCHER_IDLE on a (re)connect, regardless of
       // whether the user is currently on the launcher screen or inside a
       // placeholder (Pocket Tech / Setup Exchange / AC Copilot). Otherwise
@@ -1059,6 +1068,8 @@ static void serial_send_hello() {
 
 static void serial_mark_link_up() {
   serial_last_rx_ms = millis();  // any inbound frame keeps the link alive
+  link_stats_note_frame();
+  link_stats_set_linked(1);
   if (serial_link_up) return;
   serial_link_up = true;
   ws_state = WsState::Open;
@@ -1076,6 +1087,7 @@ static void serial_mark_link_up() {
 static void serial_mark_link_down(const char* why) {
   if (!serial_link_up) return;
   serial_link_up = false;
+  link_stats_set_linked(0);
   ws_state = WsState::Connecting;
   Serial.printf("[serial] link down (%s) — re-announcing\n", why);
   disconnect_grace_arm();
@@ -1102,14 +1114,20 @@ static void serial_transport_tick() {
     serial_hello_next_ms = millis() + (serial_link_up ? 5000 : 1000);
   }
   // Pump inbound newline-delimited JSON frames into the shared dispatcher.
+  // Issue #677 Part B: measure drain cost + peak ring depth so a sustained
+  // coaching.snapshot burst can prove "no drop / stall ≤ one render tick".
+  const uint32_t drain_start_ms = millis();
+  const int available_at_start = Serial.available();
+  uint32_t frames_this_drain = 0;
   while (Serial.available() > 0) {
     int c = Serial.read();
     if (c < 0) break;
     if (c == '\n') {
       serial_rx_line.trim();  // strip trailing \r / whitespace
       if (serial_rx_line.length() > 0) {
-        serial_mark_link_up();  // refreshes serial_last_rx_ms
+        serial_mark_link_up();  // refreshes serial_last_rx_ms + frame counter
         dispatch_phase2_message(serial_rx_line);
+        ++frames_this_drain;
       }
       serial_rx_line = "";
     } else if (c != '\r') {
@@ -1117,7 +1135,23 @@ static void serial_transport_tick() {
         serial_rx_line += (char)c;
       } else {
         serial_rx_line = "";  // overflow guard: drop a runaway unterminated line
+        link_stats_note_overflow();
       }
+    }
+  }
+  if (available_at_start > 0) {
+    const uint32_t drain_ms = millis() - drain_start_ms;
+    link_stats_note_drain(static_cast<uint32_t>(available_at_start), drain_ms);
+    // Emit a machine-parseable summary after a burst (≥8 frames in one tick)
+    // or whenever an overflow was just recorded.
+    static uint32_t last_bp_emit_ms = 0;
+    const link_stats_t* st = link_stats_get();
+    const bool burst = frames_this_drain >= 8;
+    const bool drop_event = st->overflow_drops > 0 && frames_this_drain > 0;
+    if ((burst || drop_event) &&
+        (int32_t)(millis() - last_bp_emit_ms) >= 250) {
+      link_stats_emit_bp_line();
+      last_bp_emit_ms = millis();
     }
   }
   // Down-transition: no frame (not even a heartbeat ack) for the timeout window

@@ -37,7 +37,9 @@
 
 #include "ui/app_state.h"
 #include "ui/nav.h"
+#include "ui/persist.h"
 #include "ui/screen_ac_copilot.h"
+#include "ui/screen_debug.h"
 #include "ui/screen_pocket_technician.h"
 #include "ui/screen_setup_exchange.h"
 #include "ui/tokens.h"
@@ -150,15 +152,24 @@ void on_tile_clicked(lv_event_t* e) {
         reinterpret_cast<uintptr_t>(lv_event_get_user_data(e)));
     switch (app) {
         case LAUNCHER_APP_AC_COPILOT:
+            ui_persist_set_screen(UI_SCREEN_AC_COPILOT);
             ui_nav_push(screen_ac_copilot_create);
             break;
         case LAUNCHER_APP_POCKET_TECH:
+            ui_persist_set_screen(UI_SCREEN_POCKET_TECH);
             ui_nav_push(screen_pocket_technician_create);
             break;
         case LAUNCHER_APP_SETUP_EXCHANGE:
+            ui_persist_set_screen(UI_SCREEN_SETUP_EXCHANGE);
             ui_nav_push(screen_setup_exchange_create);
             break;
     }
+}
+
+// Issue #677 Part C: long-press the brand label to open the hidden debug screen.
+void on_brand_long_press(lv_event_t*) {
+    ui_persist_set_screen(UI_SCREEN_DEBUG);
+    ui_nav_push(screen_debug_create);
 }
 
 // Build one app tile. Returns the outer container so the caller can
@@ -241,6 +252,11 @@ void make_header(lv_obj_t* parent, launcher_ctx_t* ctx) {
     // Letter-spacing approximation: LVGL 8.3 supports `text_letter_space`.
     lv_obj_set_style_text_letter_space(brand, 2, LV_PART_MAIN);
     lv_obj_align(brand, LV_ALIGN_LEFT_MID, 0, 0);
+    // Long-press target for the hidden debug screen (#677 Part C). Grow the
+    // hit box to the Part A7 tap floor so a thumb press registers reliably.
+    lv_obj_add_flag(brand, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(brand, 12);
+    lv_obj_add_event_cb(brand, on_brand_long_press, LV_EVENT_LONG_PRESSED, nullptr);
 
     // Right-aligned status pill: [dot] [label] [spinner-when-disconnected].
     // Sized for portrait 320 width: title ~130 px + 16 pad + pill 130 px +

@@ -157,6 +157,22 @@ or before sharing logs/screenshots externally:
 If rotation was caused by suspected exposure, do not reuse the old token in any
 local config or firmware build.
 
+## Polish (#677) — NVS, backpressure probe, debug screen
+
+- **Last screen + SE sort** persist in NVS (`Preferences` namespace `acscreen`) on
+  every change, not on shutdown. Power-cycle restores the last app screen and
+  Setup Exchange sort (`SORT: DL` / `SORT: NAME`).
+- **Debug screen:** long-press the launcher brand `AC LAUNCHER`. Shows link
+  state, last-frame age, peer count, free heap, and backpressure counters.
+- **Serial backpressure proof** (host owns the CDC — stop the sidecar first):
+
+  ```powershell
+  py -3 -m tools.ai_sidecar.serial_backpressure_probe --port COM6 --count 40
+  ```
+
+  Expect `PASS drop=0` and `max_drain_ms` ≤ 33. Firmware emits
+  `[serial][bp] ok=… drop=… max_drain_ms=…` after a ≥8-frame drain burst.
+
 ## Layout
 
 ```text

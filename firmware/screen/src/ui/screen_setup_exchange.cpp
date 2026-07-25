@@ -3,6 +3,7 @@
 #include "ui/screen_setup_exchange.h"
 
 #include "ui/nav.h"
+#include "ui/persist.h"
 #include "ui/toast.h"
 #include "ui/tokens.h"
 
@@ -38,6 +39,7 @@ struct se_ctx_t {
     lv_obj_t* meta_car;
     lv_obj_t* meta_track;
     lv_obj_t* status;
+    lv_obj_t* sort_lbl;
     lv_obj_t* list_col;
     lv_obj_t* placeholder;
     lv_obj_t* active_row;
@@ -97,8 +99,67 @@ bool req_q_push_download(const se_result_t& result) {
     return true;
 }
 
+void rebuild_list(se_ctx_t* ctx);
+
 void on_back_clicked(lv_event_t*) {
+    ui_persist_set_screen(UI_SCREEN_LAUNCHER);
     ui_nav_pop();
+}
+
+const char* sort_label(se_sort_t sort) {
+    return sort == SE_SORT_NAME_ASC ? "SORT: NAME" : "SORT: DL";
+}
+
+int name_cmp_ci(const char* a, const char* b) {
+    // Local ASCII fold — avoids relying on strcasecmp across toolchains.
+    while (*a && *b) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca = static_cast<char>(ca + ('a' - 'A'));
+        if (cb >= 'A' && cb <= 'Z') cb = static_cast<char>(cb + ('a' - 'A'));
+        if (ca != cb) return static_cast<unsigned char>(ca) - static_cast<unsigned char>(cb);
+        ++a;
+        ++b;
+    }
+    return static_cast<unsigned char>(*a) - static_cast<unsigned char>(*b);
+}
+
+void apply_sort_in_place() {
+    const se_sort_t sort = ui_persist_get_se_sort();
+    // Tiny n (≤32): insertion sort keeps the firmware free of qsort + thunk.
+    for (int i = 1; i < g_result_count; ++i) {
+        se_result_t key = g_results[i];
+        int j = i - 1;
+        while (j >= 0) {
+            bool out_of_order = false;
+            if (sort == SE_SORT_NAME_ASC) {
+                out_of_order = name_cmp_ci(g_results[j].name, key.name) > 0;
+            } else {
+                // Downloads descending; equal downloads keep relative order.
+                out_of_order = g_results[j].downloads < key.downloads;
+            }
+            if (!out_of_order) break;
+            g_results[j + 1] = g_results[j];
+            --j;
+        }
+        g_results[j + 1] = key;
+    }
+}
+
+void update_sort_button(se_ctx_t* ctx) {
+    if (!ctx || !ctx->sort_lbl) return;
+    lv_label_set_text(ctx->sort_lbl, sort_label(ui_persist_get_se_sort()));
+}
+
+void on_sort_clicked(lv_event_t*) {
+    const se_sort_t cur = ui_persist_get_se_sort();
+    const se_sort_t next =
+        (cur == SE_SORT_DOWNLOADS_DESC) ? SE_SORT_NAME_ASC : SE_SORT_DOWNLOADS_DESC;
+    ui_persist_set_se_sort(next);
+    apply_sort_in_place();
+    if (g_active_ctx) {
+        update_sort_button(g_active_ctx);
+        rebuild_list(g_active_ctx);
+    }
 }
 
 void set_status(const char* text, lv_color_t color) {
@@ -125,8 +186,6 @@ void update_meta(se_ctx_t* ctx) {
     snprintf(buf, sizeof(buf), "TRACK: %s", track);
     lv_label_set_text(ctx->meta_track, buf);
 }
-
-void rebuild_list(se_ctx_t* ctx);
 
 void on_refresh_clicked(lv_event_t*) {
     if (!g_se_sidecar_link_up) {
@@ -364,6 +423,20 @@ extern "C" lv_obj_t* screen_setup_exchange_create(void) {
     lv_obj_set_style_text_color(refresh_lbl, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_center(refresh_lbl);
 
+    // Issue #677 Part A: SE sort order, persisted in NVS across power cycles.
+    lv_obj_t* sort_btn = lv_btn_create(meta);
+    lv_obj_set_size(sort_btn, 96, 28);
+    lv_obj_align(sort_btn, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(sort_btn, UI_BG_HEADER, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(sort_btn, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(sort_btn, UI_RADIUS_TILE, LV_PART_MAIN);
+    lv_obj_add_event_cb(sort_btn, on_sort_clicked, LV_EVENT_CLICKED, nullptr);
+    ctx->sort_lbl = lv_label_create(sort_btn);
+    lv_obj_set_style_text_font(ctx->sort_lbl, UI_FONT_LABEL_XS, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ctx->sort_lbl, UI_DATA_CYAN, LV_PART_MAIN);
+    lv_obj_center(ctx->sort_lbl);
+    update_sort_button(ctx);
+
     const int list_y = HEADER_H + 6 + META_H + 6;
     ctx->list_col = lv_obj_create(scr);
     lv_obj_set_size(ctx->list_col, SCREEN_W - 2 * OUTER_PAD, SCREEN_H - list_y - OUTER_PAD);
@@ -438,6 +511,7 @@ extern "C" void screen_setup_exchange_add_result(int32_t setup_id,
 
 extern "C" void screen_setup_exchange_finish_results(void) {
     g_loading = false;
+    apply_sort_in_place();
     set_status(g_result_count > 0 ? "Tap a setup to download" : "No community setups found",
                g_result_count > 0 ? UI_TX_MUTED : UI_ALERT_RED);
     if (g_active_ctx) rebuild_list(g_active_ctx);

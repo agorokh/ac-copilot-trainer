@@ -8,6 +8,7 @@
 #include "ui/screen_ac_copilot.h"
 
 #include "ui/nav.h"
+#include "ui/persist.h"
 #include "ui/tokens.h"
 
 #include <Arduino.h>
@@ -204,6 +205,7 @@ lv_obj_t* make_label(lv_obj_t* parent, const char* text, const lv_font_t* font,
 }
 
 void on_back_clicked(lv_event_t*) {
+    ui_persist_set_screen(UI_SCREEN_LAUNCHER);
     ui_nav_pop();
 }
 
