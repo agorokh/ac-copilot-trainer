@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-25T06:55:00Z
+last_updated: 2026-07-25T07:50:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-677-esp32-polish-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-671-telemetry-tick-hello-gate-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-674-l4-l0-meta-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/issue-673-atelier-parta-remainder-2026-07-24.md
@@ -114,6 +115,15 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-25) — #677 CLOSED: ESP32 polish (NVS / backpressure / debug) MERGED
+
+**PR [#680](https://github.com/agorokh/ac-copilot-trainer/pull/680) MERGED** squash
+[`e3e427c`](https://github.com/agorokh/ac-copilot-trainer/commit/e3e427c2d2e48f2ae57130387e0a176833cd3f8b)
+(2026-07-25T07:47:08Z). NVS last-screen + SE sort; USB CDC backpressure probe with
+primed baseline deltas; hidden debug screen (long-press AC LAUNCHER). **Live COM6:**
+`PASS drop=0 ok=48 last_drain_ms=20`. Post-merge classify: no migrations/env/deps flags.
+#86 remains OPEN for on-glass smoke only. Detail: [[issue-677-esp32-polish-2026-07-25]].
 
 ## Delivered (2026-07-25) — #671 CLOSED: telemetry_tick hello gate MERGED
 

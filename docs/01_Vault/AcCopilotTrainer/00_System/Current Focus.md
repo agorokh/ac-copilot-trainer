@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-25T06:55:00Z
+last_updated: 2026-07-25T07:50:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-677-esp32-polish-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-671-telemetry-tick-hello-gate-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-674-l4-l0-meta-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/issue-673-atelier-parta-remainder-2026-07-24.md
@@ -47,6 +48,12 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-25):** PR [#680](https://github.com/agorokh/ac-copilot-trainer/pull/680)
+MERGED [`e3e427c`](https://github.com/agorokh/ac-copilot-trainer/commit/e3e427c2d2e48f2ae57130387e0a176833cd3f8b)
+— #677 ESP32 polish (NVS persist, serial backpressure probe, debug screen). Issue #677
+CLOSED. Live COM6: `PASS drop=0`. #86 still open for on-glass smoke. Detail:
+[[issue-677-esp32-polish-2026-07-25]].
 
 **Delivered (2026-07-25):** PR [#679](https://github.com/agorokh/ac-copilot-trainer/pull/679)
 MERGED [`efca5ca`](https://github.com/agorokh/ac-copilot-trainer/commit/efca5ca11e245d0f453a2ecc46fbdbc531eb3b70)
