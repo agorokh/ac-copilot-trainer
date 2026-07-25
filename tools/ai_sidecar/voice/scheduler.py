@@ -19,6 +19,9 @@ The
 * **Cooldown** — a minimum gap between two cues of the same *kind*. ``act`` is **exempt**: a fresh
   ``act`` cue is never delayed or dropped by cooldown/TTL/dedup machinery.
 * **Verbosity** — cues below the configured verbosity floor are suppressed.
+* **Phase-slot reslot (#675)** — a ``prepare`` heads-up that would otherwise drop behind a still-
+  playing ``info`` exit micro-verdict is deferred until the channel frees (same pattern as
+  ``brake_release`` behind a brake alarm), so the next corner's mark is not silently lost.
 
 The arbitration in :meth:`process_pending` is a pure function of the injected ``clock`` and the
 injected :class:`~tools.ai_sidecar.voice.playback.Playback`, so it is fully unit-testable with a
@@ -119,6 +122,15 @@ class Scheduler:
             self._pending = []
         if deferred is not None:
             winner, enqueued_at = deferred
+            # Deferred prepare can sit behind an exit clip long enough to go stale — drop it
+            # rather than speaking late (#675 phase-slot + existing TTL contract).
+            if (now - enqueued_at) > self._config.ttl_s:
+                _log.debug(
+                    "voice: dropping stale deferred %s (age=%.3fs)",
+                    winner.clip_id,
+                    now - enqueued_at,
+                )
+                return None
             return self._dispatch(winner, now, enqueued_at=enqueued_at)
 
         candidates: list[tuple[Utterance, float, int]] = []
@@ -205,6 +217,18 @@ class Scheduler:
                 with self._lock:
                     self._deferred.append((winner, enqueued_at if enqueued_at is not None else now))
                 _log.debug("voice: defer %s until %s finishes", winner.clip_id, current.clip_id)
+                return None
+            elif winner.urgency == "prepare" and current.urgency == "info":
+                # #675 phase-slot RESLOT: prepare heads-up never barges over an exit micro-verdict
+                # (confirm/info), but dropping it was the T2-on-every-tap residual — hold until
+                # the channel frees, then speak if still inside TTL.
+                with self._lock:
+                    self._deferred.append((winner, enqueued_at if enqueued_at is not None else now))
+                _log.debug(
+                    "voice: phase-slot reslot %s until %s finishes",
+                    winner.clip_id,
+                    current.clip_id,
+                )
                 return None
             else:
                 # Channel busy with an equal/higher cue; the moment for this one has passed — drop

@@ -345,8 +345,8 @@ def analyze(
 
     # Per-pass coverage guarantee (#522), stated directly: reference brake passes the observer
     # flagged (crossed) vs those that drew an ACTIONABLE cue (cued). A crossed-but-uncued pass
-    # (e.g. the T2 heads-up lost behind a still-playing exit debrief) is #522 V2 phase-slot
-    # scheduler scope — surfaced here, not regressed into this gate.
+    # (e.g. the T2 heads-up lost behind a still-playing exit debrief) is owned by the #675
+    # phase-slot RESLOT in ``voice/scheduler.py`` — surfaced here, not regressed into this gate.
     zones_crossed = len(brake_mark_occ)
     zones_cued = len(coached_occ)
 

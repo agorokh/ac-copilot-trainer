@@ -493,6 +493,7 @@ def _real_observer():
 def test_calibrate_brake_marks_from_lap_updates_observer(tmp_path, monkeypatch):
     obs = _real_observer()
     monkeypatch.setattr(server, "_observer", obs)
+    monkeypatch.setattr(server, "_coach_runtime", None)  # #675: prefer-v2 target must not steal
     monkeypatch.setattr(
         server, "_recent_brake_cal_keys", server._recent_brake_cal_keys.__class__(maxlen=8)
     )
@@ -511,6 +512,7 @@ def test_calibrate_brake_marks_from_lap_updates_observer(tmp_path, monkeypatch):
 def test_calibration_skips_explicitly_invalid_lap(tmp_path, monkeypatch):
     obs = _real_observer()
     monkeypatch.setattr(server, "_observer", obs)
+    monkeypatch.setattr(server, "_coach_runtime", None)
     monkeypatch.setattr(
         server, "_recent_brake_cal_keys", server._recent_brake_cal_keys.__class__(maxlen=8)
     )
@@ -533,6 +535,7 @@ def test_unresolvable_frame_does_not_reserve_the_calibration_key(tmp_path, monke
     reserve the dedup key — the archive-backed re-send of the SAME lap must still calibrate."""
     obs = _real_observer()
     monkeypatch.setattr(server, "_observer", obs)
+    monkeypatch.setattr(server, "_coach_runtime", None)
     monkeypatch.setattr(
         server, "_recent_brake_cal_keys", server._recent_brake_cal_keys.__class__(maxlen=8)
     )
@@ -553,6 +556,7 @@ def test_late_resend_after_a_newer_lap_is_still_deduped(tmp_path, monkeypatch):
     slot — a brainOnly re-send of lap N arriving AFTER lap N+1 folded must not refold lap N."""
     obs = _real_observer()
     monkeypatch.setattr(server, "_observer", obs)
+    monkeypatch.setattr(server, "_coach_runtime", None)
     monkeypatch.setattr(
         server, "_recent_brake_cal_keys", server._recent_brake_cal_keys.__class__(maxlen=8)
     )
@@ -580,16 +584,46 @@ def test_late_resend_after_a_newer_lap_is_still_deduped(tmp_path, monkeypatch):
     assert after_lap4 == laps_folded + 1
 
 
-def test_calibration_inactive_when_coach_v2_owns_the_cue_path(monkeypatch):
-    """PR #525 review: with coach v2 routing live telemetry, folding laps into the LEGACY
-    observer would log 'calibrated' with zero effect on the spoken cues — the task must not
-    be scheduled at all."""
+def test_calibration_active_when_coach_v2_owns_the_cue_path(monkeypatch):
+    """#675 Part 0: alien-line / Coach v2 must NOT silently bypass brake calibration.
+
+    PR #525 skipped calibration while v2 owned cues (legacy observer marks would not affect
+    speech). V2 now has its own calibrate path, so the gate stays active whenever a live
+    producer exists.
+    """
     monkeypatch.setattr(server, "_observer", _real_observer())
     monkeypatch.setattr(server, "_coach_runtime", object())
     monkeypatch.delenv("AC_COPILOT_BRAKE_CAL", raising=False)
-    assert server._brake_calibration_active() is False
+    assert server._brake_calibration_active() is True
+    assert server._brake_calibration_target() is server._coach_runtime
     monkeypatch.setattr(server, "_coach_runtime", None)
     assert server._brake_calibration_active() is True
+    assert server._brake_calibration_target() is server._observer
+
+
+def test_calibrate_brake_marks_from_lap_updates_coach_v2(tmp_path, monkeypatch):
+    """#675: with AC_COPILOT_COACH_V2 path live, calibration folds into CoachRuntime anchors."""
+    from tools.ai_sidecar.coaching_runtime import build_coach_runtime
+
+    archive = _corner_archive()
+    coach = build_coach_runtime(archive)
+    assert coach is not None
+    monkeypatch.setattr(server, "_coach_runtime", coach)
+    monkeypatch.setattr(server, "_observer", None)
+    monkeypatch.setattr(
+        server, "_recent_brake_cal_keys", server._recent_brake_cal_keys.__class__(maxlen=8)
+    )
+    monkeypatch.delenv("AC_COPILOT_OLLAMA_ENABLE", raising=False)
+    path = _write_lap_archive(tmp_path, archive)
+    before = {idx: anc.brake for idx, anc in coach.anchors.items()}
+    asyncio.run(server._calibrate_brake_marks_from_lap({"archivePath": path, "lap": 3}))
+    assert coach._driver_brake_points, "v2 must calibrate at least one corner from the driver lap"
+    # brainOnly re-send of the SAME lap must not double-weight
+    n0 = next(iter(coach._driver_brake_points.values()))[1]
+    asyncio.run(server._calibrate_brake_marks_from_lap({"archivePath": path, "lap": 3}))
+    assert next(iter(coach._driver_brake_points.values()))[1] == n0
+    # At least one anchor should have been rewritten from the calibrated action point.
+    assert any(coach.anchors[i].brake != before[i] for i in before) or coach._driver_brake_points
 
 
 # ---------------------------------------------------------------- #531 Part D/E server wiring

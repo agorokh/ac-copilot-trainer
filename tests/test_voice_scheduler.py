@@ -188,6 +188,29 @@ def test_release_cue_is_deferred_until_brake_alarm_finishes() -> None:
     assert pb.current is not None and pb.current.kind == "brake_release"
 
 
+def test_prepare_heads_up_is_reslotted_behind_exit_info_clip() -> None:
+    """#675 phase-slot RESLOT: prepare must not drop behind a playing exit micro-verdict."""
+    sched, pb, clock = _scheduler(VoiceConfig(ttl_s=5.0))
+    # exit confirm / micro-verdict (info) is still playing
+    sched.submit(make_advisory(kind="confirm", urgency="info", register="calm", corner=1))
+    assert sched.process_pending(clock()) is not None
+    assert pb.current is not None and pb.current.urgency == "info"
+
+    clock.advance(0.1)
+    # next corner prepare heads-up arrives — previously dropped every tap (T2 residual)
+    sched.submit(make_advisory(kind="late_brake", urgency="prepare", register="calm", corner=2))
+    assert sched.process_pending(clock()) is None
+    assert pb.current is not None and pb.current.urgency == "info"
+    assert not pb.cancelled
+
+    pb.finish()
+    clock.advance(0.05)
+    spoken = sched.process_pending(clock())
+    assert spoken is not None
+    assert spoken.urgency == "prepare"
+    assert spoken.kind == "late_brake"
+
+
 def test_stale_advisory_is_dropped_by_ttl() -> None:
     sched, pb, clock = _scheduler(VoiceConfig(ttl_s=1.5))
     sched.submit(make_advisory(kind="late_brake", urgency="act", corner=2))  # enqueued at t0
