@@ -9,15 +9,17 @@ Usage (live COM port, sidecar stopped so this process owns the CDC)::
     python -m tools.ai_sidecar.serial_backpressure_probe --port COM6 --count 40
 
 The probe is intentionally **host-side only** — it does not change the protocol
-v1 envelope the sidecar already speaks. Exit 0 when ``drop=0`` (hard gate) and
-every observed ``max_drain_ms`` is at or below ``--max-drain-ms``.
+v1 envelope the sidecar already speaks.
 
-The default drain budget is **100 ms**, not one 16/33 ms LVGL tick: the 8 KiB
-CDC RX ring exists specifically so a multi-frame USB burst can land across a
-render gap and be drained on the next ``loop()`` without dropping. A saturated
-ring of ~20–25 coaching.snapshot frames typically drains in ~40–80 ms on the
-JC3248W535; that is absorption working, not a display stall. ``drop>0`` is the
-failure that matches the #677 Part B acceptance criterion.
+Hard gates (evaluated on **counter deltas** after a priming baseline):
+
+* ``overflow_drops`` delta == 0
+* ``parse_drops`` delta == 0
+* ``frames_ok`` delta >= measured frame count
+* ``last_drain_ms`` (this drain) <= ``--max-drain-ms`` (default 100)
+
+Waves are paced to fit the 8 KiB CDC RX ring (~16 × ~350 B frames). A single
+40-frame write is ~14 KiB and overfills the ring.
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ BP_RE = re.compile(
     r"parse=(?P<parse>\d+)\s+"
     r"max_avail=(?P<max_avail>\d+)\s+"
     r"max_drain_ms=(?P<max_drain_ms>\d+)"
+    r"(?:\s+last_drain_ms=(?P<last_drain_ms>\d+))?"
     r"(?:\s+linked=(?P<linked>\d+)\s+peers=(?P<peers>\d+)"
     r"\s+last_ms=(?P<last_ms>\d+)\s+heap=(?P<heap>\d+))?"
 )
@@ -52,6 +55,7 @@ class BpStats:
     parse: int
     max_avail: int
     max_drain_ms: int
+    last_drain_ms: int | None = None
     linked: int | None = None
     peers: int | None = None
     last_ms: int | None = None
@@ -78,8 +82,6 @@ def build_coaching_snapshot_frame(
         "dist_to_brake_m": 45,
         "progress_pct": (seq * 7) % 100,
     }
-    # Pad toward the historical hello_ack / snapshot size class (~300 B) so the
-    # burst exercises the 8 KiB RX ring under LVGL drain gaps (#463 / #677).
     pad = "x" * max(0, 280 - len(json.dumps(payload)))
     if pad:
         payload["pad"] = pad
@@ -107,6 +109,7 @@ def parse_bp_line(line: str) -> BpStats | None:
         parse=int(g["parse"]),
         max_avail=int(g["max_avail"]),
         max_drain_ms=int(g["max_drain_ms"]),
+        last_drain_ms=int(g["last_drain_ms"]) if g.get("last_drain_ms") is not None else None,
         linked=int(g["linked"]) if g.get("linked") is not None else None,
         peers=int(g["peers"]) if g.get("peers") is not None else None,
         last_ms=int(g["last_ms"]) if g.get("last_ms") is not None else None,
@@ -114,45 +117,66 @@ def parse_bp_line(line: str) -> BpStats | None:
     )
 
 
-def evaluate_bp(
-    stats: BpStats,
-    *,
-    max_drain_ms: int,
-    require_frames: int = 1,
-) -> tuple[bool, str]:
-    """Return (pass, reason) for a single firmware bp summary (absolute counters)."""
-    if stats.drop > 0:
-        return False, f"overflow drops={stats.drop}"
-    if stats.parse > 0:
-        return False, f"parse drops={stats.parse}"
-    if stats.ok < require_frames:
-        return False, f"frames_ok={stats.ok} < required {require_frames}"
-    if stats.max_drain_ms > max_drain_ms:
-        return False, f"max_drain_ms={stats.max_drain_ms} > budget {max_drain_ms}"
-    return True, "ok"
-
-
 def evaluate_bp_delta(
-    before: BpStats | None,
+    before: BpStats,
     after: BpStats,
     *,
     max_drain_ms: int,
-    require_frames: int = 1,
+    require_frames: int,
 ) -> tuple[bool, str]:
-    """Gate on the counter delta across one probe (firmware counters are cumulative)."""
-    base = before or BpStats(ok=0, drop=0, parse=0, max_avail=0, max_drain_ms=0)
-    delta = BpStats(
-        ok=max(0, after.ok - base.ok),
-        drop=max(0, after.drop - base.drop),
-        parse=max(0, after.parse - base.parse),
-        max_avail=after.max_avail,
-        max_drain_ms=after.max_drain_ms,
-        linked=after.linked,
-        peers=after.peers,
-        last_ms=after.last_ms,
-        heap=after.heap,
-    )
-    return evaluate_bp(delta, max_drain_ms=max_drain_ms, require_frames=require_frames)
+    """Gate on counter deltas + this-burst ``last_drain_ms``."""
+    d_ok = after.ok - before.ok
+    d_drop = after.drop - before.drop
+    d_parse = after.parse - before.parse
+    if d_drop > 0:
+        return False, f"overflow drops delta={d_drop}"
+    if d_parse > 0:
+        return False, f"parse drops delta={d_parse}"
+    if d_ok < require_frames:
+        return False, f"frames_ok delta={d_ok} < required {require_frames}"
+    drain = after.last_drain_ms if after.last_drain_ms is not None else after.max_drain_ms
+    if drain > max_drain_ms:
+        return False, f"last_drain_ms={drain} > budget {max_drain_ms}"
+    return True, "ok"
+
+
+def _read_bp_until(
+    ser: Any,
+    *,
+    settle_s: float,
+    buf: bytearray,
+) -> BpStats | None:
+    last: BpStats | None = None
+    end = time.monotonic() + settle_s
+    while time.monotonic() < end:
+        chunk = ser.read(1024) if hasattr(ser, "read") else b""
+        if chunk:
+            buf.extend(chunk)
+            while b"\n" in buf:
+                line_b, _, rest = bytes(buf).partition(b"\n")
+                buf[:] = rest
+                try:
+                    line = line_b.decode("utf-8", errors="replace")
+                except Exception:  # noqa: BLE001
+                    continue
+                parsed = parse_bp_line(line)
+                if parsed is not None:
+                    last = parsed
+        else:
+            time.sleep(0.02)
+    return last
+
+
+def _write_waves(ser: Any, count: int, *, start_seq: int = 0, wave: int = 8) -> None:
+    # Keep each wave well under the 8 KiB CDC RX ring and wait for firmware
+    # drain + LVGL before the next write (pile-up → silent USB drops with
+    # drop=0/parse=0 — the classic #463 ring failure).
+    for off in range(0, count, wave):
+        n = min(wave, count - off)
+        ser.write(build_burst(n, start_seq=start_seq + off))
+        if hasattr(ser, "flush"):
+            ser.flush()
+        time.sleep(0.35)
 
 
 def run_burst_on_port(
@@ -164,11 +188,10 @@ def run_burst_on_port(
     max_drain_ms: int = 100,
     open_fn: Callable[[str, int], Any] | None = None,
 ) -> BpStats:
-    """Open ``port``, flood ``count`` snapshots, return the last parsed bp line."""
+    """Open ``port``, prime a baseline, flood ``count`` snapshots, gate on deltas."""
     opener = open_fn or open_serial
     ser = opener(port, baud)
     try:
-        # Drain any boot banner so we don't confuse it with bp output.
         deadline = time.monotonic() + 0.5
         while time.monotonic() < deadline:
             waiting = getattr(ser, "in_waiting", 0) or 0
@@ -176,74 +199,46 @@ def run_burst_on_port(
                 ser.read(waiting)
             else:
                 time.sleep(0.02)
-        # Terminate any partial host→device line left in the firmware accumulator
-        # after flash/reset so the first snapshot cannot concatenate into garbage.
         ser.write(b"\n")
         if hasattr(ser, "flush"):
             ser.flush()
         time.sleep(0.05)
-        # Pace waves that fit the 8 KiB CDC RX ring (~20 × ~350 B frames). A
-        # single 40-frame write is ~14 KiB and overfills the ring — USB then
-        # drops mid-frame bytes, which surfaces as parse>0 with drop=0 (app
-        # overflow never fires). Real coaching.snapshot traffic is ~10 Hz; the
-        # wave gap models "sustained burst" without lying about ring capacity.
-        wave = 16
-        for start in range(0, count, wave):
-            n = min(wave, count - start)
-            ser.write(build_burst(n, start_seq=start))
-            if hasattr(ser, "flush"):
-                ser.flush()
-            time.sleep(0.08)
-        # Firmware emits `[serial][bp]` after a ≥8-frame drain; wait for it.
-        # Counters are cumulative since boot — gate on the first→last delta.
+
         buf = bytearray()
-        first: BpStats | None = None
-        last: BpStats | None = None
-        end = time.monotonic() + settle_s
-        while time.monotonic() < end:
-            chunk = ser.read(1024) if hasattr(ser, "read") else b""
-            if chunk:
-                buf.extend(chunk)
-                while b"\n" in buf:
-                    line_b, _, rest = bytes(buf).partition(b"\n")
-                    buf = bytearray(rest)
-                    try:
-                        line = line_b.decode("utf-8", errors="replace")
-                    except Exception:  # noqa: BLE001 — probe must stay alive
-                        continue
-                    parsed = parse_bp_line(line)
-                    if parsed is not None:
-                        if first is None:
-                            first = parsed
-                        last = parsed
-            else:
-                time.sleep(0.02)
-        if last is None:
+        # Priming wave establishes a true pre-measurement baseline (reviewer HIGH).
+        prime = 8
+        _write_waves(ser, prime, start_seq=0, wave=prime)
+        baseline = _read_bp_until(ser, settle_s=max(1.0, settle_s * 0.5), buf=buf)
+        if baseline is None:
             raise RuntimeError(
-                "no [serial][bp] line from firmware — is the #677 build flashed "
+                "no baseline [serial][bp] line after priming — is the #677 build flashed "
                 "and the sidecar stopped so this probe owns the CDC port?"
             )
-        # Prefer absolute `last` when the first summary is still within this
-        # probe's frame budget (fresh boot / first burst after reset). Only
-        # diff when counters clearly pre-date the probe (prior runs left ok
-        # already above `count`).
-        # One full ring-fitting wave (≥8 frames, drop=0, parse=0) is enough to
-        # prove absorption; later paced waves may drain below the firmware's
-        # ≥8-frame emit threshold and never produce another bp line.
-        require = min(16, max(8, count // 4))
-        if first is None or first is last or first.ok <= count:
-            ok, reason = evaluate_bp(
-                last, max_drain_ms=max_drain_ms, require_frames=require
-            )
-        else:
-            ok, reason = evaluate_bp_delta(
-                first, last, max_drain_ms=max_drain_ms, require_frames=require
-            )
+
+        _write_waves(ser, count, start_seq=prime, wave=8)
+        # Poll until the frames_ok delta covers the measured burst (or settle).
+        after: BpStats | None = None
+        deadline = time.monotonic() + max(settle_s, count * 0.05 + 2.0)
+        while time.monotonic() < deadline:
+            got = _read_bp_until(ser, settle_s=0.4, buf=buf)
+            if got is not None:
+                after = got
+                if after.ok - baseline.ok >= count:
+                    break
+        if after is None:
+            raise RuntimeError("no post-burst [serial][bp] line from firmware")
+
+        ok, reason = evaluate_bp_delta(
+            baseline,
+            after,
+            max_drain_ms=max_drain_ms,
+            require_frames=count,
+        )
         if not ok:
             raise RuntimeError(
-                f"backpressure probe failed: {reason} (first={first}, last={last})"
+                f"backpressure probe failed: {reason} (baseline={baseline}, after={after})"
             )
-        return last
+        return after
     finally:
         try:
             ser.close()
@@ -254,16 +249,13 @@ def run_burst_on_port(
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--port", required=True, help="USB CDC port (e.g. COM6)")
-    p.add_argument("--count", type=int, default=40, help="snapshot frames to flood")
+    p.add_argument("--count", type=int, default=40, help="measured snapshot frames to flood")
     p.add_argument("--baud", type=int, default=DEFAULT_BAUD)
     p.add_argument(
         "--max-drain-ms",
         type=int,
         default=100,
-        help=(
-            "fail if firmware reports a longer single-tick drain (default 100; "
-            "the 8 KiB ring is meant to absorb multi-frame bursts across a render gap)"
-        ),
+        help="fail if last_drain_ms exceeds this (default 100)",
     )
     p.add_argument("--settle-s", type=float, default=2.0)
     args = p.parse_args(argv)
@@ -275,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
         max_drain_ms=args.max_drain_ms,
     )
     print(
-        f"PASS drop={stats.drop} ok={stats.ok} max_drain_ms={stats.max_drain_ms} "
+        f"PASS drop={stats.drop} ok={stats.ok} last_drain_ms={stats.last_drain_ms} "
         f"max_avail={stats.max_avail} heap={stats.heap}"
     )
     return 0

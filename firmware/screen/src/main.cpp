@@ -1121,6 +1121,7 @@ static void serial_transport_tick() {
   const uint32_t drain_start_ms = millis();
   const int available_at_start = Serial.available();
   uint32_t frames_this_drain = 0;
+  uint32_t drops_this_drain = 0;
   while (Serial.available() > 0) {
     int c = Serial.read();
     if (c < 0) break;
@@ -1138,21 +1139,33 @@ static void serial_transport_tick() {
       } else {
         serial_rx_line = "";  // overflow guard: drop a runaway unterminated line
         link_stats_note_overflow();
+        ++drops_this_drain;
       }
     }
   }
   if (available_at_start > 0) {
     const uint32_t drain_ms = millis() - drain_start_ms;
     link_stats_note_drain(static_cast<uint32_t>(available_at_start), drain_ms);
-    // Emit a machine-parseable summary after a burst (≥8 frames in one tick)
-    // or whenever an overflow was just recorded.
+    // Emit on any activity this drain (not only ≥8-frame fat drains) so a
+    // healthy multi-tick drain still reports for the host probe. Throttle
+    // 250 ms. drop_event uses THIS drain's drops — never the all-time peak.
     static uint32_t last_bp_emit_ms = 0;
-    const link_stats_t* st = link_stats_get();
-    const bool burst = frames_this_drain >= 8;
-    const bool drop_event = st->overflow_drops > 0 && frames_this_drain > 0;
-    if ((burst || drop_event) &&
-        (int32_t)(millis() - last_bp_emit_ms) >= 250) {
-      link_stats_emit_bp_line();
+    const bool activity = frames_this_drain > 0 || drops_this_drain > 0;
+    if (activity && (int32_t)(millis() - last_bp_emit_ms) >= 250) {
+      const link_stats_t* st = link_stats_get();
+      Serial.printf(
+          "[serial][bp] ok=%lu drop=%lu parse=%lu max_avail=%lu max_drain_ms=%lu "
+          "last_drain_ms=%lu linked=%u peers=%u last_ms=%lu heap=%u\n",
+          static_cast<unsigned long>(st->frames_ok),
+          static_cast<unsigned long>(st->overflow_drops),
+          static_cast<unsigned long>(st->parse_drops),
+          static_cast<unsigned long>(st->max_rx_available),
+          static_cast<unsigned long>(st->max_drain_ms),
+          static_cast<unsigned long>(st->last_drain_ms),
+          static_cast<unsigned>(st->linked),
+          static_cast<unsigned>(st->peer_count),
+          static_cast<unsigned long>(st->last_frame_ms),
+          static_cast<unsigned>(ESP.getFreeHeap()));
       last_bp_emit_ms = millis();
     }
   }
