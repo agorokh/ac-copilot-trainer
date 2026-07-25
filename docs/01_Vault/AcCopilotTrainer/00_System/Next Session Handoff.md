@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-24T23:50:00Z
+last_updated: 2026-07-25T06:50:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-674-l4-l0-meta-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/issue-673-atelier-parta-remainder-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/backlog-reconcile-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/pr-657-resolve-blocked-2026-07-22.md
@@ -113,6 +114,15 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-07-25) — #674 CLOSED: L4 stint / Layer-0 env / META transfer MERGED
+
+**PR [#682](https://github.com/agorokh/ac-copilot-trainer/pull/682) MERGED** squash
+[`7b7b00a`](https://github.com/agorokh/ac-copilot-trainer/commit/7b7b00acc725d04ba2aa74d428ba5ca7544f1c21)
+(2026-07-25T06:46:52Z). Ships `env_observer.py`, `stint_optimizer.py`, META cross-combo
+provenance on the existing scientist ledger, and `auto_alien --stint` composition. Offline
+`make ci-fast` green (3448 passed); live G1/G2/G3 remain on #529 (rig-blocked on #627). Detail:
+[[issue-674-l4-l0-meta-2026-07-24]].
+
 ## Delivered (2026-07-24 night) — #673 CLOSED: Racing Atelier Part-A remainder MERGED
 
 PR [#681](https://github.com/agorokh/ac-copilot-trainer/pull/681) MERGED
@@ -194,10 +204,14 @@ Post-merge classify: **no** migrations/env/deps/workflow flags.
 
 ## What remains / resume here
 
-Issue [#625](https://github.com/agorokh/ac-copilot-trainer/issues/625) stays **OPEN** — code is not
-the experiment. Operator steps: power on `pc`, authorize Steam/NVIDIA overlay toggles, run the
-planned A/B schedule, attach stats/evidence to #625, then close. Detail:
-[[issue-625-init-perturber-ab-prepared-2026-07-22]] / [[pr-657-resolve-blocked-2026-07-22]].
+- **#529** stays OPEN for real Windows-rig / cross-combo performance gates (G1-pace / G1b / G2 /
+  G3) — L4/L0/META code is now on main via #674; gates still rig-blocked on #627.
+- Issue [#625](https://github.com/agorokh/ac-copilot-trainer/issues/625) stays **OPEN** — code is not
+  the experiment. Operator steps: power on `pc`, authorize Steam/NVIDIA overlay toggles, run the
+  planned A/B schedule, attach stats/evidence to #625, then close. Detail:
+  [[issue-625-init-perturber-ab-prepared-2026-07-22]] / [[pr-657-resolve-blocked-2026-07-22]].
+- Next ICE backlog candidates after the 2026-07-24 steward: #675 Coach V2 (incl. calibration
+  bypass Part 0), #531 Part G latency, #627 investigation continuation.
 
 
 ## Delivered (2026-07-22 evening) — #662 module map MERGED; zero-kill uptime soak IN PROGRESS

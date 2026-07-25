@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-24T23:50:00Z
+last_updated: 2026-07-25T06:50:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-674-l4-l0-meta-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/issue-673-atelier-parta-remainder-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/pr-657-resolve-blocked-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
@@ -46,6 +47,12 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
+**Delivered (2026-07-25):** PR [#682](https://github.com/agorokh/ac-copilot-trainer/pull/682)
+MERGED [`7b7b00a`](https://github.com/agorokh/ac-copilot-trainer/commit/7b7b00acc725d04ba2aa74d428ba5ca7544f1c21)
+— #674 L4 stint optimizer / Layer-0 env observer / META prior transfer (EPIC #529 offline
+layers). Issue #674 CLOSED. Live performance gates remain on #529 (blocked on #627). Detail:
+[[issue-674-l4-l0-meta-2026-07-24]].
+
 **Delivered (2026-07-24):** PR [#681](https://github.com/agorokh/ac-copilot-trainer/pull/681)
 MERGED [`333ef93a9`](https://github.com/agorokh/ac-copilot-trainer/commit/333ef93a9a39742c2926d2d6f2af35c47cc95eb1)
 — #673 Racing Atelier Part-A remainder (`hud_settings` / `racing_line` tokens + coaching-overlay
@@ -58,8 +65,8 @@ MERGED [`ce70add1e`](https://github.com/agorokh/ac-copilot-trainer/commit/ce70ad
 OPEN for the physical A/B on `pc` (operator-gated Steam/NVIDIA toggles + attached stats). Detail:
 [[issue-625-init-perturber-ab-prepared-2026-07-22]].
 
-**In flight (2026-07-23):** issue [#625](https://github.com/agorokh/ac-copilot-trainer/issues/625)
-physical overlay A/B run — code is on `main`; remaining work is the rig experiment + evidence.
+**In flight (2026-07-25):** issue [#625](https://github.com/agorokh/ac-copilot-trainer/issues/625)
+physical overlay A/B — code on `main`. #529 live gates still blocked on #627. Next ICE: #675.
 
 **Delivered (2026-07-22 PM):** PR [#647](https://github.com/agorokh/ac-copilot-trainer/pull/647)
 MERGED `c5d6e909b` — #630 **Part G** (runnable freeze-forensics capture driver; 6 review rounds).
