@@ -13,7 +13,9 @@ from tools.ac_harness.alien_scientist import (
     build_plan,
     evaluate_experiment,
     load_ledger,
+    meta_priors,
     persist_completed_run,
+    scope_key,
     write_candidate_setup,
 )
 from tools.ai_sidecar.car_schema import CarSetupSchema
@@ -98,6 +100,125 @@ def test_falsified_constraint_is_suppressed_for_same_platform_scope() -> None:
                 {
                     "id": "renamed_same_adjustment",
                     "mechanism": "different prose, identical physical adjustment",
+                    "parameter": "WING_2",
+                    "direction": -1,
+                }
+            ],
+        )
+
+
+def test_meta_prior_transfers_across_combos_sharing_scope_key() -> None:
+    """#674: falsified constraint for combo A suppresses the same META key on combo B."""
+    first = build_plan(
+        trigger="pace plateau",
+        combo=_COMBO,
+        scope=_SCOPE,
+        baseline_payloads=[_lap("lap-1", 100_000)],
+        schema=_schema(),
+    )
+    constraint = first["experiments"][0]["constraint_key"]
+    other_combo = {"car": "car_b", "track": "track_b", "layout": "gp"}
+    assert scope_key(_SCOPE) == first["scope_key"]
+
+    ledger = [
+        {
+            "scope_key": first["scope_key"],
+            "scope": dict(_SCOPE),
+            "combo": dict(_COMBO),
+            "constraint_key": constraint,
+            "verdict": "falsified",
+            "experiment_id": "run:0",
+            "reason": "candidate_not_significantly_faster",
+        }
+    ]
+    priors = meta_priors(ledger, scope=_SCOPE)
+    assert len(priors) == 1
+    assert priors[0]["source_combo"] == _COMBO
+
+    # Wing is suppressed via cross-combo transfer; front bias remains a safe experiment.
+    transferred = build_plan(
+        trigger="pace plateau other combo",
+        combo=other_combo,
+        scope=_SCOPE,
+        baseline_payloads=[
+            {
+                **_lap("lap-9", 100_000),
+                "car": {"id": "car_b"},
+                "track": {"id": "track_b", "layout": "gp"},
+            }
+        ],
+        schema=_schema(),
+        ledger=ledger,
+        proposed_hypotheses=[
+            {
+                "id": "plateau_rear_wing",
+                "mechanism": "transferred prior must suppress this",
+                "parameter": "WING_2",
+                "direction": -1,
+            },
+            {
+                "id": "braking_stability_front_bias",
+                "mechanism": "unrelated constraint remains available",
+                "parameter": "FRONT_BIAS",
+                "direction": 1,
+            },
+        ],
+    )
+    assert transferred["combo"] == other_combo
+    assert transferred["experiments"][0]["parameter"] == "FRONT_BIAS.VALUE"
+    assert transferred["suppressed"][0]["transfer"]["mode"] == "cross_combo"
+    assert transferred["suppressed"][0]["transfer"]["source_combo"] == _COMBO
+    assert transferred["meta_priors"][0]["constraint_key"] == constraint
+
+
+def test_meta_prior_does_not_transfer_across_different_scope_dimensions() -> None:
+    first = build_plan(
+        trigger="pace plateau",
+        combo=_COMBO,
+        scope=_SCOPE,
+        baseline_payloads=[_lap("lap-1", 100_000)],
+        schema=_schema(),
+    )
+    other_scope = {**_SCOPE, "track_archetype": "long-fast"}
+    assert scope_key(other_scope) != first["scope_key"]
+    rebuilt = build_plan(
+        trigger="pace plateau",
+        combo=_COMBO,
+        scope=other_scope,
+        baseline_payloads=[_lap("lap-1", 100_000)],
+        schema=_schema(),
+        ledger=[
+            {
+                "scope_key": first["scope_key"],
+                "constraint_key": first["experiments"][0]["constraint_key"],
+                "verdict": "falsified",
+            }
+        ],
+    )
+    assert rebuilt["experiments"]
+    assert rebuilt["suppressed"] == []
+
+
+def test_legacy_ledger_row_without_combo_still_suppresses() -> None:
+    first = _plan()
+    with pytest.raises(ScientistError, match="scientist_constraints_suppressed"):
+        build_plan(
+            trigger="pace plateau",
+            combo={"car": "car_z", "track": "track_z", "layout": None},
+            scope=_SCOPE,
+            baseline_payloads=[_lap("lap-1", 100_000)],
+            schema=_schema(),
+            ledger=[
+                {
+                    "scope_key": first["scope_key"],
+                    "constraint_key": first["experiments"][0]["constraint_key"],
+                    "verdict": "falsified",
+                }
+            ],
+            proposed_hypotheses=[
+                {
+                    "id": "plateau_rear_wing",
+                    "mechanism": "legacy row transfer",
                     "parameter": "WING_2",
                     "direction": -1,
                 }
@@ -312,6 +433,9 @@ def test_completed_run_persists_plan_outcomes_and_append_only_ledger(tmp_path: P
     assert payload["outcomes"] == [outcome]
     ledger = load_ledger(tmp_path / "journal" / "alien_scientist" / "experiments.jsonl")
     assert ledger[0]["verdict"] == "falsified"
+    assert ledger[0]["scope"] == _SCOPE
+    assert ledger[0]["combo"] == _COMBO
+    assert ledger[0]["scope_key"] == plan["scope_key"]
     with pytest.raises(ScientistError, match="scientist_experiment_already_recorded"):
         append_ledger(tmp_path / "journal" / "alien_scientist" / "experiments.jsonl", ledger[0])
 

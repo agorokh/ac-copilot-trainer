@@ -201,6 +201,71 @@ def stage_l3_summary(outcome: dict | None) -> dict | None:
     return summary
 
 
+def compose_stint_layers(
+    *,
+    plant_artifact: dict | None,
+    archive_payloads: Sequence[dict],
+    laps_remaining: int,
+    fuel_start_l: float,
+    fuel_burn_l_per_lap: float,
+    tyre_temp_target_c: float,
+    tyre_temp_tolerance_c: float,
+    wear_budget_fraction: float,
+    v_top_kmh: float,
+    environment_prior: dict | None = None,
+) -> dict:
+    """Build Layer-0 environment + Layer-4 stint plan blocks for the composed report (#674).
+
+    Failures stay named in the returned dict (never swallowed): a bad archive or unusable plant
+    surfaces as ``ok=False`` with a reason so the pipeline can keep driving with baseline knobs.
+    """
+    from tools.ac_harness.env_observer import (
+        EnvironmentObserverError,
+        EnvironmentState,
+        environment_for_plan,
+        environment_from_archives,
+    )
+    from tools.ac_harness.stint_optimizer import StintInputs, StintOptimizerError, plan_stint
+
+    block: dict = {"ok": False, "environment": None, "stint": None}
+    try:
+        prior = EnvironmentState.from_dict(environment_prior)
+        environment = (
+            environment_from_archives(archive_payloads, prior=prior)
+            if archive_payloads
+            else prior
+        )
+        if environment is not None:
+            block["environment"] = environment_for_plan(environment)
+            block["environment_state"] = environment.to_dict()
+        if plant_artifact is None:
+            raise StintOptimizerError("stint_plant_missing")
+        plan = plan_stint(
+            StintInputs(
+                plant_artifact=plant_artifact,
+                environment=environment,
+                laps_remaining=max(1, int(laps_remaining)),
+                fuel_start_l=fuel_start_l,
+                fuel_burn_l_per_lap=fuel_burn_l_per_lap,
+                tyre_temp_target_c=tyre_temp_target_c,
+                tyre_temp_tolerance_c=tyre_temp_tolerance_c,
+                wear_budget_fraction=wear_budget_fraction,
+                v_top_kmh=v_top_kmh,
+            )
+        )
+        block["stint"] = plan.to_dict()
+        block["inner_loop"] = {
+            "ggv_scale": plan.pace_scale,
+            "l3_params": plan.l3_params,
+            "degraded": plan.degraded,
+            "reasons": list(plan.reasons),
+        }
+        block["ok"] = True
+    except (EnvironmentObserverError, StintOptimizerError, ValueError, TypeError) as exc:
+        block["error"] = str(exc)
+    return block
+
+
 def load_archive_payloads(paths: list[str]) -> tuple[list[dict], list[str]]:
     """Load lap-archive JSON payloads; unreadable files are reported, never silently dropped."""
     payloads: list[dict] = []
@@ -1000,6 +1065,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--scientist-aero-platform", default=None)
     p.add_argument("--scientist-tyre-family", default=None)
     p.add_argument("--scientist-track-archetype", default=None)
+    p.add_argument(
+        "--stint",
+        action="store_true",
+        help="#674 Layer-4: apply stint pace_scale to the base alien drive when a plant is ready "
+        "(environment/stint report blocks are attached whenever computable, even without this flag)",
+    )
+    p.add_argument("--stint-laps", type=int, default=None, help="laps remaining for L4 planning")
+    p.add_argument("--stint-fuel-start-l", type=float, default=30.0)
+    p.add_argument("--stint-fuel-burn-l-per-lap", type=float, default=2.2)
+    p.add_argument("--stint-tyre-temp-target-c", type=float, default=90.0)
+    p.add_argument("--stint-tyre-temp-tolerance-c", type=float, default=5.0)
+    p.add_argument("--stint-wear-budget", type=float, default=0.35)
     return p
 
 
@@ -1027,6 +1104,10 @@ def run_pipeline(
         raise ValueError("--scientist requires --setup, --iterations >= 1, and --laps >= 2")
     if not 1 <= args.scientist_batch_size <= 3:
         raise ValueError("--scientist-batch-size must be between 1 and 3")
+    if args.stint_laps is not None and args.stint_laps < 1:
+        raise ValueError(f"--stint-laps must be >= 1 (got {args.stint_laps})")
+    if not 0.0 < args.stint_wear_budget <= 1.0:
+        raise ValueError("--stint-wear-budget must be in (0, 1]")
     # The BASE drive keeps the #572 one-shot gate: above-1 envelopes are reachable only through
     # the falsification-gated self-play ladder (per-iteration scale overrides), never by passing
     # a bare --ggv-scale > 1 (#579 Codex P1).
@@ -1129,19 +1210,78 @@ def run_pipeline(
         report["sidecar_port_between_stages"] = settled
         print(f"auto-alien: sidecar port between stages: {settled}")
 
+    plant = load_plant_artifact(
+        user_dir,
+        args.car,
+        args.track,
+        setup_key,
+        setup_ini,
+        layout=args.track_layout,
+    )
+    stint_layers = compose_stint_layers(
+        plant_artifact=plant,
+        archive_payloads=[],
+        laps_remaining=args.stint_laps or max(1, args.laps or 1),
+        fuel_start_l=args.stint_fuel_start_l,
+        fuel_burn_l_per_lap=args.stint_fuel_burn_l_per_lap,
+        tyre_temp_target_c=args.stint_tyre_temp_target_c,
+        tyre_temp_tolerance_c=args.stint_tyre_temp_tolerance_c,
+        wear_budget_fraction=args.stint_wear_budget,
+        v_top_kmh=args.max_speed,
+    )
+    report["layers"] = {"pre_drive": stint_layers}
+    drive_scale = None
+    if args.stint and stint_layers.get("ok") and isinstance(stint_layers.get("inner_loop"), dict):
+        drive_scale = float(stint_layers["inner_loop"]["ggv_scale"])
+        report["stint_applied"] = {"ggv_scale": drive_scale, "source": "pre_drive"}
+        print(f"auto-alien: Layer-4 stint pace_scale={drive_scale}")
+    elif args.stint:
+        report["stint_applied"] = {
+            "ggv_scale": None,
+            "source": "pre_drive",
+            "skipped": stint_layers.get("error") or "stint_layers_unavailable",
+        }
+        print(
+            "auto-alien: --stint requested but Layer-4 plan unavailable — "
+            f"{report['stint_applied']['skipped']}; driving with baseline ggv_scale"
+        )
+
     stage_dir = evidence_root / "drive"
-    code = run_stage(drive_argv(args, stage_dir))
+    code = run_stage(drive_argv(args, stage_dir, ggv_scale=drive_scale))
     report["stages"]["drive"] = {"exit_code": code, "evidence_dir": str(stage_dir)}
     if code != 0:
         report["error"] = f"alien drive stage failed (exit {code})"
         print(f"auto-alien: FAIL — {report['error']}")
         return code or 1, report
 
+    base_outcome = load_stage_outcome(stage_dir)
+    post_payloads, post_errors = load_archive_payloads(stage_lap_archives(base_outcome))
+    post_layers = compose_stint_layers(
+        plant_artifact=plant,
+        archive_payloads=post_payloads,
+        laps_remaining=args.stint_laps or max(1, args.laps or 1),
+        fuel_start_l=args.stint_fuel_start_l,
+        fuel_burn_l_per_lap=args.stint_fuel_burn_l_per_lap,
+        tyre_temp_target_c=args.stint_tyre_temp_target_c,
+        tyre_temp_tolerance_c=args.stint_tyre_temp_tolerance_c,
+        wear_budget_fraction=args.stint_wear_budget,
+        v_top_kmh=args.max_speed,
+        environment_prior=(
+            stint_layers.get("environment_state")
+            if isinstance(stint_layers.get("environment_state"), dict)
+            else None
+        ),
+    )
+    if post_errors:
+        post_layers = {**post_layers, "archive_load_errors": post_errors}
+    report["layers"]["post_drive"] = post_layers
+    report["environment"] = post_layers.get("environment") or stint_layers.get("environment")
+    report["stint"] = post_layers.get("stint") or stint_layers.get("stint")
+
     if args.iterations > 0:
         # #577 progressive-envelope self-play. A falsified/stopped ladder is a VALID pipeline
         # outcome — the base drive passed and the report names exactly where and why the ladder
         # ended (keep-last-valid already restored the plant). Only the base stages gate exit.
-        base_outcome = load_stage_outcome(stage_dir)
         base_laps = stage_lap_times_ms(base_outcome)
         print(
             "auto-alien: base drive laps "
