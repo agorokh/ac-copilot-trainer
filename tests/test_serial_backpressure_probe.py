@@ -13,6 +13,7 @@ from tools.ai_sidecar.serial_backpressure_probe import (
     build_burst,
     build_coaching_snapshot_frame,
     evaluate_bp,
+    evaluate_bp_delta,
     parse_bp_line,
     run_burst_on_port,
 )
@@ -80,6 +81,13 @@ def test_evaluate_bp_gates_drop_and_drain() -> None:
         max_drain_ms=33,
     )
     assert not bad_drain and "max_drain_ms" in reason2
+
+
+def test_evaluate_bp_delta_ignores_cumulative_baseline() -> None:
+    before = BpStats(ok=40, drop=0, parse=2, max_avail=100, max_drain_ms=12)
+    after = BpStats(ok=80, drop=0, parse=2, max_avail=8000, max_drain_ms=40)
+    ok, _ = evaluate_bp_delta(before, after, max_drain_ms=100, require_frames=20)
+    assert ok  # parse delta 0, ok delta 40
 
 
 class _FakeBpSerial:

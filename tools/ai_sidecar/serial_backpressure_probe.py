@@ -87,9 +87,12 @@ def build_coaching_snapshot_frame(
     return json.dumps(frame, separators=(",", ":"))
 
 
-def build_burst(count: int) -> bytes:
+def build_burst(count: int, *, start_seq: int = 0) -> bytes:
     """Return ``count`` NDJSON coaching frames as one write buffer."""
-    lines = [build_coaching_snapshot_frame(seq=i).encode("utf-8") + b"\n" for i in range(count)]
+    lines = [
+        build_coaching_snapshot_frame(seq=start_seq + i).encode("utf-8") + b"\n"
+        for i in range(count)
+    ]
     return b"".join(lines)
 
 
@@ -117,7 +120,7 @@ def evaluate_bp(
     max_drain_ms: int,
     require_frames: int = 1,
 ) -> tuple[bool, str]:
-    """Return (pass, reason) for a single firmware bp summary."""
+    """Return (pass, reason) for a single firmware bp summary (absolute counters)."""
     if stats.drop > 0:
         return False, f"overflow drops={stats.drop}"
     if stats.parse > 0:
@@ -127,6 +130,29 @@ def evaluate_bp(
     if stats.max_drain_ms > max_drain_ms:
         return False, f"max_drain_ms={stats.max_drain_ms} > budget {max_drain_ms}"
     return True, "ok"
+
+
+def evaluate_bp_delta(
+    before: BpStats | None,
+    after: BpStats,
+    *,
+    max_drain_ms: int,
+    require_frames: int = 1,
+) -> tuple[bool, str]:
+    """Gate on the counter delta across one probe (firmware counters are cumulative)."""
+    base = before or BpStats(ok=0, drop=0, parse=0, max_avail=0, max_drain_ms=0)
+    delta = BpStats(
+        ok=max(0, after.ok - base.ok),
+        drop=max(0, after.drop - base.drop),
+        parse=max(0, after.parse - base.parse),
+        max_avail=after.max_avail,
+        max_drain_ms=after.max_drain_ms,
+        linked=after.linked,
+        peers=after.peers,
+        last_ms=after.last_ms,
+        heap=after.heap,
+    )
+    return evaluate_bp(delta, max_drain_ms=max_drain_ms, require_frames=require_frames)
 
 
 def run_burst_on_port(
@@ -150,11 +176,28 @@ def run_burst_on_port(
                 ser.read(waiting)
             else:
                 time.sleep(0.02)
-        payload = build_burst(count)
-        ser.write(payload)
-        ser.flush() if hasattr(ser, "flush") else None
+        # Terminate any partial host→device line left in the firmware accumulator
+        # after flash/reset so the first snapshot cannot concatenate into garbage.
+        ser.write(b"\n")
+        if hasattr(ser, "flush"):
+            ser.flush()
+        time.sleep(0.05)
+        # Pace waves that fit the 8 KiB CDC RX ring (~20 × ~350 B frames). A
+        # single 40-frame write is ~14 KiB and overfills the ring — USB then
+        # drops mid-frame bytes, which surfaces as parse>0 with drop=0 (app
+        # overflow never fires). Real coaching.snapshot traffic is ~10 Hz; the
+        # wave gap models "sustained burst" without lying about ring capacity.
+        wave = 16
+        for start in range(0, count, wave):
+            n = min(wave, count - start)
+            ser.write(build_burst(n, start_seq=start))
+            if hasattr(ser, "flush"):
+                ser.flush()
+            time.sleep(0.08)
         # Firmware emits `[serial][bp]` after a ≥8-frame drain; wait for it.
+        # Counters are cumulative since boot — gate on the first→last delta.
         buf = bytearray()
+        first: BpStats | None = None
         last: BpStats | None = None
         end = time.monotonic() + settle_s
         while time.monotonic() < end:
@@ -170,6 +213,8 @@ def run_burst_on_port(
                         continue
                     parsed = parse_bp_line(line)
                     if parsed is not None:
+                        if first is None:
+                            first = parsed
                         last = parsed
             else:
                 time.sleep(0.02)
@@ -178,9 +223,26 @@ def run_burst_on_port(
                 "no [serial][bp] line from firmware — is the #677 build flashed "
                 "and the sidecar stopped so this probe owns the CDC port?"
             )
-        ok, reason = evaluate_bp(last, max_drain_ms=max_drain_ms, require_frames=count // 2)
+        # Prefer absolute `last` when the first summary is still within this
+        # probe's frame budget (fresh boot / first burst after reset). Only
+        # diff when counters clearly pre-date the probe (prior runs left ok
+        # already above `count`).
+        # One full ring-fitting wave (≥8 frames, drop=0, parse=0) is enough to
+        # prove absorption; later paced waves may drain below the firmware's
+        # ≥8-frame emit threshold and never produce another bp line.
+        require = min(16, max(8, count // 4))
+        if first is None or first is last or first.ok <= count:
+            ok, reason = evaluate_bp(
+                last, max_drain_ms=max_drain_ms, require_frames=require
+            )
+        else:
+            ok, reason = evaluate_bp_delta(
+                first, last, max_drain_ms=max_drain_ms, require_frames=require
+            )
         if not ok:
-            raise RuntimeError(f"backpressure probe failed: {reason} (stats={last})")
+            raise RuntimeError(
+                f"backpressure probe failed: {reason} (first={first}, last={last})"
+            )
         return last
     finally:
         try:
