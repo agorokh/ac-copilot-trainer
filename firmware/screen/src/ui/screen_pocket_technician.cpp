@@ -24,6 +24,7 @@
 #include <math.h>
 
 #include "ui/nav.h"
+#include "ui/persist.h"
 #include "ui/toast.h"
 #include "ui/tokens.h"
 
@@ -335,6 +336,7 @@ void refresh_chip_label(int idx) {
 }
 
 void on_back_clicked(lv_event_t*) {
+    ui_persist_set_screen(UI_SCREEN_LAUNCHER);
     ui_nav_pop();
 }
 
