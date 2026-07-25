@@ -399,8 +399,7 @@ def test_send_client_frame_gated_until_hello_ack():
     sent_before = int(rt.eval("_ws_sent"))
     assert (
         rt.eval(
-            'require("ws_bridge").sendClientFrame('
-            '{v=1, type="telemetry_tick", seq=1, payload={}})'
+            'require("ws_bridge").sendClientFrame({v=1, type="telemetry_tick", seq=1, payload={}})'
         )
         is False
     )
@@ -414,8 +413,7 @@ def test_send_client_frame_gated_until_hello_ack():
     sent_ready = int(rt.eval("_ws_sent"))
     assert (
         rt.eval(
-            'require("ws_bridge").sendClientFrame('
-            '{v=1, type="telemetry_tick", seq=1, payload={}})'
+            'require("ws_bridge").sendClientFrame({v=1, type="telemetry_tick", seq=1, payload={}})'
         )
         is True
     )
