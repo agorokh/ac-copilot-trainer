@@ -120,6 +120,8 @@ def evaluate_bp(
     """Return (pass, reason) for a single firmware bp summary."""
     if stats.drop > 0:
         return False, f"overflow drops={stats.drop}"
+    if stats.parse > 0:
+        return False, f"parse drops={stats.parse}"
     if stats.ok < require_frames:
         return False, f"frames_ok={stats.ok} < required {require_frames}"
     if stats.max_drain_ms > max_drain_ms:

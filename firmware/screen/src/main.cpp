@@ -642,6 +642,8 @@ static void dispatch_phase2_message(const String& body) {
     Serial.printf("[ws] parse err: %s\n", err.c_str());
     return;
   }
+  // Count only successfully deserialized frames as ok (#677 Part B / qodo).
+  link_stats_note_frame();
   // Legacy `corner_advice` uses the pre-v1 `event` envelope and may omit
   // `v` / `type` — handle before enforcing the v1 envelope (chatgpt-codex P2
   // on PR #91).
@@ -838,7 +840,7 @@ static void ws_on_message(WebsocketsMessage msg) {
 #else
   // Issue #86 Parts C/D: parse + dispatch. Tolerates malformed JSON by
   // logging once and dropping; never blocks the WS poll path.
-  link_stats_note_frame();
+  link_stats_note_rx();
   dispatch_phase2_message(msg.data());
 #endif
 }
@@ -1068,7 +1070,7 @@ static void serial_send_hello() {
 
 static void serial_mark_link_up() {
   serial_last_rx_ms = millis();  // any inbound frame keeps the link alive
-  link_stats_note_frame();
+  link_stats_note_rx();          // last-frame age; frames_ok waits on parse
   link_stats_set_linked(1);
   if (serial_link_up) return;
   serial_link_up = true;

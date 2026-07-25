@@ -70,6 +70,11 @@ def test_evaluate_bp_gates_drop_and_drain() -> None:
         max_drain_ms=33,
     )
     assert not bad_drop and "drop" in reason
+    bad_parse, reason_parse = evaluate_bp(
+        BpStats(ok=40, drop=0, parse=3, max_avail=100, max_drain_ms=12),
+        max_drain_ms=33,
+    )
+    assert not bad_parse and "parse" in reason_parse
     bad_drain, reason2 = evaluate_bp(
         BpStats(ok=40, drop=0, parse=0, max_avail=100, max_drain_ms=50),
         max_drain_ms=33,

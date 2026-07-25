@@ -13,8 +13,13 @@ extern "C" void link_stats_set_linked(int linked) {
     g_stats.peer_count = g_stats.linked;
 }
 
-extern "C" void link_stats_note_frame(void) {
+extern "C" void link_stats_note_rx(void) {
     g_stats.last_frame_ms = millis();
+}
+
+extern "C" void link_stats_note_frame(void) {
+    // Parse-success counter only — do not bump last_frame here; callers that
+    // already saw a complete line call link_stats_note_rx() first (#677 / qodo).
     if (g_stats.frames_ok < UINT32_MAX) {
         ++g_stats.frames_ok;
     }

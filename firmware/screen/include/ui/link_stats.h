@@ -23,6 +23,9 @@ typedef struct {
 } link_stats_t;
 
 void link_stats_set_linked(int linked);
+// Any complete inbound line (keeps last-frame age fresh for the debug screen).
+void link_stats_note_rx(void);
+// Successfully deserialized JSON (increments frames_ok — host probe hard gate).
 void link_stats_note_frame(void);
 void link_stats_note_overflow(void);
 void link_stats_note_parse_drop(void);
