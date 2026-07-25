@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-07-22
+updated: 2026-07-24
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -13,6 +13,7 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [issue-673-atelier-parta-remainder-2026-07-24.md](issue-673-atelier-parta-remainder-2026-07-24.md) | **#673 CLOSED** by PR #681 (`333ef93a9`): Settings + racing-line + coaching-overlay Part-A remainder derive from `design_tokens`; dead cyan panels deleted; conformance bans numeric `rgbm` palette literals. Lupa Settings draw observed brass/chalk/mute. |
 | [pr-657-resolve-blocked-2026-07-22.md](pr-657-resolve-blocked-2026-07-22.md) | PR #657 resolve-pr blocked on Codex usage limits + branch-specific GitHub Actions silence after `cc83191`. GraphQL threads/resolve-gate clean locally; physical A/B still operator-gated. |
 | [issue-625-init-perturber-ab-prepared-2026-07-22.md](issue-625-init-perturber-ab-prepared-2026-07-22.md) | #625/PR #657 prepared the statistically honest overlay A/B path: seeded adjacent pairs, immutable per-trial reports, uptime/order gates, Wilson + Fisher + paired exact analysis, and `never_live` excluded from the freeze endpoint. Focused + full CI green and exact math reconciled against SciPy. Physical run is gated on `pc` being powered on plus explicit operator authorization to toggle and restore Steam overlay + NVIDIA ShadowPlay. |
 | [issue-603-car-content-preflight-2026-07-15.md](issue-603-car-content-preflight-2026-07-15.md) | **#603 CLOSED** by PR #607 (`123a577`): `auto_drive` validates the effective packed/unpacked data source, root `lods.ini`, and referenced KN5 files before launch; fatal faults persist explicit non-drive evidence excluded from drive/sim-death denominators. Review hardening centralized lazy packed-first access in `CarDataSource`, preserved preset attribution, tolerated malformed encodings/inline comments, and aligned flat member semantics. Merged-main proof: 222 focused tests; healthy BMW exit 0; damaged Porsche exit 2 before launch. |

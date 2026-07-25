@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-23T07:27:35Z
+last_updated: 2026-07-24T23:50:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-673-atelier-parta-remainder-2026-07-24.md
   - AcCopilotTrainer/03_Investigations/pr-657-resolve-blocked-2026-07-22.md
   - AcCopilotTrainer/03_Investigations/pr-637-pause-semantics-review-2026-07-20.md
   - AcCopilotTrainer/03_Investigations/pr-626-resilient-launch-review-2026-07-18.md
@@ -44,6 +45,12 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-24):** PR [#681](https://github.com/agorokh/ac-copilot-trainer/pull/681)
+MERGED [`333ef93a9`](https://github.com/agorokh/ac-copilot-trainer/commit/333ef93a9a39742c2926d2d6f2af35c47cc95eb1)
+— #673 Racing Atelier Part-A remainder (`hud_settings` / `racing_line` tokens + coaching-overlay
+cyan-panel deletion + conformance lock). Issue #673 CLOSED. Detail:
+[[issue-673-atelier-parta-remainder-2026-07-24]].
 
 **Delivered (2026-07-23):** PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657)
 MERGED [`ce70add1e`](https://github.com/agorokh/ac-copilot-trainer/commit/ce70add1edaa700fefaabb27914fbb47a2edeaa2) — #625
