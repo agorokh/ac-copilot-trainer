@@ -626,6 +626,50 @@ def test_calibrate_brake_marks_from_lap_updates_coach_v2(tmp_path, monkeypatch):
     assert any(coach.anchors[i].brake != before[i] for i in before) or coach._driver_brake_points
 
 
+def test_between_lap_plain_frame_does_not_poison_rolling_best(tmp_path, monkeypatch):
+    """#687 daemon: validity-blind plain lap_complete must not fold into rolling-best."""
+    from tools.ai_sidecar.coaching_runtime import build_coach_runtime
+
+    archive = _corner_archive()
+    coach = build_coach_runtime(archive)
+    assert coach is not None and coach.reference_lap_ms is not None
+    monkeypatch.setattr(server, "_coach_runtime", coach)
+    monkeypatch.setattr(
+        server,
+        "_recent_between_lap_fold_keys",
+        server._recent_between_lap_fold_keys.__class__(maxlen=8),
+    )
+    monkeypatch.setattr(
+        server,
+        "_recent_between_lap_advice_keys",
+        server._recent_between_lap_advice_keys.__class__(maxlen=8),
+    )
+    bogus_fast = coach.reference_lap_ms - 5000.0
+    # plain frame: no archive, no isValid — must not fold
+    asyncio.run(
+        server._coach_v2_between_lap(
+            object(),
+            {"lap": 3, "lapTimeMs": bogus_fast},
+            reply_coaching=False,
+        )
+    )
+    assert coach._rolling_best_lap_ms is None
+    assert coach._off_pace_reference is False
+    # archive-backed INVALID re-send: fold with is_valid=False (no rolling-best update)
+    bad = dict(archive)
+    bad["lap"] = {**(archive.get("lap") or {}), "is_valid": False, "lap_ms": bogus_fast}
+    path = _write_lap_archive(tmp_path, bad)
+    asyncio.run(
+        server._coach_v2_between_lap(
+            object(),
+            {"lap": 3, "lapTimeMs": bogus_fast, "archivePath": path},
+            reply_coaching=False,
+        )
+    )
+    assert coach._rolling_best_lap_ms is None
+    assert coach._off_pace_reference is False
+
+
 # ---------------------------------------------------------------- #531 Part D/E server wiring
 def test_cue_payload_carries_audio_routing_by_register(monkeypatch):
     """#531 Part E: urgent/critical cues route authoritative_pc; calm/alert tablet_native."""

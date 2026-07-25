@@ -814,17 +814,17 @@ async def _coach_v2_between_lap(
         key = f"lap:{lap_n}:{lap_ms}"
     else:
         key = str(inbound.get("archivePath") or "") or f"lap:{lap_n}"
-    # Off-pace gate updates on the first sighting; advice emission is once per physical lap.
-    already = key in _recent_between_lap_keys
-    if not already:
-        _recent_between_lap_keys.append(key)
+    # Off-pace fold requires KNOWN validity — a plain lap_complete without archive/trace must
+    # not default to valid and poison _rolling_best_lap_ms before the brainOnly re-send (#687).
     is_valid = True
+    validity_known = False
     if str(inbound.get("archivePath") or "").strip() or (
         isinstance(inbound.get("trace"), dict) and inbound.get("trace", {}).get("samples")
     ):
         try:
             loaded = await asyncio.to_thread(resolve_lap_archive, inbound)
             if isinstance(loaded, dict):
+                validity_known = True
                 lap_meta = loaded.get("lap")
                 if isinstance(lap_meta, dict):
                     if lap_meta.get("is_valid") is False:
@@ -833,9 +833,17 @@ async def _coach_v2_between_lap(
                         lap_ms = lap_meta.get("lap_ms") or lap_meta.get("lapTimeMs")
         except Exception as e:
             logger.info("coach v2 between-lap archive load skipped: %s", e)
-    if not already:
+    else:
+        for flag_key in ("isValid", "is_valid", "valid"):
+            raw = inbound.get(flag_key)
+            if isinstance(raw, bool):
+                is_valid = raw
+                validity_known = True
+                break
+    if validity_known and key not in _recent_between_lap_fold_keys:
+        _recent_between_lap_fold_keys.append(key)
         coach.note_completed_lap(lap_ms, is_valid=is_valid)
-    if already or not is_valid or not reply_coaching:
+    if not is_valid or not reply_coaching or key in _recent_between_lap_advice_keys:
         return
     ranking = inbound.get("improvementRanking")
     if not isinstance(ranking, list):
@@ -855,6 +863,7 @@ async def _coach_v2_between_lap(
         return
     if advice is None:
         return
+    _recent_between_lap_advice_keys.append(key)
     await _safe_send(
         websocket,
         {
@@ -900,8 +909,11 @@ def _brake_calibration_target() -> Any | None:
 #: bounded set of recent keys is kept, not just the last one (PR #525 review). The most recent
 #: reservation is tracked separately so a failed load can roll itself back.
 _recent_brake_cal_keys: deque[str] = deque(maxlen=8)
-#: same physical-lap identity guard for between-lap ``corner_advice`` (plain + brainOnly).
-_recent_between_lap_keys: deque[str] = deque(maxlen=8)
+#: same physical-lap identity guards for between-lap fold / ``corner_advice`` (plain + brainOnly).
+#: Kept separate so a validity-blind plain frame can reserve advice without permanently blocking
+#: an archive-backed fold on the re-send (#687 daemon review).
+_recent_between_lap_fold_keys: deque[str] = deque(maxlen=8)
+_recent_between_lap_advice_keys: deque[str] = deque(maxlen=8)
 
 
 async def _calibrate_brake_marks_from_lap(inbound: dict[str, Any]) -> None:
