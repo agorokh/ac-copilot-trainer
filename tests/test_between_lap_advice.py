@@ -32,8 +32,11 @@ def test_validate_rejects_unknown_corner() -> None:
     refs = _refs(0, 1)
     assert validate_corner_advice(corner=9, text="BRAKE LATER NEXT LAP", refs=refs) is None
     assert validate_corner_advice(corner=1, text="ok", refs=refs) is None  # too short
-    ok = validate_corner_advice(corner=1, text="BRAKE LATER NEXT LAP", refs=refs)
-    assert ok is not None and ok["corner"] == 1 and ok["corner_label"] == "T1"
+    # index 0 → user-facing T1 (matches observer / voice spoken labels)
+    ok0 = validate_corner_advice(corner=0, text="BRAKE LATER NEXT LAP", refs=refs)
+    assert ok0 is not None and ok0["corner"] == 0 and ok0["corner_label"] == "T1"
+    ok1 = validate_corner_advice(corner=1, text="BRAKE LATER NEXT LAP", refs=refs)
+    assert ok1 is not None and ok1["corner"] == 1 and ok1["corner_label"] == "T2"
 
 
 def test_select_focus_prefers_ledger_focus() -> None:
@@ -53,7 +56,8 @@ def test_select_between_lap_rules_fallback_without_ollama(monkeypatch) -> None:
     advice = select_between_lap_advice(refs=refs, ledger=ledger, use_ollama=False)
     assert advice is not None
     assert advice["corner"] == 1
-    assert "T1" in advice["text"] or "NEXT LAP" in advice["text"]
+    assert advice["corner_label"] == "T2"
+    assert "T2" in advice["text"] or "NEXT LAP" in advice["text"]
 
 
 def test_select_between_lap_uses_ranking_when_ledger_empty(monkeypatch) -> None:
@@ -65,4 +69,4 @@ def test_select_between_lap_uses_ranking_when_ledger_empty(monkeypatch) -> None:
         improvement_ranking=[{"corner": 3, "suggestion": "carry more"}],
         use_ollama=False,
     )
-    assert advice is not None and advice["corner"] == 3
+    assert advice is not None and advice["corner"] == 3 and advice["corner_label"] == "T4"

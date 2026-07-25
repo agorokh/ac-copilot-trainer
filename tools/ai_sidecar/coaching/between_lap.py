@@ -25,10 +25,16 @@ def _corner_in_refs(corner: int, refs: Sequence[CornerReference]) -> bool:
     return any(r.index == corner for r in refs)
 
 
+def _turn_label(corner: int) -> str:
+    """User-facing turn label — ``CornerReference.index`` is 0-based; spoken labels are T1.."""
+    return f"T{corner + 1}"
+
+
 def _rules_phrase(root: RootError | None, corner: int) -> str:
+    label = _turn_label(corner)
     if root is not None and root != RootError.NONE and root in PHRASE:
-        return f"NEXT LAP T{corner}: {PHRASE[root]}"
-    return f"NEXT LAP: FOCUS T{corner}"
+        return f"NEXT LAP {label}: {PHRASE[root]}"
+    return f"NEXT LAP: FOCUS {label}"
 
 
 def select_focus_corner(
@@ -92,7 +98,7 @@ def validate_corner_advice(
         return None
     if len(cleaned) > 120:
         cleaned = cleaned[:120].rstrip()
-    label = f"T{corner}"
+    label = _turn_label(corner)
     if len(label) > _CORNER_LABEL_MAX:
         return None
     return {"corner": corner, "corner_label": label, "text": cleaned}
@@ -112,12 +118,13 @@ def compose_between_lap_advice(
     if use_ollama and debrief_feature_enabled():
         root_s = str(root) if root and root != RootError.NONE else "general"
         phrase = PHRASE.get(root, "improve the corner") if root else "improve the corner"
+        label = _turn_label(corner)
         prompt = (
             "You coach Assetto Corsa. Reply with ONE short next-lap focus command.\n"
             "RULES: Max 10 words. UPPERCASE. Name the corner as "
-            f"T{corner}. Use verbs BRAKE/LIFT/CARRY/TURN/HOLD only.\n"
+            f"{label}. Use verbs BRAKE/LIFT/CARRY/TURN/HOLD only.\n"
             f"Focus root={root_s}; suggested={phrase}\n"
-            f"NOW: next-lap focus for T{corner} ->"
+            f"NOW: next-lap focus for {label} ->"
         )
         raw = call_ollama_generate(
             prompt,
