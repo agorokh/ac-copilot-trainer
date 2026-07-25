@@ -104,6 +104,7 @@ from tools.ai_sidecar.external_protocol import (
 from tools.ai_sidecar.protocol import (
     EVENT_ANALYSIS_ERROR,
     EVENT_COACHING_RESPONSE,
+    EVENT_CORNER_ADVICE,
     EVENT_CORNER_QUERY,
     PROTOCOL_VERSION,
     build_brain_followup,
@@ -312,6 +313,10 @@ def public_voice_runtime_status() -> dict[str, object]:
         if frontier_reason and not re.fullmatch(r"[a-z0-9_]+", frontier_reason):
             public_frontier["reason"] = "alien_frontier_error"
         status["coach_frontier"] = public_frontier
+    # #675 Part 4 — machine-code suppress reason for timing reports (no paths / free text).
+    suppress = getattr(_coach_runtime, "cue_suppress_reason", "") or ""
+    if isinstance(suppress, str) and re.fullmatch(r"[a-z0-9_]+", suppress):
+        status["cue_suppress_reason"] = suppress
     return status
 
 
@@ -792,6 +797,87 @@ async def _send_brain_followup(websocket: Any, inbound: dict[str, Any]) -> None:
     await _safe_send(websocket, followup)
 
 
+async def _coach_v2_between_lap(
+    websocket: Any, inbound: dict[str, Any], *, reply_coaching: bool
+) -> None:
+    """#675 Parts 2/4: update off-pace gate and emit one between-lap ``corner_advice``.
+
+    Fail-closed: invalid/unknown corners and empty LLM text never dispatch. Does not raise into
+    the websocket loop — calibration/advice gaps are logged, not swallowed into a silent success.
+    Deduped across the plain ``lap_complete`` + archive-backed ``brainOnly`` re-send.
+    """
+    coach = _coach_runtime
+    if coach is None:
+        return
+    lap_n, lap_ms = inbound.get("lap"), inbound.get("lapTimeMs")
+    if lap_n is not None and lap_ms is not None:
+        key = f"lap:{lap_n}:{lap_ms}"
+    else:
+        key = str(inbound.get("archivePath") or "") or f"lap:{lap_n}"
+    # Off-pace fold requires KNOWN validity — a plain lap_complete without archive/trace must
+    # not default to valid and poison _rolling_best_lap_ms before the brainOnly re-send (#687).
+    is_valid = True
+    validity_known = False
+    if str(inbound.get("archivePath") or "").strip() or (
+        isinstance(inbound.get("trace"), dict) and inbound.get("trace", {}).get("samples")
+    ):
+        try:
+            loaded = await asyncio.to_thread(resolve_lap_archive, inbound)
+            if isinstance(loaded, dict):
+                validity_known = True
+                lap_meta = loaded.get("lap")
+                if isinstance(lap_meta, dict):
+                    if lap_meta.get("is_valid") is False:
+                        is_valid = False
+                    if lap_ms is None:
+                        lap_ms = lap_meta.get("lap_ms") or lap_meta.get("lapTimeMs")
+        except Exception as e:
+            logger.info("coach v2 between-lap archive load skipped: %s", e)
+    else:
+        for flag_key in ("isValid", "is_valid", "valid"):
+            raw = inbound.get(flag_key)
+            if isinstance(raw, bool):
+                is_valid = raw
+                validity_known = True
+                break
+    if validity_known and key not in _recent_between_lap_fold_keys:
+        _recent_between_lap_fold_keys.append(key)
+        coach.note_completed_lap(lap_ms, is_valid=is_valid)
+    if not is_valid or not reply_coaching or key in _recent_between_lap_advice_keys:
+        return
+    ranking = inbound.get("improvementRanking")
+    if not isinstance(ranking, list):
+        ranking = None
+    try:
+        from tools.ai_sidecar.coaching.between_lap import select_between_lap_advice
+
+        advice = await asyncio.to_thread(
+            select_between_lap_advice,
+            refs=coach.refs,
+            ledger=coach.ledger,
+            improvement_ranking=ranking,
+            use_ollama=True,
+        )
+    except Exception:
+        logger.exception("coach v2 between-lap selector failed")
+        return
+    if advice is None:
+        return
+    _recent_between_lap_advice_keys.append(key)
+    await _safe_send(
+        websocket,
+        {
+            "protocol": PROTOCOL_VERSION,
+            "event": EVENT_CORNER_ADVICE,
+            "corner": advice["corner_label"],
+            "cornerIndex": advice["corner"],
+            "lap": inbound.get("lap"),
+            "text": advice["text"],
+            "slot": "between_lap",
+        },
+    )
+
+
 def _brake_calibration_enabled() -> bool:
     """Per-driver brake-mark calibration (issue #522): on by default, ``AC_COPILOT_BRAKE_CAL=0``
     disables."""
@@ -799,14 +885,22 @@ def _brake_calibration_enabled() -> bool:
 
 
 def _brake_calibration_active() -> bool:
-    """Calibration folds into the LEGACY observer's marks — the default live cue producer.
+    """Calibration folds into the live cue producer (#522 legacy observer, #675 Coach v2).
 
-    With coach v2 active (``AC_COPILOT_COACH_V2=1``), ``_publish_coaching_cues`` routes
-    telemetry through ``_coach_runtime`` instead, so folding laps into ``_observer`` would log
-    "calibrated" while having zero effect on the spoken cues — misleading. Skip; v2-side
-    calibration is tracked as #522 V2 scope (PR #525 review).
+    Alien-line launches set ``AC_COPILOT_COACH_V2=1`` (``supervisor.py``); without a v2-side
+    calibrate path that would silently bypass per-driver brake marks. Prefer ``_coach_runtime``
+    when present so spoken cue anchors actually move.
     """
-    return _observer is not None and _coach_runtime is None and _brake_calibration_enabled()
+    if not _brake_calibration_enabled():
+        return False
+    return _coach_runtime is not None or _observer is not None
+
+
+def _brake_calibration_target() -> Any | None:
+    """The producer whose marks/anchors calibration must update to affect spoken cues."""
+    if _coach_runtime is not None:
+        return _coach_runtime
+    return _observer
 
 
 #: recent lap_complete identities already folded into calibration — the plain lap_complete frame
@@ -815,18 +909,24 @@ def _brake_calibration_active() -> bool:
 #: bounded set of recent keys is kept, not just the last one (PR #525 review). The most recent
 #: reservation is tracked separately so a failed load can roll itself back.
 _recent_brake_cal_keys: deque[str] = deque(maxlen=8)
+#: same physical-lap identity guards for between-lap fold / ``corner_advice`` (plain + brainOnly).
+#: Kept separate so a validity-blind plain frame can reserve advice without permanently blocking
+#: an archive-backed fold on the re-send (#687 daemon review).
+_recent_between_lap_fold_keys: deque[str] = deque(maxlen=8)
+_recent_between_lap_advice_keys: deque[str] = deque(maxlen=8)
 
 
 async def _calibrate_brake_marks_from_lap(inbound: dict[str, Any]) -> None:
-    """Fold the driver's completed lap into the observer's per-zone brake-mark EMA (#522).
+    """Fold the driver's completed lap into the live producer's brake-mark EMA (#522 / #675).
 
     Runs as a background task on lap_complete: loads the lap archive off the loop (safe-path
     validated by :func:`resolve_lap_archive`), skips explicitly-invalid laps (a cut lap's brake
     points are not calibration data), and applies the EMA update on the event loop — the same
-    loop that calls ``observer.observe``, so there is no cross-thread mutation.
+    loop that calls ``observe``, so there is no cross-thread mutation. Targets Coach v2 when
+    active so alien-line launches do not silently bypass calibration.
     """
-    observer = _observer
-    if observer is None:
+    target = _brake_calibration_target()
+    if target is None:
         return
     # A frame with neither an inline trace nor an archivePath can never resolve: return WITHOUT
     # reserving the dedup key, or the archive-backed brainOnly re-send racing this task would see
@@ -877,13 +977,18 @@ async def _calibrate_brake_marks_from_lap(inbound: dict[str, Any]) -> None:
     track_obj = archive.get("track")
     track_id = track_obj.get("id") if isinstance(track_obj, dict) else None
     track_layout = track_obj.get("layout") if isinstance(track_obj, dict) else None
-    updated = observer.calibrate_from_driver_lap(
+    updated = target.calibrate_from_driver_lap(
         trace,
         track_id=track_id if isinstance(track_id, str) else None,
         track_layout=track_layout if isinstance(track_layout, str) else None,
     )
     if updated:
-        logger.info("brake marks calibrated from the driver's lap: %d zone(s) updated", updated)
+        producer = "coach_v2" if target is _coach_runtime else "observer"
+        logger.info(
+            "brake marks calibrated from the driver's lap (%s): %d zone(s) updated",
+            producer,
+            updated,
+        )
 
 
 async def _safe_send(websocket: Any, payload: dict[str, Any]) -> None:
@@ -2531,6 +2636,13 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     cal_task = asyncio.create_task(_calibrate_brake_marks_from_lap(data))
                     _background_tasks.add(cal_task)
                     cal_task.add_done_callback(_background_tasks.discard)
+                # #675 Parts 2/4: off-pace gate always; between-lap corner_advice when coaching on.
+                if _coach_runtime is not None:
+                    v2_task = asyncio.create_task(
+                        _coach_v2_between_lap(websocket, data, reply_coaching=reply_coaching)
+                    )
+                    _background_tasks.add(v2_task)
+                    v2_task.add_done_callback(_background_tasks.discard)
 
             # Archive-backed activation frames are emitted after Lua knows the final archive path.
             # They should only run the brain, not the generic rules ack or Ollama narration.

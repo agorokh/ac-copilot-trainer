@@ -41,9 +41,23 @@ from tools.ai_sidecar.driver_progression import (
     cue_policy_from_profile,
     default_cue_policy,
 )
-from tools.ai_sidecar.lap_dynamics import CornerSignature, corner_signatures, lap_trace_from_archive
-from tools.ai_sidecar.realtime_observer import Advisory
-from tools.ai_sidecar.track_reference import CornerReference, build_references
+from tools.ai_sidecar.lap_dynamics import (
+    CornerSignature,
+    LapTrace,
+    corner_signatures,
+    lap_trace_from_archive,
+)
+from tools.ai_sidecar.realtime_observer import (
+    _CAL_EMA_ALPHA,
+    CAL_MATCH_TOL_M,
+    Advisory,
+    _signed_spline_delta,
+)
+from tools.ai_sidecar.track_reference import (
+    CornerReference,
+    build_references,
+    sustained_brake_onsets,
+)
 
 #: Roots that demand more speed / later braking — suppressed at the grip ceiling (P3).
 #: LATE_BRAKE maps to "Brake earlier." and is NOT grip-gated (still valid at the grip ceiling).
@@ -128,6 +142,17 @@ class CoachRuntime:
             "corners": [],
         }
     )
+    brake_lead_s: float = _DEFAULT_LEAD_S
+    track_id: str | None = None
+    track_layout: str | None = None
+    reference_lap_ms: float | None = None
+    #: per-corner driver brake action-point EMA (issue #675 Parts 0/3): (spline, n_laps).
+    _driver_brake_points: dict[int, tuple[float, int]] = field(default_factory=dict)
+    _rolling_best_lap_ms: float | None = None
+    #: Part 4 — when the active reference is slower than the driver's rolling best, reference-
+    #: derived brake/turn cues are suppressed (visible via :attr:`cue_suppress_reason`).
+    _off_pace_reference: bool = False
+    cue_suppress_reason: str = ""
     _pass: dict[int, _PassState] = field(default_factory=dict)
     _last_spline: float | None = None
     _last_lap: float | None = None
@@ -145,6 +170,8 @@ class CoachRuntime:
 
         Without this, stale ``_lap``/``_last_spline``/per-corner passes + a RETIRED ledger carry
         across stints, which silently suppresses cues until the sidecar process is restarted.
+        Per-driver brake calibration and the rolling-best / off-pace gate persist
+        (driver knowledge).
         """
         self.ledger.clear_session()
         self._pass = {r.index: _PassState() for r in self.refs}
@@ -154,6 +181,101 @@ class CoachRuntime:
         self._pending_wrap_finals = False
         self._pending_pre_lap = None
         self.ledger.begin_lap(self._lap)
+
+    def note_completed_lap(self, lap_time_ms: float | None, *, is_valid: bool = True) -> None:
+        """Fold a finished lap into the rolling-best / off-pace-reference gate (#675 Part 4)."""
+        if not is_valid or lap_time_ms is None:
+            return
+        try:
+            ms = float(lap_time_ms)
+        except (TypeError, ValueError):
+            return
+        if ms <= 0.0 or ms != ms:
+            return
+        if self._rolling_best_lap_ms is None or ms < self._rolling_best_lap_ms:
+            self._rolling_best_lap_ms = ms
+        self._refresh_off_pace_gate()
+
+    def _refresh_off_pace_gate(self) -> None:
+        ref = self.reference_lap_ms
+        best = self._rolling_best_lap_ms
+        if ref is None or best is None:
+            self._off_pace_reference = False
+            self.cue_suppress_reason = ""
+            return
+        if ref > best:
+            self._off_pace_reference = True
+            self.cue_suppress_reason = "reference_slower_than_rolling_best"
+        else:
+            self._off_pace_reference = False
+            self.cue_suppress_reason = ""
+
+    def calibrate_from_driver_lap(
+        self,
+        lap: LapTrace,
+        *,
+        track_id: str | None = None,
+        track_layout: str | None = None,
+    ) -> int:
+        """Fold one valid driver lap into per-corner brake action-point EMAs (#675 Parts 0/3).
+
+        Mirrors :meth:`RealtimeObserver.calibrate_from_driver_lap` guards (track/layout match,
+        metric tolerance, EMA alpha) but updates the v2 cue producer: PRIME brake anchors and the
+        SAVE ``brake_point_spline`` on :attr:`ref_sigs`. Returns the number of corners updated.
+        """
+        if track_id and self.track_id and track_id != self.track_id:
+            return 0
+        if track_layout and self.track_layout and track_layout != self.track_layout:
+            return 0
+        tol = CAL_MATCH_TOL_M / max(self.track_length_m, 1.0)
+        updated = 0
+        for ref in self.refs:
+            sig = self.ref_sigs.get(ref.index)
+            if sig is None or sig.brake_point_spline is None:
+                continue
+            cur = self._driver_brake_points.get(ref.index)
+            anchor = cur[0] if cur is not None else sig.brake_point_spline
+            lo_a, hi_a = anchor - tol, anchor + 2.0 * tol
+            if lo_a < 0.0:
+                windows = [(lo_a % 1.0, 1.0), (0.0, hi_a)]
+            elif hi_a > 1.0:
+                windows = [(lo_a, 1.0), (0.0, hi_a % 1.0)]
+            else:
+                windows = [(lo_a, hi_a)]
+            onsets: list[float] = []
+            seen: set[float] = set()
+            for w_lo, w_hi in windows:
+                for onset in sustained_brake_onsets(lap, w_lo, w_hi):
+                    if onset not in seen:
+                        seen.add(onset)
+                        onsets.append(onset)
+            if not onsets:
+                continue
+            best = min(onsets, key=lambda o: abs(_signed_spline_delta(o, anchor)))
+            if abs(_signed_spline_delta(best, anchor)) > tol:
+                continue
+            if cur is None:
+                candidate = best % 1.0
+                n = 1
+            else:
+                ema, n_prev = cur
+                candidate = (ema + _CAL_EMA_ALPHA * _signed_spline_delta(best, ema)) % 1.0
+                n = n_prev + 1
+            self._driver_brake_points[ref.index] = (candidate, n)
+            self._apply_brake_calibration(ref.index, candidate)
+            updated += 1
+        return updated
+
+    def _apply_brake_calibration(self, corner_idx: int, brake_point: float) -> None:
+        """Move the PRIME fire point and SAVE action point to a calibrated brake mark."""
+        sig = self.ref_sigs.get(corner_idx)
+        v_ref = sig.entry_speed_kmh if sig is not None else 150.0
+        lead = _lead_spline(v_ref, self.track_length_m, self.brake_lead_s)
+        anc = self.anchors.get(corner_idx)
+        if anc is not None:
+            anc.brake = (brake_point - lead) % 1.0
+        if sig is not None:
+            self.ref_sigs[corner_idx] = replace(sig, brake_point_spline=brake_point % 1.0)
 
     def _advance_lap_after_wrap(self, out: list[Advisory]) -> None:
         """Finalize open passes, then advance the ledger lap (speak-set needs fresh diagnoses)."""
@@ -209,10 +331,12 @@ class CoachRuntime:
             anc = self.anchors[r.index]
 
             # 1. PRIME — fire on crossing the armed root's anchor (before the action point).
+            # Part 4 off-pace: still advance ledger state (due_prime spends budget) but do not speak
+            # reference-derived brake/turn cues when the reference itself is slower than the driver.
             root = self.ledger.armed_root(r.index)
             if root is not None and _crossed(self._last_spline, spline, anc.for_root(root)):
                 spoken = self.ledger.due_prime(r.index)
-                if spoken is not None:
+                if spoken is not None and not self._off_pace_reference:
                     gst = self.ledger.state(r.index)
                     reg = gst.register if gst else "urgent"
                     inten = gst.intensity if gst else 0.5
@@ -248,10 +372,12 @@ class CoachRuntime:
         _accumulate_core(st, r, spline, speed, brake, throttle, steer)
 
         # SAVE: past the reference brake point, still coasting (no brake), carrying speed → "Brake!"
+        # Suppressed under Part 4 off-pace (would coach toward a slower reference).
         ref_sig = self.ref_sigs.get(r.index)
         ref_bp = ref_sig.brake_point_spline if ref_sig else None
         if (
-            not st.save_fired
+            not self._off_pace_reference
+            and not st.save_fired
             and ref_bp is not None
             and spline > ref_bp + _SAVE_LATE_BRAKE_MARGIN
             and spline < r.apex_spline
@@ -579,11 +705,18 @@ def build_coach_runtime(
     geom = {s.index: s for s in corner_signatures(ref_lap)}  # for anchor timing only
     track_obj = reference_archive.get("track")
     track_m = _DEFAULT_TRACK_M
+    track_id: str | None = None
+    track_layout: str | None = None
     if isinstance(track_obj, dict):
         try:
             track_m = float(track_obj.get("lengthM") or _DEFAULT_TRACK_M)
         except (TypeError, ValueError):
             track_m = _DEFAULT_TRACK_M
+        tid = track_obj.get("id")
+        track_id = tid if isinstance(tid, str) and tid.strip() else None
+        tlayout = track_obj.get("layout")
+        track_layout = tlayout if isinstance(tlayout, str) and tlayout.strip() else None
+    reference_lap_ms = _archive_lap_ms(reference_archive)
     anchors: dict[int, _Anchors] = {}
     for r in refs:
         sig = geom.get(r.index)
@@ -695,7 +828,29 @@ def build_coach_runtime(
         ledger=ledger,
         cue_policy=policy,
         frontier=frontier,
+        brake_lead_s=lead_s,
+        track_id=track_id,
+        track_layout=track_layout,
+        reference_lap_ms=reference_lap_ms,
     )
+
+
+def _archive_lap_ms(archive: Mapping[str, Any]) -> float | None:
+    """Best-effort lap time (ms) from a reference/driver archive ``lap`` block."""
+    lap = archive.get("lap")
+    if not isinstance(lap, Mapping):
+        return None
+    for key in ("lap_ms", "lapTimeMs", "time_ms", "lap_time_ms"):
+        raw = lap.get(key)
+        if raw is None or isinstance(raw, bool):
+            continue
+        try:
+            ms = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if ms > 0.0 and ms == ms:
+            return ms
+    return None
 
 
 def _env_int(name: str, default: int, *, min_value: int = 0) -> int:

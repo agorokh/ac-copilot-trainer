@@ -294,3 +294,34 @@ def test_wrap_finalizes_passes_before_begin_lap():
     assert r.index in rt.ledger._speak_set
     assert rt.ledger.state(r.index) is not None
     assert rt.ledger.state(r.index).root is not RootError.NONE
+
+
+def test_off_pace_reference_suppresses_prime_and_save():
+    """#675 Part 4: when the reference is slower than the driver's rolling best, mute cues."""
+    from tools.ai_sidecar.lap_dynamics import lap_trace_from_archive
+
+    archive = _ref()
+    rt = build_coach_runtime(archive)
+    assert rt is not None
+    assert rt.reference_lap_ms is not None
+    # Driver posts a faster lap than the reference → reference is off-pace.
+    rt.note_completed_lap(rt.reference_lap_ms - 1500.0, is_valid=True)
+    assert rt._off_pace_reference is True
+    assert rt.cue_suppress_reason == "reference_slower_than_rolling_best"
+
+    rt.ledger.assess_laps = 0
+    r = next(ref for ref in rt.refs if rt.ref_sigs[ref.index].brake_point_spline is not None)
+    st = rt.ledger._states.setdefault(r.index, CornerState(r.index))
+    st.status = Status.ARMED
+    st.root = RootError.EARLY_BRAKE
+    st.time_lost_s = 5.0
+    rt.ledger.begin_lap(3)
+    rt.ledger._speak_set = {r.index}
+    fire_at = rt.anchors[r.index].brake
+    rt._last_spline = (fire_at - 0.01) % 1.0
+    advs = rt.observe({"spline": fire_at + 0.001, "speed": 140.0, "brake": 0.0, "lap": 3})
+    assert not any(a.detail.get("coach") == "prime" for a in advs)
+
+    # Calibration still folds (Part 0/3) even under the off-pace gate.
+    n = rt.calibrate_from_driver_lap(lap_trace_from_archive(archive), track_id="magione")
+    assert n >= 0  # may be 0 if onsets don't match windows; must not raise
