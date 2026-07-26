@@ -130,14 +130,14 @@ def test_checked_in_registry_has_expected_authoritative_rows() -> None:
     ],
 )
 def test_invalid_registry_rejected(tmp_path: Path, payload: dict) -> None:
-    path = tmp_path / "bad.yml"
+    path = tmp_path / "bad.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(CarClassRegistryError):
         load_registry(path)
 
 
 def test_duplicate_registry_key_rejected(tmp_path: Path) -> None:
-    path = tmp_path / "duplicate.yml"
+    path = tmp_path / "duplicate.json"
     path.write_text(
         '{"version":1,"default_class":"road","overrides":{"car":"road","car":"race"}}',
         encoding="utf-8",

@@ -238,14 +238,7 @@ namespace AcCopilot.CarEnrichment
             string topic = Value(frame, "topic") as string;
             if (String.Equals(topic, "connection", StringComparison.Ordinal))
             {
-                long previous = Interlocked.Read(ref lastConnectionUtcTicks);
-                long now = DateTime.UtcNow.Ticks;
-                if (previous == 0
-                    || new TimeSpan(now - previous).TotalMilliseconds > TrainerFreshMilliseconds)
-                {
-                    ClearIdentity();
-                }
-                Interlocked.Exchange(ref lastConnectionUtcTicks, now);
+                Interlocked.Exchange(ref lastConnectionUtcTicks, DateTime.UtcNow.Ticks);
                 return;
             }
             if (!String.Equals(topic, "session", StringComparison.Ordinal))

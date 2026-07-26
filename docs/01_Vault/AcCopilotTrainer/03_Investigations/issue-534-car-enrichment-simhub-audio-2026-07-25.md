@@ -38,7 +38,7 @@ Live dependencies:
 The branch `feat/issue-534-car-class-enrichment` establishes:
 
 - a stdlib-only, override-first Python resolver with a versioned,
-  JSON-compatible YAML authority;
+  JSON authority;
 - the existing replayable `session` snapshot as the one identity stream,
   enriched before race-status consumption, caching, and fan-out;
 - direct tablet consumption in the header;

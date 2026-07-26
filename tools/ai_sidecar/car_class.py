@@ -20,7 +20,7 @@ from typing import Any
 ENV_AC_ROOT = "AC_COPILOT_AC_ROOT"
 DEFAULT_AC_ROOT = Path(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa")
 DEFAULT_CLASS = "road"
-REGISTRY_PATH = Path(__file__).with_name("car_class_overrides.yml")
+REGISTRY_PATH = Path(__file__).with_name("car_class_overrides.json")
 
 CAR_CLASSES: frozenset[str] = frozenset(
     {
@@ -82,7 +82,7 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 @lru_cache(maxsize=8)
 def load_registry(path: str | Path = REGISTRY_PATH) -> CarClassRegistry:
-    """Load the JSON-compatible YAML registry without a runtime PyYAML dependency."""
+    """Load the versioned JSON registry without adding a runtime parser dependency."""
 
     registry_path = Path(path)
     try:

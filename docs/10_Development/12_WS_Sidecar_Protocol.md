@@ -139,7 +139,7 @@ receive the same enriched snapshot through the existing identity cache. The
 cache is invalidated when the producing Lua peer disconnects.
 
 The resolver reads `ui_car.json` under `AC_COPILOT_AC_ROOT`, applies
-`tools/ai_sidecar/car_class_overrides.yml` first, then deterministic metadata
+`tools/ai_sidecar/car_class_overrides.json` first, then deterministic metadata
 rules, then the conservative `road` default. Run an installed-fleet audit with:
 
 ```bash

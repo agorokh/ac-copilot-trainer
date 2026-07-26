@@ -130,7 +130,7 @@ include = ["ac_copilot_trainer*", "tools*"]
 
 [tool.setuptools.package-data]
 # Ship the native-OCR PowerShell helper so TrackTitanScreenOracle resolves it in wheel/non-editable installs.
-"tools.ai_sidecar" = ["*.ps1", "*.yml"]
+"tools.ai_sidecar" = ["*.ps1", "*.json"]
 # Ship the tablet voice endpoint page so /tablet/voice works in wheel/non-editable installs (#511 Part D).
 "tools.ai_sidecar.voice" = ["web/*.html"]
 # Ship the tablet GT dashboard page + vendored fonts so /tablet/dash works in wheel installs (#531).

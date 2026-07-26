@@ -39,6 +39,14 @@ def test_bridge_subscribes_to_authoritative_identity_and_fails_closed() -> None:
     assert "ConnectAsync" not in data_update
 
 
+def test_connection_heartbeat_preserves_last_session_identity() -> None:
+    connection_branch = SOURCE.split('if (String.Equals(topic, "connection"', 1)[1].split(
+        'if (!String.Equals(topic, "session"', 1
+    )[0]
+    assert "lastConnectionUtcTicks" in connection_branch
+    assert "ClearIdentity" not in connection_branch
+
+
 def test_bridge_never_writes_or_reconfigures_simhub_profiles() -> None:
     assert "File.Write" not in SOURCE
     assert "ShakeITBassShakersSettingsV2" not in SOURCE

@@ -10,7 +10,7 @@ trainer publishes only `car_id`; the sidecar resolves and enriches the existing
 Resolution is deterministic and ordered:
 
 1. Exact, case-insensitive entry in
-   `tools/ai_sidecar/car_class_overrides.yml`.
+   `tools/ai_sidecar/car_class_overrides.json`.
 2. Normalized `ui_car.json` `class`, `tags`, and `specs` metadata.
 3. Conservative `road` fallback when metadata is absent, malformed, or unknown.
 
@@ -21,9 +21,9 @@ The stable vocabulary is:
 
 Engine placement is never guessed from drive layout, power, or mass. AC's GT
 metadata does not encode it reliably, so those facts belong in the override
-registry. The registry is JSON-compatible YAML so the sidecar and frozen
-launcher remain stdlib-only; malformed versioned data fails explicitly in
-tests. Unsafe car IDs cannot escape `content/cars`.
+registry. The registry is versioned JSON so its extension matches the strict
+stdlib parser used by the sidecar and frozen launcher; malformed data fails
+explicitly in tests. Unsafe car IDs cannot escape `content/cars`.
 
 The sidecar resolves once per `session` identity event, not on high-rate
 telemetry. It publishes class, provenance, registry version, and the original
