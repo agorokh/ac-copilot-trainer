@@ -1,15 +1,16 @@
 ---
 type: investigation
-status: active
+status: resolved
 memory_tier: canonical
 created: 2026-07-03
-updated: 2026-07-03
+updated: 2026-07-25
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/381
 relates_to:
   - AcCopilotTrainer/01_Decisions/voice-intensity-register-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-441-voice-signature-gate-2026-07-01.md
   - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/03_Investigations/issue-381-brake-articulation-closure-2026-07-25.md
 ---
 
 # Issue #381 — intensity scaling acoustically verified; at-wheel listen still human-gated (2026-07-03)
