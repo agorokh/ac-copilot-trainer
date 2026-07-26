@@ -86,6 +86,25 @@ def test_bridge_shutdown_invalidates_worker_before_deferred_disposal() -> None:
     )
     assert "IsCurrentGeneration(generation)" in SOURCE
     assert "ApplySnapshot(message, generation)" in SOURCE
+    assert "private readonly object lifecycleGate = new object();" in SOURCE
+    apply_branch = SOURCE.split("private bool ApplySnapshot", 1)[1].split(
+        "private Dictionary<string, object> ParseObject", 1
+    )[0]
+    assert "lock (lifecycleGate)" in apply_branch
+    assert apply_branch.index("lock (lifecycleGate)") < apply_branch.index(
+        "Interlocked.Exchange(\n                        ref lastConnectionTimestamp"
+    )
+    assert apply_branch.index("lock (lifecycleGate)") < apply_branch.index(
+        "Interlocked.Exchange(\n                    ref carClass"
+    )
+    assert "MarkSidecarConnected(generation)" in SOURCE
+    mark_connected = SOURCE.split("private bool MarkSidecarConnected", 1)[1].split(
+        "private string CurrentCarClass", 1
+    )[0]
+    assert "lock (lifecycleGate)" in mark_connected
+    assert mark_connected.index("IsCurrentGeneration(generation)") < mark_connected.index(
+        "sidecarConnected = true;"
+    )
 
 
 def test_bridge_uses_launcher_resolved_endpoint_and_resets_backoff_on_handshake() -> None:
