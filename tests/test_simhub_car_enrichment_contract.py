@@ -42,12 +42,28 @@ def test_bridge_subscribes_to_authoritative_identity_and_fails_closed() -> None:
     assert "ConnectAsync" not in data_update
 
 
-def test_connection_heartbeat_preserves_last_session_identity() -> None:
+def test_connection_heartbeat_preserves_identity_only_within_fresh_epoch() -> None:
     connection_branch = SOURCE.split('if (String.Equals(topic, "connection"', 1)[1].split(
         'if (!String.Equals(topic, "session"', 1
     )[0]
     assert "lastConnectionTimestamp" in connection_branch
-    assert "ClearIdentity" not in connection_branch
+    assert "bool wasFresh = TrainerIsFresh();" in connection_branch
+    assert "if (!wasFresh || !TrainerIsFresh())" in connection_branch
+    assert "ClearIdentity();" in connection_branch
+
+
+def test_bridge_shutdown_invalidates_worker_before_deferred_disposal() -> None:
+    end_branch = SOURCE.split("public void End", 1)[1].split(
+        "private async Task RunAsync", 1
+    )[0]
+    assert "Interlocked.Increment(ref lifecycleGeneration);" in end_branch
+    assert "runningWorker.Wait(TimeSpan.FromSeconds(2))" in end_branch
+    assert "runningWorker.ContinueWith(" in end_branch
+    assert end_branch.index("Interlocked.Increment(ref lifecycleGeneration);") < end_branch.index(
+        "source.Cancel();"
+    )
+    assert "IsCurrentGeneration(generation)" in SOURCE
+    assert "ApplySnapshot(message, generation)" in SOURCE
 
 
 def test_bridge_uses_launcher_resolved_endpoint_and_resets_backoff_on_handshake() -> None:
@@ -64,6 +80,8 @@ def test_bridge_uses_launcher_resolved_endpoint_and_resets_backoff_on_handshake(
     assert '"AC Copilot Trainer"' in SOURCE
     assert '"GamePoint"' in SOURCE
     assert '"settings.json"' in SOURCE
+    assert 'Value(settings, "sidecar_port")' in SOURCE
+    assert 'Value(settings, "port")' not in SOURCE
     assert "File.ReadAllText(path)" in SOURCE
     hello_branch = SOURCE.split("if (!IsHelloAck(hello))", 1)[1].split(
         "sidecarConnected = true", 1
