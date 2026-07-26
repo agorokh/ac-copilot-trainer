@@ -1,0 +1,354 @@
+using GameReaderCommon;
+using SimHub.Plugins;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net.WebSockets;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Web.Script.Serialization;
+
+namespace AcCopilot.CarEnrichment
+{
+    [PluginDescription("Publishes AC Copilot's authoritative car enrichment to SimHub.")]
+    [PluginAuthor("AC Copilot Trainer")]
+    [PluginName("AC Copilot car enrichment")]
+    public sealed class AcCopilotDataPlugin : IPlugin, IDataPlugin
+    {
+        private const string UnknownClass = "unknown";
+        private const int TrainerFreshMilliseconds = 3500;
+        private const int MaximumFrameBytes = 65536;
+
+        private readonly JavaScriptSerializer serializer = new JavaScriptSerializer();
+        private CancellationTokenSource cancellation;
+        private Task worker;
+        private string carClass = UnknownClass;
+        private string carId = "";
+        private string classSource = "";
+        private int registryVersion;
+        private long lastConnectionUtcTicks;
+        private volatile bool sidecarConnected;
+
+        public PluginManager PluginManager { get; set; }
+
+        public void Init(PluginManager pluginManager)
+        {
+            this.AttachDelegate("CarClass", () => CurrentCarClass());
+            this.AttachDelegate("CarId", () => CurrentCarId());
+            this.AttachDelegate("ClassSource", () => CurrentClassSource());
+            this.AttachDelegate("RegistryVersion", () => CurrentRegistryVersion());
+            this.AttachDelegate("SidecarConnected", () => sidecarConnected);
+            this.AttachDelegate("TrainerConnected", () => TrainerIsFresh());
+
+            cancellation = new CancellationTokenSource();
+            worker = Task.Run(() => RunAsync(cancellation.Token));
+            SimHub.Logging.Current.Info("AC Copilot car enrichment bridge started");
+        }
+
+        public void DataUpdate(PluginManager pluginManager, ref GameData data)
+        {
+            // Network work stays entirely off SimHub's game-data critical path.
+        }
+
+        public void End(PluginManager pluginManager)
+        {
+            if (cancellation != null)
+            {
+                cancellation.Cancel();
+            }
+            if (worker != null)
+            {
+                try
+                {
+                    worker.Wait(TimeSpan.FromSeconds(2));
+                }
+                catch (AggregateException)
+                {
+                    // Cancellation and socket teardown are expected during SimHub exit.
+                }
+            }
+            ClearConnection();
+            if (cancellation != null)
+            {
+                cancellation.Dispose();
+            }
+            SimHub.Logging.Current.Info("AC Copilot car enrichment bridge stopped");
+        }
+
+        private async Task RunAsync(CancellationToken token)
+        {
+            int retryMilliseconds = 500;
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    await ConnectAndConsumeAsync(token).ConfigureAwait(false);
+                    retryMilliseconds = 500;
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception error)
+                {
+                    SimHub.Logging.Current.Warn(
+                        "AC Copilot car enrichment sidecar connection failed: " + error.Message);
+                }
+                finally
+                {
+                    ClearConnection();
+                }
+
+                try
+                {
+                    await Task.Delay(retryMilliseconds, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                retryMilliseconds = Math.Min(retryMilliseconds * 2, 5000);
+            }
+        }
+
+        private async Task ConnectAndConsumeAsync(CancellationToken token)
+        {
+            using (ClientWebSocket socket = new ClientWebSocket())
+            {
+                socket.Options.SetRequestHeader("X-AC-Copilot-Client", "simhub-car-enrichment");
+                string authToken = Environment.GetEnvironmentVariable("AC_COPILOT_SIDECAR_TOKEN");
+                if (!String.IsNullOrWhiteSpace(authToken))
+                {
+                    socket.Options.SetRequestHeader("X-AC-Copilot-Token", authToken);
+                }
+
+                await socket.ConnectAsync(SidecarUri(), token).ConfigureAwait(false);
+                await SendAsync(
+                    socket,
+                    "{\"v\":1,\"type\":\"hello\",\"client\":\"simhub-car-enrichment\","
+                        + "\"client_class\":\"external\"}",
+                    token).ConfigureAwait(false);
+
+                string hello = await ReceiveTextAsync(socket, token).ConfigureAwait(false);
+                if (!IsHelloAck(hello))
+                {
+                    throw new InvalidDataException("sidecar did not return hello_ack");
+                }
+                sidecarConnected = true;
+                await SendAsync(
+                    socket,
+                    "{\"v\":1,\"type\":\"state.subscribe\","
+                        + "\"topics\":[\"connection\",\"session\"]}",
+                    token).ConfigureAwait(false);
+
+                while (!token.IsCancellationRequested && socket.State == WebSocketState.Open)
+                {
+                    string message = await ReceiveTextAsync(socket, token).ConfigureAwait(false);
+                    if (message == null)
+                    {
+                        break;
+                    }
+                    ApplySnapshot(message);
+                }
+            }
+        }
+
+        private static Uri SidecarUri()
+        {
+            int port;
+            string configured = Environment.GetEnvironmentVariable("AC_COPILOT_SIDECAR_PORT");
+            if (!Int32.TryParse(configured, out port) || port < 1 || port > 65535)
+            {
+                port = 8765;
+            }
+            return new Uri("ws://127.0.0.1:" + port + "/");
+        }
+
+        private async Task SendAsync(
+            ClientWebSocket socket,
+            string message,
+            CancellationToken token)
+        {
+            byte[] bytes = Encoding.UTF8.GetBytes(message);
+            await socket.SendAsync(
+                new ArraySegment<byte>(bytes),
+                WebSocketMessageType.Text,
+                true,
+                token).ConfigureAwait(false);
+        }
+
+        private static async Task<string> ReceiveTextAsync(
+            ClientWebSocket socket,
+            CancellationToken token)
+        {
+            byte[] buffer = new byte[4096];
+            using (MemoryStream frame = new MemoryStream())
+            {
+                while (true)
+                {
+                    WebSocketReceiveResult result = await socket.ReceiveAsync(
+                        new ArraySegment<byte>(buffer),
+                        token).ConfigureAwait(false);
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        return null;
+                    }
+                    if (result.MessageType != WebSocketMessageType.Text)
+                    {
+                        throw new InvalidDataException("sidecar returned a non-text frame");
+                    }
+                    frame.Write(buffer, 0, result.Count);
+                    if (frame.Length > MaximumFrameBytes)
+                    {
+                        throw new InvalidDataException("sidecar frame exceeds 64 KiB");
+                    }
+                    if (result.EndOfMessage)
+                    {
+                        return Encoding.UTF8.GetString(frame.ToArray());
+                    }
+                }
+            }
+        }
+
+        private bool IsHelloAck(string message)
+        {
+            Dictionary<string, object> frame = ParseObject(message);
+            return frame != null
+                && Convert.ToInt32(Value(frame, "v") ?? 0) == 1
+                && String.Equals(Value(frame, "type") as string, "hello_ack",
+                    StringComparison.Ordinal);
+        }
+
+        private void ApplySnapshot(string message)
+        {
+            Dictionary<string, object> frame = ParseObject(message);
+            if (frame == null
+                || !String.Equals(Value(frame, "type") as string, "state.snapshot",
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+            Dictionary<string, object> payload = Value(frame, "payload") as Dictionary<string, object>;
+            if (payload == null)
+            {
+                return;
+            }
+
+            string topic = Value(frame, "topic") as string;
+            if (String.Equals(topic, "connection", StringComparison.Ordinal))
+            {
+                long previous = Interlocked.Read(ref lastConnectionUtcTicks);
+                long now = DateTime.UtcNow.Ticks;
+                if (previous == 0
+                    || new TimeSpan(now - previous).TotalMilliseconds > TrainerFreshMilliseconds)
+                {
+                    ClearIdentity();
+                }
+                Interlocked.Exchange(ref lastConnectionUtcTicks, now);
+                return;
+            }
+            if (!String.Equals(topic, "session", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            string resolvedClass = Value(payload, "car_class") as string;
+            string resolvedCarId = Value(payload, "car_id") as string;
+            string resolvedSource = Value(payload, "car_class_source") as string;
+            int resolvedVersion = ToInt32(Value(payload, "car_class_registry_version"));
+            Interlocked.Exchange(
+                ref carClass,
+                String.IsNullOrWhiteSpace(resolvedClass) ? UnknownClass : resolvedClass);
+            Interlocked.Exchange(ref carId, resolvedCarId ?? "");
+            Interlocked.Exchange(ref classSource, resolvedSource ?? "");
+            Interlocked.Exchange(ref registryVersion, resolvedVersion);
+        }
+
+        private Dictionary<string, object> ParseObject(string message)
+        {
+            if (String.IsNullOrWhiteSpace(message))
+            {
+                return null;
+            }
+            try
+            {
+                return serializer.DeserializeObject(message) as Dictionary<string, object>;
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
+        }
+
+        private static object Value(Dictionary<string, object> source, string key)
+        {
+            object value;
+            return source != null && source.TryGetValue(key, out value) ? value : null;
+        }
+
+        private static int ToInt32(object value)
+        {
+            try
+            {
+                return value == null ? 0 : Convert.ToInt32(value);
+            }
+            catch (FormatException)
+            {
+                return 0;
+            }
+            catch (OverflowException)
+            {
+                return 0;
+            }
+        }
+
+        private bool TrainerIsFresh()
+        {
+            long observed = Interlocked.Read(ref lastConnectionUtcTicks);
+            return sidecarConnected
+                && observed > 0
+                && new TimeSpan(DateTime.UtcNow.Ticks - observed).TotalMilliseconds
+                    <= TrainerFreshMilliseconds;
+        }
+
+        private string CurrentCarClass()
+        {
+            return TrainerIsFresh() ? Interlocked.CompareExchange(ref carClass, null, null) : UnknownClass;
+        }
+
+        private string CurrentCarId()
+        {
+            return TrainerIsFresh() ? Interlocked.CompareExchange(ref carId, null, null) : "";
+        }
+
+        private string CurrentClassSource()
+        {
+            return TrainerIsFresh() ? Interlocked.CompareExchange(ref classSource, null, null) : "";
+        }
+
+        private int CurrentRegistryVersion()
+        {
+            return TrainerIsFresh() ? Interlocked.CompareExchange(ref registryVersion, 0, 0) : 0;
+        }
+
+        private void ClearIdentity()
+        {
+            Interlocked.Exchange(ref carClass, UnknownClass);
+            Interlocked.Exchange(ref carId, "");
+            Interlocked.Exchange(ref classSource, "");
+            Interlocked.Exchange(ref registryVersion, 0);
+        }
+
+        private void ClearConnection()
+        {
+            sidecarConnected = false;
+            Interlocked.Exchange(ref lastConnectionUtcTicks, 0);
+            ClearIdentity();
+        }
+    }
+}

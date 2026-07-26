@@ -25,6 +25,10 @@ venv/
 .coverage
 htmlcov/
 
+# .NET/SimHub plugin build outputs
+**/bin/
+**/obj/
+
 # Scratch / local experiments
 .scratch/
 tools/_scratch/

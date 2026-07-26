@@ -32,6 +32,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from tools.ai_sidecar import observability
+from tools.ai_sidecar.car_class import CarClassResolution, resolve_installed_car
 from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled
 from tools.ai_sidecar.external_protocol import (
     AUTH_HEADER,
@@ -2101,6 +2102,29 @@ def _cache_sidecar_snapshot(frame: dict[str, Any]) -> None:
         _sidecar_state_cache[str(topic)] = frame
 
 
+def _enrich_session_snapshot(frame: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of a Lua session snapshot with the sidecar-authoritative car class."""
+
+    payload_in = frame.get("payload")
+    payload = dict(payload_in) if isinstance(payload_in, dict) else {}
+    car_id = payload.get("car_id")
+    try:
+        resolution = resolve_installed_car(car_id if isinstance(car_id, str) else "")
+    except Exception:  # noqa: BLE001 - a registry/package fault must not kill the relay
+        logger.exception("car-class resolution failed car_id=%r", car_id)
+        resolution = CarClassResolution(
+            car_id=car_id if isinstance(car_id, str) else "",
+            car_class="road",
+            source="registry-error",
+            registry_version=0,
+        )
+    payload.update(resolution.wire_fields())
+    enriched = dict(frame)
+    enriched["payload"] = payload
+    enriched["source"] = "sidecar.car_class"
+    return enriched
+
+
 def _sanitize_session_review_result(payload: dict[str, Any]) -> dict[str, Any]:
     """Drop host-local paths before broadcasting session-review results to clients."""
     sanitized = dict(payload)
@@ -2483,6 +2507,11 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     # responds with `config.value` / `config.ack` / `action.ack` /
     # `state.snapshot`, which are also forwarded back through this same path.
     topic = data.get("topic")
+    if t == TYPE_STATE_SNAPSHOT and topic == "session":
+        # #534: session is the single car-identity authority. Enrich before every
+        # downstream consumer (race status, replay cache, and live fan-out) so a
+        # late subscriber sees the byte-equivalent resolved class.
+        data = _enrich_session_snapshot(data)
     # #531 Part D remainder: the Lua `delta` / `lap` topics feed the fused race-status state
     # (predicted lap = stint best + live gap) on their way through the relay. Read-only tap;
     # the frames still broadcast unchanged below.
