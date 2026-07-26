@@ -190,18 +190,23 @@ namespace AcCopilot.CarEnrichment
 
         private Dictionary<string, object> ReadLauncherSettings()
         {
-            string localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
-            if (String.IsNullOrWhiteSpace(localAppData))
-            {
-                return null;
-            }
-            string path = Path.Combine(
-                localAppData,
-                "AC Copilot Trainer",
-                "GamePoint",
-                "settings.json");
             try
             {
+                string gamePointDirectory = Environment.GetEnvironmentVariable(
+                    "AC_COPILOT_GAME_POINT_DIR");
+                if (String.IsNullOrWhiteSpace(gamePointDirectory))
+                {
+                    string localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+                    if (String.IsNullOrWhiteSpace(localAppData))
+                    {
+                        return null;
+                    }
+                    gamePointDirectory = Path.Combine(
+                        localAppData,
+                        "AC Copilot Trainer",
+                        "GamePoint");
+                }
+                string path = Path.Combine(gamePointDirectory, "settings.json");
                 return serializer.DeserializeObject(File.ReadAllText(path))
                     as Dictionary<string, object>;
             }

@@ -54,6 +54,8 @@ def test_bridge_uses_launcher_resolved_endpoint_and_resets_backoff_on_handshake(
     assert "AC_COPILOT_SIDECAR_PORT" in SOURCE
     assert "AC_COPILOT_SIDECAR_EXTERNAL_BIND" in SOURCE
     assert 'new UriBuilder("ws", host, port, "/")' in SOURCE
+    assert "AC_COPILOT_GAME_POINT_DIR" in SOURCE
+    assert SOURCE.index("AC_COPILOT_GAME_POINT_DIR") < SOURCE.index('"LOCALAPPDATA"')
     assert '"AC Copilot Trainer"' in SOURCE
     assert '"GamePoint"' in SOURCE
     assert '"settings.json"' in SOURCE

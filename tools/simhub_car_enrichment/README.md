@@ -35,8 +35,9 @@ The bridge reads `AC_COPILOT_SIDECAR_PORT`,
 `AC_COPILOT_SIDECAR_TOKEN` from the inherited environment. Game Point injects
 its resolved settings when it launches SimHub; wildcard binds normalize to
 loopback. An already-running SimHub falls back to the same non-secret bind and
-port in `%LOCALAPPDATA%\AC Copilot Trainer\GamePoint\settings.json`; tokens are
-never read from that file. The bridge reconnects with a bounded backoff.
+port in `AC_COPILOT_GAME_POINT_DIR\settings.json`, when that root override is
+set, or `%LOCALAPPDATA%\AC Copilot Trainer\GamePoint\settings.json`; tokens are
+never read from either file. The bridge reconnects with a bounded backoff.
 `CarClass` fails closed to `unknown` within 3.5 seconds, using monotonic
 heartbeat age (including cache replay age), even if the sidecar process remains
 connected.
