@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-25T16:20:00Z
+last_updated: 2026-07-26T02:18:11Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-381-brake-articulation-closure-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-675-coach-v2-phase-slots-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-677-esp32-polish-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-671-telemetry-tick-hello-gate-2026-07-25.md
@@ -116,6 +117,22 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-25) — #381 CLOSED: critical Brake articulation accepted and guarded
+
+**PR [#690](https://github.com/agorokh/ac-copilot-trainer/pull/690) MERGED** as squash
+[`f8c0ccc`](https://github.com/agorokh/ac-copilot-trainer/commit/f8c0ccc08c23c844286f6fd4bbf8524b90b89938)
+(2026-07-26T02:18:10Z); issue #381 closed automatically. The operator caught the intensity3
+critical `Brake!` ending sounding cut off, then accepted the corrected intensity5 production clip
+on the rig's default USB speakers. The final `am_fenrir` bank is valid (76 clips), with the shaped
+Brake ladder `432.6 / 412.9 / 409.9 ms` for alert / urgent / critical. Bank baking now enforces the
+universal `<=450 ms` action-cue ceiling and, for the operator-calibrated Fenrir voice, requires
+audible energy to extend through 360 ms using 5 ms RMS windows at -45 dBFS. The rejected original
+ends audibly at 330 ms; the approved bank passes all 76 clips. Validation runs after normalized
+bank output, not inside `synthesize()`, so voice benchmarks retain diagnostic measurements.
+Observed: `make ci-fast` 3479 passed / 73 skipped / 87.15%; hosted CI green; exact-SHA Codex review
+clean; all threads resolved. Live in-ear re-arm remains deferred while #627 is open; no Game Point
+voice-bank setting was changed. Detail: [[issue-381-brake-articulation-closure-2026-07-25]].
 
 ## Delivered (2026-07-25) — #675 CLOSED: Coach V2 phase-slot / calibration / between-lap MERGED
 
