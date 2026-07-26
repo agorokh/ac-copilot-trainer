@@ -292,15 +292,19 @@ class KokoroBackend:
     lazily so the bake module stays importable without it.
     """
 
-    #: Per-register synthesis speed. Kokoro renders neutral speech before the shaper adds the
-    #: baked tone. The hot tiers need an assertive base pace so one-word act cues stay inside the
-    #: <=450 ms brake-alarm budget after the full 48 kHz rig bake.
+    #: Per-register synthesis speed. The shaper already owns the active-register tempo ladder, so
+    #: alert/urgent/critical share one articulation-safe base instead of double-accelerating the
+    #: final consonant (operator A/B finding, issue #381). The shaped production ladder remains
+    #: monotonic and keeps the critical ``Brake!`` inside its 450 ms alarm budget.
     _REGISTER_SPEED: dict[str, float] = {
         "calm": 0.95,
-        "alert": 1.26,
-        "urgent": 1.35,
-        "critical": 1.45,
+        "alert": 1.25,
+        "urgent": 1.25,
+        "critical": 1.25,
     }
+
+    _CRITICAL_BRAKE_MIN_MS = 380.0
+    _CRITICAL_BRAKE_MAX_MS = 450.0
 
     def __init__(
         self,
@@ -339,6 +343,23 @@ class KokoroBackend:
             raw = Path(tmp) / "raw.wav"
             sf.write(str(raw), samples, sr, subtype="PCM_16")
             self._shaper.shape(raw, out_path, register, samplerate)
+        self._validate_critical_brake_articulation(text, register, out_path)
+
+    def _validate_critical_brake_articulation(
+        self, text: str, register: str, out_path: Path
+    ) -> None:
+        """Fail a Kokoro bake whose critical brake is clipped or too slow to be actionable."""
+        if register != "critical" or text.strip().casefold() != "brake!":
+            return
+        with wave.open(str(out_path), "rb") as wf:
+            duration_ms = wf.getnframes() * 1000.0 / wf.getframerate()
+        if not self._CRITICAL_BRAKE_MIN_MS <= duration_ms <= self._CRITICAL_BRAKE_MAX_MS:
+            raise RuntimeError(
+                "critical Brake! articulation must be "
+                f"{self._CRITICAL_BRAKE_MIN_MS:.0f}-"
+                f"{self._CRITICAL_BRAKE_MAX_MS:.0f} ms after shaping; "
+                f"got {duration_ms:.1f} ms"
+            )
 
 
 class PiperBackend:

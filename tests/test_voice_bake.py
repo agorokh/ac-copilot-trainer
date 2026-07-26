@@ -136,12 +136,17 @@ def test_tone_backend_registers_are_distinct(tmp_path) -> None:
 
 
 def test_speech_backends_keep_act_registers_fast() -> None:
-    # Issue #381: the real neural backends must bake terse act registers at an assertive pace.
-    # Otherwise a valid v3 manifest can still fail the runtime brake-alarm timing report.
+    # Issue #381: Kokoro's base pace and the ffmpeg tempo step stack. The shaper owns escalation
+    # across active registers; their common bounded base keeps the final consonant articulated.
     assert KokoroBackend._REGISTER_SPEED["calm"] < KokoroBackend._REGISTER_SPEED["alert"]
-    assert KokoroBackend._REGISTER_SPEED["alert"] < KokoroBackend._REGISTER_SPEED["urgent"]
-    assert KokoroBackend._REGISTER_SPEED["urgent"] < KokoroBackend._REGISTER_SPEED["critical"]
-    assert KokoroBackend._REGISTER_SPEED["critical"] >= 1.4
+    assert len(
+        {
+            KokoroBackend._REGISTER_SPEED["alert"],
+            KokoroBackend._REGISTER_SPEED["urgent"],
+            KokoroBackend._REGISTER_SPEED["critical"],
+        }
+    ) == 1
+    assert 1.20 <= KokoroBackend._REGISTER_SPEED["critical"] <= 1.25
 
     assert (
         PiperBackend._REGISTER_LENGTH_SCALE["calm"] > PiperBackend._REGISTER_LENGTH_SCALE["alert"]
@@ -273,6 +278,33 @@ def _write_pcm16_wav(path: Path, *, samplerate: int, value: int, frames: int = 1
 def _first_sample(path: Path) -> int:
     with wave.open(str(path), "rb") as wf:
         return struct.unpack("<h", wf.readframes(1))[0]
+
+
+@pytest.mark.parametrize(
+    ("duration_ms", "raises"),
+    [
+        (379, True),
+        (380, False),
+        (450, False),
+        (451, True),
+    ],
+)
+def test_kokoro_critical_brake_articulation_window(
+    tmp_path: Path, duration_ms: int, raises: bool
+) -> None:
+    out = tmp_path / "critical.wav"
+    _write_pcm16_wav(out, samplerate=1000, value=0, frames=duration_ms)
+    backend = object.__new__(KokoroBackend)
+
+    if raises:
+        with pytest.raises(RuntimeError, match="articulation must be 380-450 ms"):
+            backend._validate_critical_brake_articulation("Brake!", "critical", out)
+    else:
+        backend._validate_critical_brake_articulation("Brake!", "critical", out)
+
+    # The narrow duration contract is for the one-syllable alarm only, not every critical phrase.
+    backend._validate_critical_brake_articulation("Save tyres!", "critical", out)
+    backend._validate_critical_brake_articulation("Brake!", "urgent", out)
 
 
 class _CopyShaper:
