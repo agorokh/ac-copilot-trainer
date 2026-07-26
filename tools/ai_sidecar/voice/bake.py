@@ -304,8 +304,10 @@ class KokoroBackend:
         "critical": 1.25,
     }
 
-    _CRITICAL_BRAKE_MIN_MS = 380.0
+    _CRITICAL_BRAKE_MIN_AUDIBLE_TAIL_MS = 360.0
     _BRAKE_ACT_MAX_MS = 450.0
+    _AUDIBLE_WINDOW_MS = 5.0
+    _AUDIBLE_FLOOR_DBFS = -45.0
 
     def __init__(
         self,
@@ -344,10 +346,14 @@ class KokoroBackend:
             raw = Path(tmp) / "raw.wav"
             sf.write(str(raw), samples, sr, subtype="PCM_16")
             self._shaper.shape(raw, out_path, register, samplerate)
-        self._validate_brake_act_duration(text, register, out_path)
 
-    def _validate_brake_act_duration(self, text: str, register: str, out_path: Path) -> None:
-        """Fail a Kokoro bake whose brake act cue is clipped or too slow to be actionable."""
+    def validate_baked_clip(self, text: str, register: str, out_path: Path) -> None:
+        """Fail a bank bake whose shaped brake cue is clipped or too slow to be actionable.
+
+        This hook is intentionally separate from :meth:`synthesize`: the voice benchmark must be
+        able to render and measure an out-of-contract voice instead of reporting the backend as
+        unavailable. ``bake_bank`` invokes it after final WAV normalization.
+        """
         normalized = text.strip().casefold()
         if register not in {"alert", "urgent", "critical"} or normalized not in {
             "brake.",
@@ -355,18 +361,43 @@ class KokoroBackend:
         }:
             return
         with wave.open(str(out_path), "rb") as wf:
-            duration_ms = wf.getnframes() * 1000.0 / wf.getframerate()
+            frames = wf.getnframes()
+            samplerate = wf.getframerate()
+            duration_ms = frames * 1000.0 / samplerate
+            if wf.getnchannels() != 1 or wf.getsampwidth() != 2:
+                raise RuntimeError(
+                    "brake act cue validation requires normalized mono PCM16 WAV output"
+                )
+            samples = struct.unpack(f"<{frames}h", wf.readframes(frames)) if frames else ()
         if duration_ms > self._BRAKE_ACT_MAX_MS:
             raise RuntimeError(
                 "brake act cue must be at most "
                 f"{self._BRAKE_ACT_MAX_MS:.0f} ms after shaping; "
                 f"got {duration_ms:.1f} ms"
             )
-        if register == "critical" and duration_ms < self._CRITICAL_BRAKE_MIN_MS:
+        if register != "critical":
+            return
+        # The audible-tail floor is a perceptual calibration for the operator-approved
+        # ``am_fenrir`` artifact, not a universal phoneme-duration claim. Other Kokoro voices
+        # still receive the actionable <=450 ms ceiling and remain measurable in bench_voices;
+        # they need their own listening calibration before an articulation floor is enforced.
+        if self._voice != "am_fenrir":
+            return
+
+        window_frames = max(1, round(samplerate * self._AUDIBLE_WINDOW_MS / 1000.0))
+        audible_floor = 32768.0 * 10.0 ** (self._AUDIBLE_FLOOR_DBFS / 20.0)
+        last_audible_frame = 0
+        for start in range(0, len(samples), window_frames):
+            window = samples[start : start + window_frames]
+            rms = math.sqrt(sum(sample * sample for sample in window) / len(window))
+            if rms >= audible_floor:
+                last_audible_frame = start + len(window)
+        audible_tail_ms = last_audible_frame * 1000.0 / samplerate
+        if audible_tail_ms < self._CRITICAL_BRAKE_MIN_AUDIBLE_TAIL_MS:
             raise RuntimeError(
-                "critical Brake! articulation must be at least "
-                f"{self._CRITICAL_BRAKE_MIN_MS:.0f} ms after shaping; "
-                f"got {duration_ms:.1f} ms"
+                "critical Brake! audible articulation must extend to at least "
+                f"{self._CRITICAL_BRAKE_MIN_AUDIBLE_TAIL_MS:.0f} ms after shaping; "
+                f"last audible 5 ms window ended at {audible_tail_ms:.1f} ms"
             )
 
 
@@ -593,9 +624,12 @@ def bake_bank(out_dir: str | Path, backend: VoiceBackend, *, samplerate: int = 4
             backend.synthesize(phrase.text, phrase.register, target, samplerate)
 
     clips: dict[str, ClipEntry] = {}
+    validator = getattr(backend, "validate_baked_clip", None)
     for phrase, fp in targets:
         fname = fp.name
         _normalize_wav(fp, samplerate)
+        if callable(validator):
+            validator(phrase.text, phrase.register, fp)
         data = fp.read_bytes()
         clips[phrase.clip_id] = ClipEntry(
             clip_id=phrase.clip_id,

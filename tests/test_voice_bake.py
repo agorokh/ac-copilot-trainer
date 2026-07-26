@@ -124,6 +124,27 @@ def test_bake_accepts_float32_external_backend(tmp_path) -> None:
     assert max(abs(v[0]) for v in struct.iter_unpack("<h", raw)) > 1000
 
 
+def test_bank_policy_hook_runs_after_normalization_not_during_synthesis(tmp_path) -> None:
+    class _ValidatingToneBackend(ToneBackend):
+        def __init__(self) -> None:
+            self.validated: list[str] = []
+
+        def validate_baked_clip(self, text: str, register: str, out_path: Path) -> None:
+            del text, register
+            with wave.open(str(out_path), "rb") as wf:
+                assert wf.getframerate() == 22050
+                assert wf.getnchannels() == 1
+                assert wf.getsampwidth() == 2
+            self.validated.append(out_path.name)
+
+    backend = _ValidatingToneBackend()
+    backend.synthesize("Brake!", "critical", tmp_path / "benchmark.wav", 22050)
+    assert backend.validated == []  # bench_voices uses the unchecked, measurable render path.
+
+    manifest = bake_bank(tmp_path / "bank", backend, samplerate=22050)
+    assert len(backend.validated) == len(manifest.clips)
+
+
 def test_tone_backend_registers_are_distinct(tmp_path) -> None:
     # Issue #381: the register (intensity tier) must produce measurably distinct audio even from the
     # stdlib CI backend, so CI exercises calm/alert/urgent/critical end-to-end.
@@ -277,37 +298,59 @@ def _first_sample(path: Path) -> int:
 
 
 @pytest.mark.parametrize(
-    ("text", "register", "duration_ms", "error"),
+    ("text", "register", "audible_ms", "duration_ms", "error"),
     [
-        ("Brake.", "alert", 450, None),
-        ("Brake.", "alert", 451, "brake act cue must be at most 450 ms"),
-        ("Brake.", "urgent", 450, None),
-        ("Brake.", "urgent", 451, "brake act cue must be at most 450 ms"),
-        ("Brake!", "critical", 379, "articulation must be at least 380 ms"),
-        ("Brake!", "critical", 380, None),
-        ("Brake!", "critical", 450, None),
-        ("Brake!", "critical", 451, "brake act cue must be at most 450 ms"),
+        ("Brake.", "alert", 450, 450, None),
+        ("Brake.", "alert", 451, 451, "brake act cue must be at most 450 ms"),
+        ("Brake.", "urgent", 450, 450, None),
+        ("Brake.", "urgent", 451, 451, "brake act cue must be at most 450 ms"),
+        ("Brake!", "critical", 0, 380, "audible articulation must extend"),
+        ("Brake!", "critical", 355, 380, "audible articulation must extend"),
+        ("Brake!", "critical", 360, 380, None),
+        ("Brake!", "critical", 375, 450, None),
+        ("Brake!", "critical", 451, 451, "brake act cue must be at most 450 ms"),
     ],
 )
-def test_kokoro_brake_act_duration_window(
+def test_kokoro_brake_act_timing_window(
     tmp_path: Path,
     text: str,
     register: str,
+    audible_ms: int,
     duration_ms: int,
     error: str | None,
 ) -> None:
     out = tmp_path / "brake.wav"
-    _write_pcm16_wav(out, samplerate=1000, value=0, frames=duration_ms)
+    with wave.open(str(out), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(1000)
+        wf.writeframes(
+            struct.pack(
+                f"<{duration_ms}h", *([1000] * audible_ms), *([0] * (duration_ms - audible_ms))
+            )
+        )
     backend = object.__new__(KokoroBackend)
+    backend._voice = "am_fenrir"
 
     if error:
         with pytest.raises(RuntimeError, match=error):
-            backend._validate_brake_act_duration(text, register, out)
+            backend.validate_baked_clip(text, register, out)
     else:
-        backend._validate_brake_act_duration(text, register, out)
+        backend.validate_baked_clip(text, register, out)
 
     # The narrow duration contract is for the one-syllable alarm only, not every critical phrase.
-    backend._validate_brake_act_duration("Save tyres!", "critical", out)
+    backend.validate_baked_clip("Save tyres!", "critical", out)
+
+
+def test_kokoro_articulation_floor_is_scoped_to_operator_calibrated_voice(tmp_path) -> None:
+    out = tmp_path / "short-but-audible.wav"
+    _write_pcm16_wav(out, samplerate=1000, value=1000, frames=300)
+    backend = object.__new__(KokoroBackend)
+    backend._voice = "af_heart"
+
+    # Different voices remain benchmarkable/bakeable below Fenrir's empirically calibrated floor;
+    # the universal action-cue ceiling is still enforced for every Kokoro voice.
+    backend.validate_baked_clip("Brake!", "critical", out)
 
 
 class _CopyShaper:
