@@ -136,19 +136,12 @@ def test_tone_backend_registers_are_distinct(tmp_path) -> None:
 
 
 def test_speech_backends_keep_act_registers_fast() -> None:
-    # Issue #381: Kokoro's base pace and the ffmpeg tempo step stack. The shaper owns escalation
-    # across active registers; their common bounded base keeps the final consonant articulated.
+    # Issue #381: Kokoro quantizes terse utterance durations, so the shaped WAV contract below is
+    # authoritative. These base-speed rails preserve the measured <=450 ms active ladder while
+    # leaving critical enough articulation room for the final consonant.
     assert KokoroBackend._REGISTER_SPEED["calm"] < KokoroBackend._REGISTER_SPEED["alert"]
-    assert (
-        len(
-            {
-                KokoroBackend._REGISTER_SPEED["alert"],
-                KokoroBackend._REGISTER_SPEED["urgent"],
-                KokoroBackend._REGISTER_SPEED["critical"],
-            }
-        )
-        == 1
-    )
+    assert KokoroBackend._REGISTER_SPEED["alert"] >= 1.26
+    assert KokoroBackend._REGISTER_SPEED["urgent"] >= 1.28
     assert 1.20 <= KokoroBackend._REGISTER_SPEED["critical"] <= 1.25
 
     assert (
@@ -284,30 +277,37 @@ def _first_sample(path: Path) -> int:
 
 
 @pytest.mark.parametrize(
-    ("duration_ms", "raises"),
+    ("text", "register", "duration_ms", "error"),
     [
-        (379, True),
-        (380, False),
-        (450, False),
-        (451, True),
+        ("Brake.", "alert", 450, None),
+        ("Brake.", "alert", 451, "brake act cue must be at most 450 ms"),
+        ("Brake.", "urgent", 450, None),
+        ("Brake.", "urgent", 451, "brake act cue must be at most 450 ms"),
+        ("Brake!", "critical", 379, "articulation must be at least 380 ms"),
+        ("Brake!", "critical", 380, None),
+        ("Brake!", "critical", 450, None),
+        ("Brake!", "critical", 451, "brake act cue must be at most 450 ms"),
     ],
 )
-def test_kokoro_critical_brake_articulation_window(
-    tmp_path: Path, duration_ms: int, raises: bool
+def test_kokoro_brake_act_duration_window(
+    tmp_path: Path,
+    text: str,
+    register: str,
+    duration_ms: int,
+    error: str | None,
 ) -> None:
-    out = tmp_path / "critical.wav"
+    out = tmp_path / "brake.wav"
     _write_pcm16_wav(out, samplerate=1000, value=0, frames=duration_ms)
     backend = object.__new__(KokoroBackend)
 
-    if raises:
-        with pytest.raises(RuntimeError, match="articulation must be 380-450 ms"):
-            backend._validate_critical_brake_articulation("Brake!", "critical", out)
+    if error:
+        with pytest.raises(RuntimeError, match=error):
+            backend._validate_brake_act_duration(text, register, out)
     else:
-        backend._validate_critical_brake_articulation("Brake!", "critical", out)
+        backend._validate_brake_act_duration(text, register, out)
 
     # The narrow duration contract is for the one-syllable alarm only, not every critical phrase.
-    backend._validate_critical_brake_articulation("Save tyres!", "critical", out)
-    backend._validate_critical_brake_articulation("Brake!", "urgent", out)
+    backend._validate_brake_act_duration("Save tyres!", "critical", out)
 
 
 class _CopyShaper:

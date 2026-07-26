@@ -292,19 +292,20 @@ class KokoroBackend:
     lazily so the bake module stays importable without it.
     """
 
-    #: Per-register synthesis speed. The shaper already owns the active-register tempo ladder, so
-    #: alert/urgent/critical share one articulation-safe base instead of double-accelerating the
-    #: final consonant (operator A/B finding, issue #381). The shaped production ladder remains
-    #: monotonic and keeps the critical ``Brake!`` inside its 450 ms alarm budget.
+    #: Per-register synthesis speed. Kokoro quantizes short utterances into different duration
+    #: bands, so these bases are tuned against the *shaped output* rather than required to be
+    #: monotonic themselves: alert/urgent retain the <=450 ms act-cue budget while critical leaves
+    #: enough room for its final consonant (operator A/B finding, issue #381). The shaped
+    #: production ladder remains monotonic.
     _REGISTER_SPEED: dict[str, float] = {
         "calm": 0.95,
-        "alert": 1.25,
-        "urgent": 1.25,
+        "alert": 1.26,
+        "urgent": 1.28,
         "critical": 1.25,
     }
 
     _CRITICAL_BRAKE_MIN_MS = 380.0
-    _CRITICAL_BRAKE_MAX_MS = 450.0
+    _BRAKE_ACT_MAX_MS = 450.0
 
     def __init__(
         self,
@@ -343,21 +344,28 @@ class KokoroBackend:
             raw = Path(tmp) / "raw.wav"
             sf.write(str(raw), samples, sr, subtype="PCM_16")
             self._shaper.shape(raw, out_path, register, samplerate)
-        self._validate_critical_brake_articulation(text, register, out_path)
+        self._validate_brake_act_duration(text, register, out_path)
 
-    def _validate_critical_brake_articulation(
-        self, text: str, register: str, out_path: Path
-    ) -> None:
-        """Fail a Kokoro bake whose critical brake is clipped or too slow to be actionable."""
-        if register != "critical" or text.strip().casefold() != "brake!":
+    def _validate_brake_act_duration(self, text: str, register: str, out_path: Path) -> None:
+        """Fail a Kokoro bake whose brake act cue is clipped or too slow to be actionable."""
+        normalized = text.strip().casefold()
+        if register not in {"alert", "urgent", "critical"} or normalized not in {
+            "brake.",
+            "brake!",
+        }:
             return
         with wave.open(str(out_path), "rb") as wf:
             duration_ms = wf.getnframes() * 1000.0 / wf.getframerate()
-        if not self._CRITICAL_BRAKE_MIN_MS <= duration_ms <= self._CRITICAL_BRAKE_MAX_MS:
+        if duration_ms > self._BRAKE_ACT_MAX_MS:
             raise RuntimeError(
-                "critical Brake! articulation must be "
-                f"{self._CRITICAL_BRAKE_MIN_MS:.0f}-"
-                f"{self._CRITICAL_BRAKE_MAX_MS:.0f} ms after shaping; "
+                "brake act cue must be at most "
+                f"{self._BRAKE_ACT_MAX_MS:.0f} ms after shaping; "
+                f"got {duration_ms:.1f} ms"
+            )
+        if register == "critical" and duration_ms < self._CRITICAL_BRAKE_MIN_MS:
+            raise RuntimeError(
+                "critical Brake! articulation must be at least "
+                f"{self._CRITICAL_BRAKE_MIN_MS:.0f} ms after shaping; "
                 f"got {duration_ms:.1f} ms"
             )
 
