@@ -42,12 +42,69 @@ def test_bridge_subscribes_to_authoritative_identity_and_fails_closed() -> None:
     assert "ConnectAsync" not in data_update
 
 
-def test_connection_heartbeat_preserves_last_session_identity() -> None:
+def test_connection_heartbeat_preserves_identity_only_within_fresh_epoch() -> None:
     connection_branch = SOURCE.split('if (String.Equals(topic, "connection"', 1)[1].split(
         'if (!String.Equals(topic, "session"', 1
     )[0]
     assert "lastConnectionTimestamp" in connection_branch
-    assert "ClearIdentity" not in connection_branch
+    assert "bool wasFresh = TrainerIsFresh();" in connection_branch
+    assert "bool isFresh = TrainerIsFresh();" in connection_branch
+    assert "if (!wasFresh || !isFresh)" in connection_branch
+    assert "ClearIdentity();" in connection_branch
+    assert "if (!wasFresh && isFresh)" in connection_branch
+    assert "awaitingFreshSessionReplay" in connection_branch
+    assert "return true;" in connection_branch
+
+
+def test_fresh_epoch_requests_and_waits_for_lua_session_replay() -> None:
+    receive_loop = SOURCE.split("while (!token.IsCancellationRequested", 1)[1].split(
+        "private Uri SidecarUri()", 1
+    )[0]
+    assert "bool requestSessionReplay = ApplySnapshot(message, generation);" in receive_loop
+    assert "if (requestSessionReplay)" in receive_loop
+    assert r'"topics\":[\"session\"]' in receive_loop
+    session_branch = SOURCE.split('if (!String.Equals(topic, "session"', 1)[1].split(
+        "string resolvedClass", 1
+    )[0]
+    assert "awaitingFreshSessionReplay" in session_branch
+    assert 'ToDouble(Value(frame, "snapshot_age_ms")) > TrainerFreshMilliseconds' in session_branch
+    assert "return false;" in session_branch
+    assert "Interlocked.Exchange(ref awaitingFreshSessionReplay, 0);" in SOURCE
+
+
+def test_bridge_shutdown_invalidates_worker_before_deferred_disposal() -> None:
+    init_branch = SOURCE.split("public void Init", 1)[1].split("public void DataUpdate", 1)[0]
+    end_branch = SOURCE.split("public void End", 1)[1].split("private async Task RunAsync", 1)[0]
+    assert "CancellationTokenSource source = new CancellationTokenSource();" in init_branch
+    assert "RunAsync(source.Token, generation)" in init_branch
+    assert "RunAsync(cancellation.Token, generation)" not in init_branch
+    assert "Interlocked.Increment(ref lifecycleGeneration);" in end_branch
+    assert "runningWorker.Wait(TimeSpan.FromSeconds(2))" in end_branch
+    assert "runningWorker.ContinueWith(" in end_branch
+    assert end_branch.index("Interlocked.Increment(ref lifecycleGeneration);") < end_branch.index(
+        "source.Cancel();"
+    )
+    assert "IsCurrentGeneration(generation)" in SOURCE
+    assert "ApplySnapshot(message, generation)" in SOURCE
+    assert "private readonly object lifecycleGate = new object();" in SOURCE
+    apply_branch = SOURCE.split("private bool ApplySnapshot", 1)[1].split(
+        "private Dictionary<string, object> ParseObject", 1
+    )[0]
+    assert "lock (lifecycleGate)" in apply_branch
+    assert apply_branch.index("lock (lifecycleGate)") < apply_branch.index(
+        "Interlocked.Exchange(\n                        ref lastConnectionTimestamp"
+    )
+    assert apply_branch.index("lock (lifecycleGate)") < apply_branch.index(
+        "Interlocked.Exchange(\n                    ref carClass"
+    )
+    assert "MarkSidecarConnected(generation)" in SOURCE
+    mark_connected = SOURCE.split("private bool MarkSidecarConnected", 1)[1].split(
+        "private string CurrentCarClass", 1
+    )[0]
+    assert "lock (lifecycleGate)" in mark_connected
+    assert mark_connected.index("IsCurrentGeneration(generation)") < mark_connected.index(
+        "sidecarConnected = true;"
+    )
 
 
 def test_bridge_uses_launcher_resolved_endpoint_and_resets_backoff_on_handshake() -> None:
@@ -64,6 +121,8 @@ def test_bridge_uses_launcher_resolved_endpoint_and_resets_backoff_on_handshake(
     assert '"AC Copilot Trainer"' in SOURCE
     assert '"GamePoint"' in SOURCE
     assert '"settings.json"' in SOURCE
+    assert 'Value(settings, "sidecar_port")' in SOURCE
+    assert 'Value(settings, "port")' not in SOURCE
     assert "File.ReadAllText(path)" in SOURCE
     hello_branch = SOURCE.split("if (!IsHelloAck(hello))", 1)[1].split(
         "sidecarConnected = true", 1

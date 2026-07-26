@@ -22,13 +22,16 @@ namespace AcCopilot.CarEnrichment
         private const int MaximumFrameBytes = 65536;
 
         private readonly JavaScriptSerializer serializer = new JavaScriptSerializer();
+        private readonly object lifecycleGate = new object();
         private CancellationTokenSource cancellation;
         private Task worker;
+        private int lifecycleGeneration;
         private string carClass = UnknownClass;
         private string carId = "";
         private string classSource = "";
         private int registryVersion;
         private long lastConnectionTimestamp;
+        private int awaitingFreshSessionReplay;
         private volatile bool sidecarConnected;
 
         public PluginManager PluginManager { get; set; }
@@ -42,8 +45,15 @@ namespace AcCopilot.CarEnrichment
             this.AttachDelegate("SidecarConnected", () => sidecarConnected);
             this.AttachDelegate("TrainerConnected", () => TrainerIsFresh());
 
-            cancellation = new CancellationTokenSource();
-            worker = Task.Run(() => RunAsync(cancellation.Token));
+            int generation;
+            lock (lifecycleGate)
+            {
+                generation = Interlocked.Increment(ref lifecycleGeneration);
+                ClearConnectionUnsafe();
+            }
+            CancellationTokenSource source = new CancellationTokenSource();
+            cancellation = source;
+            worker = Task.Run(() => RunAsync(source.Token, generation));
             SimHub.Logging.Current.Info("AC Copilot car enrichment bridge started");
         }
 
@@ -54,38 +64,60 @@ namespace AcCopilot.CarEnrichment
 
         public void End(PluginManager pluginManager)
         {
-            if (cancellation != null)
+            lock (lifecycleGate)
             {
-                cancellation.Cancel();
+                Interlocked.Increment(ref lifecycleGeneration);
+                ClearConnectionUnsafe();
             }
-            if (worker != null)
+            CancellationTokenSource source = cancellation;
+            Task runningWorker = worker;
+            cancellation = null;
+            worker = null;
+            if (source != null)
+            {
+                source.Cancel();
+            }
+            bool workerStopped = runningWorker == null;
+            if (runningWorker != null)
             {
                 try
                 {
-                    worker.Wait(TimeSpan.FromSeconds(2));
+                    workerStopped = runningWorker.Wait(TimeSpan.FromSeconds(2));
                 }
                 catch (AggregateException)
                 {
                     // Cancellation and socket teardown are expected during SimHub exit.
+                    workerStopped = true;
                 }
             }
-            ClearConnection();
-            if (cancellation != null)
+            if (source != null)
             {
-                cancellation.Dispose();
+                if (workerStopped)
+                {
+                    source.Dispose();
+                }
+                else
+                {
+                    runningWorker.ContinueWith(
+                        _ => source.Dispose(),
+                        CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+                }
             }
             SimHub.Logging.Current.Info("AC Copilot car enrichment bridge stopped");
         }
 
-        private async Task RunAsync(CancellationToken token)
+        private async Task RunAsync(CancellationToken token, int generation)
         {
             int retryMilliseconds = 500;
-            while (!token.IsCancellationRequested)
+            while (!token.IsCancellationRequested && IsCurrentGeneration(generation))
             {
                 try
                 {
                     await ConnectAndConsumeAsync(
                         token,
+                        generation,
                         () => retryMilliseconds = 500).ConfigureAwait(false);
                     retryMilliseconds = 500;
                 }
@@ -100,9 +132,13 @@ namespace AcCopilot.CarEnrichment
                 }
                 finally
                 {
-                    ClearConnection();
+                    ClearConnection(generation);
                 }
 
+                if (!IsCurrentGeneration(generation))
+                {
+                    return;
+                }
                 try
                 {
                     await Task.Delay(retryMilliseconds, token).ConfigureAwait(false);
@@ -117,6 +153,7 @@ namespace AcCopilot.CarEnrichment
 
         private async Task ConnectAndConsumeAsync(
             CancellationToken token,
+            int generation,
             Action onConnected)
         {
             using (ClientWebSocket socket = new ClientWebSocket())
@@ -139,22 +176,35 @@ namespace AcCopilot.CarEnrichment
                 {
                     throw new InvalidDataException("sidecar did not return hello_ack");
                 }
+                if (token.IsCancellationRequested || !MarkSidecarConnected(generation))
+                {
+                    return;
+                }
                 onConnected();
-                sidecarConnected = true;
                 await SendAsync(
                     socket,
                     "{\"v\":1,\"type\":\"state.subscribe\","
                         + "\"topics\":[\"connection\",\"session\"]}",
                     token).ConfigureAwait(false);
 
-                while (!token.IsCancellationRequested && socket.State == WebSocketState.Open)
+                while (!token.IsCancellationRequested
+                    && IsCurrentGeneration(generation)
+                    && socket.State == WebSocketState.Open)
                 {
                     string message = await ReceiveTextAsync(socket, token).ConfigureAwait(false);
                     if (message == null)
                     {
                         break;
                     }
-                    ApplySnapshot(message);
+                    bool requestSessionReplay = ApplySnapshot(message, generation);
+                    if (requestSessionReplay)
+                    {
+                        await SendAsync(
+                            socket,
+                            "{\"v\":1,\"type\":\"state.subscribe\","
+                                + "\"topics\":[\"session\"]}",
+                            token).ConfigureAwait(false);
+                    }
                 }
             }
         }
@@ -283,49 +333,87 @@ namespace AcCopilot.CarEnrichment
                     StringComparison.Ordinal);
         }
 
-        private void ApplySnapshot(string message)
+        private bool ApplySnapshot(string message, int generation)
         {
+            if (!IsCurrentGeneration(generation))
+            {
+                return false;
+            }
             Dictionary<string, object> frame = ParseObject(message);
             if (frame == null
                 || !String.Equals(Value(frame, "type") as string, "state.snapshot",
                     StringComparison.Ordinal))
             {
-                return;
+                return false;
             }
             Dictionary<string, object> payload = Value(frame, "payload") as Dictionary<string, object>;
             if (payload == null)
             {
-                return;
+                return false;
             }
 
-            string topic = Value(frame, "topic") as string;
-            if (String.Equals(topic, "connection", StringComparison.Ordinal))
+            lock (lifecycleGate)
             {
-                double replayAgeMilliseconds = Math.Min(
-                    Math.Max(ToDouble(Value(frame, "snapshot_age_ms")), 0),
-                    TrainerFreshMilliseconds + 1);
-                long replayAgeTicks = (long)(
-                    replayAgeMilliseconds * Stopwatch.Frequency / 1000.0);
+                if (!IsCurrentGeneration(generation))
+                {
+                    return false;
+                }
+
+                string topic = Value(frame, "topic") as string;
+                if (String.Equals(topic, "connection", StringComparison.Ordinal))
+                {
+                    bool wasFresh = TrainerIsFresh();
+                    double replayAgeMilliseconds = Math.Min(
+                        Math.Max(ToDouble(Value(frame, "snapshot_age_ms")), 0),
+                        TrainerFreshMilliseconds + 1);
+                    long replayAgeTicks = (long)(
+                        replayAgeMilliseconds * Stopwatch.Frequency / 1000.0);
+                    Interlocked.Exchange(
+                        ref lastConnectionTimestamp,
+                        Stopwatch.GetTimestamp() - replayAgeTicks);
+                    bool isFresh = TrainerIsFresh();
+                    if (!wasFresh || !isFresh)
+                    {
+                        // A heartbeat gap starts a new identity epoch. Do not allow a
+                        // resumed connection frame to resurrect the previous car before
+                        // a fresh session snapshot arrives.
+                        ClearIdentity();
+                    }
+                    if (!wasFresh && isFresh)
+                    {
+                        // Session is event-driven. Ask Lua to replay it whenever a fresh
+                        // heartbeat starts or resumes an epoch; the sidecar can otherwise
+                        // replay its old cached session before Lua confirms current state.
+                        Interlocked.Exchange(ref awaitingFreshSessionReplay, 1);
+                        return true;
+                    }
+                    return false;
+                }
+                if (!String.Equals(topic, "session", StringComparison.Ordinal))
+                {
+                    return false;
+                }
+                if (Interlocked.CompareExchange(ref awaitingFreshSessionReplay, 0, 0) != 0
+                    && ToDouble(Value(frame, "snapshot_age_ms")) > TrainerFreshMilliseconds)
+                {
+                    // The sidecar immediately replays its cache on subscribe. During
+                    // recovery, ignore that old identity and wait for Lua's fresh replay.
+                    return false;
+                }
+
+                string resolvedClass = Value(payload, "car_class") as string;
+                string resolvedCarId = Value(payload, "car_id") as string;
+                string resolvedSource = Value(payload, "car_class_source") as string;
+                int resolvedVersion = ToInt32(Value(payload, "car_class_registry_version"));
                 Interlocked.Exchange(
-                    ref lastConnectionTimestamp,
-                    Stopwatch.GetTimestamp() - replayAgeTicks);
-                return;
+                    ref carClass,
+                    String.IsNullOrWhiteSpace(resolvedClass) ? UnknownClass : resolvedClass);
+                Interlocked.Exchange(ref carId, resolvedCarId ?? "");
+                Interlocked.Exchange(ref classSource, resolvedSource ?? "");
+                Interlocked.Exchange(ref registryVersion, resolvedVersion);
+                Interlocked.Exchange(ref awaitingFreshSessionReplay, 0);
+                return false;
             }
-            if (!String.Equals(topic, "session", StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            string resolvedClass = Value(payload, "car_class") as string;
-            string resolvedCarId = Value(payload, "car_id") as string;
-            string resolvedSource = Value(payload, "car_class_source") as string;
-            int resolvedVersion = ToInt32(Value(payload, "car_class_registry_version"));
-            Interlocked.Exchange(
-                ref carClass,
-                String.IsNullOrWhiteSpace(resolvedClass) ? UnknownClass : resolvedClass);
-            Interlocked.Exchange(ref carId, resolvedCarId ?? "");
-            Interlocked.Exchange(ref classSource, resolvedSource ?? "");
-            Interlocked.Exchange(ref registryVersion, resolvedVersion);
         }
 
         private Dictionary<string, object> ParseObject(string message)
@@ -397,6 +485,24 @@ namespace AcCopilot.CarEnrichment
                 && elapsedMilliseconds <= TrainerFreshMilliseconds;
         }
 
+        private bool IsCurrentGeneration(int generation)
+        {
+            return Volatile.Read(ref lifecycleGeneration) == generation;
+        }
+
+        private bool MarkSidecarConnected(int generation)
+        {
+            lock (lifecycleGate)
+            {
+                if (!IsCurrentGeneration(generation))
+                {
+                    return false;
+                }
+                sidecarConnected = true;
+                return true;
+            }
+        }
+
         private string CurrentCarClass()
         {
             return TrainerIsFresh() ? Interlocked.CompareExchange(ref carClass, null, null) : UnknownClass;
@@ -425,11 +531,23 @@ namespace AcCopilot.CarEnrichment
             Interlocked.Exchange(ref registryVersion, 0);
         }
 
-        private void ClearConnection()
+        private void ClearConnectionUnsafe()
         {
             sidecarConnected = false;
             Interlocked.Exchange(ref lastConnectionTimestamp, 0);
+            Interlocked.Exchange(ref awaitingFreshSessionReplay, 0);
             ClearIdentity();
+        }
+
+        private void ClearConnection(int generation)
+        {
+            lock (lifecycleGate)
+            {
+                if (IsCurrentGeneration(generation))
+                {
+                    ClearConnectionUnsafe();
+                }
+            }
         }
     }
 }
