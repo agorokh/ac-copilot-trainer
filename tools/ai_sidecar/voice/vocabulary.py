@@ -100,7 +100,10 @@ URGENCIES: tuple[str, ...] = ("info", "prepare", "act")
 #: clone.
 VOICE_PERSONA_ID = "race-engineer-original-v1"
 VOICE_PERSONA_LICENSE = "project-authored; no unconsented real-person clone"
-INTENSITY_CHAIN_VERSION = 3
+# v5 restores the final consonant articulation of critical Kokoro cues while retaining the
+# <=450 ms act-cue budget across alert/urgent/critical (operator A/B finding, issue #381).
+# v4 was an unshipped experimental bake that slowed alert beyond the budget; v5 invalidates it.
+INTENSITY_CHAIN_VERSION = 5
 
 #: Bump when the per-register prosody delivery changes: the ffmpeg filter chains in
 #: ``bake._prosody_filter`` (shaped speech backends) or ``bake.ToneBackend``'s register tone table
