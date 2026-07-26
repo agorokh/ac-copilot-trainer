@@ -302,10 +302,19 @@ own logs, then create, run, and poll the task:
 Derive every path from the environment and give the task a **per-run name** — a fixed task name lets
 two agents clobber each other's registration on the one rig, and leaves stale tasks behind:
 
+Everything below is copy/paste-runnable as written — set the four values in step 0 and nothing else.
+**Do not introduce `<angle-bracket>` placeholders here**: `cmd.exe` parses `<` and `>` as redirection
+inside the generated `.cmd`, and both are illegal in Windows path components and task names, so an
+angle-bracket "placeholder" fails before the harness ever starts. Use PowerShell variables, which are
+interpolated into the file.
+
 ```powershell
-# 0) parameterise (no hardcoded user or checkout path)
+# 0) the only values to set (no hardcoded user or checkout path)
 $repo   = "$env:USERPROFILE\Projects\ac-copilot-trainer"   # or wherever this clone lives
-$runId  = "alien-<issue>-<combo>-<utc>"                    # unique per run
+$car    = "ks_porsche_911_gt3_r_2016"
+$track  = "magione"
+# Unique per run, and Windows-path/task-name safe (no ':' from the timestamp).
+$runId  = "alien-$car-$track-" + (Get-Date -Format "yyyyMMdd-HHmmss")
 $task   = "ac-harness-$runId"                              # never a shared fixed name
 $rel    = ".scratch\harness-evidence\$runId"
 $ev     = "$repo\$rel"
@@ -314,9 +323,9 @@ $ev     = "$repo\$rel"
 New-Item -ItemType Directory -Force -Path $ev | Out-Null
 Set-Content -LiteralPath "$ev\run.cmd" -Encoding ascii -Value @"
 @echo off
-cd /d $repo
-".venv\Scripts\python.exe" -m tools.ac_harness.auto_alien --car <car> --track <track> ^
-    --laps 3 --iterations 2 --evidence-dir $rel > "$ev\stdout.log" 2> "$ev\stderr.log"
+cd /d "$repo"
+".venv\Scripts\python.exe" -m tools.ac_harness.auto_alien --car $car --track $track ^
+    --laps 3 --iterations 2 --evidence-dir "$rel" > "$ev\stdout.log" 2> "$ev\stderr.log"
 echo [wrapper] exit=%ERRORLEVEL% >> "$ev\wrapper.log"
 "@
 
