@@ -1423,3 +1423,42 @@ def test_lateral_envelope_floor_is_a_true_lower_bound():
         while v <= 340.0 / 3.6:
             assert floor_ay <= plant.ay_max(v) + 1e-12, f"floor {floor_ay} > ay_max({v})"
             v += 0.25
+
+
+def test_sub_floor_apex_does_not_block_the_braking_pass():
+    """A corner whose apex is under ``v_floor_ms`` must still be brakeable (#695 review).
+
+    Deriving the drivability floor from the apex would make that apex a hard minimum, so the
+    backward pass could no longer lower the point even when the propagation constraint demands it.
+    """
+    from tools.ac_harness.ggv_profile import apex_speed
+
+    plant = _step_edge_plant()
+    v_floor = 8.0
+    # Point 0: apex just under the floor. Point 1: a far tighter corner right after it, with a short
+    # segment, so braking into point 1 requires point 0 below its own local apex.
+    k0 = plant.ay_max(7.0) / (7.0 * 7.0)
+    k1 = plant.ay_max(3.0) / (3.0 * 3.0)
+    apex0 = apex_speed(k0, plant, v_top_ms=232.0 / 3.6, v_floor_ms=v_floor)
+    assert apex0 < v_floor, "fixture must put the apex under the drivability floor"
+    kappa = [k0, k1, k1, k1]
+    seg = [0.5, 0.5, 0.5, 0.5]
+    v, _ax = forward_backward_profile(kappa, seg, plant, v_top_ms=232.0 / 3.6, v_floor_ms=v_floor)
+    assert v[0] < apex0, (
+        f"braking pass could not lower a sub-floor apex ({v[0]:.3f} vs {apex0:.3f})"
+    )
+    for i, vi in enumerate(v):
+        if kappa[i] > 1e-6:
+            assert vi * vi * kappa[i] <= plant.ay_max(vi) * (1.0 + 1e-9)
+
+
+def test_drivability_floor_still_holds_where_the_apex_allows_it():
+    """The floor is not abandoned — a point whose apex clears it keeps a non-zero minimum."""
+    plant = _step_edge_plant()
+    v_floor = 8.0
+    # Gentle curvature everywhere: every apex is far above the floor, and a slow neighbour must not
+    # drag a point below the drivability minimum.
+    kappa = [1e-7] * 4
+    seg = [0.2, 0.2, 0.2, 0.2]
+    v, _ax = forward_backward_profile(kappa, seg, plant, v_top_ms=232.0 / 3.6, v_floor_ms=v_floor)
+    assert min(v) >= v_floor - 1e-9

@@ -1922,20 +1922,29 @@ def forward_backward_profile(
         k = kappa[i]
         if k > 1e-6:
             v[i] = apex_speed(k, ggv, v_top_ms=v_top_ms, v_floor_ms=v_floor_ms)
-    # The drivability floor is per-point and itself envelope-checked: a corner whose feasible apex
-    # is below ``v_floor_ms`` keeps that apex, else the propagation passes would clamp it back over
-    # the lateral envelope and hand the verifier the very infeasible profile the apex solve just
-    # avoided. ``min`` alone is not enough: the envelope is non-monotonic in v, so even a lower
-    # floor can sit in a lower-grip bin (#695).
-    floor = [feasible_speed_at_or_below(min(v_floor_ms, v[i]), kappa[i], ggv) for i in range(n)]
+    # The drivability floor is per-point and itself envelope-checked, because the envelope is
+    # non-monotonic in v: ``min(v_floor_ms, …)`` alone is not enough, since even a *lower* floor can
+    # sit in a lower-grip bin and break the envelope the apex solve just satisfied (#695).
+    #
+    # It must NOT be derived from the apex. A corner whose feasible apex is already below
+    # ``v_floor_ms`` has no drivability floor to enforce — clamping it to its own apex would make
+    # the apex a hard minimum and stop the braking/traction passes lowering it at all, even when
+    # the propagation constraint requires it (#695 review). Such a point gets a floor of zero;
+    # envelope feasibility of any lower candidate is `lowered()`'s job, not the floor's.
+    floor = [
+        feasible_speed_at_or_below(v_floor_ms, kappa[i], ggv) if v[i] >= v_floor_ms else 0.0
+        for i in range(n)
+    ]
 
     def lowered(i: int, candidate: float) -> float:
         """Apply a propagation cap at point ``i``, keeping the result envelope-feasible.
 
         Lowering a speed can cross a bin edge downward into less grip, so a smaller number is not
-        automatically a safer one (#695 review).
+        automatically a safer one (#695 review). Correct the candidate first, then re-apply the
+        drivability floor — itself feasible — so the floor never re-lifts the point over the
+        envelope and never blocks a required propagation cap.
         """
-        return feasible_speed_at_or_below(max(floor[i], candidate), kappa[i], ggv)
+        return max(floor[i], feasible_speed_at_or_below(candidate, kappa[i], ggv))
 
     # 2) backward (braking) - ellipse uses the lateral g implied by apex usage
     for _ in range(passes):
