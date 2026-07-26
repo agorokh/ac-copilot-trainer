@@ -1804,6 +1804,53 @@ def seg_lengths(plane: list[tuple[float, float]]) -> list[float]:
     ]
 
 
+# Apex solve budget. The fixed point converges in a handful of steps where ``ay_max`` is smooth;
+# the descent guard then needs at most one step per uncertainty bin it walks down through.
+_APEX_FIXED_POINT_STEPS = 8
+_APEX_DESCENT_STEPS = 64
+
+
+def apex_speed(
+    kappa: float,
+    ggv: GGVModel,
+    *,
+    v_top_ms: float,
+    v_floor_ms: float = 0.0,
+) -> float:
+    """Largest speed at ``kappa`` whose lateral demand fits the envelope: ``v²·κ <= ay_max(v)``.
+
+    ``GGVModel.ay_max`` is **not continuous in v** — :meth:`GGVModel._uncertainty_safe_g` selects
+    ``safe_g`` from discrete speed bins (#543), so the envelope is a step function of speed. A bare
+    fixed point ``v <- sqrt(ay_max(v)/κ)`` on a discontinuous map need not converge: it can settle
+    on the *high* branch of a bin edge, where the speed it returns lands in a lower-grip bin than
+    the one used to compute it. That yields an apex the plant cannot support, which
+    :func:`~tools.ac_harness.alien_line._verify_lateral_envelope` then rejects with its float-noise
+    tolerance — the solver handing its own verifier infeasible input (#695: 445/3960 curvature
+    samples violating on a real Magione plant, worst 1.40x).
+
+    So iterate, then **descend until the constraint actually holds**. A violation means
+    ``ay_max(v) < v²·κ``, so the corrective iterate is strictly smaller; with finitely many bins the
+    descent terminates. The returned speed satisfies the envelope by construction, not by assertion.
+
+    ``v_floor_ms`` is a drivability floor and is applied only when it does not break the envelope —
+    raising an infeasible corner back over the limit would reintroduce the same defect.
+    """
+    if kappa <= 0.0:
+        return v_top_ms
+    vi = v_top_ms
+    for _ in range(_APEX_FIXED_POINT_STEPS):
+        vi = min(v_top_ms, math.sqrt(ggv.ay_max(vi) / kappa))
+    for _ in range(_APEX_DESCENT_STEPS):
+        ay_limit = ggv.ay_max(vi)
+        if vi * vi * kappa <= ay_limit:
+            break
+        # Strictly decreasing: ay_limit < vi²·κ here, so sqrt(ay_limit/κ) < vi.
+        vi = math.sqrt(ay_limit / kappa)
+    if v_floor_ms > vi and v_floor_ms * v_floor_ms * kappa <= ggv.ay_max(v_floor_ms):
+        return v_floor_ms
+    return vi
+
+
 def forward_backward_profile(
     kappa: list[float],
     seg: list[float],
@@ -1815,21 +1862,23 @@ def forward_backward_profile(
 ) -> tuple[list[float], list[float]]:
     """Quasi-steady-state minimum-time speed profile over a cyclic line.
 
-    1. apex speed from lateral grip (fixed-point, grip depends on v);
+    1. apex speed from lateral grip (:func:`apex_speed` — envelope-feasible by construction even
+       though the uncertainty-aware grip is a step function of v);
     2. backward pass: braking limited by the friction ellipse with speed-dependent grip;
     3. forward pass: accel limited by ellipse + traction/power cap.
     Returns (v_target_ms per point, ax_ff per point [m/s^2, +accel/-decel]).
     """
     n = len(kappa)
-    # 1) apex (fixed-point on v because ay_max depends on v)
+    # 1) apex (envelope-feasible by construction; ay_max is a step function of v — see apex_speed)
     v = [v_top_ms] * n
     for i in range(n):
         k = kappa[i]
         if k > 1e-6:
-            vi = v_top_ms
-            for _ in range(8):
-                vi = min(v_top_ms, math.sqrt(ggv.ay_max(vi) / k))
-            v[i] = max(v_floor_ms, vi)
+            v[i] = apex_speed(k, ggv, v_top_ms=v_top_ms, v_floor_ms=v_floor_ms)
+    # The drivability floor is per-point: a corner whose feasible apex is below ``v_floor_ms`` must
+    # keep its apex, otherwise the propagation passes would clamp it back over the lateral envelope
+    # and hand the verifier the very infeasible profile the apex solve just avoided (#695).
+    floor = [min(v_floor_ms, v[i]) for i in range(n)]
     # 2) backward (braking) - ellipse uses the lateral g implied by apex usage
     for _ in range(passes):
         for j in range(n):
@@ -1838,13 +1887,13 @@ def forward_backward_profile(
             ds = seg[i]
             if ds <= 1e-6:  # coincident points must share speed, else propagation chain breaks
                 if v[nx] < v[i]:
-                    v[i] = max(v_floor_ms, v[nx])
+                    v[i] = max(floor[i], v[nx])
                 continue
             ay_used = v[i] * v[i] * kappa[i]
             ax = ggv.ax_brake_avail(ay_used, v[i])
             cap = math.sqrt(v[nx] * v[nx] + 2.0 * ax * ds)
             if cap < v[i]:
-                v[i] = max(v_floor_ms, cap)
+                v[i] = max(floor[i], cap)
     # 3) forward (accel)
     for _ in range(passes):
         for i in range(n):
@@ -1852,13 +1901,13 @@ def forward_backward_profile(
             ds = seg[pv]
             if ds <= 1e-6:  # coincident points must share speed
                 if v[pv] < v[i]:
-                    v[i] = max(v_floor_ms, v[pv])
+                    v[i] = max(floor[i], v[pv])
                 continue
             ay_used = v[pv] * v[pv] * kappa[pv]
             ax = ggv.ax_drive_avail(ay_used, v[pv])
             cap = math.sqrt(v[pv] * v[pv] + 2.0 * ax * ds)
             if cap < v[i]:
-                v[i] = max(v_floor_ms, cap)
+                v[i] = max(floor[i], cap)
     v = [min(v_top_ms, x) for x in v]
     # ax feedforward from the profile (central, cyclic): a = v*dv/ds
     ax_ff = []
