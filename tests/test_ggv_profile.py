@@ -1306,3 +1306,120 @@ def test_velocity_floor_never_lifts_a_point_above_the_envelope():
     v = apex_speed(kappa, plant, v_top_ms=232.0 / 3.6, v_floor_ms=8.0)
     assert v * v * kappa <= plant.ay_max(v) * (1.0 + 1e-9)
     assert v < 8.0
+
+
+def _step_up_bins() -> tuple[dict, ...]:
+    """Bins whose lateral ``safe_g`` steps UP with speed across 40 km/h.
+
+    The opposite-direction transition from :func:`_step_edge_bins`: here *lowering* a speed across
+    the edge moves into LESS grip, so a braking/traction cap that looks safe because it is smaller
+    can still land outside the envelope (#695 review).
+    """
+
+    def channel(safe_g: float) -> dict:
+        return {
+            "mean_g": safe_g + 0.05,
+            "epistemic_std_g": 0.02,
+            "safe_g": safe_g,
+            "n": 60,
+            "source": "measured",
+        }
+
+    bins = []
+    for i in range(30):
+        lo = i * 10.0
+        safe_lat = 0.75 if lo < 40.0 else 1.45
+        bins.append(
+            {
+                "speed_min_kmh": lo,
+                "speed_max_kmh": lo + 10.0,
+                "lateral": channel(safe_lat),
+                "brake": channel(1.2),
+                "drive": channel(0.5),
+            }
+        )
+    return tuple(bins)
+
+
+def test_lowering_a_speed_across_an_upward_bin_edge_stays_feasible():
+    """A smaller speed is not automatically a safer one when the envelope steps (#695 review)."""
+    from tools.ac_harness.ggv_profile import feasible_speed_at_or_below
+
+    plant = _step_up_plant()
+    # Feasible just above the edge, where the higher bin grants 1.45 g.
+    v_hi = 40.5 / 3.6
+    kappa = plant.ay_max(v_hi) / (v_hi * v_hi)
+    assert v_hi * v_hi * kappa <= plant.ay_max(v_hi) * (1.0 + 1e-9)
+    # A tiny propagation cap drops it below the edge into 0.75 g — naively "safer", actually not.
+    v_lo = 39.5 / 3.6
+    assert v_lo * v_lo * kappa > plant.ay_max(v_lo), "fixture must expose the downward crossing"
+    corrected = feasible_speed_at_or_below(v_lo, kappa, plant)
+    assert corrected <= v_lo
+    assert corrected * corrected * kappa <= plant.ay_max(corrected) * (1.0 + 1e-9)
+
+
+def _step_up_plant() -> GGVModel:
+    from dataclasses import replace as dc_replace
+
+    return dc_replace(_prior(), uncertainty_bins=_step_up_bins())
+
+
+def test_forward_backward_profile_feasible_on_an_upward_step_plant():
+    """Whole-profile feasibility on an upward-stepping envelope (broad guard, not a reproduction).
+
+    Honest scope: this passes even with the propagation feasibility check neutered, because the
+    backward pass only lowers points *toward* an apex, so a lowered value stays at or above that
+    apex and therefore in the same-or-higher bin. The downward-crossing rule is proved directly by
+    :func:`test_lowering_a_speed_across_an_upward_bin_edge_stays_feasible`; this test exists so a
+    future change to the propagation dynamics that *does* start producing sub-apex speeds cannot
+    reintroduce the violation silently.
+    """
+    plant = _step_up_plant()
+    pts = []
+    n = 720
+    for i in range(n):
+        theta = 2.0 * math.pi * i / n
+        r = 14.0 + 6.0 * math.sin(5.0 * theta)
+        pts.append((r * math.cos(theta), r * math.sin(theta)))
+    seg = seg_lengths(pts)
+    kappa = curvature_profile(pts)
+    v, _ax = forward_backward_profile(kappa, seg, plant, v_top_ms=232.0 / 3.6)
+    worst = 0.0
+    for i, vi in enumerate(v):
+        if kappa[i] > 1e-6:
+            worst = max(worst, (vi * vi * kappa[i]) / plant.ay_max(vi))
+    assert worst <= 1.0 + 1e-6, f"profile exceeds the envelope: {worst:.4f}x ay_max"
+
+
+def test_exhausted_descent_budget_falls_back_to_a_feasible_speed():
+    """With zero descent steps the solver must still not return an infeasible speed (#695 review).
+
+    Guards the branch Qodo flagged: a fixed budget that proves insufficient must degrade to the
+    provably-feasible global floor, never return the violating candidate.
+    """
+    from tools.ac_harness.ggv_profile import (
+        feasible_speed_at_or_below,
+        lateral_envelope_floor_ms2,
+    )
+
+    plant = _step_edge_plant()
+    floor_ay = lateral_envelope_floor_ms2(plant)
+    assert floor_ay > 0.0
+    kappa = 0.0545  # inside the band that violates by ~1.4x on the pre-fix solver
+    v_bad = 16.29
+    assert v_bad * v_bad * kappa > plant.ay_max(v_bad), "fixture must start infeasible"
+    v = feasible_speed_at_or_below(v_bad, kappa, plant, descent_steps=0)
+    assert v * v * kappa <= plant.ay_max(v) * (1.0 + 1e-9)
+    assert v < v_bad
+
+
+def test_lateral_envelope_floor_is_a_true_lower_bound():
+    """The fallback floor must not exceed ``ay_max`` anywhere, or it would not be safe to use."""
+    from tools.ac_harness.ggv_profile import lateral_envelope_floor_ms2
+
+    for plant in (_step_edge_plant(), _step_up_plant(), _prior()):
+        floor_ay = lateral_envelope_floor_ms2(plant)
+        v = 0.0
+        while v <= 340.0 / 3.6:
+            assert floor_ay <= plant.ay_max(v) + 1e-12, f"floor {floor_ay} > ay_max({v})"
+            v += 0.25
