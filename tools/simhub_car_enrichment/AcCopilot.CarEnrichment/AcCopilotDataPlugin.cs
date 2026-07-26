@@ -30,6 +30,7 @@ namespace AcCopilot.CarEnrichment
         private string classSource = "";
         private int registryVersion;
         private long lastConnectionTimestamp;
+        private int awaitingFreshSessionReplay;
         private volatile bool sidecarConnected;
 
         public PluginManager PluginManager { get; set; }
@@ -187,7 +188,15 @@ namespace AcCopilot.CarEnrichment
                     {
                         break;
                     }
-                    ApplySnapshot(message, generation);
+                    bool requestSessionReplay = ApplySnapshot(message, generation);
+                    if (requestSessionReplay)
+                    {
+                        await SendAsync(
+                            socket,
+                            "{\"v\":1,\"type\":\"state.subscribe\","
+                                + "\"topics\":[\"session\"]}",
+                            token).ConfigureAwait(false);
+                    }
                 }
             }
         }
@@ -316,23 +325,23 @@ namespace AcCopilot.CarEnrichment
                     StringComparison.Ordinal);
         }
 
-        private void ApplySnapshot(string message, int generation)
+        private bool ApplySnapshot(string message, int generation)
         {
             if (!IsCurrentGeneration(generation))
             {
-                return;
+                return false;
             }
             Dictionary<string, object> frame = ParseObject(message);
             if (frame == null
                 || !String.Equals(Value(frame, "type") as string, "state.snapshot",
                     StringComparison.Ordinal))
             {
-                return;
+                return false;
             }
             Dictionary<string, object> payload = Value(frame, "payload") as Dictionary<string, object>;
             if (payload == null)
             {
-                return;
+                return false;
             }
 
             string topic = Value(frame, "topic") as string;
@@ -347,18 +356,34 @@ namespace AcCopilot.CarEnrichment
                 Interlocked.Exchange(
                     ref lastConnectionTimestamp,
                     Stopwatch.GetTimestamp() - replayAgeTicks);
-                if (!wasFresh || !TrainerIsFresh())
+                bool isFresh = TrainerIsFresh();
+                if (!wasFresh || !isFresh)
                 {
                     // A heartbeat gap starts a new identity epoch. Do not allow a
                     // resumed connection frame to resurrect the previous car before
                     // a fresh session snapshot arrives.
                     ClearIdentity();
                 }
-                return;
+                if (!wasFresh && isFresh)
+                {
+                    // Session is event-driven. Ask Lua to replay it whenever a fresh
+                    // heartbeat starts or resumes an epoch; the sidecar can otherwise
+                    // replay its old cached session before Lua confirms current state.
+                    Interlocked.Exchange(ref awaitingFreshSessionReplay, 1);
+                    return true;
+                }
+                return false;
             }
             if (!String.Equals(topic, "session", StringComparison.Ordinal))
             {
-                return;
+                return false;
+            }
+            if (Interlocked.CompareExchange(ref awaitingFreshSessionReplay, 0, 0) != 0
+                && ToDouble(Value(frame, "snapshot_age_ms")) > TrainerFreshMilliseconds)
+            {
+                // The sidecar immediately replays its cache on subscribe. During
+                // recovery, ignore that old identity and wait for Lua's fresh replay.
+                return false;
             }
 
             string resolvedClass = Value(payload, "car_class") as string;
@@ -371,6 +396,8 @@ namespace AcCopilot.CarEnrichment
             Interlocked.Exchange(ref carId, resolvedCarId ?? "");
             Interlocked.Exchange(ref classSource, resolvedSource ?? "");
             Interlocked.Exchange(ref registryVersion, resolvedVersion);
+            Interlocked.Exchange(ref awaitingFreshSessionReplay, 0);
+            return false;
         }
 
         private Dictionary<string, object> ParseObject(string message)
@@ -479,6 +506,7 @@ namespace AcCopilot.CarEnrichment
         {
             sidecarConnected = false;
             Interlocked.Exchange(ref lastConnectionTimestamp, 0);
+            Interlocked.Exchange(ref awaitingFreshSessionReplay, 0);
             ClearIdentity();
         }
 

@@ -48,8 +48,28 @@ def test_connection_heartbeat_preserves_identity_only_within_fresh_epoch() -> No
     )[0]
     assert "lastConnectionTimestamp" in connection_branch
     assert "bool wasFresh = TrainerIsFresh();" in connection_branch
-    assert "if (!wasFresh || !TrainerIsFresh())" in connection_branch
+    assert "bool isFresh = TrainerIsFresh();" in connection_branch
+    assert "if (!wasFresh || !isFresh)" in connection_branch
     assert "ClearIdentity();" in connection_branch
+    assert "if (!wasFresh && isFresh)" in connection_branch
+    assert "awaitingFreshSessionReplay" in connection_branch
+    assert "return true;" in connection_branch
+
+
+def test_fresh_epoch_requests_and_waits_for_lua_session_replay() -> None:
+    receive_loop = SOURCE.split("while (!token.IsCancellationRequested", 1)[1].split(
+        "private Uri SidecarUri()", 1
+    )[0]
+    assert "bool requestSessionReplay = ApplySnapshot(message, generation);" in receive_loop
+    assert "if (requestSessionReplay)" in receive_loop
+    assert r'"topics\":[\"session\"]' in receive_loop
+    session_branch = SOURCE.split('if (!String.Equals(topic, "session"', 1)[1].split(
+        "string resolvedClass", 1
+    )[0]
+    assert "awaitingFreshSessionReplay" in session_branch
+    assert 'ToDouble(Value(frame, "snapshot_age_ms")) > TrainerFreshMilliseconds' in session_branch
+    assert "return false;" in session_branch
+    assert "Interlocked.Exchange(ref awaitingFreshSessionReplay, 0);" in SOURCE
 
 
 def test_bridge_shutdown_invalidates_worker_before_deferred_disposal() -> None:
