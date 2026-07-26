@@ -299,26 +299,38 @@ Get-Process explorer | Select-Object Id,SessionId # the console session (typical
 session **and needs no stored credential**. Wrap the harness invocation in a `.cmd` that redirects its
 own logs, then create, run, and poll the task:
 
+Derive every path from the environment and give the task a **per-run name** — a fixed task name lets
+two agents clobber each other's registration on the one rig, and leaves stale tasks behind:
+
 ```powershell
+# 0) parameterise (no hardcoded user or checkout path)
+$repo   = "$env:USERPROFILE\Projects\ac-copilot-trainer"   # or wherever this clone lives
+$runId  = "alien-<issue>-<combo>-<utc>"                    # unique per run
+$task   = "ac-harness-$runId"                              # never a shared fixed name
+$rel    = ".scratch\harness-evidence\$runId"
+$ev     = "$repo\$rel"
+
 # 1) wrapper (writes its own logs; the SSH session only ever reads files)
-$ev = "C:\Users\arsen\Projects\ac-copilot-trainer\.scratch\harness-evidence\<run-id>"
 New-Item -ItemType Directory -Force -Path $ev | Out-Null
 Set-Content -LiteralPath "$ev\run.cmd" -Encoding ascii -Value @"
 @echo off
-cd /d C:\Users\arsen\Projects\ac-copilot-trainer
+cd /d $repo
 ".venv\Scripts\python.exe" -m tools.ac_harness.auto_alien --car <car> --track <track> ^
-    --laps 3 --iterations 2 --evidence-dir <relative-evidence-dir> > "$ev\stdout.log" 2> "$ev\stderr.log"
+    --laps 3 --iterations 2 --evidence-dir $rel > "$ev\stdout.log" 2> "$ev\stderr.log"
 echo [wrapper] exit=%ERRORLEVEL% >> "$ev\wrapper.log"
 "@
 
-# 2) create + run in the console session
-schtasks /create /tn "ac-harness-run" /tr "$ev\run.cmd" /sc once /st 23:59 /ru <user> /it /f
-schtasks /run    /tn "ac-harness-run"
+# 2) create + run in the console session ($env:USERNAME, not a literal account)
+schtasks /create /tn $task /tr "$ev\run.cmd" /sc once /st 23:59 /ru $env:USERNAME /it /f
+schtasks /run    /tn $task
 
 # 3) poll from the SSH session (reads only — no AC interaction)
-schtasks /query  /tn "ac-harness-run" /fo list | Select-String "^Status"
+schtasks /query  /tn $task /fo list | Select-String "^Status"
 Get-Content "$ev\stdout.log" -Tail 30
 Get-Process acs -ErrorAction SilentlyContinue | Select-Object Id,Responding
+
+# 4) clean up once the wrapper has logged its exit code — stale tasks pollute the rig
+schtasks /delete /tn $task /f
 ```
 
 You landed in the right session when the run's own first lines report the provenance gate passing:
