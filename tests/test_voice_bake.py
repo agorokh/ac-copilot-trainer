@@ -139,13 +139,16 @@ def test_speech_backends_keep_act_registers_fast() -> None:
     # Issue #381: Kokoro's base pace and the ffmpeg tempo step stack. The shaper owns escalation
     # across active registers; their common bounded base keeps the final consonant articulated.
     assert KokoroBackend._REGISTER_SPEED["calm"] < KokoroBackend._REGISTER_SPEED["alert"]
-    assert len(
-        {
-            KokoroBackend._REGISTER_SPEED["alert"],
-            KokoroBackend._REGISTER_SPEED["urgent"],
-            KokoroBackend._REGISTER_SPEED["critical"],
-        }
-    ) == 1
+    assert (
+        len(
+            {
+                KokoroBackend._REGISTER_SPEED["alert"],
+                KokoroBackend._REGISTER_SPEED["urgent"],
+                KokoroBackend._REGISTER_SPEED["critical"],
+            }
+        )
+        == 1
+    )
     assert 1.20 <= KokoroBackend._REGISTER_SPEED["critical"] <= 1.25
 
     assert (
