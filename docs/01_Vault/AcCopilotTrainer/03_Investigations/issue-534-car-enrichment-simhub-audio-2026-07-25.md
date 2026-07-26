@@ -8,6 +8,7 @@ relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/10_Rig/audio-5.1-positional-engine-2026-07-12.md
   - AcCopilotTrainer/03_Investigations/pr-480-simhub-launcher-toggle-2026-07-03.md
+  - AcCopilotTrainer/01_Decisions/car-class-enrichment-authority-2026-07-25.md
 source_path: "AcCopilotTrainer/03_Investigations/issue-534-car-enrichment-simhub-audio-2026-07-25.md"
 ---
 
