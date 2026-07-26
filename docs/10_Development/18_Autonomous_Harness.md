@@ -330,12 +330,18 @@ echo [wrapper] exit=%ERRORLEVEL% >> "$ev\wrapper.log"
 "@
 
 # 2) create + run in the console session ($env:USERNAME, not a literal account).
-#    /st must be a FUTURE clock time: a fixed "23:59" fails with "The start time of the task cannot
-#    be earlier than the current time" once local time passes it — exactly during the overnight runs
-#    this path exists for. The trigger never fires anyway; /run starts it on demand.
-$st = (Get-Date).AddMinutes(5).ToString('HH:mm')
-schtasks /create /tn $task /tr "$ev\run.cmd" /sc once /st $st /ru $env:USERNAME /it /f
-schtasks /run    /tn $task
+#    /st alone is not enough. `/sc once` defaults the start DATE to today, so a bare clock time
+#    computed after ~23:55 lands at 00:xx and is read as earlier TODAY — `/create` then fails with
+#    "The start time of the task cannot be earlier than the current time", precisely during the
+#    overnight runs this path exists for. Derive /st and /sd from the SAME DateTime so a rollover
+#    carries the correct day. The trigger never fires anyway; /run starts the task on demand.
+$when = (Get-Date).AddMinutes(5)
+schtasks /create /tn $task /tr "$ev\run.cmd" /sc once `
+    /st $when.ToString('HH:mm') /sd $when.ToString('MM/dd/yyyy') `
+    /ru $env:USERNAME /it /f
+if ($LASTEXITCODE -ne 0) { throw "schtasks /create failed ($LASTEXITCODE)" }
+schtasks /run /tn $task
+if ($LASTEXITCODE -ne 0) { schtasks /delete /tn $task /f; throw "schtasks /run failed ($LASTEXITCODE)" }
 
 # 3) poll from the SSH session (reads only — no AC interaction)
 schtasks /query  /tn $task /fo list | Select-String "^Status"
@@ -344,16 +350,33 @@ Get-Process acs -ErrorAction SilentlyContinue | Select-Object Id,Responding
 
 # 4) clean up ONLY after the wrapper has logged its exit code. `/run` is asynchronous, so deleting
 #    the task definition in the same unguarded paste can cancel a start that has not spawned yet —
-#    and it removes the only Status handle while the run is still launching. Wait for the sentinel:
-while (-not (Select-String -Path "$ev\wrapper.log" -Pattern "exit=" -Quiet -ErrorAction SilentlyContinue)) {
-    Start-Sleep -Seconds 30
+#    and it removes the only Status handle while the run is still launching. Wait for the sentinel,
+#    but BOUND the wait: if the run never starts, the sentinel never appears and an unbounded loop
+#    would hang forever with no diagnosis.
+$sentinel = "$ev\wrapper.log"
+$deadline = (Get-Date).AddHours(3)   # longer than any ladder you should be running unattended
+function Test-Done { Select-String -Path $sentinel -Pattern "exit=" -Quiet -ErrorAction SilentlyContinue }
+while ((Get-Date) -lt $deadline -and -not (Test-Done)) { Start-Sleep -Seconds 30 }
+if (Test-Done) {
+    Get-Content $sentinel
+    schtasks /delete /tn $task /f
+} else {
+    # No sentinel: report the task's own verdict instead of deleting the evidence silently.
+    schtasks /query /tn $task /fo list /v | Select-String "^Status|^Last Result"
+    Write-Warning "run never wrote exit=; inspect $ev\stderr.log before deleting $task"
 }
-schtasks /delete /tn $task /f
 ```
 
 An `auto_alien` ladder runs for tens of minutes, so treat step 3 as the loop you actually live in and
 step 4 as end-of-run housekeeping. If a session dies before step 4, the leftover task is harmless but
 should be reaped by name on the next visit (`schtasks /query | Select-String "ac-harness-"`).
+
+> **`/sd` format is locale-dependent.** `MM/dd/yyyy` (zero-padded) is what this rig accepts; the
+> *culture* short-date pattern is **not** interchangeable — measured on the rig, `M/d/yyyy`,
+> `dd/MM/yyyy` and `yyyy/MM/dd` were all rejected with `0x80004005` while `MM/dd/yyyy` succeeded. If
+> `/create` fails on a differently-localised host, probe the accepted form rather than guessing. Note
+> also that `/sc ONDEMAND` — which would remove the date problem entirely — is **not** accepted by
+> `schtasks /create` here (same `0x80004005`), so `/sc once` plus an explicit date is the working path.
 
 You landed in the right session when the run's own first lines report the provenance gate passing:
 
