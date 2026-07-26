@@ -262,6 +262,87 @@ launch, probe outcome, and re-bake stats so a recycle's timing is visible.
 > tracked on #466. Until then a `--setup` run may stall at the overlay; a plain no-setup drive is
 > reliable.
 
+## Driving the harness from off-rig (the Windows session-0 trap)
+
+An agent working from another host (macOS laptop, another Mac, CI) reaches the rig over SSH. **A
+command run directly in that SSH session can never drive AC**, for two independent reasons — fix the
+transport, not the harness:
+
+1. **The app junction is untraversable from session 0.** An OpenSSH logon is a *network* logon and
+   lands in Windows **session 0**, where the redirection-trust policy is enforced. `apps/lua/ac_copilot_trainer`
+   is a junction created by a non-admin user, so session 0 refuses to follow it. The #575
+   app-provenance preflight is the first code to touch it, so the run dies there:
+
+   ```text
+   OSError: [WinError 448] The path cannot be traversed because it contains an untrusted mount point:
+     'C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\apps\lua\ac_copilot_trainer'
+     at auto_drive.app_install_provenance -> installed.is_dir()
+   ```
+
+2. **Session 0 has no interactive desktop.** AC renders on the console session. Even with traversal
+   working, a session-0 launch could not produce a real drive.
+
+> **Do not "fix" this by relaxing the provenance preflight or the junction.** The preflight is what
+> catches a stale app (#543/#575); the junction is how the rig serves the checkout. Both are correct —
+> the SSH session is the wrong place to run from.
+
+### Confirm which session you are in
+
+```powershell
+(Get-Process -Id $PID).SessionId                 # SSH session reports 0
+Get-Process explorer | Select-Object Id,SessionId # the console session (typically 1)
+```
+
+### Run in the console session with a `/IT` scheduled task
+
+`schtasks /IT` means "run only when the user is logged on", so the task executes in the console
+session **and needs no stored credential**. Wrap the harness invocation in a `.cmd` that redirects its
+own logs, then create, run, and poll the task:
+
+```powershell
+# 1) wrapper (writes its own logs; the SSH session only ever reads files)
+$ev = "C:\Users\arsen\Projects\ac-copilot-trainer\.scratch\harness-evidence\<run-id>"
+New-Item -ItemType Directory -Force -Path $ev | Out-Null
+Set-Content -LiteralPath "$ev\run.cmd" -Encoding ascii -Value @"
+@echo off
+cd /d C:\Users\arsen\Projects\ac-copilot-trainer
+".venv\Scripts\python.exe" -m tools.ac_harness.auto_alien --car <car> --track <track> ^
+    --laps 3 --iterations 2 --evidence-dir <relative-evidence-dir> > "$ev\stdout.log" 2> "$ev\stderr.log"
+echo [wrapper] exit=%ERRORLEVEL% >> "$ev\wrapper.log"
+"@
+
+# 2) create + run in the console session
+schtasks /create /tn "ac-harness-run" /tr "$ev\run.cmd" /sc once /st 23:59 /ru <user> /it /f
+schtasks /run    /tn "ac-harness-run"
+
+# 3) poll from the SSH session (reads only — no AC interaction)
+schtasks /query  /tn "ac-harness-run" /fo list | Select-String "^Status"
+Get-Content "$ev\stdout.log" -Tail 30
+Get-Process acs -ErrorAction SilentlyContinue | Select-Object Id,Responding
+```
+
+You landed in the right session when the run's own first lines report the provenance gate passing:
+
+```text
+auto-drive: installed app provenance: match
+auto-drive: preflight ok
+auto-drive: rig lock acquired -> ...\AC Copilot Trainer\Harness\rig-session.lock
+```
+
+`installed app provenance: match` is the machine-checkable signal — it means the junction was
+traversed *and* the served tree matches the checkout the harness is running from.
+
+### Pre-run rig invariants (check these before creating the task)
+
+- **The AC app junction serves the primary checkout**, which must sit at the merged `main` tip
+  (#575/#543 — a stale checkout serves stale Lua and the run fails in confusing ways).
+- **`main` may be checked out by another worktree**, in which case `git switch main` fails with
+  `fatal: 'main' is already used by worktree at …`. Detach instead — `git switch --detach origin/main`
+  — which leaves every branch ref and peer worktree untouched.
+- **One rig, one session.** The harness takes a cross-worktree lock at
+  `%LOCALAPPDATA%\AC Copilot Trainer\Harness\rig-session.lock`; check for a live `acs.exe` or a peer
+  sidecar before starting, and let the lock arbitrate rather than killing processes.
+
 ## Troubleshooting (hard-won rig lore — read before debugging)
 
 | Symptom | Cause / fix |
@@ -275,6 +356,7 @@ launch, probe outcome, and re-bake stats so a recycle's timing is visible.
 | `setup.load` error "no loopback Lua peer connected" | The trainer app isn't (yet) connected to the sidecar — the harness retries for `setup_timeout`; persistent = app not installed/enabled in CSP |
 | Run FAILS with `recovery cap exceeded at <N>m` | Real stall: the car repeatedly stopped at the same spot. Inspect `hud.png` plus `report.drive.control_trace` (especially the forced `recovery:*` rows); do **not** raise the cap to make it "pass" |
 | `acs.exe` dies mid-drive | The main physics packet watchdog fails that attempt and the CLI automatically runs one fresh full launch (bounded by `--sim-death-retries`). Inspect `report.attempts`: every failed attempt, reason, and control trace is retained even when the final attempt passes. |
+| `OSError: [WinError 448] … untrusted mount point` on the app junction | You are running in Windows **session 0** (an SSH logon), which cannot traverse the user-created junction and has no desktop for AC to render on. Not a harness bug and **not** a reason to relax the provenance preflight — re-run through a `schtasks /IT` task in the console session (see *Driving the harness from off-rig*) |
 | Two agents, one rig | **Yield**: a single AC instance cannot serve two autonomous sessions (see the issue-277 investigation). Check for a running `acs.exe`/peer sidecar before launching |
 | Sidecar port already in use | That's usually the Game Point launcher's supervised sidecar — the harness reuses it; don't spawn a second |
 
