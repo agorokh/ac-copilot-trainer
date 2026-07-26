@@ -54,6 +54,10 @@ def test_bridge_uses_launcher_resolved_endpoint_and_resets_backoff_on_handshake(
     assert "AC_COPILOT_SIDECAR_PORT" in SOURCE
     assert "AC_COPILOT_SIDECAR_EXTERNAL_BIND" in SOURCE
     assert 'new UriBuilder("ws", host, port, "/")' in SOURCE
+    assert '"AC Copilot Trainer"' in SOURCE
+    assert '"GamePoint"' in SOURCE
+    assert '"settings.json"' in SOURCE
+    assert "File.ReadAllText(path)" in SOURCE
     hello_branch = SOURCE.split("if (!IsHelloAck(hello))", 1)[1].split(
         "sidecarConnected = true", 1
     )[0]
@@ -62,5 +66,6 @@ def test_bridge_uses_launcher_resolved_endpoint_and_resets_backoff_on_handshake(
 
 def test_bridge_never_writes_or_reconfigures_simhub_profiles() -> None:
     assert "File.Write" not in SOURCE
+    assert "X-AC-Copilot-Client" not in SOURCE
     assert "ShakeITBassShakersSettingsV2" not in SOURCE
     assert "AC_COPILOT_SIDECAR_TOKEN" in SOURCE

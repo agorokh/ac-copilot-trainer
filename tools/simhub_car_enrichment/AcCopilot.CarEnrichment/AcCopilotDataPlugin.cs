@@ -121,7 +121,6 @@ namespace AcCopilot.CarEnrichment
         {
             using (ClientWebSocket socket = new ClientWebSocket())
             {
-                socket.Options.SetRequestHeader("X-AC-Copilot-Client", "simhub-car-enrichment");
                 string authToken = Environment.GetEnvironmentVariable("AC_COPILOT_SIDECAR_TOKEN");
                 if (!String.IsNullOrWhiteSpace(authToken))
                 {
@@ -160,16 +159,25 @@ namespace AcCopilot.CarEnrichment
             }
         }
 
-        private static Uri SidecarUri()
+        private Uri SidecarUri()
         {
+            Dictionary<string, object> settings = ReadLauncherSettings();
             int port;
             string configured = Environment.GetEnvironmentVariable("AC_COPILOT_SIDECAR_PORT");
+            if (String.IsNullOrWhiteSpace(configured))
+            {
+                configured = Convert.ToString(Value(settings, "sidecar_port"));
+            }
             if (!Int32.TryParse(configured, out port) || port < 1 || port > 65535)
             {
                 port = 8765;
             }
             string host = Environment.GetEnvironmentVariable(
                 "AC_COPILOT_SIDECAR_EXTERNAL_BIND");
+            if (String.IsNullOrWhiteSpace(host))
+            {
+                host = Value(settings, "external_bind") as string;
+            }
             if (String.IsNullOrWhiteSpace(host)
                 || String.Equals(host, "0.0.0.0", StringComparison.Ordinal)
                 || String.Equals(host, "::", StringComparison.Ordinal))
@@ -178,6 +186,41 @@ namespace AcCopilot.CarEnrichment
             }
             UriBuilder builder = new UriBuilder("ws", host, port, "/");
             return builder.Uri;
+        }
+
+        private Dictionary<string, object> ReadLauncherSettings()
+        {
+            string localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+            if (String.IsNullOrWhiteSpace(localAppData))
+            {
+                return null;
+            }
+            string path = Path.Combine(
+                localAppData,
+                "AC Copilot Trainer",
+                "GamePoint",
+                "settings.json");
+            try
+            {
+                return serializer.DeserializeObject(File.ReadAllText(path))
+                    as Dictionary<string, object>;
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return null;
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
         }
 
         private async Task SendAsync(

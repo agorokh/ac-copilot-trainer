@@ -46,9 +46,12 @@ The plugin does no work on SimHub's `DataUpdate` critical path. A background
 WebSocket subscribes to `connection` and `session`, reconnects with bounded
 backoff, and inherits the launcher's resolved bind, port, and optional secret
 token. Wildcard binds normalize to loopback; a concrete adapter bind remains
-reachable. Heartbeat age uses monotonic time, including the relative age carried
-on cached replay. If the trainer heartbeat stops, the public class fails closed
-to `unknown` within 3.5 seconds even when the sidecar socket remains open.
+reachable. If SimHub was already running and could not inherit a new process
+environment, the plugin reads the same non-secret port/bind values from Game
+Point's `settings.json`; the secret token remains environment-only. Heartbeat
+age uses monotonic time, including the relative age carried on cached replay.
+If the trainer heartbeat stops, the public class fails closed to `unknown`
+within 3.5 seconds even when the sidecar socket remains open.
 
 SimHub's supported profile selector matches games/cars, not arbitrary custom
 properties. Use the property inside one operator-curated dashboard or ShakeIt
