@@ -329,8 +329,12 @@ cd /d "$repo"
 echo [wrapper] exit=%ERRORLEVEL% >> "$ev\wrapper.log"
 "@
 
-# 2) create + run in the console session ($env:USERNAME, not a literal account)
-schtasks /create /tn $task /tr "$ev\run.cmd" /sc once /st 23:59 /ru $env:USERNAME /it /f
+# 2) create + run in the console session ($env:USERNAME, not a literal account).
+#    /st must be a FUTURE clock time: a fixed "23:59" fails with "The start time of the task cannot
+#    be earlier than the current time" once local time passes it — exactly during the overnight runs
+#    this path exists for. The trigger never fires anyway; /run starts it on demand.
+$st = (Get-Date).AddMinutes(5).ToString('HH:mm')
+schtasks /create /tn $task /tr "$ev\run.cmd" /sc once /st $st /ru $env:USERNAME /it /f
 schtasks /run    /tn $task
 
 # 3) poll from the SSH session (reads only — no AC interaction)
@@ -338,9 +342,18 @@ schtasks /query  /tn $task /fo list | Select-String "^Status"
 Get-Content "$ev\stdout.log" -Tail 30
 Get-Process acs -ErrorAction SilentlyContinue | Select-Object Id,Responding
 
-# 4) clean up once the wrapper has logged its exit code — stale tasks pollute the rig
+# 4) clean up ONLY after the wrapper has logged its exit code. `/run` is asynchronous, so deleting
+#    the task definition in the same unguarded paste can cancel a start that has not spawned yet —
+#    and it removes the only Status handle while the run is still launching. Wait for the sentinel:
+while (-not (Select-String -Path "$ev\wrapper.log" -Pattern "exit=" -Quiet -ErrorAction SilentlyContinue)) {
+    Start-Sleep -Seconds 30
+}
 schtasks /delete /tn $task /f
 ```
+
+An `auto_alien` ladder runs for tens of minutes, so treat step 3 as the loop you actually live in and
+step 4 as end-of-run housekeeping. If a session dies before step 4, the leftover task is harmless but
+should be reaped by name on the next visit (`schtasks /query | Select-String "ac-harness-"`).
 
 You landed in the right session when the run's own first lines report the provenance gate passing:
 
