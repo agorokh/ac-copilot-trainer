@@ -44,8 +44,9 @@ namespace AcCopilot.CarEnrichment
             this.AttachDelegate("TrainerConnected", () => TrainerIsFresh());
 
             int generation = Interlocked.Increment(ref lifecycleGeneration);
-            cancellation = new CancellationTokenSource();
-            worker = Task.Run(() => RunAsync(cancellation.Token, generation));
+            CancellationTokenSource source = new CancellationTokenSource();
+            cancellation = source;
+            worker = Task.Run(() => RunAsync(source.Token, generation));
             SimHub.Logging.Current.Info("AC Copilot car enrichment bridge started");
         }
 

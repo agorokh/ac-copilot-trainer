@@ -53,9 +53,11 @@ def test_connection_heartbeat_preserves_identity_only_within_fresh_epoch() -> No
 
 
 def test_bridge_shutdown_invalidates_worker_before_deferred_disposal() -> None:
-    end_branch = SOURCE.split("public void End", 1)[1].split(
-        "private async Task RunAsync", 1
-    )[0]
+    init_branch = SOURCE.split("public void Init", 1)[1].split("public void DataUpdate", 1)[0]
+    end_branch = SOURCE.split("public void End", 1)[1].split("private async Task RunAsync", 1)[0]
+    assert "CancellationTokenSource source = new CancellationTokenSource();" in init_branch
+    assert "RunAsync(source.Token, generation)" in init_branch
+    assert "RunAsync(cancellation.Token, generation)" not in init_branch
     assert "Interlocked.Increment(ref lifecycleGeneration);" in end_branch
     assert "runningWorker.Wait(TimeSpan.FromSeconds(2))" in end_branch
     assert "runningWorker.ContinueWith(" in end_branch
