@@ -1403,10 +1403,10 @@ def test_exhausted_descent_budget_falls_back_to_a_feasible_speed():
     )
 
     plant = _step_edge_plant()
-    floor_ay = lateral_envelope_floor_ms2(plant)
+    v_bad = 16.29
+    floor_ay = lateral_envelope_floor_ms2(plant, v_bad)
     assert floor_ay > 0.0
     kappa = 0.0545  # inside the band that violates by ~1.4x on the pre-fix solver
-    v_bad = 16.29
     assert v_bad * v_bad * kappa > plant.ay_max(v_bad), "fixture must start infeasible"
     v = feasible_speed_at_or_below(v_bad, kappa, plant, descent_steps=0)
     assert v * v * kappa <= plant.ay_max(v) * (1.0 + 1e-9)
@@ -1414,15 +1414,47 @@ def test_exhausted_descent_budget_falls_back_to_a_feasible_speed():
 
 
 def test_lateral_envelope_floor_is_a_true_lower_bound():
-    """The fallback floor must not exceed ``ay_max`` anywhere, or it would not be safe to use."""
+    """The fallback floor must not exceed ``ay_max`` anywhere in range, or it is not safe to use."""
     from tools.ac_harness.ggv_profile import lateral_envelope_floor_ms2
 
+    v_max = 340.0 / 3.6
     for plant in (_step_edge_plant(), _step_up_plant(), _prior()):
-        floor_ay = lateral_envelope_floor_ms2(plant)
+        floor_ay = lateral_envelope_floor_ms2(plant, v_max)
         v = 0.0
-        while v <= 340.0 / 3.6:
+        while v <= v_max:
             assert floor_ay <= plant.ay_max(v) + 1e-12, f"floor {floor_ay} > ay_max({v})"
             v += 0.25
+
+
+def test_lateral_envelope_floor_holds_for_a_binless_model_losing_grip_with_speed():
+    """A smooth model with NO bins whose grip falls with speed has its minimum at the top (#695).
+
+    Sampling only ``v=0`` would return that model's *maximum* and silently break the lower-bound
+    invariant the exhausted-budget fallback depends on.
+    """
+    from dataclasses import replace as dc_replace
+
+    from tools.ac_harness.ggv_profile import (
+        feasible_speed_at_or_below,
+        lateral_envelope_floor_ms2,
+    )
+
+    # Negative aero term: lateral grip DECREASES with speed, and no uncertainty bins at all.
+    plant = dc_replace(_prior(), k_aero_lat=-1.0e-4, uncertainty_bins=())
+    assert not plant.uncertainty_aware
+    v_max = 240.0 / 3.6
+    assert plant.ay_max(v_max) < plant.ay_max(0.0), "fixture must lose grip with speed"
+
+    floor_ay = lateral_envelope_floor_ms2(plant, v_max)
+    v = 0.0
+    while v <= v_max:
+        assert floor_ay <= plant.ay_max(v) + 1e-12, f"floor {floor_ay} > ay_max({v})"
+        v += 0.25
+
+    # And the fallback path built on it must still return a feasible speed.
+    kappa = 0.01
+    v_out = feasible_speed_at_or_below(v_max, kappa, plant, descent_steps=0)
+    assert v_out * v_out * kappa <= plant.ay_max(v_out) * (1.0 + 1e-9)
 
 
 def test_sub_floor_apex_does_not_block_the_braking_pass():

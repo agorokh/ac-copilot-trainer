@@ -1810,22 +1810,27 @@ _APEX_FIXED_POINT_STEPS = 8
 _APEX_DESCENT_STEPS = 64
 
 
-def lateral_envelope_floor_ms2(ggv: GGVModel) -> float:
-    """A speed-independent lower bound on ``ay_max`` over the model's whole speed support.
+def lateral_envelope_floor_ms2(ggv: GGVModel, v_max_ms: float) -> float:
+    """A lower bound on ``ay_max`` over ``[0, v_max_ms]`` — the range a descent can land in.
 
     Used as the provably-feasible fallback when an iterative descent runs out of budget: for any
     ``kappa``, ``v = sqrt(floor/kappa)`` satisfies ``v²·κ = floor <= ay_max(v)`` by definition of a
     lower bound, so it can never violate the envelope.
 
     ``ay_max`` is piecewise in v (a smooth point model clipped by a per-bin ``safe_g``), so its
-    minimum lies on a bin boundary. Scanning both edges of every bin plus zero covers that whether
-    the point model rises or falls with speed, and uses only the public accessor rather than
-    re-deriving the model internals.
+    minimum over an interval lies on a bin boundary or an interval endpoint. Scanning zero, both
+    edges of every bin inside the interval, and ``v_max_ms`` itself covers that **whether the point
+    model rises or falls with speed** — the endpoint matters because a model with no bins at all and
+    a negative ``k_aero_lat`` has its minimum at the top of the range, not at zero, so sampling only
+    zero would return that model's *maximum* and break the bound (#695 review). Uses only the public
+    accessor rather than re-deriving the model internals.
     """
-    speeds = [0.0]
+    speeds = [0.0, max(0.0, v_max_ms)]
     for speed_bin in ggv.uncertainty_bins:
-        speeds.append(float(speed_bin["speed_min_kmh"]) / 3.6)
-        speeds.append(float(speed_bin["speed_max_kmh"]) / 3.6)
+        for edge_kmh in (speed_bin["speed_min_kmh"], speed_bin["speed_max_kmh"]):
+            edge = float(edge_kmh) / 3.6
+            if 0.0 <= edge <= v_max_ms:
+                speeds.append(edge)
     return min(ggv.ay_max(v) for v in speeds)
 
 
@@ -1858,8 +1863,9 @@ def feasible_speed_at_or_below(
             return vi
         vi = math.sqrt(ay_limit / kappa)
     # Budget exhausted (a pathological envelope, or a bin count beyond the descent budget): drop to
-    # the global floor rather than returning a speed the verifier will reject.
-    return min(vi, math.sqrt(lateral_envelope_floor_ms2(ggv) / kappa))
+    # the floor over the range we could have landed in, rather than returning a speed the verifier
+    # will reject. Bounding over [0, v_ms] is what makes the fallback provably feasible.
+    return min(vi, math.sqrt(lateral_envelope_floor_ms2(ggv, v_ms) / kappa))
 
 
 def apex_speed(
