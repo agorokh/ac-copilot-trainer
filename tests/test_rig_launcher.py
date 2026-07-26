@@ -1158,7 +1158,13 @@ def test_simhub_starts_when_requested_and_executable_exists(tmp_path: Path) -> N
     exe.parent.mkdir()
     exe.write_text("", encoding="utf-8")
     calls: list[Any] = []
-    cfg = GamePointConfig(start_simhub=True, paths=LauncherPaths(tmp_path))
+    cfg = GamePointConfig(
+        port=9999,
+        external_bind="192.168.137.1",
+        token="test-token",
+        start_simhub=True,
+        paths=LauncherPaths(tmp_path),
+    )
 
     def fake_popen(*args: Any, **kwargs: Any) -> _Proc:
         calls.append((args, kwargs))
@@ -1175,6 +1181,10 @@ def test_simhub_starts_when_requested_and_executable_exists(tmp_path: Path) -> N
 
     assert result.state == "started"
     assert calls[0][0][0] == [str(exe)]
+    child_env = calls[0][1]["env"]
+    assert child_env["AC_COPILOT_SIDECAR_PORT"] == "9999"
+    assert child_env["AC_COPILOT_SIDECAR_EXTERNAL_BIND"] == "192.168.137.1"
+    assert child_env["AC_COPILOT_SIDECAR_TOKEN"] == "test-token"
 
 
 def test_config_from_env_and_args_uses_launcher_overrides(tmp_path: Path, monkeypatch) -> None:

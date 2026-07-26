@@ -36,6 +36,7 @@ from tools.ai_sidecar.server import (  # noqa: E402
     _is_loopback,
     _RateLimiter,
     _reset_external_state,
+    _with_snapshot_age,
     make_token_check,
 )
 from tools.ai_sidecar.setup_optimizer import rebuild_experiments  # noqa: E402
@@ -2126,6 +2127,17 @@ def test_peripheral_rate_limiter_blocks_until_interval_elapsed() -> None:
     assert limiter.allow(("telemetry_tick",), max_hz=20.0)
 
 
+def test_identity_replay_age_uses_relative_monotonic_time_without_mutating_cache() -> None:
+    cached = {"v": 1, "type": "state.snapshot", "topic": "connection", "payload": {}}
+    replay = _with_snapshot_age(
+        cached,
+        observed_monotonic=10.0,
+        now_monotonic=14.2,
+    )
+    assert replay["snapshot_age_ms"] == 4200
+    assert "snapshot_age_ms" not in cached
+
+
 def test_session_is_enriched_live_replayed_and_invalidated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2194,4 +2206,8 @@ def test_session_is_enriched_live_replayed_and_invalidated(
         assert frame["payload"]["car_class"] == "rear-engine-gt"
         assert frame["payload"]["car_class_source"] == "override"
         assert frame["payload"]["car_class_registry_version"] == 1
-    assert replayed_frame == live_frame
+    assert replayed_frame["v"] == live_frame["v"]
+    assert replayed_frame["type"] == live_frame["type"]
+    assert replayed_frame["topic"] == live_frame["topic"]
+    assert replayed_frame["payload"] == live_frame["payload"]
+    assert replayed_frame["snapshot_age_ms"] >= 0

@@ -30,8 +30,10 @@ example:
 if([AcCopilotDataPlugin.CarClass] = 'rear-engine-gt', 1.15, 1.0)
 ```
 
-The bridge reads `AC_COPILOT_SIDECAR_PORT` and the optional
-`AC_COPILOT_SIDECAR_TOKEN` from the inherited environment. It reconnects with
-a bounded backoff. `CarClass` fails closed to `unknown` within 3.5 seconds when
-the trainer's one-second `connection` heartbeat stops, even if the sidecar
-process remains connected.
+The bridge reads `AC_COPILOT_SIDECAR_PORT`,
+`AC_COPILOT_SIDECAR_EXTERNAL_BIND`, and the optional
+`AC_COPILOT_SIDECAR_TOKEN` from the inherited environment. Game Point injects
+its resolved settings when it launches SimHub; wildcard binds normalize to
+loopback. The bridge reconnects with a bounded backoff. `CarClass` fails closed
+to `unknown` within 3.5 seconds, using monotonic heartbeat age (including cache
+replay age), even if the sidecar process remains connected.

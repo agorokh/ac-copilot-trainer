@@ -2,6 +2,7 @@ using GameReaderCommon;
 using SimHub.Plugins;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Net.WebSockets;
 using System.Text;
@@ -27,7 +28,7 @@ namespace AcCopilot.CarEnrichment
         private string carId = "";
         private string classSource = "";
         private int registryVersion;
-        private long lastConnectionUtcTicks;
+        private long lastConnectionTimestamp;
         private volatile bool sidecarConnected;
 
         public PluginManager PluginManager { get; set; }
@@ -83,7 +84,9 @@ namespace AcCopilot.CarEnrichment
             {
                 try
                 {
-                    await ConnectAndConsumeAsync(token).ConfigureAwait(false);
+                    await ConnectAndConsumeAsync(
+                        token,
+                        () => retryMilliseconds = 500).ConfigureAwait(false);
                     retryMilliseconds = 500;
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -112,7 +115,9 @@ namespace AcCopilot.CarEnrichment
             }
         }
 
-        private async Task ConnectAndConsumeAsync(CancellationToken token)
+        private async Task ConnectAndConsumeAsync(
+            CancellationToken token,
+            Action onConnected)
         {
             using (ClientWebSocket socket = new ClientWebSocket())
             {
@@ -135,6 +140,7 @@ namespace AcCopilot.CarEnrichment
                 {
                     throw new InvalidDataException("sidecar did not return hello_ack");
                 }
+                onConnected();
                 sidecarConnected = true;
                 await SendAsync(
                     socket,
@@ -162,7 +168,16 @@ namespace AcCopilot.CarEnrichment
             {
                 port = 8765;
             }
-            return new Uri("ws://127.0.0.1:" + port + "/");
+            string host = Environment.GetEnvironmentVariable(
+                "AC_COPILOT_SIDECAR_EXTERNAL_BIND");
+            if (String.IsNullOrWhiteSpace(host)
+                || String.Equals(host, "0.0.0.0", StringComparison.Ordinal)
+                || String.Equals(host, "::", StringComparison.Ordinal))
+            {
+                host = "127.0.0.1";
+            }
+            UriBuilder builder = new UriBuilder("ws", host, port, "/");
+            return builder.Uri;
         }
 
         private async Task SendAsync(
@@ -238,7 +253,14 @@ namespace AcCopilot.CarEnrichment
             string topic = Value(frame, "topic") as string;
             if (String.Equals(topic, "connection", StringComparison.Ordinal))
             {
-                Interlocked.Exchange(ref lastConnectionUtcTicks, DateTime.UtcNow.Ticks);
+                double replayAgeMilliseconds = Math.Min(
+                    Math.Max(ToDouble(Value(frame, "snapshot_age_ms")), 0),
+                    TrainerFreshMilliseconds + 1);
+                long replayAgeTicks = (long)(
+                    replayAgeMilliseconds * Stopwatch.Frequency / 1000.0);
+                Interlocked.Exchange(
+                    ref lastConnectionTimestamp,
+                    Stopwatch.GetTimestamp() - replayAgeTicks);
                 return;
             }
             if (!String.Equals(topic, "session", StringComparison.Ordinal))
@@ -300,13 +322,31 @@ namespace AcCopilot.CarEnrichment
             }
         }
 
+        private static double ToDouble(object value)
+        {
+            try
+            {
+                return value == null ? 0 : Convert.ToDouble(value);
+            }
+            catch (FormatException)
+            {
+                return 0;
+            }
+            catch (OverflowException)
+            {
+                return 0;
+            }
+        }
+
         private bool TrainerIsFresh()
         {
-            long observed = Interlocked.Read(ref lastConnectionUtcTicks);
+            long observed = Interlocked.Read(ref lastConnectionTimestamp);
+            double elapsedMilliseconds =
+                (Stopwatch.GetTimestamp() - observed) * 1000.0 / Stopwatch.Frequency;
             return sidecarConnected
                 && observed > 0
-                && new TimeSpan(DateTime.UtcNow.Ticks - observed).TotalMilliseconds
-                    <= TrainerFreshMilliseconds;
+                && elapsedMilliseconds >= 0
+                && elapsedMilliseconds <= TrainerFreshMilliseconds;
         }
 
         private string CurrentCarClass()
@@ -340,7 +380,7 @@ namespace AcCopilot.CarEnrichment
         private void ClearConnection()
         {
             sidecarConnected = false;
-            Interlocked.Exchange(ref lastConnectionUtcTicks, 0);
+            Interlocked.Exchange(ref lastConnectionTimestamp, 0);
             ClearIdentity();
         }
     }

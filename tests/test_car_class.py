@@ -29,6 +29,7 @@ def _registry(**overrides: str) -> CarClassRegistry:
         ({"class": "race", "tags": ["DTM", "touring"]}, "touring"),
         ({"class": "drift", "tags": None}, "drift"),
         ({"class": "race", "tags": ["GT3", "race"]}, "gt"),
+        ({"class": None, "tags": ["GT3"]}, "gt"),
         ({"class": "race", "tags": []}, "race"),
         ({"class": "street", "tags": ["GT3 RS", "trackday"]}, "road"),
         ({"class": None, "tags": None, "specs": {"bhp": "500hp"}}, "road"),
@@ -61,6 +62,16 @@ def test_override_ids_are_case_insensitive() -> None:
         registry=_registry(ks_porsche_911_gt3_r_2016="rear-engine-gt"),
     )
     assert resolution.car_class == "rear-engine-gt"
+
+
+def test_unknown_metadata_uses_default_provenance() -> None:
+    resolution = classify_car(
+        "mystery",
+        {"class": "unclassified", "tags": ["novel"]},
+        registry=_registry(),
+    )
+    assert resolution.car_class == "road"
+    assert resolution.source == "default"
 
 
 def test_load_ui_metadata_accepts_bom_and_heterogeneous_specs(tmp_path: Path) -> None:

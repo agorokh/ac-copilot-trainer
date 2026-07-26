@@ -44,9 +44,11 @@ SimHub's supported PluginSdk. It exposes:
 
 The plugin does no work on SimHub's `DataUpdate` critical path. A background
 WebSocket subscribes to `connection` and `session`, reconnects with bounded
-backoff, and inherits `AC_COPILOT_SIDECAR_PORT` plus the optional secret token.
-If the trainer heartbeat stops, the public class fails closed to `unknown`
-within 3.5 seconds even when the sidecar socket remains open.
+backoff, and inherits the launcher's resolved bind, port, and optional secret
+token. Wildcard binds normalize to loopback; a concrete adapter bind remains
+reachable. Heartbeat age uses monotonic time, including the relative age carried
+on cached replay. If the trainer heartbeat stops, the public class fails closed
+to `unknown` within 3.5 seconds even when the sidecar socket remains open.
 
 SimHub's supported profile selector matches games/cars, not arbitrary custom
 properties. Use the property inside one operator-curated dashboard or ShakeIt

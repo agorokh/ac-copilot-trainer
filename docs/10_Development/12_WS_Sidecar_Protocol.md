@@ -135,8 +135,11 @@ relaying a Lua-produced `state.snapshot` on that topic, the sidecar adds:
 | `car_ui_class` | string/null | Original `ui_car.json` class for diagnosis, never the downstream authority. |
 
 The enriched frame has `source="sidecar.car_class"`. Live and late subscribers
-receive the same enriched snapshot through the existing identity cache. The
-cache is invalidated when the producing Lua peer disconnects.
+receive the same enriched payload through the existing identity cache. A replay
+also carries top-level `snapshot_age_ms`, computed from the sidecar's monotonic
+receipt time, so freshness consumers do not mistake an old cached heartbeat for
+a new one. The cache and its age record are invalidated when the producing Lua
+peer disconnects.
 
 The resolver reads `ui_car.json` under `AC_COPILOT_AC_ROOT`, applies
 `tools/ai_sidecar/car_class_overrides.json` first, then deterministic metadata

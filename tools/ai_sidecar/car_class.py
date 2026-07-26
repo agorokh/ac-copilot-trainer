@@ -227,13 +227,7 @@ def _metadata_words(metadata: dict[str, Any] | None) -> tuple[set[str], str]:
     return set(_WORD.findall(normalized)), normalized
 
 
-def classify_metadata(
-    metadata: dict[str, Any] | None, *, default_class: str = DEFAULT_CLASS
-) -> str:
-    """Classify UI metadata using a stable, ordered vocabulary."""
-
-    if default_class not in CAR_CLASSES:
-        raise ValueError(f"invalid default class: {default_class!r}")
+def _classify_metadata_rule(metadata: dict[str, Any] | None) -> str | None:
     words, normalized = _metadata_words(metadata)
     raw_class = metadata.get("class") if isinstance(metadata, dict) else None
     raw_words = set(_WORD.findall(raw_class.casefold())) if isinstance(raw_class, str) else set()
@@ -257,15 +251,28 @@ def classify_metadata(
         return "drift"
 
     gt_words = {"gt", "gt1", "gt2", "gt3", "gt4", "gte"}
-    if raw_words.intersection(gt_words) or ("race" in raw_words and words.intersection(gt_words)):
+    road_words = {"street", "road", "stock", "track", "supercars"}
+    if raw_words.intersection(gt_words) or (
+        not raw_words.intersection(road_words) and words.intersection(gt_words)
+    ):
         return "gt"
     if "race" in raw_words:
         return "race"
-    if raw_words.intersection({"street", "road", "stock", "track", "supercars"}):
+    if raw_words.intersection(road_words):
         return "road"
     if "race" in words:
         return "race"
-    return default_class
+    return None
+
+
+def classify_metadata(
+    metadata: dict[str, Any] | None, *, default_class: str = DEFAULT_CLASS
+) -> str:
+    """Classify UI metadata using a stable, ordered vocabulary."""
+
+    if default_class not in CAR_CLASSES:
+        raise ValueError(f"invalid default class: {default_class!r}")
+    return _classify_metadata_rule(metadata) or default_class
 
 
 def classify_car(
@@ -288,11 +295,12 @@ def classify_car(
             registry_version=active_registry.version,
             ui_class=ui_class,
         )
-    classified = classify_metadata(metadata, default_class=active_registry.default_class)
+    matched_class = _classify_metadata_rule(metadata)
+    classified = matched_class or active_registry.default_class
     return CarClassResolution(
         car_id=car_id,
         car_class=classified,
-        source="metadata" if isinstance(metadata, dict) else "default",
+        source="metadata" if matched_class is not None else "default",
         registry_version=active_registry.version,
         ui_class=ui_class,
     )
