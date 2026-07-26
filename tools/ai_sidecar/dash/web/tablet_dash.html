@@ -22,7 +22,7 @@
                     + Part D vitals: tyre_pressures_psi / tyre_wear_pct per corner,
                       tc_active / abs_active (electronics intervention flash)
     delta           {delta_s, spline} 10 Hz            tire_temps {fl,fr,rl,rr} core degC
-    lap             {lap,last_lap_ms,best_lap_ms}      session    {car_id,track_id}
+    lap             {lap,last_lap_ms,best_lap_ms}      session    {car_id,track_id,car_class}
     coaching.snapshot  corner/kind/target/dist/progress (coach lane, kind=="brake" takeover)
     setup.active    {name,path}                        setup.list.result  car/track identity
     setup.spinner.list.result  per-car electronics ranges (the "/max" fix, DESIGN_SPEC section 5)
@@ -331,6 +331,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     coach: null, coachAt: 0,        // coaching.snapshot payload
     setupName: null,                // setup.active .name
     carName: null, trackName: null, // setup.list.result identity
+    carClass: "unknown",            // sidecar-enriched session identity (#534)
     sessionIdent: null,             // "car|track|session|uuid" key (re-request setup data on change)
     sessionCarId: null, sessionTrackId: null, sessionUuid: null,
                                       // identity parts for replay-frame gating (#618 R3, #622)
@@ -1120,7 +1121,10 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     setText("sname", S.setupName ? String(S.setupName).toUpperCase() : "NO SETUP LOADED");
     var car = S.carName || "—";
     var trk = S.trackName ? " — " + S.trackName : "";
-    setText("cartrk", (car + trk).toUpperCase());
+    var cls = S.carClass && S.carClass !== "unknown"
+      ? " · " + String(S.carClass).replace(/-/g, " ")
+      : "";
+    setText("cartrk", (car + trk + cls).toUpperCase());
   }
 
   // ---- websocket -----------------------------------------------------------------------------
@@ -1218,6 +1222,9 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
             S.sessionCarId = p.car_id || null;
             S.sessionTrackId = p.track_id || null;
             S.sessionUuid = p.session_uuid || null;
+            S.carClass = p.car_class || "road";
+            document.body.setAttribute("data-car-class", S.carClass);
+            renderHeader();
             // Replayed cached frames may have arrived BEFORE this session snapshot — drop
             // any that a known identity now contradicts (#618 R3).
             if (S.review && !identCompatible(

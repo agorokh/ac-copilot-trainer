@@ -122,6 +122,36 @@ python -m tools.ai_sidecar --setup-store "<...>/experiments.jsonl" --host 127.0.
 
 See [13_Setup_Experiments.md](13_Setup_Experiments.md) for data location, reset, and rebuild.
 
+## Car-class enrichment
+
+Issue **#534** keeps `session` as the one car-identity topic. Before caching or
+relaying a Lua-produced `state.snapshot` on that topic, the sidecar adds:
+
+| Payload field | Type | Meaning |
+| --- | --- | --- |
+| `car_class` | string | Stable resolved class such as `rear-engine-gt`, `formula`, or `road`. |
+| `car_class_source` | string | `override`, `metadata`, `default`, or `registry-error`. |
+| `car_class_registry_version` | int | Checked-in override schema version; `0` only on a registry/package fault. |
+| `car_ui_class` | string/null | Original `ui_car.json` class for diagnosis, never the downstream authority. |
+
+The enriched frame has `source="sidecar.car_class"`. Live and late subscribers
+receive the same enriched payload through the existing identity cache. A replay
+also carries top-level `snapshot_age_ms`, computed from the sidecar's monotonic
+receipt time, so freshness consumers do not mistake an old cached heartbeat for
+a new one. The cache and its age record are invalidated when the producing Lua
+peer disconnects.
+
+The resolver reads `ui_car.json` under `AC_COPILOT_AC_ROOT`, applies
+`tools/ai_sidecar/car_class_overrides.json` first, then deterministic metadata
+rules, then the conservative `road` default. Run an installed-fleet audit with:
+
+```bash
+python -m tools.ai_sidecar.car_class --ac-root "C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"
+```
+
+See [20_Car_Enrichment.md](20_Car_Enrichment.md) for taxonomy, SimHub properties,
+gates, and rollback.
+
 ## Session Review Reports
 
 Loopback Lua/client -> sidecar: `{"v":1,"type":"session.review.generate","lap_dir":".../journal/laps"}` writes a derived post-session review to the sibling `journal/reports` directory.

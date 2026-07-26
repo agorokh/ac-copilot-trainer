@@ -131,6 +131,14 @@ def test_session_review_replay_is_scoped_by_shared_session_uuid() -> None:
     assert '+ "|" + String(p.session_uuid || "")' in body
 
 
+def test_dashboard_consumes_sidecar_enriched_car_class() -> None:
+    body = _TABLET_DASH_PAGE_PATH.read_text(encoding="utf-8")
+    assert 'carClass: "unknown"' in body
+    assert 'S.carClass = p.car_class || "road"' in body
+    assert 'setAttribute("data-car-class", S.carClass)' in body
+    assert 'String(S.carClass).replace(/-/g, " ")' in body
+
+
 def test_dash_part_d_vitals_are_bound_end_to_end() -> None:
     """#531 Part D anti-dead-wiring guard.
 

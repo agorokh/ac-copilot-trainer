@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-03-28
-updated: 2026-06-16
+updated: 2026-07-25
 relates_to:
   - AcCopilotTrainer/00_System/Architecture Invariants.md
   - 00_Graph_Schema.md
@@ -27,6 +27,7 @@ Architecture Decision Records for this vault.
 - [track-titan-coaching-oracle-strategy-2026-06-27](track-titan-coaching-oracle-strategy-2026-06-27.md) — **draft proposal**: treat Track Titan as a swappable external "coaching oracle" (not a runtime data source); cheap wins = pro-ghost→#207 importer + TT-as-referee for the harness; gated ws:9121 spike; never automate the user's cloud token. See [[track-titan-telemetry-extraction-feasibility-2026-06-27]].
 - [curated-setup-as-data-platform-entity-2026-06-28](curated-setup-as-data-platform-entity-2026-06-28.md) — car setups become **first-class data entities**: version-controlled `assets/setups/<carID>/<track>/*.ini` + `tools/setup_catalog` registrar (rig-faithful djb2 `canonical_hash`) + a JSONL catalog the DuckDB lake LEFT-JOINs onto driven laps (no schema change). Deploy to `%AC_USERDATA%` is opt-in. See [[curated-setup-hash-bridge-2026-06-28]] and the first entity [[porsche-911-gt3r-magione-balanced-setup-2026-06-28]].
 - [setup-intelligence-platform-2026-06-29](setup-intelligence-platform-2026-06-29.md) — draft SIP roadmap: full per-car setup schema, setup/outcome lake joins, write surface, and autonomous setup-sweep loop.
+- [car-class-enrichment-authority-2026-07-25](car-class-enrichment-authority-2026-07-25.md) — the Python sidecar owns deterministic car-class resolution; the replayable `session` snapshot is the single publication stream; SimHub is a fail-closed, read-only consumer and never a profile authority.
 - [voice-coach-architecture-2026-06-28](voice-coach-architecture-2026-06-28.md) — in-the-ear voice coach (issue #340): pre-rendered phrase bank (not live TTS) + urgency scheduler (barge-in/dedup/TTL/cooldown) speaking the same `Advisory` stream as the text HUD; stdlib core dep-free, audio deps behind the `voice` extra; headset pinned off the haptic DAC.
 - [voice-intensity-register-2026-06-28](voice-intensity-register-2026-06-28.md) — intensity-expressive coach (issue #368): a baked `register` tone tier (calm/firm/critical) as a 4th content-addressed manifest axis; severity→register in the observer w/ hysteresis; terse anticipatory cues (act ≤450 ms); ffmpeg prosody chain over Kokoro/say-expressive/ToneBackend; timing-report + voice benchmark. Corrects the stale "spline absent from live payload" comment.
 - [duckdb-over-clickhouse-storage-2026-06-29](duckdb-over-clickhouse-storage-2026-06-29.md) — why **embedded DuckDB** (not the fleet-default **ClickHouse**) for AC analytics storage: it's offline-only (NOT the voice/realtime path — voice is a baked phrase bank, no DB), there was no head-to-head trade study (ClickHouse absent from the repo), and the drivers are deployment topology + the data-immutability invariant (server-less single-rig, derived/disposable view over an immutable JSON corpus, ~375k-sample scale, CI-embeddable). See [[coaching-lakehouse-duckdb-2026-06-28]].

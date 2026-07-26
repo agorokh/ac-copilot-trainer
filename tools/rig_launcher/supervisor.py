@@ -417,6 +417,19 @@ class GamePointSupervisor:
             env["AC_COPILOT_VOICE_TTS"] = "1"
         return env
 
+    def simhub_environment(self) -> dict[str, str]:
+        """Expose the launcher's resolved sidecar endpoint to the SimHub plugin."""
+
+        env = dict(self._environ)
+        env["AC_COPILOT_SIDECAR_PORT"] = str(self.config.port)
+        _put_if_present(
+            env,
+            "AC_COPILOT_SIDECAR_EXTERNAL_BIND",
+            self.config.external_bind,
+        )
+        _put_if_present(env, "AC_COPILOT_SIDECAR_TOKEN", self.config.token)
+        return env
+
     def preflight(self) -> tuple[ProbeResult, ...]:
         checks: list[ProbeResult] = []
         if self.config.external_bind and not _is_loopback(self.config.external_bind):
@@ -1000,7 +1013,11 @@ class GamePointSupervisor:
         try:
             self._popen(
                 [str(exe)],
-                **_subprocess_kwargs(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+                **_subprocess_kwargs(
+                    env=self.simhub_environment(),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - visible status beats hidden failure
             return ProbeResult("simhub", False, "start_failed", str(exc))

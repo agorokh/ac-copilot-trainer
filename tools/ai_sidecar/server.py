@@ -32,6 +32,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from tools.ai_sidecar import observability
+from tools.ai_sidecar.car_class import CarClassResolution, resolve_installed_car
 from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled
 from tools.ai_sidecar.external_protocol import (
     AUTH_HEADER,
@@ -168,6 +169,9 @@ _sidecar_state_cache: dict[str, dict[str, Any]] = {}
 # #531 Part B: which peer produced each cached IDENTITY_REPLAY_TOPICS snapshot — the cache
 # entry is dropped when that peer disconnects (its identity dies with it).
 _identity_cache_producers: dict[str, Any] = {}
+# Monotonic receipt time for each identity snapshot. Replays carry only the relative age, so
+# consumers can preserve freshness without comparing unrelated process clocks.
+_identity_cache_observed_monotonic: dict[str, float] = {}
 # M0 (#341): the live RealtimeObserver built from a FASTER reference lap. Set once at startup
 # (--reference-archive / AC_COPILOT_REFERENCE_ARCHIVE); fed each telemetry_tick frame; emits
 # advisories on the coaching.cue topic for the voice client. None = no live coaching this run.
@@ -489,12 +493,27 @@ class _RateLimiter:
 _peripheral_rate_limiter = _RateLimiter()
 
 
+def _with_snapshot_age(
+    cached: dict[str, Any],
+    *,
+    observed_monotonic: float,
+    now_monotonic: float | None = None,
+) -> dict[str, Any]:
+    """Copy one replay frame and attach its server-observed monotonic age."""
+
+    now = time.monotonic() if now_monotonic is None else now_monotonic
+    replay = dict(cached)
+    replay["snapshot_age_ms"] = max(0, round((now - observed_monotonic) * 1000))
+    return replay
+
+
 def _reset_external_state() -> None:
     global _observer_feed_peer, _observer_feed_warned
     _external_peers.clear()
     _external_peer_classes.clear()
     _sidecar_state_cache.clear()
     _identity_cache_producers.clear()
+    _identity_cache_observed_monotonic.clear()
     _peripheral_rate_limiter.reset()
     _voice_dispatch_log.clear()
     _voice_echo_log.clear()
@@ -2101,6 +2120,29 @@ def _cache_sidecar_snapshot(frame: dict[str, Any]) -> None:
         _sidecar_state_cache[str(topic)] = frame
 
 
+def _enrich_session_snapshot(frame: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of a Lua session snapshot with the sidecar-authoritative car class."""
+
+    payload_in = frame.get("payload")
+    payload = dict(payload_in) if isinstance(payload_in, dict) else {}
+    car_id = payload.get("car_id")
+    try:
+        resolution = resolve_installed_car(car_id if isinstance(car_id, str) else "")
+    except Exception:  # noqa: BLE001 - a registry/package fault must not kill the relay
+        logger.exception("car-class resolution failed car_id=%r", car_id)
+        resolution = CarClassResolution(
+            car_id=car_id if isinstance(car_id, str) else "",
+            car_class="road",
+            source="registry-error",
+            registry_version=0,
+        )
+    payload.update(resolution.wire_fields())
+    enriched = dict(frame)
+    enriched["payload"] = payload
+    enriched["source"] = "sidecar.car_class"
+    return enriched
+
+
 def _sanitize_session_review_result(payload: dict[str, Any]) -> dict[str, Any]:
     """Drop host-local paths before broadcasting session-review results to clients."""
     sanitized = dict(payload)
@@ -2454,13 +2496,18 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
         # identity instead of waiting for the next change event. Runs for BOTH the
         # sidecar-only fast path below and the relayed mixed-topic subscribe.
         for topic in data.get("topics") or []:
-            cached = _sidecar_state_cache.get(str(topic))
+            topic_name = str(topic)
+            cached = _sidecar_state_cache.get(topic_name)
             # #531 Part F: track.map is built at wire time (before the serve-start cache
             # reset), so its frame lives in a global rather than the peer-scoped cache.
-            if cached is None and str(topic) == "track.map":
+            if cached is None and topic_name == "track.map":
                 cached = _track_map_frame
             if cached is not None:
-                await _safe_send(websocket, cached)
+                replay = cached
+                observed = _identity_cache_observed_monotonic.get(topic_name)
+                if observed is not None:
+                    replay = _with_snapshot_age(cached, observed_monotonic=observed)
+                await _safe_send(websocket, replay)
     if t in (TYPE_STATE_SUBSCRIBE, TYPE_STATE_UNSUBSCRIBE) and topics_are_sidecar_only(
         data.get("topics")
     ):
@@ -2483,6 +2530,11 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     # responds with `config.value` / `config.ack` / `action.ack` /
     # `state.snapshot`, which are also forwarded back through this same path.
     topic = data.get("topic")
+    if t == TYPE_STATE_SNAPSHOT and topic == "session":
+        # #534: session is the single car-identity authority. Enrich before every
+        # downstream consumer (race status, replay cache, and live fan-out) so a
+        # late subscriber sees the byte-equivalent resolved class.
+        data = _enrich_session_snapshot(data)
     # #531 Part D remainder: the Lua `delta` / `lap` topics feed the fused race-status state
     # (predicted lap = stint best + live gap) on their way through the relay. Read-only tap;
     # the frames still broadcast unchanged below.
@@ -2505,6 +2557,7 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
         # the dead session's car/setup).
         _sidecar_state_cache[topic] = data
         _identity_cache_producers[topic] = websocket
+        _identity_cache_observed_monotonic[topic] = time.monotonic()
     logger.info(
         "relay peer=%s type=%s%s peers=%d",
         peer,
@@ -2739,6 +2792,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
         for cached_topic, producer in list(_identity_cache_producers.items()):
             if producer is websocket:
                 _identity_cache_producers.pop(cached_topic, None)
+                _identity_cache_observed_monotonic.pop(cached_topic, None)
                 _sidecar_state_cache.pop(cached_topic, None)
         _release_observer_feed(websocket)
         for t in list(pending_followups):

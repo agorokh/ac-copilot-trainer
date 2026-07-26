@@ -36,6 +36,7 @@ from tools.ai_sidecar.server import (  # noqa: E402
     _is_loopback,
     _RateLimiter,
     _reset_external_state,
+    _with_snapshot_age,
     make_token_check,
 )
 from tools.ai_sidecar.setup_optimizer import rebuild_experiments  # noqa: E402
@@ -2124,3 +2125,89 @@ def test_peripheral_rate_limiter_blocks_until_interval_elapsed() -> None:
     assert not limiter.allow(("telemetry_tick",), max_hz=20.0)
     now[0] += 0.001
     assert limiter.allow(("telemetry_tick",), max_hz=20.0)
+
+
+def test_identity_replay_age_uses_relative_monotonic_time_without_mutating_cache() -> None:
+    cached = {"v": 1, "type": "state.snapshot", "topic": "connection", "payload": {}}
+    replay = _with_snapshot_age(
+        cached,
+        observed_monotonic=10.0,
+        now_monotonic=14.2,
+    )
+    assert replay["snapshot_age_ms"] == 4200
+    assert "snapshot_age_ms" not in cached
+
+
+def test_session_is_enriched_live_replayed_and_invalidated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One authoritative session class reaches live and late peers, then dies with Lua."""
+
+    ui = tmp_path / "content" / "cars" / "ks_porsche_911_gt3_r_2016" / "ui" / "ui_car.json"
+    ui.parent.mkdir(parents=True)
+    ui.write_text('{"class":"race","tags":["GT3","race"]}', encoding="utf-8")
+    monkeypatch.setenv("AC_COPILOT_AC_ROOT", str(tmp_path))
+
+    async def _hello(ws, client: str, client_class: str) -> None:
+        await ws.send(
+            json.dumps({"v": 1, "type": "hello", "client": client, "client_class": client_class})
+        )
+        await asyncio.wait_for(ws.recv(), timeout=2.0)
+
+    async def _subscribe(ws) -> None:
+        await ws.send(json.dumps({"v": 1, "type": "state.subscribe", "topics": ["session"]}))
+
+    async def _run() -> tuple[dict, dict]:
+        async with _running_sidecar() as port:
+            url = f"ws://127.0.0.1:{port}/"
+            async with (
+                ws_connect(url) as lua,
+                ws_connect(url) as live,
+                ws_connect(url) as late,
+            ):
+                await _hello(lua, "trainer-lua", ep.CLIENT_CLASS_LUA)
+                await _hello(live, "simhub-live", ep.CLIENT_CLASS_EXTERNAL)
+                await _subscribe(live)
+                relayed_subscription = json.loads(await asyncio.wait_for(lua.recv(), timeout=2.0))
+                assert relayed_subscription["type"] == "state.subscribe"
+
+                await lua.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "state.snapshot",
+                            "topic": "session",
+                            "payload": {
+                                "car_id": "ks_porsche_911_gt3_r_2016",
+                                "track_id": "magione",
+                            },
+                        }
+                    )
+                )
+                live_frame = json.loads(await asyncio.wait_for(live.recv(), timeout=2.0))
+
+                await _hello(late, "simhub-late", ep.CLIENT_CLASS_EXTERNAL)
+                await _subscribe(late)
+                replayed_frame = json.loads(await asyncio.wait_for(late.recv(), timeout=2.0))
+                await asyncio.wait_for(lua.recv(), timeout=2.0)  # late peer's relayed subscribe
+                await lua.close()
+                await asyncio.sleep(0)
+
+                async with ws_connect(url) as after:
+                    await _hello(after, "simhub-after", ep.CLIENT_CLASS_EXTERNAL)
+                    await _subscribe(after)
+                    with pytest.raises(asyncio.TimeoutError):
+                        await asyncio.wait_for(after.recv(), timeout=0.15)
+                return live_frame, replayed_frame
+
+    live_frame, replayed_frame = asyncio.run(_run())
+    for frame in (live_frame, replayed_frame):
+        assert frame["source"] == "sidecar.car_class"
+        assert frame["payload"]["car_class"] == "rear-engine-gt"
+        assert frame["payload"]["car_class_source"] == "override"
+        assert frame["payload"]["car_class_registry_version"] == 1
+    assert replayed_frame["v"] == live_frame["v"]
+    assert replayed_frame["type"] == live_frame["type"]
+    assert replayed_frame["topic"] == live_frame["topic"]
+    assert replayed_frame["payload"] == live_frame["payload"]
+    assert replayed_frame["snapshot_age_ms"] >= 0

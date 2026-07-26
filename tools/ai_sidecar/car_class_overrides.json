@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "default_class": "road",
+  "overrides": {
+    "bmw_m3_gt2": "front-engine-gt",
+    "bmw_z4_gt3": "front-engine-gt",
+    "ks_audi_r8_lms": "mid-engine-gt",
+    "ks_audi_r8_lms_2016": "mid-engine-gt",
+    "ks_corvette_c7r": "front-engine-gt",
+    "ks_ferrari_458_gt2": "mid-engine-gt",
+    "ks_ferrari_488_gt3": "mid-engine-gt",
+    "ks_lamborghini_huracan_gt3": "mid-engine-gt",
+    "ks_mclaren_650_gt3": "mid-engine-gt",
+    "ks_mercedes_amg_gt3": "front-engine-gt",
+    "ks_nissan_gtr_gt3": "front-engine-gt",
+    "ks_porsche_911_carrera_rsr": "rear-engine-gt",
+    "ks_porsche_911_gt3_cup_2017": "rear-engine-gt",
+    "ks_porsche_911_gt3_r_2016": "rear-engine-gt",
+    "ks_porsche_911_gt1": "mid-engine-gt",
+    "ks_porsche_911_rsr_2017": "mid-engine-gt",
+    "ks_porsche_935_78_moby_dick": "rear-engine-gt",
+    "mercedes_sls_gt3": "front-engine-gt",
+    "mclaren_mp412c_gt3": "mid-engine-gt"
+  }
+}

@@ -25,6 +25,10 @@ venv/
 .coverage
 htmlcov/
 
+# .NET/SimHub plugin build outputs
+tools/simhub_car_enrichment/**/bin/
+tools/simhub_car_enrichment/**/obj/
+
 # Scratch / local experiments
 .scratch/
 tools/_scratch/
