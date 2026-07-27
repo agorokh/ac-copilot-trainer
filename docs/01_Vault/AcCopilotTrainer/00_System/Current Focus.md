@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-27T01:20:00Z
+last_updated: 2026-07-27T03:35:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-529-pace-ladder-115-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-695-qss-apex-envelope-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-693-off-rig-session0-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-675-coach-v2-phase-slots-2026-07-25.md
@@ -51,6 +52,21 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-26 PM):** `/autonomous-deliver 529` — **#529 G2 MET: 81.505 s at Magione**,
+under the 82.7 s Track-Titan floor (two consecutive flying laps, 0 recoveries, all archives
+`is_valid: true`). Night's progression 88.425 -> 85.072 -> 84.587 -> **81.505 s**. The decisive
+factor was **retaining** the plant refit: identical 1.15 scale, plant QSS floor 91.26 -> 87.14 s.
+#696 proven on the rig (1.15 had never actually been driven). Assist-parity caveat vs the "TC-off"
+reference is stated on the issue for the operator to adjudicate. Detail:
+[[issue-529-pace-ladder-115-2026-07-26]].
+
+**Open now:** PR [#702](https://github.com/agorokh/ac-copilot-trainer/pull/702) (#697
+`remote_launcher` off-rig transport) — CI green, 0 threads, live-proven, **merge blocked only by a
+Codex usage-limit wall**. New issue [#703](https://github.com/agorokh/ac-copilot-trainer/issues/703)
+— a falsified ladder step discards the evidence-backed plant refit made in the same iteration; that
+cost ladder 1 ~3.5 s, so it is the top pace lever remaining. #627 is *not* the binding constraint it was assumed to be: a ~4 h
+hold restored 6 launch cycles, no reboot needed.
 
 **Delivered (2026-07-26):** PR [#696](https://github.com/agorokh/ac-copilot-trainer/pull/696)
 MERGED [`7702b42`](https://github.com/agorokh/ac-copilot-trainer/commit/7702b42) — #695 QSS apex
