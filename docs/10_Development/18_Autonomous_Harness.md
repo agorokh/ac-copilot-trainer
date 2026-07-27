@@ -342,10 +342,15 @@ echo [wrapper] exit=%ERRORLEVEL% >> "$ev\wrapper.log"
 #    overnight runs this path exists for. Derive /st and /sd from the SAME DateTime so a rollover
 #    carries the correct day. The trigger never fires anyway; /run starts the task on demand.
 $when = (Get-Date).AddMinutes(5)
+# Hand /tr the 8.3 SHORT path. If any component of the path contains a space, Task Scheduler
+# accepts the create (rc=0) and the run (rc=0) and then never launches the wrapper — the evidence
+# dir just stays empty and `Last Result` reads -2147024894 (file not found). Quoting does not save
+# it; the short path does. Measured on the rig (see the note below this block).
+$trPath = (New-Object -ComObject Scripting.FileSystemObject).GetFile("$ev\run.cmd").ShortPath
 # /f is kept deliberately. The unique run id above is what prevents a peer agent's task being
 # clobbered; /f is what stops schtasks blocking on its interactive "replace it?" prompt, which was
 # measured on the rig to hang a non-interactive create indefinitely rather than return an error.
-schtasks /create /tn $task /tr "$ev\run.cmd" /sc once `
+schtasks /create /tn $task /tr $trPath /sc once `
     /st $when.ToString('HH:mm') /sd $when.ToString('MM/dd/yyyy') `
     /ru $env:USERNAME /it /f
 if ($LASTEXITCODE -ne 0) { throw "schtasks /create failed ($LASTEXITCODE)" }
@@ -380,6 +385,12 @@ An `auto_alien` ladder runs for tens of minutes, so treat step 3 as the loop you
 step 4 as end-of-run housekeeping. If a session dies before step 4, the leftover task is harmless but
 should be reaped by name on the next visit (`schtasks /query | Select-String "ac-harness-"`).
 
+> **A space anywhere in the path silently breaks `/tr`.** Measured on the rig with an evidence dir
+> under `…\space test dir\`: the bare path and a quoted path both gave `create=0`, `run=0`, and then
+> **never executed** (`Last Result: -2147024894`, empty evidence dir — the paste just waits out the
+> step-4 deadline). Wrapping as `cmd.exe /c "…"` failed to create at all (`0x80004005`). The 8.3
+> **short path** worked: `create=0`, `run=0`, `Last Result: 0`, wrapper executed. Hence `$trPath`.
+>
 > **`/sd` format is locale-dependent.** `MM/dd/yyyy` (zero-padded) is what this rig accepts; the
 > *culture* short-date pattern is **not** interchangeable — measured on the rig, `M/d/yyyy`,
 > `dd/MM/yyyy` and `yyyy/MM/dd` were all rejected with `0x80004005` while `MM/dd/yyyy` succeeded. If
