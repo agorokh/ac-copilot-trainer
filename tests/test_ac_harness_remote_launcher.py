@@ -765,3 +765,45 @@ def test_docs_do_not_advertise_a_load_subcommand() -> None:
     assert "remote_launcher load" not in doc
     assert "`load` binds" not in doc
     assert commands  # parser still exposes its subcommands
+
+
+def test_tail_keeps_a_single_very_long_line_instead_of_returning_nothing(tmp_path: Path) -> None:
+    """Dropping the partial first row must not empty the tail when the chunk has no newline."""
+    log = tmp_path / "stdout.log"
+    log.write_text("y" * (rl._TAIL_MAX_BYTES + 4096), encoding="utf-8")
+    rows = rl._tail(log, 5)
+    assert rows and rows[-1].startswith("y")
+
+
+def test_resolve_short_path_retries_with_the_required_buffer_size() -> None:
+    """A too-small buffer is not a failure — GetShortPathNameW returns the size it needs."""
+    long_value = "C:/" + "a" * 2000
+    calls: list[int] = []
+
+    def _fake_get_short(path, buf, size):  # noqa: ANN001, ANN202
+        calls.append(size)
+        if size <= len(long_value):
+            return len(long_value) + 1  # "buffer too small" -> required length
+        buf.value = long_value
+        return len(long_value)
+
+    assert rl.resolve_short_path(Path("C:/whatever"), _fake_get_short) == long_value
+    assert len(calls) == 2 and calls[1] > calls[0]
+
+
+def test_resolve_short_path_raises_when_the_call_genuinely_fails() -> None:
+    assert_raises = pytest.raises(rl.RemoteLaunchError, match="GetShortPathNameW failed")
+    with assert_raises:
+        rl.resolve_short_path(Path("C:/x"), lambda path, buf, size: 0)
+
+
+def test_resolve_short_path_uses_one_call_when_the_first_buffer_fits() -> None:
+    calls: list[int] = []
+
+    def _fake_get_short(path, buf, size):  # noqa: ANN001, ANN202
+        calls.append(size)
+        buf.value = "C:/SHORT~1"
+        return len("C:/SHORT~1")
+
+    assert rl.resolve_short_path(Path("C:/short"), _fake_get_short) == "C:/SHORT~1"
+    assert len(calls) == 1

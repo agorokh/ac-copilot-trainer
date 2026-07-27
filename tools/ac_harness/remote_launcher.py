@@ -404,6 +404,24 @@ def assert_transport_needed() -> tuple[int, int]:
     return current, console
 
 
+def resolve_short_path(path: Path, get_short) -> str:  # noqa: ANN001 - injected Win32 callable
+    """Buffer-growth wrapper around ``GetShortPathNameW``; separated so it is testable off-Windows.
+
+    A too-small buffer is **not** a failure: the call returns the REQUIRED length, so retry at that
+    size rather than refusing a long-but-perfectly-valid repo/run path.
+    """
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(1024)
+    size = get_short(str(path), buf, len(buf))
+    if size >= len(buf):
+        buf = ctypes.create_unicode_buffer(size + 1)
+        size = get_short(str(path), buf, len(buf))
+    if size == 0 or size >= len(buf):
+        raise RemoteLaunchError(f"GetShortPathNameW failed for {path}")
+    return buf.value
+
+
 def short_path(path: Path) -> str:
     """The 8.3 short path for ``/tr``; **raises** rather than silently handing back a spaced path.
 
@@ -416,16 +434,7 @@ def short_path(path: Path) -> str:
     get_short = ctypes.windll.kernel32.GetShortPathNameW  # type: ignore[attr-defined]
     get_short.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
     get_short.restype = wintypes.DWORD
-    # A too-small buffer is not a failure: the call returns the REQUIRED length, so retry at that
-    # size rather than refusing a long-but-perfectly-valid repo/run path.
-    buf = ctypes.create_unicode_buffer(1024)
-    size = get_short(str(path), buf, len(buf))
-    if size >= len(buf):
-        buf = ctypes.create_unicode_buffer(size + 1)
-        size = get_short(str(path), buf, len(buf))
-    if size == 0 or size >= len(buf):
-        raise RemoteLaunchError(f"GetShortPathNameW failed for {path}")
-    resolved = buf.value
+    resolved = resolve_short_path(path, get_short)
     if any(ch.isspace() for ch in resolved):
         raise RemoteLaunchError(
             f"8.3 short path unavailable (got {resolved!r}). Task Scheduler accepts a spaced /tr "
@@ -568,8 +577,11 @@ def _tail(path: Path, lines: int) -> list[str]:
         return []
     text = blob.decode("utf-8", errors="replace")
     rows = text.splitlines()
-    if start > 0 and rows:
-        # The seek can land mid-line (and mid-codepoint); drop that partial first row.
+    if start > 0 and len(rows) > 1:
+        # The seek can land mid-line (and mid-codepoint), so drop that partial first row — but
+        # ONLY when another row survives it. A chunk containing no newline at all (one very long
+        # log line) is entirely "partial", and dropping it would report an empty tail for a
+        # non-empty log, hiding exactly the diagnostics a poll is for.
         rows = rows[1:]
     return rows[-lines:]
 
