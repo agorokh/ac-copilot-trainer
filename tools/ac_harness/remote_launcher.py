@@ -416,8 +416,13 @@ def short_path(path: Path) -> str:
     get_short = ctypes.windll.kernel32.GetShortPathNameW  # type: ignore[attr-defined]
     get_short.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
     get_short.restype = wintypes.DWORD
+    # A too-small buffer is not a failure: the call returns the REQUIRED length, so retry at that
+    # size rather than refusing a long-but-perfectly-valid repo/run path.
     buf = ctypes.create_unicode_buffer(1024)
     size = get_short(str(path), buf, len(buf))
+    if size >= len(buf):
+        buf = ctypes.create_unicode_buffer(size + 1)
+        size = get_short(str(path), buf, len(buf))
     if size == 0 or size >= len(buf):
         raise RemoteLaunchError(f"GetShortPathNameW failed for {path}")
     resolved = buf.value
@@ -538,11 +543,35 @@ def load_run(run_id: str, *, repo_root: Path | None = None) -> RemoteRun:
     return replace(run, run_dir=str(run_dir))
 
 
+#: Cap on how much of a log is read to satisfy a tail. A drive stage writes megabytes of relay
+#: chatter to stderr, so reading whole files would make every poll scale with log size.
+_TAIL_MAX_BYTES = 256 * 1024
+
+
 def _tail(path: Path, lines: int) -> list[str]:
-    if not path.is_file():
+    """Last ``lines`` lines of a log, reading only the tail of the file.
+
+    ``lines <= 0`` means **no tail** — it previously returned the *entire* file, and
+    :func:`cleanup_run` calls :func:`poll_run` with ``tail=0``, so a cleanup could load and
+    JSON-print megabytes of sidecar logs.
+    """
+    if lines <= 0:
         return []
-    text = path.read_text(encoding="utf-8", errors="replace")
-    return text.splitlines()[-lines:] if lines > 0 else text.splitlines()
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            start = max(0, size - _TAIL_MAX_BYTES)
+            fh.seek(start)
+            blob = fh.read()
+    except OSError:
+        return []
+    text = blob.decode("utf-8", errors="replace")
+    rows = text.splitlines()
+    if start > 0 and rows:
+        # The seek can land mid-line (and mid-codepoint); drop that partial first row.
+        rows = rows[1:]
+    return rows[-lines:]
 
 
 def poll_run(run: RemoteRun, *, tail: int = 30) -> dict[str, Any]:
@@ -658,8 +687,19 @@ def cleanup_run(run: RemoteRun, *, force: bool = False) -> dict[str, Any]:
 
 
 def list_stale_tasks() -> list[str]:
-    """Task names this module owns that are still registered. Read-only — see :func:`reap_tasks`."""
+    """Task names this module owns that are still registered. Read-only — see :func:`reap_tasks`.
+
+    Raises rather than returning an empty list when the query fails: an empty result is what an
+    operator reads as "nothing left behind", so silently returning it on a failed ``schtasks`` call
+    would let ``reap`` exit 0 with live registrations still on the rig.
+    """
     queried = _run(["schtasks", "/query", "/fo", "list"])
+    if queried.returncode != 0:
+        raise RemoteLaunchError(
+            f"schtasks /query failed (rc={queried.returncode}): "
+            f"{(queried.stderr or queried.stdout or '').strip()[:200]} — refusing to report an "
+            "empty task list, which would read as 'nothing left behind'"
+        )
     names: list[str] = []
     for line in queried.stdout.splitlines():
         key, _, value = line.partition(":")
@@ -687,9 +727,16 @@ SCHED_S_TASK_IS_CURRENTLY_RUNNING = 267009
 def _sentinel_exit_code(run_dir: Path) -> int | None:
     """The wrapper's recorded exit code, or ``None`` when the run has not finished."""
     sentinel = run_dir / SENTINEL_NAME
-    if not sentinel.is_file():
+    try:
+        if not sentinel.is_file():
+            return None
+        text = sentinel.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        # A transient IO/permission failure must not abort a reap pass with a traceback (main()
+        # only catches RemoteLaunchError). Unreadable == unproven == fail closed: the caller then
+        # skips this task, which is the safe direction.
         return None
-    return parse_sentinel(sentinel.read_text(encoding="utf-8", errors="replace"))
+    return parse_sentinel(text)
 
 
 def task_deletion_verdict(name: str, run_dir: Path) -> tuple[bool, str]:
@@ -721,8 +768,10 @@ def task_deletion_verdict(name: str, run_dir: Path) -> tuple[bool, str]:
         last_result = int(raw_result, 0)
     except ValueError:
         return False, f"last result {raw_result!r} unreadable — failing closed"
-    if last_result in (SCHED_S_TASK_HAS_NOT_YET_RUN, SCHED_S_TASK_IS_CURRENTLY_RUNNING):
+    if last_result == SCHED_S_TASK_HAS_NOT_YET_RUN:
         return False, "task has not yet run (pre-spawn Ready window) — refusing to cancel a launch"
+    if last_result == SCHED_S_TASK_IS_CURRENTLY_RUNNING:
+        return False, "last result says the task is currently running — refusing to cancel it"
     return True, ""
 
 

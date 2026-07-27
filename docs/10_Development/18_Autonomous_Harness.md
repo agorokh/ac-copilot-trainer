@@ -359,9 +359,10 @@ Behaviours worth knowing before you debug something:
   substituted before validation, so `--evidence-dir .scratch/harness-evidence/{run_id}` makes the
   in-sim evidence share the transport's run id. The wrapper also exports
   `AC_HARNESS_REMOTE_RUN_ID`.
-- **The run id you pass is authoritative.** `run.json` lives in a writable scratch tree, so `load`
-  binds the payload to the id you asked for and **recomputes** its directory; a forged or stale
-  payload cannot redirect `cleanup` onto a peer's task.
+- **The run id you pass is authoritative.** `run.json` lives in a writable scratch tree, so
+  `poll` / `wait` / `cleanup` bind the payload to the run id you asked for and **recompute** its
+  directory; a forged or stale payload cannot redirect `cleanup` onto a peer's task. (There is no
+  `load` subcommand — that binding happens inside every command that takes a run id.)
 
 You landed in the right session when the run's own first lines report the provenance gate passing:
 

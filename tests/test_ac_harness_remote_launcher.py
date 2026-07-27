@@ -684,3 +684,84 @@ def test_cli_cleanup_exits_zero_on_a_real_delete(
         rl, "cleanup_run", lambda run, force=False: {"deleted": True, "delete_rc": 0}
     )
     assert rl.main(["cleanup", "r"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Qodo persistent-review findings 2-7
+# ---------------------------------------------------------------------------
+
+
+def test_sentinel_read_failure_does_not_abort_a_reap_pass(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An OSError on the sentinel must skip the task, not crash the CLI with a traceback."""
+    d = tmp_path.joinpath(*rl.RUN_DIR_RELPATH, "r")
+    d.mkdir(parents=True)
+    (d / rl.SENTINEL_NAME).write_text("[wrapper] exit=0\n", encoding="utf-8")
+    monkeypatch.setattr(
+        Path, "read_text", lambda self, **kw: (_ for _ in ()).throw(OSError("permission denied"))
+    )
+    assert rl._sentinel_exit_code(d) is None
+
+
+def test_list_stale_tasks_raises_rather_than_reporting_an_empty_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty list reads as 'nothing left behind' — it must never come from a FAILED query."""
+
+    class _Broken:
+        returncode = 1
+        stdout = ""
+        stderr = "ERROR: access denied"
+
+    monkeypatch.setattr(rl, "_run", lambda argv: _Broken())
+    with pytest.raises(rl.RemoteLaunchError, match="refusing to report an empty task list"):
+        rl.list_stale_tasks()
+
+
+def test_tail_zero_means_no_tail_not_the_whole_file(tmp_path: Path) -> None:
+    """cleanup_run polls with tail=0; returning the whole file printed megabytes of sidecar logs."""
+    log = tmp_path / "stdout.log"
+    log.write_text("\n".join(f"line {i}" for i in range(5000)), encoding="utf-8")
+    assert rl._tail(log, 0) == []
+    assert rl._tail(log, 3) == ["line 4997", "line 4998", "line 4999"]
+
+
+def test_tail_reads_only_the_end_of_a_large_log(tmp_path: Path) -> None:
+    log = tmp_path / "stderr.log"
+    log.write_text("x" * (rl._TAIL_MAX_BYTES * 2) + "\nlast line\n", encoding="utf-8")
+    assert rl._tail(log, 1) == ["last line"]
+
+
+def test_tail_of_a_missing_file_is_empty(tmp_path: Path) -> None:
+    assert rl._tail(tmp_path / "nope.log", 10) == []
+
+
+def test_verdict_reason_names_which_last_result_it_saw(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Refusing on 'currently running' must not report 'has not yet run'."""
+    _seed_finished_run(tmp_path, "r")
+
+    class _Running:
+        returncode = 0
+        stdout = f"Status:  Ready\nLast Result:  {rl.SCHED_S_TASK_IS_CURRENTLY_RUNNING}\n"
+
+    monkeypatch.setattr(rl, "_run", lambda argv: _Running())
+    ok, reason = rl.task_deletion_verdict(
+        "ac-harness-r", tmp_path.joinpath(*rl.RUN_DIR_RELPATH, "r")
+    )
+    assert ok is False
+    assert "currently running" in reason
+    assert "not yet run" not in reason
+
+
+def test_docs_do_not_advertise_a_load_subcommand() -> None:
+    """The runbook claimed a `load` command binds the payload; no such subcommand exists."""
+    commands = {a.dest for a in rl.build_parser()._subparsers._group_actions}  # noqa: SLF001
+    doc = (rl.harness_repo_root() / "docs/10_Development/18_Autonomous_Harness.md").read_text(
+        encoding="utf-8"
+    )
+    assert "remote_launcher load" not in doc
+    assert "`load` binds" not in doc
+    assert commands  # parser still exposes its subcommands
