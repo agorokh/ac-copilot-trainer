@@ -411,7 +411,9 @@ class AutoDriveReport:
     """Structured result of one composed autonomous self-test run."""
 
     ok: bool
-    stage: str  # preflight | launch | hijack | setup | pipeline | drive | cleanup | done
+    stage: (
+        str  # preflight | alien_line | launch | hijack | setup | pipeline | drive | cleanup | done
+    )
     launched: bool = False
     hijacked: bool = False
     drive: DriveStats | None = None
@@ -4477,6 +4479,20 @@ def _main_impl(
         )
         if alien_error is not None:
             print(f"auto-drive: {alien_error}")
+            # Emit the evidence bundle even on this pre-launch exit. Without it the composed
+            # self-play oracle sees no report.json at all and can only report "stage report
+            # missing", which reads as a physical falsification of the envelope step when the
+            # real cause was an asset/solver failure that never put the car on track (#695).
+            write_evidence(
+                evidence_dir,
+                AutoDriveReport(
+                    ok=False,
+                    stage="alien_line",
+                    error=alien_error,
+                    car_id=config.car_id,
+                    track_id=config.track_id,
+                ),
+            )
             return 2
 
     sidecar_proc = None

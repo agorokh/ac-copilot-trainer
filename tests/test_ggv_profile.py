@@ -1189,3 +1189,308 @@ def test_merge_selfplay_requires_uncertainty_aware_models():
         merge_selfplay_model(prior, aware)
     with pytest.raises(ValueError, match="uncertainty-aware"):
         merge_selfplay_model(aware, prior)
+
+
+# ---------------------------------------------------------------------------
+# #695: the lateral envelope is a STEP function of speed (uncertainty bins), so the apex solve
+# must produce a feasible speed by construction rather than trusting a fixed-iteration fixed point.
+# ---------------------------------------------------------------------------
+def _step_edge_bins() -> tuple[dict, ...]:
+    """30 x 10 km/h bins whose lateral ``safe_g`` steps DOWN across the 60 km/h edge.
+
+    Mirrors the shape observed on the live Magione 911 GT3 R plant that lost the #529 self-play
+    ladder its top envelope step: 50-60 km/h held more grip than 60-70 km/h, so an apex solved with
+    the 50-60 value can land in 60-70 and demand grip the plant does not grant there.
+    """
+
+    def channel(safe_g: float) -> dict:
+        return {
+            "mean_g": safe_g + 0.05,
+            "epistemic_std_g": 0.02,
+            "safe_g": safe_g,
+            "n": 60,
+            "source": "measured",
+        }
+
+    bins = []
+    for i in range(30):
+        lo = i * 10.0
+        safe_lat = 1.0712 if lo == 50.0 else 1.0590
+        bins.append(
+            {
+                "speed_min_kmh": lo,
+                "speed_max_kmh": lo + 10.0,
+                "lateral": channel(safe_lat),
+                "brake": channel(1.2),
+                "drive": channel(0.5),
+            }
+        )
+    return tuple(bins)
+
+
+def _step_edge_plant() -> GGVModel:
+    from dataclasses import replace as dc_replace
+
+    return dc_replace(_prior(), uncertainty_bins=_step_edge_bins())
+
+
+def test_apex_speed_never_exceeds_the_lateral_envelope_across_bin_edges():
+    """Every curvature must yield an apex whose lateral demand fits the plant (#695).
+
+    Fails on the pre-fix solver: the bare 8-step fixed point settles on the high branch of the
+    60 km/h edge for a band of curvatures, demanding up to 1.4x the safe envelope.
+    """
+    from tools.ac_harness.ggv_profile import apex_speed
+
+    plant = _step_edge_plant()
+    v_top = 232.0 / 3.6
+    violations = []
+    kappa = 0.002
+    while kappa < 0.20:
+        v = apex_speed(kappa, plant, v_top_ms=v_top, v_floor_ms=8.0)
+        ay_limit = plant.ay_max(v)
+        if v * v * kappa > ay_limit * (1.0 + 1e-9) and v < v_top:
+            violations.append((kappa, v, (v * v * kappa) / ay_limit))
+        kappa += 0.00025
+    assert violations == [], (
+        f"{len(violations)} infeasible apex speeds, worst {max(r for *_, r in violations):.4f}x"
+    )
+
+
+def test_apex_speed_stays_at_the_binding_edge_not_conservative_everywhere():
+    """The guard must only lower infeasible points — a smooth-region apex is unchanged."""
+    from tools.ac_harness.ggv_profile import apex_speed
+
+    plant = _step_edge_plant()
+    v_top = 232.0 / 3.6
+    # 150-160 km/h region: flat safe_g on both sides, so the fixed point is already consistent.
+    kappa = plant.ay_max(43.0) / (43.0 * 43.0)
+    v = apex_speed(kappa, plant, v_top_ms=v_top)
+    assert v * v * kappa <= plant.ay_max(v) * (1.0 + 1e-9)
+    # It should sit AT the envelope, not well under it (no blanket conservatism).
+    assert (v * v * kappa) / plant.ay_max(v) > 0.99
+
+
+def test_forward_backward_profile_is_envelope_feasible_on_a_step_edge_plant():
+    """The whole QSS profile — not just the apex — must satisfy the envelope (#695).
+
+    ``alien_line._verify_lateral_envelope`` re-checks this with a float-noise tolerance and fails
+    the line build otherwise, which is how the ladder lost its ggv_scale=1.15 step.
+    """
+    plant = _step_edge_plant()
+    # A cyclic line sweeping curvature through the 60 km/h binding band.
+    pts = []
+    n = 720
+    for i in range(n):
+        theta = 2.0 * math.pi * i / n
+        r = 26.0 + 10.0 * math.sin(3.0 * theta)  # radii ~16-36 m -> apex speeds around the edge
+        pts.append((r * math.cos(theta), r * math.sin(theta)))
+    seg = seg_lengths(pts)
+    kappa = curvature_profile(pts)
+    v, _ax = forward_backward_profile(kappa, seg, plant, v_top_ms=232.0 / 3.6)
+    worst = 0.0
+    for i, vi in enumerate(v):
+        if kappa[i] <= 1e-6:
+            continue
+        worst = max(worst, (vi * vi * kappa[i]) / plant.ay_max(vi))
+    assert worst <= 1.0 + 1e-6, f"QSS profile exceeds the lateral envelope: {worst:.4f}x ay_max"
+
+
+def test_velocity_floor_never_lifts_a_point_above_the_envelope():
+    """A corner whose feasible apex is under ``v_floor_ms`` keeps that apex, floor regardless."""
+    from tools.ac_harness.ggv_profile import apex_speed
+
+    plant = _step_edge_plant()
+    # Curvature tight enough that the feasible apex is well under the 8 m/s drivability floor.
+    kappa = plant.ay_max(5.0) / (5.0 * 5.0) * 1.6
+    v = apex_speed(kappa, plant, v_top_ms=232.0 / 3.6, v_floor_ms=8.0)
+    assert v * v * kappa <= plant.ay_max(v) * (1.0 + 1e-9)
+    assert v < 8.0
+
+
+def _step_up_bins() -> tuple[dict, ...]:
+    """Bins whose lateral ``safe_g`` steps UP with speed across 40 km/h.
+
+    The opposite-direction transition from :func:`_step_edge_bins`: here *lowering* a speed across
+    the edge moves into LESS grip, so a braking/traction cap that looks safe because it is smaller
+    can still land outside the envelope (#695 review).
+    """
+
+    def channel(safe_g: float) -> dict:
+        return {
+            "mean_g": safe_g + 0.05,
+            "epistemic_std_g": 0.02,
+            "safe_g": safe_g,
+            "n": 60,
+            "source": "measured",
+        }
+
+    bins = []
+    for i in range(30):
+        lo = i * 10.0
+        safe_lat = 0.75 if lo < 40.0 else 1.45
+        bins.append(
+            {
+                "speed_min_kmh": lo,
+                "speed_max_kmh": lo + 10.0,
+                "lateral": channel(safe_lat),
+                "brake": channel(1.2),
+                "drive": channel(0.5),
+            }
+        )
+    return tuple(bins)
+
+
+def test_lowering_a_speed_across_an_upward_bin_edge_stays_feasible():
+    """A smaller speed is not automatically a safer one when the envelope steps (#695 review)."""
+    from tools.ac_harness.ggv_profile import feasible_speed_at_or_below
+
+    plant = _step_up_plant()
+    # Feasible just above the edge, where the higher bin grants 1.45 g.
+    v_hi = 40.5 / 3.6
+    kappa = plant.ay_max(v_hi) / (v_hi * v_hi)
+    assert v_hi * v_hi * kappa <= plant.ay_max(v_hi) * (1.0 + 1e-9)
+    # A tiny propagation cap drops it below the edge into 0.75 g — naively "safer", actually not.
+    v_lo = 39.5 / 3.6
+    assert v_lo * v_lo * kappa > plant.ay_max(v_lo), "fixture must expose the downward crossing"
+    corrected = feasible_speed_at_or_below(v_lo, kappa, plant)
+    assert corrected <= v_lo
+    assert corrected * corrected * kappa <= plant.ay_max(corrected) * (1.0 + 1e-9)
+
+
+def _step_up_plant() -> GGVModel:
+    from dataclasses import replace as dc_replace
+
+    return dc_replace(_prior(), uncertainty_bins=_step_up_bins())
+
+
+def test_forward_backward_profile_feasible_on_an_upward_step_plant():
+    """Whole-profile feasibility on an upward-stepping envelope (broad guard, not a reproduction).
+
+    Honest scope: this passes even with the propagation feasibility check neutered, because the
+    backward pass only lowers points *toward* an apex, so a lowered value stays at or above that
+    apex and therefore in the same-or-higher bin. The downward-crossing rule is proved directly by
+    :func:`test_lowering_a_speed_across_an_upward_bin_edge_stays_feasible`; this test exists so a
+    future change to the propagation dynamics that *does* start producing sub-apex speeds cannot
+    reintroduce the violation silently.
+    """
+    plant = _step_up_plant()
+    pts = []
+    n = 720
+    for i in range(n):
+        theta = 2.0 * math.pi * i / n
+        r = 14.0 + 6.0 * math.sin(5.0 * theta)
+        pts.append((r * math.cos(theta), r * math.sin(theta)))
+    seg = seg_lengths(pts)
+    kappa = curvature_profile(pts)
+    v, _ax = forward_backward_profile(kappa, seg, plant, v_top_ms=232.0 / 3.6)
+    worst = 0.0
+    for i, vi in enumerate(v):
+        if kappa[i] > 1e-6:
+            worst = max(worst, (vi * vi * kappa[i]) / plant.ay_max(vi))
+    assert worst <= 1.0 + 1e-6, f"profile exceeds the envelope: {worst:.4f}x ay_max"
+
+
+def test_exhausted_descent_budget_falls_back_to_a_feasible_speed():
+    """With zero descent steps the solver must still not return an infeasible speed (#695 review).
+
+    Guards the branch Qodo flagged: a fixed budget that proves insufficient must degrade to the
+    provably-feasible global floor, never return the violating candidate.
+    """
+    from tools.ac_harness.ggv_profile import (
+        feasible_speed_at_or_below,
+        lateral_envelope_floor_ms2,
+    )
+
+    plant = _step_edge_plant()
+    v_bad = 16.29
+    floor_ay = lateral_envelope_floor_ms2(plant, v_bad)
+    assert floor_ay > 0.0
+    kappa = 0.0545  # inside the band that violates by ~1.4x on the pre-fix solver
+    assert v_bad * v_bad * kappa > plant.ay_max(v_bad), "fixture must start infeasible"
+    v = feasible_speed_at_or_below(v_bad, kappa, plant, descent_steps=0)
+    assert v * v * kappa <= plant.ay_max(v) * (1.0 + 1e-9)
+    assert v < v_bad
+
+
+def test_lateral_envelope_floor_is_a_true_lower_bound():
+    """The fallback floor must not exceed ``ay_max`` anywhere in range, or it is not safe to use."""
+    from tools.ac_harness.ggv_profile import lateral_envelope_floor_ms2
+
+    v_max = 340.0 / 3.6
+    for plant in (_step_edge_plant(), _step_up_plant(), _prior()):
+        floor_ay = lateral_envelope_floor_ms2(plant, v_max)
+        v = 0.0
+        while v <= v_max:
+            assert floor_ay <= plant.ay_max(v) + 1e-12, f"floor {floor_ay} > ay_max({v})"
+            v += 0.25
+
+
+def test_lateral_envelope_floor_holds_for_a_binless_model_losing_grip_with_speed():
+    """A smooth model with NO bins whose grip falls with speed has its minimum at the top (#695).
+
+    Sampling only ``v=0`` would return that model's *maximum* and silently break the lower-bound
+    invariant the exhausted-budget fallback depends on.
+    """
+    from dataclasses import replace as dc_replace
+
+    from tools.ac_harness.ggv_profile import (
+        feasible_speed_at_or_below,
+        lateral_envelope_floor_ms2,
+    )
+
+    # Negative aero term: lateral grip DECREASES with speed, and no uncertainty bins at all.
+    plant = dc_replace(_prior(), k_aero_lat=-1.0e-4, uncertainty_bins=())
+    assert not plant.uncertainty_aware
+    v_max = 240.0 / 3.6
+    assert plant.ay_max(v_max) < plant.ay_max(0.0), "fixture must lose grip with speed"
+
+    floor_ay = lateral_envelope_floor_ms2(plant, v_max)
+    v = 0.0
+    while v <= v_max:
+        assert floor_ay <= plant.ay_max(v) + 1e-12, f"floor {floor_ay} > ay_max({v})"
+        v += 0.25
+
+    # And the fallback path built on it must still return a feasible speed.
+    kappa = 0.01
+    v_out = feasible_speed_at_or_below(v_max, kappa, plant, descent_steps=0)
+    assert v_out * v_out * kappa <= plant.ay_max(v_out) * (1.0 + 1e-9)
+
+
+def test_sub_floor_apex_does_not_block_the_braking_pass():
+    """A corner whose apex is under ``v_floor_ms`` must still be brakeable (#695 review).
+
+    Deriving the drivability floor from the apex would make that apex a hard minimum, so the
+    backward pass could no longer lower the point even when the propagation constraint demands it.
+    """
+    from tools.ac_harness.ggv_profile import apex_speed
+
+    plant = _step_edge_plant()
+    v_floor = 8.0
+    # Point 0: apex just under the floor. Point 1: a far tighter corner right after it, with a short
+    # segment, so braking into point 1 requires point 0 below its own local apex.
+    k0 = plant.ay_max(7.0) / (7.0 * 7.0)
+    k1 = plant.ay_max(3.0) / (3.0 * 3.0)
+    apex0 = apex_speed(k0, plant, v_top_ms=232.0 / 3.6, v_floor_ms=v_floor)
+    assert apex0 < v_floor, "fixture must put the apex under the drivability floor"
+    kappa = [k0, k1, k1, k1]
+    seg = [0.5, 0.5, 0.5, 0.5]
+    v, _ax = forward_backward_profile(kappa, seg, plant, v_top_ms=232.0 / 3.6, v_floor_ms=v_floor)
+    assert v[0] < apex0, (
+        f"braking pass could not lower a sub-floor apex ({v[0]:.3f} vs {apex0:.3f})"
+    )
+    for i, vi in enumerate(v):
+        if kappa[i] > 1e-6:
+            assert vi * vi * kappa[i] <= plant.ay_max(vi) * (1.0 + 1e-9)
+
+
+def test_drivability_floor_still_holds_where_the_apex_allows_it():
+    """The floor is not abandoned — a point whose apex clears it keeps a non-zero minimum."""
+    plant = _step_edge_plant()
+    v_floor = 8.0
+    # Gentle curvature everywhere: every apex is far above the floor, and a slow neighbour must not
+    # drag a point below the drivability minimum.
+    kappa = [1e-7] * 4
+    seg = [0.2, 0.2, 0.2, 0.2]
+    v, _ax = forward_backward_profile(kappa, seg, plant, v_top_ms=232.0 / 3.6, v_floor_ms=v_floor)
+    assert min(v) >= v_floor - 1e-9

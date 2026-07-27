@@ -1804,6 +1804,106 @@ def seg_lengths(plane: list[tuple[float, float]]) -> list[float]:
     ]
 
 
+# Apex solve budget. The fixed point converges in a handful of steps where ``ay_max`` is smooth;
+# the descent guard then needs at most one step per uncertainty bin it walks down through.
+_APEX_FIXED_POINT_STEPS = 8
+_APEX_DESCENT_STEPS = 64
+
+
+def lateral_envelope_floor_ms2(ggv: GGVModel, v_max_ms: float) -> float:
+    """A lower bound on ``ay_max`` over ``[0, v_max_ms]`` — the range a descent can land in.
+
+    Used as the provably-feasible fallback when an iterative descent runs out of budget: for any
+    ``kappa``, ``v = sqrt(floor/kappa)`` satisfies ``v²·κ = floor <= ay_max(v)`` by definition of a
+    lower bound, so it can never violate the envelope.
+
+    ``ay_max`` is piecewise in v (a smooth point model clipped by a per-bin ``safe_g``), so its
+    minimum over an interval lies on a bin boundary or an interval endpoint. Scanning zero, both
+    edges of every bin inside the interval, and ``v_max_ms`` itself covers that **whether the point
+    model rises or falls with speed** — the endpoint matters because a model with no bins at all and
+    a negative ``k_aero_lat`` has its minimum at the top of the range, not at zero, so sampling only
+    zero would return that model's *maximum* and break the bound (#695 review). Uses only the public
+    accessor rather than re-deriving the model internals.
+    """
+    speeds = [0.0, max(0.0, v_max_ms)]
+    for speed_bin in ggv.uncertainty_bins:
+        for edge_kmh in (speed_bin["speed_min_kmh"], speed_bin["speed_max_kmh"]):
+            edge = float(edge_kmh) / 3.6
+            if 0.0 <= edge <= v_max_ms:
+                speeds.append(edge)
+    return min(ggv.ay_max(v) for v in speeds)
+
+
+def feasible_speed_at_or_below(
+    v_ms: float,
+    kappa: float,
+    ggv: GGVModel,
+    *,
+    descent_steps: int = _APEX_DESCENT_STEPS,
+) -> float:
+    """The largest speed ``<= v_ms`` whose lateral demand fits the envelope at ``kappa``.
+
+    Every speed this module hands downstream must satisfy ``v²·κ <= ay_max(v)``, and **lowering** a
+    speed is not automatically safe: the envelope is a step function of speed (#543 uncertainty
+    bins), so a decrease that crosses a bin edge downward can land in a *lower*-grip bin and turn a
+    feasible speed infeasible (a 40.1 -> 39.9 km/h step on the live Magione plant drops the limit
+    29% while ``v²`` falls 1%). So the braking/traction propagation passes and the drivability floor
+    route their candidates through here too, not just the apex solve (#695).
+
+    Terminates feasible in every case: each descent step is strictly decreasing (a violation means
+    ``ay_max(v) < v²·κ``, hence ``sqrt(ay_max(v)/κ) < v``), and if the budget is exhausted anyway
+    the result falls back to :func:`lateral_envelope_floor_ms2`, feasible by construction.
+    """
+    if kappa <= 0.0:
+        return v_ms
+    vi = v_ms
+    for _ in range(descent_steps):
+        ay_limit = ggv.ay_max(vi)
+        if vi * vi * kappa <= ay_limit:
+            return vi
+        vi = math.sqrt(ay_limit / kappa)
+    # Budget exhausted (a pathological envelope, or a bin count beyond the descent budget): drop to
+    # the floor over the range we could have landed in, rather than returning a speed the verifier
+    # will reject. Bounding over [0, v_ms] is what makes the fallback provably feasible.
+    return min(vi, math.sqrt(lateral_envelope_floor_ms2(ggv, v_ms) / kappa))
+
+
+def apex_speed(
+    kappa: float,
+    ggv: GGVModel,
+    *,
+    v_top_ms: float,
+    v_floor_ms: float = 0.0,
+) -> float:
+    """Largest speed at ``kappa`` whose lateral demand fits the envelope: ``v²·κ <= ay_max(v)``.
+
+    ``GGVModel.ay_max`` is **not continuous in v** — :meth:`GGVModel._uncertainty_safe_g` selects
+    ``safe_g`` from discrete speed bins (#543), so the envelope is a step function of speed. A bare
+    fixed point ``v <- sqrt(ay_max(v)/κ)`` on a discontinuous map need not converge: it can settle
+    on the *high* branch of a bin edge, where the speed it returns lands in a lower-grip bin than
+    the one used to compute it. That yields an apex the plant cannot support, which
+    :func:`~tools.ac_harness.alien_line._verify_lateral_envelope` then rejects with its float-noise
+    tolerance — the solver handing its own verifier infeasible input (#695: 445/3960 curvature
+    samples violating on a real Magione plant, worst 1.40x).
+
+    So iterate, then hand the result to :func:`feasible_speed_at_or_below`, which descends until
+    the constraint holds and falls back to a provably-feasible floor if its budget runs out. The
+    returned speed satisfies the envelope by construction, not by assertion.
+
+    ``v_floor_ms`` is a drivability floor, applied only when it is itself feasible — raising an
+    infeasible corner back over the limit would reintroduce the same defect.
+    """
+    if kappa <= 0.0:
+        return v_top_ms
+    vi = v_top_ms
+    for _ in range(_APEX_FIXED_POINT_STEPS):
+        vi = min(v_top_ms, math.sqrt(ggv.ay_max(vi) / kappa))
+    vi = feasible_speed_at_or_below(vi, kappa, ggv)
+    if v_floor_ms > vi and v_floor_ms * v_floor_ms * kappa <= ggv.ay_max(v_floor_ms):
+        return v_floor_ms
+    return vi
+
+
 def forward_backward_profile(
     kappa: list[float],
     seg: list[float],
@@ -1815,21 +1915,43 @@ def forward_backward_profile(
 ) -> tuple[list[float], list[float]]:
     """Quasi-steady-state minimum-time speed profile over a cyclic line.
 
-    1. apex speed from lateral grip (fixed-point, grip depends on v);
+    1. apex speed from lateral grip (:func:`apex_speed` — envelope-feasible by construction even
+       though the uncertainty-aware grip is a step function of v);
     2. backward pass: braking limited by the friction ellipse with speed-dependent grip;
     3. forward pass: accel limited by ellipse + traction/power cap.
     Returns (v_target_ms per point, ax_ff per point [m/s^2, +accel/-decel]).
     """
     n = len(kappa)
-    # 1) apex (fixed-point on v because ay_max depends on v)
+    # 1) apex (envelope-feasible by construction; ay_max is a step function of v — see apex_speed)
     v = [v_top_ms] * n
     for i in range(n):
         k = kappa[i]
         if k > 1e-6:
-            vi = v_top_ms
-            for _ in range(8):
-                vi = min(v_top_ms, math.sqrt(ggv.ay_max(vi) / k))
-            v[i] = max(v_floor_ms, vi)
+            v[i] = apex_speed(k, ggv, v_top_ms=v_top_ms, v_floor_ms=v_floor_ms)
+    # The drivability floor is per-point and itself envelope-checked, because the envelope is
+    # non-monotonic in v: ``min(v_floor_ms, …)`` alone is not enough, since even a *lower* floor can
+    # sit in a lower-grip bin and break the envelope the apex solve just satisfied (#695).
+    #
+    # It must NOT be derived from the apex. A corner whose feasible apex is already below
+    # ``v_floor_ms`` has no drivability floor to enforce — clamping it to its own apex would make
+    # the apex a hard minimum and stop the braking/traction passes lowering it at all, even when
+    # the propagation constraint requires it (#695 review). Such a point gets a floor of zero;
+    # envelope feasibility of any lower candidate is `lowered()`'s job, not the floor's.
+    floor = [
+        feasible_speed_at_or_below(v_floor_ms, kappa[i], ggv) if v[i] >= v_floor_ms else 0.0
+        for i in range(n)
+    ]
+
+    def lowered(i: int, candidate: float) -> float:
+        """Apply a propagation cap at point ``i``, keeping the result envelope-feasible.
+
+        Lowering a speed can cross a bin edge downward into less grip, so a smaller number is not
+        automatically a safer one (#695 review). Correct the candidate first, then re-apply the
+        drivability floor — itself feasible — so the floor never re-lifts the point over the
+        envelope and never blocks a required propagation cap.
+        """
+        return max(floor[i], feasible_speed_at_or_below(candidate, kappa[i], ggv))
+
     # 2) backward (braking) - ellipse uses the lateral g implied by apex usage
     for _ in range(passes):
         for j in range(n):
@@ -1838,13 +1960,13 @@ def forward_backward_profile(
             ds = seg[i]
             if ds <= 1e-6:  # coincident points must share speed, else propagation chain breaks
                 if v[nx] < v[i]:
-                    v[i] = max(v_floor_ms, v[nx])
+                    v[i] = lowered(i, v[nx])
                 continue
             ay_used = v[i] * v[i] * kappa[i]
             ax = ggv.ax_brake_avail(ay_used, v[i])
             cap = math.sqrt(v[nx] * v[nx] + 2.0 * ax * ds)
             if cap < v[i]:
-                v[i] = max(v_floor_ms, cap)
+                v[i] = lowered(i, cap)
     # 3) forward (accel)
     for _ in range(passes):
         for i in range(n):
@@ -1852,14 +1974,15 @@ def forward_backward_profile(
             ds = seg[pv]
             if ds <= 1e-6:  # coincident points must share speed
                 if v[pv] < v[i]:
-                    v[i] = max(v_floor_ms, v[pv])
+                    v[i] = lowered(i, v[pv])
                 continue
             ay_used = v[pv] * v[pv] * kappa[pv]
             ax = ggv.ax_drive_avail(ay_used, v[pv])
             cap = math.sqrt(v[pv] * v[pv] + 2.0 * ax * ds)
             if cap < v[i]:
-                v[i] = max(v_floor_ms, cap)
-    v = [min(v_top_ms, x) for x in v]
+                v[i] = lowered(i, cap)
+    # The top-speed clamp is itself a lowering, so it goes through the same feasibility check.
+    v = [lowered(i, min(v_top_ms, x)) for i, x in enumerate(v)]
     # ax feedforward from the profile (central, cyclic): a = v*dv/ds
     ax_ff = []
     for i in range(n):
