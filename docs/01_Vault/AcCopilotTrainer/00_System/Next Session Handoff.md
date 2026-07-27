@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-27T01:20:00Z
+last_updated: 2026-07-27T03:35:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-529-pace-ladder-115-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-695-qss-apex-envelope-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-693-off-rig-session0-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-381-brake-articulation-closure-2026-07-25.md
@@ -120,6 +121,82 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-07-26 PM) — **#529 G2 MET: 81.505 s** at Magione (floor was 82.7 s); #697 entrypoint live
+
+`/autonomous-deliver 529`. Detail: [[issue-529-pace-ladder-115-2026-07-26]].
+
+**Two ladders: 88.425 → 85.072 → 84.587 → 81.505 s.** The second **beat the 82.7 s Track-Titan
+floor** on two consecutive flying laps (81.505 s / 81.519 s), `recoveries=0`, every archive
+`is_valid: true`, `selfplay done — completed` (not falsified, so the refined plant was **retained**).
+Both on merged `main` @ `670b529` — the first rig runs carrying #696.
+
+**Ladder 1** (`--max-scale 1.2`, hand-run recipe):
+
+| ggv_scale | best flying lap | verdict |
+|---|---|---|
+| 1.00 base | 96.285 s | PASS, 0 recoveries |
+| **1.15** | **85.072 s** | **VALID** — 0 recoveries, all laps `is_valid: true` |
+| 1.20 | — | FALSIFIED: `recovery cap (6) exceeded at 3335m`, 7 recoveries |
+
+**Ladder 2** (`--max-scale 1.15`, through the #697 entrypoint) — the controlled pair: identical
+1.15 scale, only the plant differed.
+
+| stage | plant QSS floor | scale | best flying lap |
+|---|---|---|---|
+| base | 91.26 s | 1.00 | 96.286 s |
+| iteration 1 | 91.26 s (refit no-op) | 1.15 | 84.587 s |
+| **iteration 2** | **87.14 s** (refit `adopted=4 raised=1`) | **1.15** | **81.505 s** |
+
+**Ladder 1 stepped to 1.20, falsified, and lost its refit → stalled at 85.072 s. Ladder 2 capped at
+a known-valid 1.15, kept the refit, and broke the floor.** ~3.5 s from refit-retention alone at the
+same scale — the direct evidence for **#703**. Practical rule until #703 lands: **never let the
+ladder's top rung be one you expect to falsify.**
+
+**Verified, not inferred:** archives `is_valid: true`; the ladder-1 cockpit frame shows the car's
+**own Porsche dash reading `Last Lap 1:25:13`**, and the G2 frame shows the live Atelier card
+(`[T2] MAGIONE`, `READY`, `BRAKE POINT 138 m`, `ENTRY Δ · REF 141 KM/H`) plus `SIDECAR V1: ACK LAP 3`
+— the whole telemetry→coaching→HUD pipeline was up, not just a lap timer.
+
+**Assist-parity caveat (operator to adjudicate):** the epic calls the 82.7 s floor "TC-off, fixed
+setup". This run used CM **factory** electronics (`Abs:1`, `TractionControl:1` — what the real GT3
+has), `StabilityControl:0`, no auto-brake/shifter/ideal-line; interventions ABS 81/3161, TC 24/3161;
+`3_clear` 26 °C, `s=1.0 t=1.0`, blankets, no wear/fuel. G2's **numeric** criterion is met on a
+like-for-like hotlap config; a strict TC-off comparison is one more ladder with
+`TractionControl:0`. **#696 is proven on the rig**: 1.15 had never actually been driven (last session it died in
+the line builder — the #695 solver bug); this time it built and drove clean, and 1.20's
+falsification is real physics.
+
+**Precisely:** G2's numeric criterion and G1's ≤86.84 s pace band are both met — on the **seed**
+combo with a **pre-identified** plant. G1 **as written** (cold start, *unseen* combo, ≤20 laps) is
+still unclaimed, as are G1b and G3 (operator-gated: needs a human at the wheel across sessions) and
+P4's first real rig scientist batch.
+
+**#703 filed:** `auto_alien.py:601` reverts the whole iteration on falsification, bundling an
+evidence-backed refit with the failed scale step — which is what cost ladder 1 its 3.5 s.
+
+**#627: no reboot was needed.** After a **~4 h hold** the rig gave **~11 landed launch cycles across
+both ladders** (vs 2 after a 35-min hold, ~9 from cold boot), with no `sim never reached LIVE` at any
+point — recovery scales with hold length
+([data point](https://github.com/agorokh/ac-copilot-trainer/issues/627#issuecomment-5086990714)).
+The previous handoff's "blocked on a rig reboot" was therefore wrong; that section is replaced below.
+
+**PR [#702](https://github.com/agorokh/ac-copilot-trainer/pull/702) OPEN (#697)** —
+`tools/ac_harness/remote_launcher.py` replaces the hand-run `schtasks` runbook, encoding each of the
+six measured Windows defects as a guard that asserts its own precondition. 49 off-rig tests,
+`make ci-fast: OK`, **live-proven end to end** — it drove the G2 ladder itself from session 0
+(`installed app provenance: match`), `poll` returned task status + `acs` liveness + the live
+rig-lock owner, and `cleanup` deleted its own task (`list` → `[]` after reaping the one task the
+hand-run ladder had left). The daemon's 4 MEDIUM findings are all fixed at `cafea1b` (58 tests):
+always-quote every wrapper token, a path guard for `%`/`"` (they survive/break quoting), a
+task-name-vs-run-id ownership check in `cleanup` (it could otherwise reap a **peer's** task on the
+shared rig), and the payload import dropped. **NOT merged:** `chatgpt-codex-connector[bot]` answered the gate trigger with
+*"You have reached your Codex usage limits for code reviews"*, so the rollback's independent
+reviewer cannot run on this SHA. CI green, 0 review threads. Retry the atomic block when the quota
+rolls.
+
+**Rig invariant, third session running:** the primary checkout the app junction serves was found at
+`49f90f1` — stale by four commits and missing #696 itself. Detached to `origin/main`.
+
 ## Delivered (2026-07-26) — #695 + #693 CLOSED: QSS envelope fix + off-rig launch path; new Magione best 88.425 s
 
 **PR [#696](https://github.com/agorokh/ac-copilot-trainer/pull/696) MERGED `7702b42`** (#695) and
@@ -150,24 +227,45 @@ disabled (silent 3 h wait), `$car`/`$track` were interpolated raw into an execut
 ascii encoding mangles non-ASCII paths. Guards assert their own preconditions; steps 3/4 split so an
 agent cannot paste itself into a blocking wait. #697 still OPEN for the script.
 
-## RESUME — #529 pace gates, blocked on a rig reboot
+## RESUME — #529 G2, and PR #702's Codex quota wall
 
-The untested `ggv_scale` **1.15 / 1.20** rungs were never driven: three attempts died on the #627
-launch-cycle freeze (`stage=launch, error=sim never reached LIVE`, after the drive stage burned its
-full 5-launch budget). A ~35-min hold bought only 2 further cycles — recorded against #627's open
-hold-duration question ([comment](https://github.com/agorokh/ac-copilot-trainer/issues/627#issuecomment-5085831701)).
-**The unblock is a rig reboot** to reset the per-boot accumulator; NOT done because session 1 hosts
-live `codex` + MCP processes belonging to peer sessions (operator's call).
+**Supersedes the previous "blocked on a rig reboot" resume** (2026-07-26 AM), which was wrong on
+both halves: the 1.15/1.20 rungs *were* driven, and no reboot was needed — a ~4 h hold carried
+~11 landed launch cycles across two full ladders.
 
-After a reboot, this reaches both untested rungs in **3 launch cycles**:
+**1. PR [#702](https://github.com/agorokh/ac-copilot-trainer/pull/702) (#697) — merge when Codex can
+review.** Head is `cafea1b` (the daemon-hardening round). Everything else is done: 0 review
+threads, `make ci-fast: OK`, 58 tests, live-proven on the rig including `cleanup`. The only blocker
+is the Codex usage-limit wall — **two** full trigger+cooldown rounds drew
+*"You have reached your Codex usage limits for code reviews"*. Re-run the atomic
+trigger/cooldown/audit block from `/resolve-pr` § Bot triggers once the quota rolls; if it still
+refuses, that is a genuine operator escalation, not an unfinished loop.
+
+**2. #529 — G2 is met; the remaining gates are the cold-start ones.** Still unclaimed: **G1 as
+written** (cold start on an **unseen** combo, ≤20 laps — the pace band is already cleared on the seed
+combo, so this is about generality, not speed), **G1b** (novel archetype), **G3** (needs a human at
+the wheel across sessions — operator-gated, not rig-gated), and **P4**'s first real rig scientist
+batch. The obvious next rig run is a cold start on a genuinely unseen combo (no plant artifact), and
+`auto_alien` already does identify→line→drive in one invocation.
+
+**3. Push G2 further, and resolve #703.** The plant on the rig is now the **retained** refined fit,
+so a fresh `--max-scale 1.15` ladder starts from a lower floor again and should compound. Watch the
+line build's QSS number (87.14 s at the end of tonight): lower means the refit stuck.
 
 ```
-python -m tools.ac_harness.auto_alien --car ks_porsche_911_gt3_r_2016 --track magione \
-    --laps 3 --ggv-scale 1.0 --scale-step 0.15 --iterations 2 --max-scale 1.2
+python -m tools.ac_harness.remote_launcher start --label alien-529-compound -- \
+    -m tools.ac_harness.auto_alien --car ks_porsche_911_gt3_r_2016 --track magione \
+    --laps 3 --ggv-scale 1.0 --scale-step 0.15 --iterations 2 --max-scale 1.15
 ```
 
-Off-rig? Read `docs/10_Development/18_Autonomous_Harness.md` § *Driving the harness from off-rig*
-first — session 0 cannot do it. Follow-up to codify that transport: **#697**.
+**Until #703 lands, never set the top rung to one you expect to falsify** — ladder 1 paid 3.5 s for
+exactly that. If the operator wants the strict TC-off comparison against the 82.7 s reference, that
+is one more ladder with `TractionControl:0`.
+
+**Off-rig?** Use `python -m tools.ac_harness.remote_launcher` (#697 / PR #702) — session 0 cannot
+drive AC. Diagnosis in `docs/10_Development/18_Autonomous_Harness.md` § *Driving the harness from
+off-rig*. **Check the app junction's checkout is at the merged `main` tip first** — it has been
+stale on arrival three sessions running.
 
 ## Delivered (2026-07-25) — #381 CLOSED: critical Brake articulation accepted and guarded
 
