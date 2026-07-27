@@ -299,27 +299,104 @@ Get-Process explorer | Select-Object Id,SessionId # the console session (typical
 session **and needs no stored credential**. Wrap the harness invocation in a `.cmd` that redirects its
 own logs, then create, run, and poll the task:
 
+Derive every path from the environment and give the task a **per-run name** — a fixed task name lets
+two agents clobber each other's registration on the one rig, and leaves stale tasks behind:
+
+Everything below is copy/paste-runnable as written — set the four values in step 0 and nothing else.
+**Do not introduce `<angle-bracket>` placeholders here**: `cmd.exe` parses `<` and `>` as redirection
+inside the generated `.cmd`, and both are illegal in Windows path components and task names, so an
+angle-bracket "placeholder" fails before the harness ever starts. Use PowerShell variables, which are
+interpolated into the file.
+
 ```powershell
+# 0) the only values to set (no hardcoded user or checkout path)
+$repo   = "$env:USERPROFILE\Projects\ac-copilot-trainer"   # or wherever this clone lives
+$car    = "ks_porsche_911_gt3_r_2016"
+$track  = "magione"
+# Unique per run, and Windows-path/task-name safe (no ':' from the timestamp). The PID+random
+# suffix matters: the threat model here is two agents on ONE rig, and a bare second-resolution
+# stamp lets same-second starts share $task and $ev, so each would overwrite the other's wrapper
+# and task registration.
+$runId  = "alien-$car-$track-" + (Get-Date -Format "yyyyMMdd-HHmmss") + "-$PID-$(Get-Random -Maximum 9999)"
+$task   = "ac-harness-$runId"                              # never a shared fixed name
+$rel    = ".scratch\harness-evidence\$runId"
+$ev     = "$repo\$rel"
+
 # 1) wrapper (writes its own logs; the SSH session only ever reads files)
-$ev = "C:\Users\arsen\Projects\ac-copilot-trainer\.scratch\harness-evidence\<run-id>"
 New-Item -ItemType Directory -Force -Path $ev | Out-Null
 Set-Content -LiteralPath "$ev\run.cmd" -Encoding ascii -Value @"
 @echo off
-cd /d C:\Users\arsen\Projects\ac-copilot-trainer
-".venv\Scripts\python.exe" -m tools.ac_harness.auto_alien --car <car> --track <track> ^
-    --laps 3 --iterations 2 --evidence-dir <relative-evidence-dir> > "$ev\stdout.log" 2> "$ev\stderr.log"
+cd /d "$repo"
+rem Unbuffered: redirected Python is fully buffered, so stdout.log stays empty for minutes and the
+rem SSH-side tail in step 3 looks hung when the run is perfectly healthy.
+set PYTHONUNBUFFERED=1
+".venv\Scripts\python.exe" -u -m tools.ac_harness.auto_alien --car $car --track $track ^
+    --laps 3 --iterations 2 --evidence-dir "$rel" > "$ev\stdout.log" 2> "$ev\stderr.log"
 echo [wrapper] exit=%ERRORLEVEL% >> "$ev\wrapper.log"
 "@
 
-# 2) create + run in the console session
-schtasks /create /tn "ac-harness-run" /tr "$ev\run.cmd" /sc once /st 23:59 /ru <user> /it /f
-schtasks /run    /tn "ac-harness-run"
+# 2) create + run in the console session ($env:USERNAME, not a literal account).
+#    /st alone is not enough. `/sc once` defaults the start DATE to today, so a bare clock time
+#    computed after ~23:55 lands at 00:xx and is read as earlier TODAY — `/create` then fails with
+#    "The start time of the task cannot be earlier than the current time", precisely during the
+#    overnight runs this path exists for. Derive /st and /sd from the SAME DateTime so a rollover
+#    carries the correct day. The trigger never fires anyway; /run starts the task on demand.
+$when = (Get-Date).AddMinutes(5)
+# Hand /tr the 8.3 SHORT path. If any component of the path contains a space, Task Scheduler
+# accepts the create (rc=0) and the run (rc=0) and then never launches the wrapper — the evidence
+# dir just stays empty and `Last Result` reads -2147024894 (file not found). Quoting does not save
+# it; the short path does. Measured on the rig (see the note below this block).
+$trPath = (New-Object -ComObject Scripting.FileSystemObject).GetFile("$ev\run.cmd").ShortPath
+# /f is kept deliberately. The unique run id above is what prevents a peer agent's task being
+# clobbered; /f is what stops schtasks blocking on its interactive "replace it?" prompt, which was
+# measured on the rig to hang a non-interactive create indefinitely rather than return an error.
+schtasks /create /tn $task /tr $trPath /sc once `
+    /st $when.ToString('HH:mm') /sd $when.ToString('MM/dd/yyyy') `
+    /ru $env:USERNAME /it /f
+if ($LASTEXITCODE -ne 0) { throw "schtasks /create failed ($LASTEXITCODE)" }
+schtasks /run /tn $task
+if ($LASTEXITCODE -ne 0) { schtasks /delete /tn $task /f; throw "schtasks /run failed ($LASTEXITCODE)" }
 
 # 3) poll from the SSH session (reads only — no AC interaction)
-schtasks /query  /tn "ac-harness-run" /fo list | Select-String "^Status"
+schtasks /query  /tn $task /fo list | Select-String "^Status"
 Get-Content "$ev\stdout.log" -Tail 30
 Get-Process acs -ErrorAction SilentlyContinue | Select-Object Id,Responding
+
+# 4) clean up ONLY after the wrapper has logged its exit code. `/run` is asynchronous, so deleting
+#    the task definition in the same unguarded paste can cancel a start that has not spawned yet —
+#    and it removes the only Status handle while the run is still launching. Wait for the sentinel,
+#    but BOUND the wait: if the run never starts, the sentinel never appears and an unbounded loop
+#    would hang forever with no diagnosis.
+$sentinel = "$ev\wrapper.log"
+$deadline = (Get-Date).AddHours(3)   # longer than any ladder you should be running unattended
+function Test-Done { Select-String -Path $sentinel -Pattern "exit=" -Quiet -ErrorAction SilentlyContinue }
+while ((Get-Date) -lt $deadline -and -not (Test-Done)) { Start-Sleep -Seconds 30 }
+if (Test-Done) {
+    Get-Content $sentinel
+    schtasks /delete /tn $task /f
+} else {
+    # No sentinel: report the task's own verdict instead of deleting the evidence silently.
+    schtasks /query /tn $task /fo list /v | Select-String "^Status|^Last Result"
+    Write-Warning "run never wrote exit=; inspect $ev\stderr.log before deleting $task"
+}
 ```
+
+An `auto_alien` ladder runs for tens of minutes, so treat step 3 as the loop you actually live in and
+step 4 as end-of-run housekeeping. If a session dies before step 4, the leftover task is harmless but
+should be reaped by name on the next visit (`schtasks /query | Select-String "ac-harness-"`).
+
+> **A space anywhere in the path silently breaks `/tr`.** Measured on the rig with an evidence dir
+> under `…\space test dir\`: the bare path and a quoted path both gave `create=0`, `run=0`, and then
+> **never executed** (`Last Result: -2147024894`, empty evidence dir — the paste just waits out the
+> step-4 deadline). Wrapping as `cmd.exe /c "…"` failed to create at all (`0x80004005`). The 8.3
+> **short path** worked: `create=0`, `run=0`, `Last Result: 0`, wrapper executed. Hence `$trPath`.
+>
+> **`/sd` format is locale-dependent.** `MM/dd/yyyy` (zero-padded) is what this rig accepts; the
+> *culture* short-date pattern is **not** interchangeable — measured on the rig, `M/d/yyyy`,
+> `dd/MM/yyyy` and `yyyy/MM/dd` were all rejected with `0x80004005` while `MM/dd/yyyy` succeeded. If
+> `/create` fails on a differently-localised host, probe the accepted form rather than guessing. Note
+> also that `/sc ONDEMAND` — which would remove the date problem entirely — is **not** accepted by
+> `schtasks /create` here (same `0x80004005`), so `/sc once` plus an explicit date is the working path.
 
 You landed in the right session when the run's own first lines report the provenance gate passing:
 
