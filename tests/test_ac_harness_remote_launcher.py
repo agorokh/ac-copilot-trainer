@@ -867,3 +867,56 @@ def test_cli_start_wait_reports_a_refused_cleanup_in_the_exit_code(
     )
     monkeypatch.setattr(rl, "cleanup_run", lambda r, **kw: {"deleted": False, "reason": "refused"})
     assert rl.main(["start", "--wait-timeout-s", "1", "--", "-m", "x"]) == 1
+
+
+def test_poll_run_issues_exactly_one_schtasks_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Two queries doubled subprocess cost AND let the reported status disagree with the verdict."""
+    queries: list[list[str]] = []
+
+    class _Q:
+        returncode = 0
+        stdout = "Status:  Ready\nLast Result:  0\n"
+
+    def _fake_run(argv):  # noqa: ANN001, ANN202
+        if argv[:2] == ["schtasks", "/query"]:
+            queries.append(list(argv))
+        return _Q()
+
+    monkeypatch.setattr(rl, "_run", _fake_run)
+    monkeypatch.setattr(rl, "_sentinel_exit_code", lambda run_dir: 0)
+    monkeypatch.setattr(rl, "read_rig_session_owner", lambda p: None)
+    status = rl.poll_run(_run_handle(tmp_path))
+    assert len(queries) == 1
+    assert status["verified_complete"] is True
+    # The reported fields and the verdict come from that single snapshot.
+    assert status["status"] == "Ready"
+
+
+def test_verdict_short_circuits_without_a_subprocess_when_no_sentinel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(rl, "_run", lambda argv: calls.append(list(argv)))
+    monkeypatch.setattr(rl, "_sentinel_exit_code", lambda run_dir: None)
+    ok, reason = rl.task_deletion_verdict("ac-harness-r", tmp_path)
+    assert ok is False and "no exit sentinel" in reason
+    assert calls == []
+
+
+def test_evaluate_deletion_is_pure_over_a_snapshot(tmp_path: Path) -> None:
+    ok, _ = rl.evaluate_deletion(
+        sentinel_exit_code=0,
+        query_rc=0,
+        fields={"status": "Ready", "last_result": "0"},
+        run_dir=tmp_path,
+    )
+    assert ok is True
+    blocked, reason = rl.evaluate_deletion(
+        sentinel_exit_code=0,
+        query_rc=0,
+        fields={"status": "Ready", "last_result": str(rl.SCHED_S_TASK_HAS_NOT_YET_RUN)},
+        run_dir=tmp_path,
+    )
+    assert blocked is False and "not yet run" in reason

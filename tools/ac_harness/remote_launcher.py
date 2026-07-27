@@ -595,13 +595,21 @@ def poll_run(run: RemoteRun, *, tail: int = 30) -> dict[str, Any]:
     # Single sentinel reader: a permission/sharing error on wrapper.log must not abort a poll (and
     # therefore cleanup, which polls first) with a traceback.
     exit_code = _sentinel_exit_code(run.directory)
-    verified, verified_reason = task_deletion_verdict(run.task, run.directory)
+    fields = parse_task_status(queried.stdout)
+    # Same snapshot the fields below are reported from — a second query would both double the
+    # subprocess cost per poll and let the reported status disagree with the verdict beside it.
+    verified, verified_reason = evaluate_deletion(
+        sentinel_exit_code=exit_code,
+        query_rc=queried.returncode,
+        fields=fields,
+        run_dir=run.directory,
+    )
     acs = _run(["tasklist", "/fi", "imagename eq acs.exe", "/nh"])
     return {
         "run_id": run.run_id,
         "task": run.task,
         "task_query_rc": queried.returncode,
-        **parse_task_status(queried.stdout),
+        **fields,
         # `finished` is the RAW sentinel signal, kept for diagnosis. `verified_complete` is the
         # strict one (sentinel + known-dead status + a Last Result showing it actually ran) and is
         # what anything acting on the run must use — a peer can write into the scratch tree.
@@ -760,6 +768,35 @@ def _sentinel_exit_code(run_dir: Path) -> int | None:
     return parse_sentinel(text)
 
 
+def evaluate_deletion(
+    *, sentinel_exit_code: int | None, query_rc: int, fields: dict[str, str], run_dir: Path
+) -> tuple[bool, str]:
+    """The deletion rule as a **pure** function over one already-taken snapshot.
+
+    Split out from :func:`task_deletion_verdict` so a caller that has already queried the task and
+    read the sentinel — :func:`poll_run` — reuses that snapshot instead of taking a second one. Two
+    snapshots meant two ``schtasks`` subprocesses per poll *and*, worse, a reported
+    ``status``/``last_result`` that could disagree with the verdict computed beside it.
+    """
+    if sentinel_exit_code is None:
+        return False, f"no exit sentinel at {run_dir / SENTINEL_NAME} — may still be launching"
+    if query_rc != 0:
+        return False, f"status query failed (rc={query_rc}) — failing closed"
+    state = fields.get("status", "").strip().lower()
+    if state not in _KNOWN_DEAD_TASK_STATES:
+        return False, f"status {state!r} is not a known non-live state — failing closed"
+    raw_result = fields.get("last_result", "").strip()
+    try:
+        last_result = int(raw_result, 0)
+    except ValueError:
+        return False, f"last result {raw_result!r} unreadable — failing closed"
+    if last_result == SCHED_S_TASK_HAS_NOT_YET_RUN:
+        return False, "task has not yet run (pre-spawn Ready window) — refusing to cancel a launch"
+    if last_result == SCHED_S_TASK_IS_CURRENTLY_RUNNING:
+        return False, "last result says the task is currently running — refusing to cancel it"
+    return True, ""
+
+
 def task_deletion_verdict(name: str, run_dir: Path) -> tuple[bool, str]:
     """May this task be deleted? Returns ``(ok, reason_when_not)``. **Fails closed.**
 
@@ -775,25 +812,18 @@ def task_deletion_verdict(name: str, run_dir: Path) -> tuple[bool, str]:
        completion, so a sentinel planted in the writable scratch tree during the pre-spawn window
        would otherwise authorise deleting a peer's task before it ever ran.
     """
-    if _sentinel_exit_code(run_dir) is None:
-        return False, f"no exit sentinel at {run_dir / SENTINEL_NAME} — may still be launching"
+    exit_code = _sentinel_exit_code(run_dir)
+    if exit_code is None:
+        # Short-circuit: no sentinel is already dispositive, so skip the subprocess entirely. This
+        # is the common case while a run is in flight, and reap calls it once per registered task.
+        return evaluate_deletion(sentinel_exit_code=None, query_rc=0, fields={}, run_dir=run_dir)
     queried = _run(["schtasks", "/query", "/tn", name, "/fo", "list", "/v"])
-    if queried.returncode != 0:
-        return False, f"status query failed (rc={queried.returncode}) — failing closed"
-    fields = parse_task_status(queried.stdout)
-    state = fields.get("status", "").strip().lower()
-    if state not in _KNOWN_DEAD_TASK_STATES:
-        return False, f"status {state!r} is not a known non-live state — failing closed"
-    raw_result = fields.get("last_result", "").strip()
-    try:
-        last_result = int(raw_result, 0)
-    except ValueError:
-        return False, f"last result {raw_result!r} unreadable — failing closed"
-    if last_result == SCHED_S_TASK_HAS_NOT_YET_RUN:
-        return False, "task has not yet run (pre-spawn Ready window) — refusing to cancel a launch"
-    if last_result == SCHED_S_TASK_IS_CURRENTLY_RUNNING:
-        return False, "last result says the task is currently running — refusing to cancel it"
-    return True, ""
+    return evaluate_deletion(
+        sentinel_exit_code=exit_code,
+        query_rc=queried.returncode,
+        fields=parse_task_status(queried.stdout),
+        run_dir=run_dir,
+    )
 
 
 def _run_dir_for_task(name: str, root: Path) -> Path | None:
