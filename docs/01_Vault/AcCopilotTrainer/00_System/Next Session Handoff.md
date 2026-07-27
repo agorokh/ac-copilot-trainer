@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-27T03:35:00Z
+last_updated: 2026-07-27T04:30:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-529-pace-ladder-115-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-695-qss-apex-envelope-2026-07-26.md
@@ -186,10 +186,28 @@ six measured Windows defects as a guard that asserts its own precondition. 49 of
 `make ci-fast: OK`, **live-proven end to end** — it drove the G2 ladder itself from session 0
 (`installed app provenance: match`), `poll` returned task status + `acs` liveness + the live
 rig-lock owner, and `cleanup` deleted its own task (`list` → `[]` after reaping the one task the
-hand-run ladder had left). The daemon's 4 MEDIUM findings are all fixed at `cafea1b` (58 tests):
-always-quote every wrapper token, a path guard for `%`/`"` (they survive/break quoting), a
-task-name-vs-run-id ownership check in `cleanup` (it could otherwise reap a **peer's** task on the
-shared rig), and the payload import dropped. **NOT merged:** `chatgpt-codex-connector[bot]` answered the gate trigger with
+hand-run ladder had left).
+
+**Head is `279af83` after THREE self-hosted-reviewer rounds** (72 tests, 0 unresolved threads). Two
+of the three rounds found defects in the *previous* round's fix, all on one theme — **trusting
+on-disk state to decide which scheduled task to kill on a shared rig**:
+
+1. `78f4276` → `cafea1b`: `()` in the token allowlist with space-only quoting; paths only
+   ASCII-checked before `.cmd` interpolation (`%` expands *inside* quotes, `"` breaks out);
+   `cleanup` deleting `run.task` with no ownership check; the transport importing its own payload.
+2. `cafea1b` → `40f4f3d` (**HIGH**): `load_run` trusted `run.json` wholesale, so round 1's ownership
+   check compared **two fields from the same payload** — a self-consistent forgery passed, and an
+   unvalidated `run_dir` plus a planted sentinel could make `cleanup` delete a **peer's live task**.
+   The requested run id is now authoritative and `run_dir` is recomputed. Plus a trailing-backslash
+   quote escape (the CRT reads `\"` as an escaped quote) and `list` advertising a reap it never did.
+3. `40f4f3d` → `279af83`: the `reap` command round 2 *added* swept every task unconditionally,
+   reintroducing the async-delete hazard `cleanup_run` refuses; `wait_for_run` accepted `inf`/`nan`,
+   making the "bounded" wait unbounded; corrupt `run.json` raised a traceback instead of
+   `RemoteLaunchError` (Qodo, resolved).
+
+**Lesson worth carrying:** adding a convenience command (`reap`) reintroduced the very hazard the
+module was written to prevent. On this rig, anything that deletes a scheduled task must check
+whether it is in flight first. **NOT merged:** `chatgpt-codex-connector[bot]` answered the gate trigger with
 *"You have reached your Codex usage limits for code reviews"*, so the rollback's independent
 reviewer cannot run on this SHA. CI green, 0 review threads. Retry the atomic block when the quota
 rolls.
@@ -234,9 +252,10 @@ both halves: the 1.15/1.20 rungs *were* driven, and no reboot was needed — a ~
 ~11 landed launch cycles across two full ladders.
 
 **1. PR [#702](https://github.com/agorokh/ac-copilot-trainer/pull/702) (#697) — merge when Codex can
-review.** Head is `cafea1b` (the daemon-hardening round). Everything else is done: 0 review
-threads, `make ci-fast: OK`, 58 tests, live-proven on the rig including `cleanup`. The only blocker
-is the Codex usage-limit wall — **two** full trigger+cooldown rounds drew
+review.** Head is `279af83`. Everything else is done: 0 review threads, `make ci-fast: OK`,
+72 tests, live-proven on the rig including `cleanup`/`reap`. The only blocker
+is the Codex usage-limit wall — **five** consecutive trigger+cooldown rounds
+(`03:17`, `03:36`, `03:54`, `04:09`, `04:24` UTC) each drew
 *"You have reached your Codex usage limits for code reviews"*. Re-run the atomic
 trigger/cooldown/audit block from `/resolve-pr` § Bot triggers once the quota rolls; if it still
 refuses, that is a genuine operator escalation, not an unfinished loop.
