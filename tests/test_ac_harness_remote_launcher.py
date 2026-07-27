@@ -920,3 +920,22 @@ def test_evaluate_deletion_is_pure_over_a_snapshot(tmp_path: Path) -> None:
         run_dir=tmp_path,
     )
     assert blocked is False and "not yet run" in reason
+
+
+def test_wrapper_suppresses_a_ghost_trigger_rerun(tmp_path: Path) -> None:
+    """`/sc once` really fires: a run that finished first would otherwise execute AGAIN."""
+    run_dir = tmp_path / "run"
+    text = rl.render_wrapper(tmp_path, ["-m", "x"], run_dir)
+    sentinel = run_dir / rl.SENTINEL_NAME
+    lines = text.splitlines()
+    guard = next(i for i, ln in enumerate(lines) if ln.startswith("if exist") and "exit /b 0" in ln)
+    payload = next(i for i, ln in enumerate(lines) if ".venv" in ln)
+    # The guard must come BEFORE the redirected python call — `>` truncates, so a ghost run that
+    # reached the payload would destroy the first run's logs.
+    assert guard < payload
+    assert f'if exist "{sentinel}" exit /b 0' in text
+
+
+def test_ghost_suppression_note_does_not_corrupt_the_exit_sentinel() -> None:
+    """The suppression note must not be mistaken for a second exit code."""
+    assert rl.parse_sentinel("[wrapper] exit=0\n[wrapper] ghost trigger suppressed\n") == 0

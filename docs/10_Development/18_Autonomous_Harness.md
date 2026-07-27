@@ -344,6 +344,12 @@ Behaviours worth knowing before you debug something:
   asynchronous: deleting the task definition early can cancel a start that has not spawned yet, and
   it removes the only `Status` handle while the run is still launching. The exit sentinel
   (`[wrapper] exit=<rc>` in `wrapper.log`), not `Status: Ready`, is what says a run finished.
+- **The `/sc once` trigger really fires.** `/run` starts the task on demand, but `/create` insists
+  on a start time and Task Scheduler honours it. A run that *finished* before that moment would be
+  executed a second time — and `>` truncates, so the ghost run would silently destroy the first
+  run's `stdout.log`/`stderr.log` and overwrite its in-sim evidence. The wrapper therefore exits
+  immediately when the exit sentinel already exists. (Earlier runbook text claimed "the trigger
+  never fires"; that only held for runs longer than the delay.)
 - **Task names are per-run** (`ac-harness-<label>-<stamp>-<pid>-<nonce>`). The threat model is two
   agents on the one physical rig: a fixed name lets each clobber the other's registration.
 - **`wait` is bounded.** If the run never starts, the sentinel never appears; an unbounded wait

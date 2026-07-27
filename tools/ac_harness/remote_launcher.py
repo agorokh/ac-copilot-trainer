@@ -256,6 +256,15 @@ def render_wrapper(repo_root: Path, argv: Sequence[str], run_dir: Path) -> str:
     return (
         "@echo off\r\n"
         f'cd /d "{repo_root}"\r\n'
+        # `/run` starts this on demand, but the `/sc once` trigger `/create` insists on is REAL and
+        # still fires at its scheduled time. A run that finished before that moment would execute a
+        # SECOND time — `>` truncates, so the ghost silently destroys the first run's stdout/stderr
+        # and overwrites its in-sim evidence while the agent is polling or disconnected. The
+        # sentinel only exists once the wrapper has completed, so it is the exact idempotency key.
+        # (A trigger that fires *during* the first run is already suppressed by Task Scheduler's
+        # default "do not start a new instance" policy; this covers the after-completion case.)
+        f'if exist "{sentinel_path}" echo [wrapper] ghost trigger suppressed>>"{sentinel_path}"\r\n'
+        f'if exist "{sentinel_path}" exit /b 0\r\n'
         "rem Redirected Python is fully buffered; without this the poll surface looks hung for\r\n"
         "rem minutes on a healthy run.\r\n"
         "set PYTHONUNBUFFERED=1\r\n"
