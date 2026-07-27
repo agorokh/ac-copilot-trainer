@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-27T00:40:00Z
+last_updated: 2026-07-27T01:20:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-695-qss-apex-envelope-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-693-off-rig-session0-2026-07-26.md
@@ -142,6 +142,13 @@ Windows **session 0** (#693). The AC app junction was also found serving a non-m
 **Still open on #529, stated honestly:** G1 pace (≤86.84 s) **not met** at 88.425 s; G2 (<82.7 s) not
 met; G1b not attempted; **G3 needs a human driving multiple sessions** (operator-gated, not
 rig-gated); P4's first real rig scientist batch not run.
+
+**Also delivered (2026-07-27):** PR [#699](https://github.com/agorokh/ac-copilot-trainer/pull/699)
+MERGED [`c5afa50`](https://github.com/agorokh/ac-copilot-trainer/commit/c5afa50) — the off-rig recipe
+now **fails closed** instead of hanging: `ShortPath` returns the long path when 8.3 generation is
+disabled (silent 3 h wait), `$car`/`$track` were interpolated raw into an executable `.cmd`, and
+ascii encoding mangles non-ASCII paths. Guards assert their own preconditions; steps 3/4 split so an
+agent cannot paste itself into a blocking wait. #697 still OPEN for the script.
 
 ## RESUME — #529 pace gates, blocked on a rig reboot
 

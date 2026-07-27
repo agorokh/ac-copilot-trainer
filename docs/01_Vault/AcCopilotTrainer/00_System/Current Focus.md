@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-27T00:40:00Z
+last_updated: 2026-07-27T01:20:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-695-qss-apex-envelope-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-693-off-rig-session0-2026-07-26.md
@@ -62,6 +62,12 @@ self-play ladder its top envelope step). Issue #695 CLOSED. Detail:
 MERGED [`49f90f1`](https://github.com/agorokh/ac-copilot-trainer/commit/49f90f1) — #693 off-rig
 launch path (SSH lands in Windows session 0; `schtasks /IT` recipe, live-verified). Issue #693
 CLOSED; codify-as-script follow-up **#697** OPEN. Detail:
+[[issue-693-off-rig-session0-2026-07-26]].
+
+**Delivered (2026-07-27):** PR [#699](https://github.com/agorokh/ac-copilot-trainer/pull/699)
+MERGED [`c5afa50`](https://github.com/agorokh/ac-copilot-trainer/commit/c5afa50) — off-rig recipe
+fails closed rather than hanging (8.3 `ShortPath` fail-open, unvalidated `$car`/`$track` into an
+executable `.cmd`, ascii-mangled non-ASCII paths, blocking-wait block split). Detail:
 [[issue-693-off-rig-session0-2026-07-26]].
 
 **In flight (2026-07-26):** EPIC [#529](https://github.com/agorokh/ac-copilot-trainer/issues/529) —
