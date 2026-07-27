@@ -347,9 +347,12 @@ Behaviours worth knowing before you debug something:
   agents on the one physical rig: a fixed name lets each clobber the other's registration.
 - **`wait` is bounded.** If the run never starts, the sentinel never appears; an unbounded wait
   would hang for hours with no diagnosis.
-- **`list` only reports; `reap` deletes.** A session that dies before `cleanup` leaves a harmless
-  but accumulating registration behind — `reap` removes every task this module owns, so you never
-  need raw `schtasks /delete`.
+- **`list` only reports; `reap` deletes — under `cleanup`'s rule, not a weaker one.** `reap`
+  removes a task only when that run's **exit sentinel** exists (and its status is a known non-live
+  value), so you never need raw `schtasks /delete`. `Status: Ready` is *not* completion: `/run` is
+  asynchronous, so a task reads `Ready` both between `/create` and `/run` and after `/run` until the
+  wrapper spawns — deleting in either window cancels a peer's launch. An unreadable or unrecognised
+  status **fails closed** (skipped, with the reason reported); `--force` overrides both checks.
 - **The run id you pass is authoritative.** `run.json` lives in a writable scratch tree, so `load`
   binds the payload to the id you asked for and **recomputes** its directory; a forged or stale
   payload cannot redirect `cleanup` onto a peer's task.

@@ -614,30 +614,74 @@ def list_stale_tasks() -> list[str]:
     return names
 
 
-#: Task states that mean a launch is still in flight. Deleting one of these cancels a start that
-#: has not spawned yet and drops the only ``Status`` handle — the same hazard :func:`cleanup_run`
-#: refuses for a single run, which ``reap`` must not reintroduce across every run on the rig.
-_LIVE_TASK_STATES = {"running", "queued"}
+#: Task states that are known NOT to be mid-launch. Everything else — ``Running``, ``Queued``, an
+#: unparseable status, or a failed query — is treated as possibly-live and skipped. ``Ready`` is in
+#: this set only as a *secondary* signal: it is emphatically **not** proof of completion (see
+#: :func:`reap_tasks`), which is why the sentinel check below is the primary gate.
+_KNOWN_DEAD_TASK_STATES = {"ready", "disabled"}
 
 
-def reap_tasks(*, force: bool = False) -> dict[str, Any]:
-    """Delete still-registered tasks this module owns, **skipping ones still in flight**.
+def _run_dir_for_task(name: str, root: Path) -> Path | None:
+    """Canonical run directory for a task name, or ``None`` when the name is not ours."""
+    if not name.startswith(TASK_PREFIX):
+        return None
+    run_id = name[len(TASK_PREFIX) :]
+    try:
+        validate_run_component("run id", run_id)
+    except RemoteLaunchError:
+        return None
+    return root.joinpath(*RUN_DIR_RELPATH, run_id)
+
+
+def reap_tasks(*, repo_root: Path | None = None, force: bool = False) -> dict[str, Any]:
+    """Delete still-registered tasks this module owns, using :func:`cleanup_run`'s own rule.
 
     ``list`` deliberately only reports; this is the command that actually removes them. A session
     that dies before ``cleanup`` leaves an accumulating registration behind, and without this the
     operator falls back to raw ``schtasks /delete`` — the hand-run path this module retires.
 
-    But this module's threat model is *two agents, one rig*: an unconditional sweep would delete a
-    **peer's live task** mid-launch. So a task reporting ``Running``/``Queued`` is skipped unless
-    ``force`` is set, and the skip is reported rather than silently swallowed.
+    The threat model is *two agents, one rig*, so this must obey exactly the rule
+    :func:`cleanup_run` encodes and no weaker one:
+
+    * **``Status: Ready`` is not completion.** ``schtasks /run`` is asynchronous, so a task reads
+      ``Ready`` in the window between ``/create`` and ``/run``, and again after ``/run`` until the
+      wrapper actually spawns. Deleting during either window cancels a peer's start and drops the
+      only ``Status`` handle. The **exit sentinel** under the canonical
+      ``.scratch/harness-remote/<run id>/`` — derived from the task name, never from an on-disk
+      payload — is the authority, exactly as in :func:`cleanup_run`.
+    * **Unknown status fails closed.** If ``/query`` errors, returns nothing, or yields a status
+      this module does not recognise, the task is skipped rather than deleted. A guard that
+      fail-*opens* on a transient query failure is worse than none: it silently removes a live peer
+      task at the one moment the evidence is missing.
+
+    ``force`` overrides both, and every skip is reported rather than silently swallowed.
     """
+    root = (repo_root or harness_repo_root()).resolve()
     results: dict[str, Any] = {}
     for name in list_stale_tasks():
-        queried = _run(["schtasks", "/query", "/tn", name, "/fo", "list", "/v"])
-        state = parse_task_status(queried.stdout).get("status", "")
-        if not force and state.strip().lower() in _LIVE_TASK_STATES:
-            results[name] = {"deleted": False, "skipped": f"task is {state.strip()}"}
-            continue
+        if not force:
+            run_dir = _run_dir_for_task(name, root)
+            if run_dir is None:
+                results[name] = {"deleted": False, "skipped": "task name is not a valid run id"}
+                continue
+            sentinel = run_dir / SENTINEL_NAME
+            finished = sentinel.is_file() and (
+                parse_sentinel(sentinel.read_text(encoding="utf-8", errors="replace")) is not None
+            )
+            if not finished:
+                results[name] = {
+                    "deleted": False,
+                    "skipped": f"no exit sentinel at {sentinel} — may still be launching",
+                }
+                continue
+            queried = _run(["schtasks", "/query", "/tn", name, "/fo", "list", "/v"])
+            state = parse_task_status(queried.stdout).get("status", "").strip().lower()
+            if queried.returncode != 0 or state not in _KNOWN_DEAD_TASK_STATES:
+                results[name] = {
+                    "deleted": False,
+                    "skipped": f"status unknown (rc={queried.returncode}, status={state!r})",
+                }
+                continue
         deleted = _run(["schtasks", "/delete", "/tn", name, "/f"])
         results[name] = {"deleted": deleted.returncode == 0, "rc": deleted.returncode}
     return {"reaped": results, "remaining": list_stale_tasks()}
@@ -709,7 +753,7 @@ def build_parser() -> argparse.ArgumentParser:
     reap.add_argument(
         "--force",
         action="store_true",
-        help="also delete Running/Queued tasks — cancels a live launch, possibly a peer's",
+        help="delete without the sentinel/status checks — cancels a live launch, possibly a peer's",
     )
     return p
 

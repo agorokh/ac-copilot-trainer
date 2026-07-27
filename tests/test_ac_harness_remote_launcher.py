@@ -434,88 +434,123 @@ def test_trailing_backslash_is_rejected(bad: str) -> None:
         rl.validate_wrapper_path("repo root", Path(bad))
 
 
-def test_reap_tasks_deletes_every_owned_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`list` only reports — this is the command that actually removes them."""
-    names = ["ac-harness-a", "ac-harness-b"]
-    calls: list[list[str]] = []
-
-    class _Ok:
-        returncode = 0
-        stdout = "Status:  Ready\n"
-
-    def _fake_run(argv):  # noqa: ANN001, ANN202
-        calls.append(list(argv))
-        return _Ok()
-
-    monkeypatch.setattr(rl, "_run", _fake_run)
-    seq = iter([names, []])
-    monkeypatch.setattr(rl, "list_stale_tasks", lambda: next(seq))
-    outcome = rl.reap_tasks()
-    assert outcome["remaining"] == []
-    assert all(o["deleted"] for o in outcome["reaped"].values())
-    for n in names:
-        assert ["schtasks", "/delete", "/tn", n, "/f"] in calls
-
-
 # ---------------------------------------------------------------------------
 # reap safety, bounded-wait finiteness, corrupt payload (3rd daemon round)
 # ---------------------------------------------------------------------------
 
 
-def test_reap_skips_a_task_that_is_still_running(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unconditional sweep would cancel a PEER's live launch — the hazard cleanup refuses."""
+def _seed_finished_run(root: Path, run_id: str) -> None:
+    d = root.joinpath(*rl.RUN_DIR_RELPATH, run_id)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / rl.SENTINEL_NAME).write_text("[wrapper] exit=0\n", encoding="utf-8")
+
+
+class _Ready:
+    returncode = 0
+    stdout = "Status:  Ready\n"
+
+
+def test_reap_skips_a_task_with_no_exit_sentinel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`Status: Ready` is NOT completion — /run is async, so Ready covers the pre-spawn window."""
     calls: list[list[str]] = []
-
-    class _Q:
-        returncode = 0
-        stdout = "Status:  Running\n"
-
-    def _fake_run(argv):  # noqa: ANN001, ANN202
-        calls.append(list(argv))
-        return _Q()
-
-    monkeypatch.setattr(rl, "_run", _fake_run)
-    monkeypatch.setattr(rl, "list_stale_tasks", lambda: ["ac-harness-live"])
-    outcome = rl.reap_tasks()
-    assert outcome["reaped"]["ac-harness-live"]["deleted"] is False
-    assert "Running" in outcome["reaped"]["ac-harness-live"]["skipped"]
+    monkeypatch.setattr(rl, "_run", lambda argv: (calls.append(list(argv)), _Ready())[1])
+    monkeypatch.setattr(rl, "list_stale_tasks", lambda: ["ac-harness-launching"])
+    outcome = rl.reap_tasks(repo_root=tmp_path)
+    assert outcome["reaped"]["ac-harness-launching"]["deleted"] is False
+    assert "no exit sentinel" in outcome["reaped"]["ac-harness-launching"]["skipped"]
     assert not any("/delete" in c for c in calls)
 
 
-def test_reap_force_deletes_even_a_running_task(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reap_fails_closed_when_the_status_query_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A transient /query failure must not become a licence to delete a live peer task."""
+    _seed_finished_run(tmp_path, "done")
     calls: list[list[str]] = []
 
-    class _Q:
+    class _Broken:
+        returncode = 1
+        stdout = ""
+
+    monkeypatch.setattr(rl, "_run", lambda argv: (calls.append(list(argv)), _Broken())[1])
+    monkeypatch.setattr(rl, "list_stale_tasks", lambda: ["ac-harness-done"])
+    outcome = rl.reap_tasks(repo_root=tmp_path)
+    assert outcome["reaped"]["ac-harness-done"]["deleted"] is False
+    assert "status unknown" in outcome["reaped"]["ac-harness-done"]["skipped"]
+    assert not any("/delete" in c for c in calls)
+
+
+def test_reap_fails_closed_on_an_unrecognised_status(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _seed_finished_run(tmp_path, "done")
+    calls: list[list[str]] = []
+
+    class _Weird:
+        returncode = 0
+        stdout = "Status:  Somethingelse\n"
+
+    monkeypatch.setattr(rl, "_run", lambda argv: (calls.append(list(argv)), _Weird())[1])
+    monkeypatch.setattr(rl, "list_stale_tasks", lambda: ["ac-harness-done"])
+    assert rl.reap_tasks(repo_root=tmp_path)["reaped"]["ac-harness-done"]["deleted"] is False
+    assert not any("/delete" in c for c in calls)
+
+
+def test_reap_skips_a_running_task_even_with_a_sentinel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _seed_finished_run(tmp_path, "live")
+    calls: list[list[str]] = []
+
+    class _Running:
         returncode = 0
         stdout = "Status:  Running\n"
 
-    def _fake_run(argv):  # noqa: ANN001, ANN202
-        calls.append(list(argv))
-        return _Q()
-
-    monkeypatch.setattr(rl, "_run", _fake_run)
+    monkeypatch.setattr(rl, "_run", lambda argv: (calls.append(list(argv)), _Running())[1])
     monkeypatch.setattr(rl, "list_stale_tasks", lambda: ["ac-harness-live"])
-    rl.reap_tasks(force=True)
+    assert rl.reap_tasks(repo_root=tmp_path)["reaped"]["ac-harness-live"]["deleted"] is False
+    assert not any("/delete" in c for c in calls)
+
+
+def test_reap_deletes_a_finished_ready_task(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Sentinel present AND a known-dead status — the only combination that authorises delete."""
+    _seed_finished_run(tmp_path, "done")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(rl, "_run", lambda argv: (calls.append(list(argv)), _Ready())[1])
+    seq = iter([["ac-harness-done"], []])
+    monkeypatch.setattr(rl, "list_stale_tasks", lambda: next(seq))
+    outcome = rl.reap_tasks(repo_root=tmp_path)
+    assert outcome["reaped"]["ac-harness-done"]["deleted"] is True
+    assert outcome["remaining"] == []
+    assert ["schtasks", "/delete", "/tn", "ac-harness-done", "/f"] in calls
+
+
+def test_reap_force_bypasses_both_guards(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    class _Running:
+        returncode = 0
+        stdout = "Status:  Running\n"
+
+    monkeypatch.setattr(rl, "_run", lambda argv: (calls.append(list(argv)), _Running())[1])
+    monkeypatch.setattr(rl, "list_stale_tasks", lambda: ["ac-harness-live"])
+    rl.reap_tasks(repo_root=tmp_path, force=True)
     assert ["schtasks", "/delete", "/tn", "ac-harness-live", "/f"] in calls
 
 
-def test_reap_deletes_a_task_that_is_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reap_skips_a_task_name_that_is_not_a_valid_run_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     calls: list[list[str]] = []
-
-    class _Q:
-        returncode = 0
-        stdout = "Status:  Ready\n"
-
-    def _fake_run(argv):  # noqa: ANN001, ANN202
-        calls.append(list(argv))
-        return _Q()
-
-    monkeypatch.setattr(rl, "_run", _fake_run)
-    seq = iter([["ac-harness-done"], []])
-    monkeypatch.setattr(rl, "list_stale_tasks", lambda: next(seq))
-    outcome = rl.reap_tasks()
-    assert outcome["reaped"]["ac-harness-done"]["deleted"] is True
-    assert ["schtasks", "/delete", "/tn", "ac-harness-done", "/f"] in calls
+    monkeypatch.setattr(rl, "_run", lambda argv: (calls.append(list(argv)), _Ready())[1])
+    monkeypatch.setattr(rl, "list_stale_tasks", lambda: ["ac-harness-bad/../id"])
+    outcome = rl.reap_tasks(repo_root=tmp_path)
+    assert outcome["reaped"]["ac-harness-bad/../id"]["deleted"] is False
+    assert not any("/delete" in c for c in calls)
 
 
 @pytest.mark.parametrize("bad", [float("inf"), float("nan"), -1.0])
