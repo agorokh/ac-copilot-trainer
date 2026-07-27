@@ -54,12 +54,12 @@ off-rig; only the ``schtasks``/session calls are Windows-only.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import os
 import random
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -494,7 +494,18 @@ def _execute_validated(requested: str) -> int:
         raise RemoteLaunchError(f"unreadable control file {control}: {exc}") from exc
     if not isinstance(payload, dict):
         raise RemoteLaunchError(f"control file {control} is not an object")
-    repo_root = validate_wrapper_path("repo root", Path(str(payload.get("repo_root", ""))))
+    # repo_root is NOT taken from the control file. Validating its characters was not enough:
+    # it selects the interpreter (`<repo_root>/.venv/Scripts/python.exe`) and the log directory, so
+    # a forged control file could point execution at an arbitrary python and writes at an arbitrary
+    # tree — the same class as the `-c` hole, one layer down. It is recomputed from THIS module's
+    # own location, and a control file that disagrees is rejected rather than silently overridden.
+    repo_root = harness_repo_root()
+    declared = str(payload.get("repo_root", ""))
+    if declared and Path(declared).resolve() != repo_root:
+        raise RemoteLaunchError(
+            f"control file {control} declares repo_root {declared!r} but this shim lives under "
+            f"{repo_root} — refusing to run a payload aimed at another checkout"
+        )
     argv = validate_payload_argv(payload.get("argv", []))
 
     run_dir = repo_root.joinpath(*RUN_DIR_RELPATH, requested)
@@ -549,7 +560,15 @@ def start_run(
     # exist_ok=False on purpose: a per-run id should never collide, and REUSING a directory would
     # inherit whatever markers it already holds (a stale or planted sentinel), which is exactly the
     # vector the wrapper's start-marker guard exists to close. A collision is a loud error.
-    run_dir.mkdir(parents=True, exist_ok=False)
+    try:
+        run_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        # main() only catches RemoteLaunchError; a bare FileExistsError would crash the CLI with a
+        # traceback instead of the documented exit code.
+        raise RemoteLaunchError(
+            f"run directory {run_dir} already exists — refusing to reuse it (it could carry a "
+            "stale or planted control/sentinel state)"
+        ) from exc
 
     resolved_argv = substitute_run_placeholders(argv, run_id=run_id, run_dir=run_dir)
     validate_wrapper_path("repo root", root)
@@ -773,9 +792,17 @@ def _discard_control_dir(run_id: str) -> None:
     (control file + sentinel) into the user's profile.
     """
     try:
-        shutil.rmtree(control_dir_for(run_id), ignore_errors=True)
+        control = control_dir_for(run_id)
     except RemoteLaunchError:
-        pass  # unvalidatable id — nothing of ours to remove
+        return  # unvalidatable id — nothing of ours to remove
+    # Delete only the two files this module writes, then rmdir. A recursive delete would remove
+    # peer-planted content in a directory this module itself documents as peer-writable, and
+    # `ignore_errors=True` would swallow the very failure that means the leak is still there.
+    for name in (CONTROL_NAME, SENTINEL_NAME):
+        with contextlib.suppress(FileNotFoundError):
+            (control / name).unlink()
+    with contextlib.suppress(FileNotFoundError, OSError):
+        control.rmdir()  # refuses if anything unexpected remains — deliberately not forced
 
 
 def _await_deletion_verdict(

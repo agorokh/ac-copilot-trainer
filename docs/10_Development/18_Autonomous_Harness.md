@@ -317,8 +317,8 @@ python -m tools.ac_harness.remote_launcher start --label alien-529-911-magione -
 It prints a JSON handle (`run_id`, `task`, `run_dir`) and returns immediately. Transport logs live
 under `.scratch/harness-remote/<run id>/` (`stdout.log`, `stderr.log`, `run.json`) — deliberately
 *beside* the harness's own `--evidence-dir` tree, which the harness keeps owning. The control file
-and exit sentinel are **not** there; they live under `%LOCALAPPDATA%\AC Copilot Trainer\Harness\
-remote\<run id>\`.
+and exit sentinel are **not** there; they live under
+`%LOCALAPPDATA%\AC Copilot Trainer\Harness\remote\<run id>\` (one unbroken path — copy it whole).
 
 Then live in `poll` (read-only — it never touches AC and never deletes the task), and reap at the
 end:

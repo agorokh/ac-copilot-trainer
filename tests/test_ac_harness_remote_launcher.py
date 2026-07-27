@@ -654,10 +654,13 @@ def test_cli_cleanup_exits_zero_on_a_real_delete(
 def test_sentinel_read_failure_does_not_abort_a_reap_pass(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """An OSError on the sentinel must skip the task, not crash the CLI with a traceback."""
-    d = tmp_path.joinpath(*rl.RUN_DIR_RELPATH, "r")
-    d.mkdir(parents=True)
-    (d / rl.SENTINEL_NAME).write_text("[wrapper] exit=0\n", encoding="utf-8")
+    """An OSError on the sentinel must skip the task, not crash the CLI with a traceback.
+
+    The sentinel lives in the CONTROL directory — an earlier version of this test seeded the run
+    directory instead, so `is_file()` was False and the OSError branch was never reached.
+    """
+    _seed_finished_run(tmp_path, "r")
+    assert rl.sentinel_path_for("r").is_file()  # precondition: we reach the read at all
     monkeypatch.setattr(
         Path, "read_text", lambda self, **kw: (_ for _ in ()).throw(OSError("permission denied"))
     )
@@ -874,18 +877,6 @@ def test_evaluate_deletion_is_pure_over_a_snapshot(tmp_path: Path) -> None:
     assert blocked is False and "not yet run" in reason
 
 
-def test_start_run_refuses_to_reuse_an_existing_run_directory(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Reusing a run dir would inherit whatever markers it already holds — a plant vector."""
-    monkeypatch.setattr(rl, "assert_transport_needed", lambda: (0, 1))
-    monkeypatch.setattr(rl, "build_run_id", lambda label, **kw: "fixed-id")
-    (tmp_path.joinpath(*rl.RUN_DIR_RELPATH, "fixed-id")).mkdir(parents=True)
-    monkeypatch.setenv("USERNAME", "someone")
-    with pytest.raises(FileExistsError):
-        rl.start_run(["-m", "x"], label="fixed", repo_root=tmp_path)
-
-
 def test_ghost_suppression_note_does_not_corrupt_the_exit_sentinel() -> None:
     """The suppression note must not be mistaken for a second exit code."""
     assert rl.parse_sentinel("[wrapper] exit=0\n[wrapper] ghost trigger suppressed\n") == 0
@@ -909,7 +900,7 @@ def test_execute_control_file_revalidates_argv_from_disk(tmp_path: Path) -> None
     control = rl.control_dir_for("evil")
     control.mkdir(parents=True)
     (control / rl.CONTROL_NAME).write_text(
-        json.dumps({"repo_root": str(tmp_path), "argv": ["-m", "x & calc.exe"]}), encoding="utf-8"
+        json.dumps({"argv": ["-m", "x & calc.exe"]}), encoding="utf-8"
     )
     with pytest.raises(rl.RemoteLaunchError, match="unsafe argv token"):
         rl.execute_control_file("evil")
@@ -926,9 +917,7 @@ def test_execute_control_file_rejects_a_corrupt_payload(tmp_path: Path) -> None:
 def test_execute_control_file_rejects_an_empty_argv(tmp_path: Path) -> None:
     control = rl.control_dir_for("empty")
     control.mkdir(parents=True)
-    (control / rl.CONTROL_NAME).write_text(
-        json.dumps({"repo_root": str(tmp_path), "argv": []}), encoding="utf-8"
-    )
+    (control / rl.CONTROL_NAME).write_text(json.dumps({"argv": []}), encoding="utf-8")
     with pytest.raises(rl.RemoteLaunchError, match="must start with"):
         rl.execute_control_file("empty")
 
@@ -939,8 +928,7 @@ def test_execute_control_file_spawns_without_a_shell_and_writes_the_sentinel(
     control = rl.control_dir_for("ok")
     control.mkdir(parents=True)
     (control / rl.CONTROL_NAME).write_text(
-        json.dumps({"repo_root": str(tmp_path), "argv": ["-m", "tools.ac_harness.auto_alien"]}),
-        encoding="utf-8",
+        json.dumps({"argv": ["-m", "tools.ac_harness.auto_alien"]}), encoding="utf-8"
     )
     seen: dict = {}
 
@@ -957,7 +945,7 @@ def test_execute_control_file_spawns_without_a_shell_and_writes_the_sentinel(
     # The interpreter and cwd are RECOMPUTED, never taken from the control file.
     assert seen["argv"][0].endswith("python.exe")
     assert seen["argv"][1:] == ["-u", "-m", "tools.ac_harness.auto_alien"]
-    assert seen["kwargs"]["cwd"] == str(tmp_path)
+    assert seen["kwargs"]["cwd"] == str(rl.harness_repo_root())
     assert "shell" not in seen["kwargs"]  # subprocess defaults to shell=False
     assert rl.parse_sentinel(rl.sentinel_path_for("ok").read_text(encoding="utf-8")) == 7
 
@@ -1008,7 +996,7 @@ def test_execute_control_file_records_a_sentinel_when_it_fails(tmp_path: Path) -
     control = rl.control_dir_for("boom")
     control.mkdir(parents=True)
     (control / rl.CONTROL_NAME).write_text(
-        json.dumps({"repo_root": str(tmp_path), "argv": ["-c", "print(1)"]}), encoding="utf-8"
+        json.dumps({"argv": ["-c", "print(1)"]}), encoding="utf-8"
     )
     with pytest.raises(rl.RemoteLaunchError):
         rl.execute_control_file("boom")
@@ -1065,3 +1053,47 @@ def test_cleanup_removes_the_control_directory(
     )
     assert rl.cleanup_run(run)["deleted"] is True
     assert not rl.control_dir_for("gone").exists()
+
+
+def test_execute_control_file_rejects_a_foreign_repo_root(tmp_path: Path) -> None:
+    """repo_root selects the INTERPRETER — trusting the control file was the `-c` hole again."""
+    control = rl.control_dir_for("foreign")
+    control.mkdir(parents=True)
+    (control / rl.CONTROL_NAME).write_text(
+        json.dumps(
+            {
+                "repo_root": str(tmp_path / "elsewhere"),
+                "argv": ["-m", "tools.ac_harness.auto_alien"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(rl.RemoteLaunchError, match="another checkout"):
+        rl.execute_control_file("foreign")
+
+
+def test_discard_control_dir_removes_only_our_files(tmp_path: Path) -> None:
+    """A recursive delete would remove peer-planted content in a peer-writable directory."""
+    control = rl.control_dir_for("mixed")
+    control.mkdir(parents=True)
+    (control / rl.CONTROL_NAME).write_text("{}", encoding="utf-8")
+    (control / rl.SENTINEL_NAME).write_text("[wrapper] exit=0\n", encoding="utf-8")
+    stranger = control / "someone-elses.txt"
+    stranger.write_text("not ours", encoding="utf-8")
+    rl._discard_control_dir("mixed")
+    assert not (control / rl.CONTROL_NAME).exists()
+    assert not (control / rl.SENTINEL_NAME).exists()
+    assert stranger.exists()  # untouched, and the rmdir therefore refuses
+    assert control.exists()
+
+
+def test_start_run_reports_a_run_dir_collision_as_a_launch_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """main() only catches RemoteLaunchError; a bare FileExistsError crashed the CLI."""
+    monkeypatch.setattr(rl, "assert_transport_needed", lambda: (0, 1))
+    monkeypatch.setattr(rl, "build_run_id", lambda label, **kw: "fixed-id")
+    tmp_path.joinpath(*rl.RUN_DIR_RELPATH, "fixed-id").mkdir(parents=True)
+    monkeypatch.setenv("USERNAME", "someone")
+    with pytest.raises(rl.RemoteLaunchError, match="already exists"):
+        rl.start_run(["-m", "tools.ac_harness.auto_alien"], label="fixed", repo_root=tmp_path)
