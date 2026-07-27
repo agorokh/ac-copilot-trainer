@@ -310,6 +310,7 @@ Start a run — everything after `--` is the harness argv, minus the interpreter
 ```bash
 python -m tools.ac_harness.remote_launcher start --label alien-529-911-magione -- \
     -m tools.ac_harness.auto_alien --car ks_porsche_911_gt3_r_2016 --track magione \
+    --evidence-dir .scratch/harness-evidence/{run_id} \
     --laps 3 --ggv-scale 1.0 --scale-step 0.15 --iterations 2 --max-scale 1.2
 ```
 

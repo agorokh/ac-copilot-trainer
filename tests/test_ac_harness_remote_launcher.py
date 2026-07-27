@@ -243,7 +243,12 @@ def _run_handle(tmp_path: Path) -> rl.RemoteRun:
 def test_wait_for_run_returns_as_soon_as_the_sentinel_lands(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    polls = iter([{"finished": False}, {"finished": True, "exit_code": 0}])
+    polls = iter(
+        [
+            {"verified_complete": False},
+            {"verified_complete": True, "finished": True, "exit_code": 0},
+        ]
+    )
     monkeypatch.setattr(rl, "poll_run", lambda run, **kw: next(polls))
     slept: list[float] = []
     status = rl.wait_for_run(
@@ -253,7 +258,8 @@ def test_wait_for_run_returns_as_soon_as_the_sentinel_lands(
         sleep=slept.append,
         monotonic=lambda: 0.0,
     )
-    assert status == {"finished": True, "exit_code": 0}
+    assert status["verified_complete"] is True
+    assert status["exit_code"] == 0
     assert slept == [30]
 
 
@@ -261,7 +267,7 @@ def test_wait_for_run_is_bounded_when_the_run_never_starts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """An unbounded wait would hang forever with no diagnosis on a task that never launched."""
-    monkeypatch.setattr(rl, "poll_run", lambda run, **kw: {"finished": False})
+    monkeypatch.setattr(rl, "poll_run", lambda run, **kw: {"verified_complete": False})
     clock = iter([0.0, 0.0, 10.0, 10.0, 10.0])
     status = rl.wait_for_run(
         _run_handle(tmp_path),
@@ -277,7 +283,7 @@ def test_cleanup_run_refuses_to_delete_an_unfinished_run(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """schtasks /run is asynchronous — an early delete can cancel a start that has not spawned."""
-    monkeypatch.setattr(rl, "poll_run", lambda run, **kw: {"finished": False})
+    monkeypatch.setattr(rl, "poll_run", lambda run, **kw: {"verified_complete": False})
     calls: list[list[str]] = []
     monkeypatch.setattr(rl, "_run", lambda argv: calls.append(list(argv)))
     result = rl.cleanup_run(_run_handle(tmp_path))
@@ -288,7 +294,7 @@ def test_cleanup_run_refuses_to_delete_an_unfinished_run(
 def test_cleanup_run_force_deletes_without_the_sentinel(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(rl, "poll_run", lambda run, **kw: {"finished": False})
+    monkeypatch.setattr(rl, "poll_run", lambda run, **kw: {"verified_complete": False})
     calls: list[list[str]] = []
 
     class _Done:
@@ -631,7 +637,7 @@ def test_cleanup_run_now_applies_the_same_live_status_gate_as_reap(
         stdout = "Status:  Running\nLast Result:  267009\n"
 
     monkeypatch.setattr(rl, "_run", lambda argv: (calls.append(list(argv)), _Running())[1])
-    monkeypatch.setattr(rl, "poll_run", lambda run, **kw: {"finished": True})
+    monkeypatch.setattr(rl, "poll_run", lambda run, **kw: {"verified_complete": False})
     run = rl.RemoteRun(
         run_id="r",
         task="ac-harness-r",
@@ -807,3 +813,57 @@ def test_resolve_short_path_uses_one_call_when_the_first_buffer_fits() -> None:
 
     assert rl.resolve_short_path(Path("C:/short"), _fake_get_short) == "C:/SHORT~1"
     assert len(calls) == 1
+
+
+def test_wait_refuses_a_planted_sentinel_while_the_task_is_still_launching(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A peer can write wrapper.log; `start --wait` must not call that success."""
+    monkeypatch.setattr(
+        rl,
+        "poll_run",
+        lambda run, **kw: {"finished": True, "verified_complete": False, "exit_code": 0},
+    )
+    clock = iter([0.0, 0.0, 99.0, 99.0, 99.0])
+    status = rl.wait_for_run(
+        _run_handle(tmp_path),
+        timeout_s=5,
+        interval_s=1,
+        sleep=lambda _s: None,
+        monotonic=lambda: next(clock),
+    )
+    assert status["timed_out"] is True
+
+
+def test_poll_run_survives_an_unreadable_sentinel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """cleanup polls first, so a sharing error on wrapper.log must not abort with a traceback."""
+    monkeypatch.setattr(
+        rl, "_sentinel_exit_code", lambda run_dir: (_ for _ in ()).throw(AssertionError("unused"))
+    )
+    monkeypatch.setattr(rl, "_sentinel_exit_code", lambda run_dir: None)
+    monkeypatch.setattr(rl, "task_deletion_verdict", lambda name, rd: (False, "no sentinel"))
+
+    class _Q:
+        returncode = 0
+        stdout = "Status:  Ready\nLast Result:  0\n"
+
+    monkeypatch.setattr(rl, "_run", lambda argv: _Q())
+    monkeypatch.setattr(rl, "read_rig_session_owner", lambda p: None)
+    status = rl.poll_run(_run_handle(tmp_path))
+    assert status["finished"] is False
+    assert status["verified_complete"] is False
+
+
+def test_cli_start_wait_reports_a_refused_cleanup_in_the_exit_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """On the unattended path a leftover live task must be visible from the exit code."""
+    run = _run_handle(tmp_path)
+    monkeypatch.setattr(rl, "start_run", lambda argv, **kw: run)
+    monkeypatch.setattr(
+        rl, "wait_for_run", lambda r, **kw: {"exit_code": 0, "verified_complete": True}
+    )
+    monkeypatch.setattr(rl, "cleanup_run", lambda r, **kw: {"deleted": False, "reason": "refused"})
+    assert rl.main(["start", "--wait-timeout-s", "1", "--", "-m", "x"]) == 1

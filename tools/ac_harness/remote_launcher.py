@@ -592,19 +592,22 @@ def poll_run(run: RemoteRun, *, tail: int = 30) -> dict[str, Any]:
     Never touches AC and never deletes the task — a poll must be safe to run in a tight loop.
     """
     queried = _run(["schtasks", "/query", "/tn", run.task, "/fo", "list", "/v"])
-    sentinel = run.directory / SENTINEL_NAME
-    exit_code = (
-        parse_sentinel(sentinel.read_text(encoding="utf-8", errors="replace"))
-        if sentinel.is_file()
-        else None
-    )
+    # Single sentinel reader: a permission/sharing error on wrapper.log must not abort a poll (and
+    # therefore cleanup, which polls first) with a traceback.
+    exit_code = _sentinel_exit_code(run.directory)
+    verified, verified_reason = task_deletion_verdict(run.task, run.directory)
     acs = _run(["tasklist", "/fi", "imagename eq acs.exe", "/nh"])
     return {
         "run_id": run.run_id,
         "task": run.task,
         "task_query_rc": queried.returncode,
         **parse_task_status(queried.stdout),
+        # `finished` is the RAW sentinel signal, kept for diagnosis. `verified_complete` is the
+        # strict one (sentinel + known-dead status + a Last Result showing it actually ran) and is
+        # what anything acting on the run must use — a peer can write into the scratch tree.
         "finished": exit_code is not None,
+        "verified_complete": verified,
+        "verified_reason": verified_reason,
         "exit_code": exit_code,
         "acs_running": "acs.exe" in acs.stdout.lower(),
         "rig_lock_owner": read_rig_session_owner(default_rig_session_lock_path()),
@@ -623,6 +626,9 @@ def wait_for_run(
 ) -> dict[str, Any]:
     """Block until the wrapper writes its exit sentinel, or the bounded deadline passes.
 
+    Completion is the same strict predicate :func:`cleanup_run` and :func:`reap_tasks` use, not the
+    bare presence of an exit sentinel.
+
     The wait is bounded on purpose: when the run never starts the sentinel never appears, and an
     unbounded loop would hang forever with no diagnosis.
     """
@@ -637,7 +643,10 @@ def wait_for_run(
     deadline = monotonic() + timeout_s
     while True:
         status = poll_run(run)
-        if status["finished"]:
+        # NOT `finished`: that is the raw sentinel, which a peer sharing this rig's writable
+        # .scratch tree can plant — making an unattended `start --wait-timeout-s` exit 0 while the
+        # /IT task is still launching. cleanup/reap already refuse that; the wait must too.
+        if status["verified_complete"]:
             return status
         if monotonic() >= deadline:
             status["timed_out"] = True
@@ -930,9 +939,16 @@ def main(raw_args: Sequence[str] | None = None) -> int:
             print(json.dumps(status, indent=2, default=str))
             if status.get("timed_out"):
                 return 2
+            rc = 0 if status.get("exit_code") == 0 else 1
             if not args.keep_task:
-                print(json.dumps(cleanup_run(run), indent=2, default=str))
-            return 0 if status.get("exit_code") == 0 else 1
+                cleaned = cleanup_run(run)
+                print(json.dumps(cleaned, indent=2, default=str))
+                # A refused or failed cleanup leaves a live task registration behind. On the
+                # unattended path that must be visible in the exit code, exactly as the standalone
+                # cleanup command reports it.
+                if not cleaned.get("deleted") or cleaned.get("delete_rc", 0) != 0:
+                    rc = rc or 1
+            return rc
         if args.command == "poll":
             print(
                 json.dumps(poll_run(load_run(args.run_id), tail=args.tail), indent=2, default=str)
