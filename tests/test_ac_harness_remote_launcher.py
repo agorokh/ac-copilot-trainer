@@ -970,3 +970,16 @@ def test_execute_control_file_spawns_without_a_shell_and_writes_the_sentinel(
 def test_parse_sentinel_skips_a_poison_trailing_line() -> None:
     """A garbled or planted final `exit=` must not hide the real one."""
     assert rl.parse_sentinel("[wrapper] exit=3\n[wrapper] exit=not-an-int\n") == 3
+
+
+def test_verdict_reason_names_the_sentinel_it_actually_checks(tmp_path: Path) -> None:
+    """The sentinel left `.scratch`; a reason pointing at the old path misdirects the operator."""
+    ok, reason = rl.evaluate_deletion(
+        sentinel_exit_code=None,
+        query_rc=0,
+        fields={},
+        run_dir=tmp_path.joinpath(*rl.RUN_DIR_RELPATH, "abc-1"),
+    )
+    assert ok is False
+    assert str(rl.sentinel_path_for("abc-1")) in reason
+    assert ".scratch" not in reason

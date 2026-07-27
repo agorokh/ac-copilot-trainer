@@ -831,7 +831,13 @@ def evaluate_deletion(
     ``status``/``last_result`` that could disagree with the verdict computed beside it.
     """
     if sentinel_exit_code is None:
-        return False, f"no exit sentinel at {run_dir / SENTINEL_NAME} — may still be launching"
+        # Name the file actually consulted. The sentinel moved out of the log directory when the
+        # control plane left `.scratch`; reporting the old path would send an operator to inspect a
+        # file this check never reads — the exact class of misleading diagnostic being fixed here.
+        return (
+            False,
+            f"no exit sentinel at {sentinel_path_for(run_dir.name)} — may still be launching",
+        )
     if query_rc != 0:
         return False, f"status query failed (rc={query_rc}) — failing closed"
     state = fields.get("status", "").strip().lower()
