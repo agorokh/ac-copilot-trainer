@@ -13,16 +13,16 @@ relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
 
-# #529 — **G2 met**: 81.505 s at Magione, under the 82.7 s floor (2026-07-26)
+# #529 — **G2 met**: 80.791 s at Magione, under the 82.7 s floor (2026-07-26)
 
 Live rig session driven **off-rig** from the laptop through the `m4max-studio` → `pc` SSH hop and a
 console-session scheduled task. Merged `main` @ `670b529`, which is the first rig run to carry the
 #696 QSS-apex fix.
 
-**Headline: two ladders, 88.425 s → 85.072 s → 84.587 s → 81.505 s.** The second ladder beat the
-82.7 s Track-Titan floor on two consecutive flying laps (81.505 s and 81.519 s), zero recoveries,
-all archives `is_valid: true`. See § *G2* below — the gain came from **retaining** the plant refit,
-which is the whole of [#703](https://github.com/agorokh/ac-copilot-trainer/issues/703).
+**Headline: three ladders, 88.425 → 85.072 → 84.587 → 81.505 → 81.492 → 80.791 s.** Ladders 2 and
+3 beat the 82.7 s Track-Titan floor, zero recoveries, all archives `is_valid: true`. The gain came
+from **retaining** the plant refit, which is the whole of
+[#703](https://github.com/agorokh/ac-copilot-trainer/issues/703) — see § *Compounding* below.
 
 ## Ladder 1 (hand-run recipe): best 85.072 s
 
@@ -82,6 +82,39 @@ GT3 has), `StabilityControl:0`, no auto-brake/auto-shifter/ideal-line, `AutoBlip
 interventions ABS 81/3161 ticks, TC 24/3161. Track `3_clear` 26 °C, `s=1.0 t=1.0`, tyre blankets, no
 wear/fuel. So G2's **numeric** criterion is met on a like-for-like hotlap config; a strict TC-off
 comparison is one more ladder with `TractionControl:0`.
+
+## Compounding — ladder 3 proves the refit survives across invocations
+
+| ladder | plant QSS floor at start | scale 1.00 | scale 1.15 | refit |
+|---|---|---|---|---|
+| 1 | 91.26 s | 96.285 s | 85.072 s | **lost** (1.20 falsified) |
+| 2 | 91.26 s → 87.14 s | 96.286 s | 84.587 s → **81.505 s** | kept |
+| 3 | **87.14 s** → 86.27 s | **92.045 s** | **81.492 s** → **80.791 s** | kept |
+
+**The refit is durable, not per-run.** Ladder 3's base at `ggv_scale` 1.00 ran **92.045 s** where
+ladders 1–2 ran ~96.28 s at the identical scale — a **4.2 s gain with no over-speed probe at all**,
+purely inherited plant. Floor progression 91.26 → 87.14 → 86.27 s with *shrinking* increments is
+convergence toward the true friction envelope, not runaway optimism: the uncertainty gating works.
+
+**G2 is reproducible.** 81.505 s (ladder 2) then **81.492 s** (ladder 3, independent invocation,
+same scale and plant) — 13 ms apart. The sub-floor result is not a fluke lap.
+
+## The 86.27 s envelope is at the stability boundary (n=1 — watch, do not yet act)
+
+Ladder 3's best lap is 80.791 s (`is_valid: true`, `recoveries=0`, 224.4 km/h). But the **same stint's
+third lap was 95.122 s** — also valid, also zero recoveries: the car lost ~14 s without leaving the
+track or needing intervention, so the oracle correctly passed it and hid nothing.
+
+| stint at scale 1.15 | laps | spread |
+|---|---|---|
+| ladder 2, 87.14 s plant | 81.505 / 81.519 | 14 **ms** |
+| ladder 3, 86.27 s plant | 80.791 / 95.122 | 14 **s** |
+
+So the 86.27 s envelope can produce a faster lap but no longer a *repeatable* one.
+`evaluate_selfplay_iteration` gates on validity and recoveries, **not on lap-time variance**, so an
+envelope that has become unrepeatable still reads VALID and is retained. A consistency/variance term
+in the falsification criterion is the natural next hardening — related to but distinct from #703.
+**Deliberately not filed as an issue yet: n=1 stint.** Reproduce before filing.
 
 ## Pace claim, stated precisely
 

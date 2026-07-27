@@ -121,14 +121,25 @@ relates_to:
 
 # Next session handoff
 
-## Delivered (2026-07-26 PM) — **#529 G2 MET: 81.505 s** at Magione (floor was 82.7 s); #697 entrypoint live
+## Delivered (2026-07-26 PM) — **#529 G2 MET: 80.791 s** at Magione (floor was 82.7 s); #697 entrypoint live
 
 `/autonomous-deliver 529`. Detail: [[issue-529-pace-ladder-115-2026-07-26]].
 
-**Two ladders: 88.425 → 85.072 → 84.587 → 81.505 s.** The second **beat the 82.7 s Track-Titan
-floor** on two consecutive flying laps (81.505 s / 81.519 s), `recoveries=0`, every archive
-`is_valid: true`, `selfplay done — completed` (not falsified, so the refined plant was **retained**).
-Both on merged `main` @ `670b529` — the first rig runs carrying #696.
+**Three ladders: 88.425 → 85.072 → 84.587 → 81.505 → 81.492 → 80.791 s.** Ladders 2 and 3 **beat
+the 82.7 s Track-Titan floor**, `recoveries=0`, every archive `is_valid: true`, `selfplay done —
+completed` (not falsified, so the refined plant was **retained**). On merged `main` @ `670b529` — the
+first rig runs carrying #696.
+
+**Ladder 3 proved the refit compounds ACROSS invocations:** its base at scale 1.00 ran **92.045 s**
+where ladders 1–2 ran ~96.28 s at the identical scale — 4.2 s with no over-speed probe at all. Floor
+progression 91.26 → 87.14 → 86.27 s, shrinking increments = convergence, not runaway optimism.
+**G2 reproduces:** 81.505 s then 81.492 s in independent invocations.
+
+**Watch item (n=1, deliberately NOT filed yet):** at the 86.27 s floor the stint went
+80.791 s **/ 95.122 s** — both valid, zero recoveries. The 87.14 s stint was 81.505/81.519 (14 ms
+apart). The envelope is at the stability boundary, and `evaluate_selfplay_iteration` gates on
+validity/recoveries but **not lap-time variance**, so an unrepeatable envelope still reads VALID and
+is retained. Reproduce before filing a consistency term.
 
 **Ladder 1** (`--max-scale 1.2`, hand-run recipe):
 
