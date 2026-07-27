@@ -2,8 +2,10 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-26T02:18:11Z
+last_updated: 2026-07-27T00:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-695-qss-apex-envelope-2026-07-26.md
+  - AcCopilotTrainer/03_Investigations/issue-693-off-rig-session0-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-381-brake-articulation-closure-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-675-coach-v2-phase-slots-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-677-esp32-polish-2026-07-25.md
@@ -117,6 +119,48 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-26) — #695 + #693 CLOSED: QSS envelope fix + off-rig launch path; new Magione best 88.425 s
+
+**PR [#696](https://github.com/agorokh/ac-copilot-trainer/pull/696) MERGED `7702b42`** (#695) and
+**PR [#694](https://github.com/agorokh/ac-copilot-trainer/pull/694) MERGED `49f90f1`** (#693).
+Detail: [[issue-695-qss-apex-envelope-2026-07-26]], [[issue-693-off-rig-session0-2026-07-26]].
+
+**New best measured flying lap on Magione: 88.425 s** (was 92.567 s, #577), strictly monotonic
+107.180 → 101.430 → 96.781 → 92.105 → 88.425 across `ggv_scale` 0.90→1.10, zero recoveries, all laps
+AC-valid. Gap to the 82.7 s TT floor **11.9% → 6.9%**. Evidence:
+`.scratch/harness-evidence/alien-529-g2-911-magione-20260726/`. **L3 fired for the first time** —
+`plant refined (lateral bins adopted=1 raised=1)` at iteration 4 flipped corner-speed bins to
+measured, so `alien L3 refined 2 corner(s) … predicted gain 210 ms` (#582's live proof had 7/7
+reverted, 0 ms). The mechanism #582 predicted would unlock is unlocked on this combo.
+
+**#529's "everything blocked on rig availability" was stale.** The rig was reachable
+(`tailscale ping pc` → 11 ms via the `m4max-studio` hop); the real off-rig blocker was undocumented
+Windows **session 0** (#693). The AC app junction was also found serving a non-main checkout
+(`971c103`, already on main as `b80ab38`) — the #575 stale-Lua trap — and was detached to `origin/main`.
+
+**Still open on #529, stated honestly:** G1 pace (≤86.84 s) **not met** at 88.425 s; G2 (<82.7 s) not
+met; G1b not attempted; **G3 needs a human driving multiple sessions** (operator-gated, not
+rig-gated); P4's first real rig scientist batch not run.
+
+## RESUME — #529 pace gates, blocked on a rig reboot
+
+The untested `ggv_scale` **1.15 / 1.20** rungs were never driven: three attempts died on the #627
+launch-cycle freeze (`stage=launch, error=sim never reached LIVE`, after the drive stage burned its
+full 5-launch budget). A ~35-min hold bought only 2 further cycles — recorded against #627's open
+hold-duration question ([comment](https://github.com/agorokh/ac-copilot-trainer/issues/627#issuecomment-5085831701)).
+**The unblock is a rig reboot** to reset the per-boot accumulator; NOT done because session 1 hosts
+live `codex` + MCP processes belonging to peer sessions (operator's call).
+
+After a reboot, this reaches both untested rungs in **3 launch cycles**:
+
+```
+python -m tools.ac_harness.auto_alien --car ks_porsche_911_gt3_r_2016 --track magione \
+    --laps 3 --ggv-scale 1.0 --scale-step 0.15 --iterations 2 --max-scale 1.2
+```
+
+Off-rig? Read `docs/10_Development/18_Autonomous_Harness.md` § *Driving the harness from off-rig*
+first — session 0 cannot do it. Follow-up to codify that transport: **#697**.
 
 ## Delivered (2026-07-25) — #381 CLOSED: critical Brake articulation accepted and guarded
 
