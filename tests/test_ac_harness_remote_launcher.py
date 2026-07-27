@@ -1005,17 +1005,17 @@ def test_execute_control_file_records_a_sentinel_when_it_fails(tmp_path: Path) -
     assert "RemoteLaunchError" in recorded
 
 
-def test_start_run_fails_closed_when_the_trigger_cannot_be_disabled(
+def test_start_run_surfaces_an_armed_trigger_without_deleting_a_live_run(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A start that leaves the one-shot trigger armed is a second AC session waiting to happen."""
+    """The payload is already running — the old fail-closed delete would have ABORTED it."""
     monkeypatch.setattr(rl, "assert_transport_needed", lambda: (0, 1))
     monkeypatch.setattr(rl, "short_path", lambda p: str(p))
     monkeypatch.setenv("USERNAME", "someone")
     calls: list[list[str]] = []
 
     class _R:
-        def __init__(self, rc):
+        def __init__(self, rc: int) -> None:
             self.returncode = rc
             self.stdout = ""
             self.stderr = "nope"
@@ -1025,9 +1025,56 @@ def test_start_run_fails_closed_when_the_trigger_cannot_be_disabled(
         return _R(1 if "/change" in argv else 0)
 
     monkeypatch.setattr(rl, "_run", _fake_run)
-    with pytest.raises(rl.RemoteLaunchError, match="trigger still armed"):
+    with pytest.raises(rl.RemoteLaunchError, match="ALREADY RUNNING"):
+        rl.start_run(
+            ["-m", "tools.ac_harness.auto_alien"],
+            label="x",
+            repo_root=tmp_path,
+            sleep=lambda _s: None,
+        )
+    # It must NOT delete: /run already succeeded, so the payload is live.
+    assert not any("/delete" in c for c in calls)
+    # ...and it retried the disable before giving up.
+    assert sum(1 for c in calls if "/change" in c) == 2
+    # A pollable handle survives, so the live run is not orphaned.
+    assert list(tmp_path.joinpath(*rl.RUN_DIR_RELPATH).glob("*/run.json"))
+
+
+def test_start_run_reports_a_failed_cleanup_delete_after_a_failed_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """/run failed so nothing is live — but an un-deleted task keeps its one-shot trigger ARMED."""
+    monkeypatch.setattr(rl, "assert_transport_needed", lambda: (0, 1))
+    monkeypatch.setattr(rl, "short_path", lambda p: str(p))
+    monkeypatch.setenv("USERNAME", "someone")
+
+    class _R:
+        def __init__(self, rc: int) -> None:
+            self.returncode = rc
+            self.stdout = ""
+            self.stderr = "boom"
+
+    def _fake_run(argv):  # noqa: ANN001, ANN202
+        if "/run" in argv or "/delete" in argv:
+            return _R(1)
+        return _R(0)
+
+    monkeypatch.setattr(rl, "_run", _fake_run)
+    with pytest.raises(rl.RemoteLaunchError, match="trigger ARMED"):
         rl.start_run(["-m", "tools.ac_harness.auto_alien"], label="x", repo_root=tmp_path)
-    assert any("/delete" in c for c in calls)
+
+
+def test_start_run_rejects_a_non_harness_payload_at_schedule_time(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`start -- -c print(1)` used to register and RUN a task, rejected only later."""
+    monkeypatch.setattr(rl, "assert_transport_needed", lambda: (0, 1))
+    calls: list[list[str]] = []
+    monkeypatch.setattr(rl, "_run", lambda argv: calls.append(list(argv)))
+    monkeypatch.setenv("USERNAME", "someone")
+    with pytest.raises(rl.RemoteLaunchError, match="must start with"):
+        rl.start_run(["-c", "print(1)"], label="x", repo_root=tmp_path)
+    assert calls == []  # nothing scheduled
 
 
 def test_cleanup_removes_the_control_directory(

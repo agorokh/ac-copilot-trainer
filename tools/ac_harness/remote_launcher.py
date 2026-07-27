@@ -544,6 +544,7 @@ def start_run(
     now: datetime | None = None,
     run_as: str | None = None,
     start_delay_minutes: int = DEFAULT_START_DELAY_MINUTES,
+    sleep=time.sleep,  # noqa: ANN001 - injectable for tests
 ) -> RemoteRun:
     """Create and start a per-run console-session task for ``argv``; returns its handle."""
     assert_transport_needed()
@@ -572,8 +573,11 @@ def start_run(
 
     resolved_argv = substitute_run_placeholders(argv, run_id=run_id, run_dir=run_dir)
     validate_wrapper_path("repo root", root)
-    for token in resolved_argv:
-        validate_wrapper_token(token)
+    # Validate at the boundary where the caller can still be told. Previously only
+    # execute_control_file() applied the module allowlist, so `start -- -c print(1)` created a
+    # control file, registered AND ran a task, and returned exit 0 — the rejection arrived later,
+    # in the console session, where nobody was listening.
+    resolved_argv = validate_payload_argv(resolved_argv)
     control = control_dir_for(run_id)
     control.mkdir(parents=True, exist_ok=True)
     (control / CONTROL_NAME).write_text(
@@ -599,25 +603,22 @@ def start_run(
         )
     started = _run(["schtasks", "/run", "/tn", task])
     if started.returncode != 0:
-        _run(["schtasks", "/delete", "/tn", task, "/f"])
-        raise RemoteLaunchError(
-            f"schtasks /run failed ({started.returncode}): {started.stdout}{started.stderr}"
-        )
+        # /run failed, so nothing was launched and deleting cannot abort a live payload. The delete
+        # itself must be checked though: a task left registered keeps its one-shot trigger armed and
+        # fires ~start_delay later with no handle for anyone to poll or clean up.
+        removed = _run(["schtasks", "/delete", "/tn", task, "/f"])
+        detail = f"schtasks /run failed ({started.returncode}): {started.stdout}{started.stderr}"
+        if removed.returncode != 0:
+            detail += (
+                f" — AND the cleanup delete failed ({removed.returncode}), so task {task!r} is "
+                f"still registered with its one-shot trigger ARMED and will fire around "
+                f"{when:%Y-%m-%d %H:%M}. Remove it by hand."
+            )
+        raise RemoteLaunchError(detail)
     # Disable the trigger now that the on-demand start has happened. `/sc once` is a REAL trigger:
     # left armed, it fires at its scheduled time and executes the payload a second time if the run
     # already finished. Disabling removes that class outright — no filesystem marker can do it,
     # because every marker lives somewhere a peer can write. A running instance is unaffected.
-    disabled = _run(["schtasks", "/change", "/tn", task, "/disable"])
-    if disabled.returncode != 0:
-        # Proceeding here would hand back a "successful" start with the `/sc once` trigger still
-        # armed — i.e. a second AC session and truncated logs ~start_delay later. Fail closed.
-        _run(["schtasks", "/delete", "/tn", task, "/f"])
-        raise RemoteLaunchError(
-            f"schtasks /change /disable failed ({disabled.returncode}): "
-            f"{(disabled.stderr or disabled.stdout or '').strip()[:200]} — refusing to start with "
-            "the one-shot trigger still armed"
-        )
-
     run = RemoteRun(
         run_id=run_id,
         task=task,
@@ -629,6 +630,25 @@ def start_run(
     (run_dir / RUN_JSON_NAME).write_text(
         json.dumps(run.to_dict(), indent=2) + "\n", encoding="utf-8"
     )
+
+    # The payload is now LIVE. Disabling the one-shot trigger is still required, but a failure here
+    # must NOT be "cleaned up" by deleting the task: this module documents that /run is asynchronous
+    # and that deleting the definition can cancel a start still spawning — so the old fail-closed
+    # delete could abort the very run it had just launched, while reporting the start as failed.
+    # Retry, then surface the armed trigger loudly and leave the run (and its handle) intact.
+    disabled = _run(["schtasks", "/change", "/tn", task, "/disable"])
+    if disabled.returncode != 0:
+        sleep(2.0)
+        disabled = _run(["schtasks", "/change", "/tn", task, "/disable"])
+    if disabled.returncode != 0:
+        raise RemoteLaunchError(
+            f"schtasks /change /disable failed ({disabled.returncode}): "
+            f"{(disabled.stderr or disabled.stdout or '').strip()[:200]} — the run is ALREADY "
+            f"RUNNING and its handle is at {run_dir / RUN_JSON_NAME}, so the task was NOT deleted "
+            f"(that would abort it). The one-shot trigger is still ARMED and will re-fire around "
+            f"{when:%Y-%m-%d %H:%M}: disable or delete task {task!r} before then."
+        )
+
     return run
 
 
