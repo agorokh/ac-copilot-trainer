@@ -62,7 +62,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -140,6 +140,7 @@ def validate_wrapper_path(kind: str, path: Path) -> Path:
         raise RemoteLaunchError(
             f"non-ASCII {kind} {text!r} would be mangled to '?' by the ascii-encoded wrapper"
         )
+    _reject_trailing_backslash(kind, text)
     bad = sorted(_WRAPPER_PATH_FORBIDDEN & set(text))
     if bad:
         raise RemoteLaunchError(
@@ -173,10 +174,27 @@ def build_run_id(
     return f"{label}-{now:%Y%m%d-%H%M%S}-{pid}-{nonce}"
 
 
+def _reject_trailing_backslash(kind: str, text: str) -> None:
+    """Reject a trailing ``\\`` — it escapes the closing quote in the Windows CRT argv parser.
+
+    :func:`quote_wrapper_token` wraps every token as ``"<token>"``. The CRT parser that builds
+    ``argv`` for ``python.exe`` treats ``\\"`` as an *escaped quote*, so a token ending in a
+    backslash does not close its quoted region: the argument swallows what follows and the harness
+    receives something other than what was validated. Windows paths and AC ids never need a trailing
+    separator, so refusing is cheaper than a doubling routine and cannot silently mis-quote.
+    """
+    if text.endswith("\\"):
+        raise RemoteLaunchError(
+            f"unsafe {kind} {text!r}: a trailing backslash escapes the closing quote in the "
+            "Windows CRT argv parser, so the quoted region does not end where it appears to"
+        )
+
+
 def validate_wrapper_token(token: str) -> str:
     """Reject an argv token that would become redirection or injection inside the wrapper."""
     if not token:
         raise RemoteLaunchError("empty argv token")
+    _reject_trailing_backslash("argv token", token)
     if not _WRAPPER_TOKEN_RE.match(token):
         raise RemoteLaunchError(
             f"unsafe argv token {token!r}: only printable ASCII without quotes or "
@@ -451,14 +469,38 @@ def start_run(
 
 
 def load_run(run_id: str, *, repo_root: Path | None = None) -> RemoteRun:
-    """Rehydrate a run handle written by :func:`start_run`."""
+    """Rehydrate a run handle, **bound to the requested id and its canonical location**.
+
+    ``run.json`` is an on-disk file in a world-writable scratch tree, so nothing in it may be
+    trusted to name what this process acts on. Checking ``task`` against ``task_name_for(run_id)``
+    using two fields *from the same payload* is not enough: a self-consistent forgery passes, and
+    an unvalidated ``run_dir`` lets a planted ``[wrapper] exit=0`` sentinel make :func:`poll_run`
+    report ``finished`` — after which ``cleanup`` deletes a **peer agent's** ``/IT`` task
+    mid-launch, the exact shared-rig clobber this module exists to prevent.
+
+    So the requested id is authoritative: the payload's ``run_id``/``task`` must equal what was
+    asked for, and ``run_dir`` is **recomputed** from the canonical root rather than read.
+    """
     root = (repo_root or harness_repo_root()).resolve()
-    payload = root.joinpath(
-        *RUN_DIR_RELPATH, validate_run_component("run id", run_id), RUN_JSON_NAME
-    )
+    requested = validate_run_component("run id", run_id)
+    run_dir = root.joinpath(*RUN_DIR_RELPATH, requested)
+    payload = run_dir / RUN_JSON_NAME
     if not payload.is_file():
         raise RemoteLaunchError(f"no such remote run: {payload}")
-    return RemoteRun.from_dict(json.loads(payload.read_text(encoding="utf-8")))
+    run = RemoteRun.from_dict(json.loads(payload.read_text(encoding="utf-8")))
+    expected_task = task_name_for(requested)
+    if run.run_id != requested:
+        raise RemoteLaunchError(
+            f"{payload} declares run_id {run.run_id!r} but was loaded as {requested!r} — "
+            "refusing to act on a payload that names a different run"
+        )
+    if run.task != expected_task:
+        raise RemoteLaunchError(
+            f"{payload} declares task {run.task!r}, expected {expected_task!r} — "
+            "refusing to act on a task this run id does not own"
+        )
+    # Recompute rather than trust: a payload-supplied run_dir could point at a planted sentinel.
+    return replace(run, run_dir=str(run_dir))
 
 
 def _tail(path: Path, lines: int) -> list[str]:
@@ -543,7 +585,7 @@ def cleanup_run(run: RemoteRun, *, force: bool = False) -> dict[str, Any]:
 
 
 def list_stale_tasks() -> list[str]:
-    """Task names this module owns that are still registered (reap after a session dies)."""
+    """Task names this module owns that are still registered. Read-only — see :func:`reap_tasks`."""
     queried = _run(["schtasks", "/query", "/fo", "list"])
     names: list[str] = []
     for line in queried.stdout.splitlines():
@@ -553,6 +595,21 @@ def list_stale_tasks() -> list[str]:
             if name.startswith(TASK_PREFIX):
                 names.append(name)
     return names
+
+
+def reap_tasks() -> dict[str, Any]:
+    """Delete every still-registered task this module owns.
+
+    ``list`` deliberately only reports; this is the command that actually removes them. A session
+    that dies before ``cleanup`` leaves a harmless but accumulating registration behind, and without
+    this the operator is left running raw ``schtasks /delete`` — which is the hand-run path this
+    module exists to retire.
+    """
+    results: dict[str, Any] = {}
+    for name in list_stale_tasks():
+        deleted = _run(["schtasks", "/delete", "/tn", name, "/f"])
+        results[name] = {"deleted": deleted.returncode == 0, "rc": deleted.returncode}
+    return {"reaped": results, "remaining": list_stale_tasks()}
 
 
 # ---------------------------------------------------------------------------
@@ -614,7 +671,8 @@ def build_parser() -> argparse.ArgumentParser:
     wait.add_argument("--timeout-s", type=float, default=3 * 60 * 60)
     wait.add_argument("--interval-s", type=float, default=30.0)
 
-    sub.add_parser("list", help="list this module's still-registered tasks")
+    sub.add_parser("list", help="list this module's still-registered tasks (read-only)")
+    sub.add_parser("reap", help="DELETE every still-registered task this module owns")
     return p
 
 
@@ -661,6 +719,10 @@ def main(raw_args: Sequence[str] | None = None) -> int:
         if args.command == "list":
             print(json.dumps(list_stale_tasks(), indent=2))
             return 0
+        if args.command == "reap":
+            outcome = reap_tasks()
+            print(json.dumps(outcome, indent=2, default=str))
+            return 0 if not outcome["remaining"] else 1
     except RemoteLaunchError as exc:
         print(f"remote-launcher: {exc}", file=sys.stderr)
         return 3

@@ -325,7 +325,8 @@ end:
 python -m tools.ac_harness.remote_launcher poll <run id> --tail 40
 python -m tools.ac_harness.remote_launcher wait <run id> --timeout-s 10800
 python -m tools.ac_harness.remote_launcher cleanup <run id>
-python -m tools.ac_harness.remote_launcher list        # reap tasks a dead session left behind
+python -m tools.ac_harness.remote_launcher list        # report tasks a dead session left behind
+python -m tools.ac_harness.remote_launcher reap        # ...and actually delete them
 ```
 
 `poll` reports the task `Status`/`Last Result`, whether the wrapper has written its exit sentinel,
@@ -346,6 +347,12 @@ Behaviours worth knowing before you debug something:
   agents on the one physical rig: a fixed name lets each clobber the other's registration.
 - **`wait` is bounded.** If the run never starts, the sentinel never appears; an unbounded wait
   would hang for hours with no diagnosis.
+- **`list` only reports; `reap` deletes.** A session that dies before `cleanup` leaves a harmless
+  but accumulating registration behind — `reap` removes every task this module owns, so you never
+  need raw `schtasks /delete`.
+- **The run id you pass is authoritative.** `run.json` lives in a writable scratch tree, so `load`
+  binds the payload to the id you asked for and **recomputes** its directory; a forged or stale
+  payload cannot redirect `cleanup` onto a peer's task.
 
 You landed in the right session when the run's own first lines report the provenance gate passing:
 

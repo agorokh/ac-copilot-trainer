@@ -8,6 +8,7 @@ measured on the rig during #693/#699 rather than a hypothetical.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -354,3 +355,101 @@ def test_cleanup_run_refuses_a_task_name_that_does_not_match_its_run_id(
     with pytest.raises(rl.RemoteLaunchError, match="does not match this run id"):
         rl.cleanup_run(hijacked, force=True)
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Payload-identity binding, trailing backslash, reap (2nd daemon round)
+# ---------------------------------------------------------------------------
+
+
+def _write_run_json(root: Path, run_id: str, payload: dict) -> None:
+    d = root.joinpath(*rl.RUN_DIR_RELPATH, run_id)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / rl.RUN_JSON_NAME).write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_load_run_rejects_a_payload_naming_a_different_run(tmp_path: Path) -> None:
+    """A self-consistent forgery must not pass: the REQUESTED id is authoritative."""
+    _write_run_json(
+        tmp_path,
+        "mine",
+        {
+            "run_id": "someone-else",
+            "task": rl.task_name_for("someone-else"),
+            "repo_root": str(tmp_path),
+            "run_dir": str(tmp_path / "planted"),
+            "argv": [],
+            "started_at": "x",
+        },
+    )
+    with pytest.raises(rl.RemoteLaunchError, match="names a different run"):
+        rl.load_run("mine", repo_root=tmp_path)
+
+
+def test_load_run_rejects_a_payload_claiming_another_task(tmp_path: Path) -> None:
+    _write_run_json(
+        tmp_path,
+        "mine",
+        {
+            "run_id": "mine",
+            "task": "ac-harness-a-peers-run",
+            "repo_root": str(tmp_path),
+            "run_dir": str(tmp_path),
+            "argv": [],
+            "started_at": "x",
+        },
+    )
+    with pytest.raises(rl.RemoteLaunchError, match="does not own"):
+        rl.load_run("mine", repo_root=tmp_path)
+
+
+def test_load_run_recomputes_run_dir_instead_of_trusting_the_payload(tmp_path: Path) -> None:
+    """A planted `[wrapper] exit=0` outside the canonical dir must not make a run look finished."""
+    planted = tmp_path / "planted"
+    planted.mkdir()
+    (planted / rl.SENTINEL_NAME).write_text("[wrapper] exit=0\n", encoding="utf-8")
+    _write_run_json(
+        tmp_path,
+        "mine",
+        {
+            "run_id": "mine",
+            "task": rl.task_name_for("mine"),
+            "repo_root": str(tmp_path),
+            "run_dir": str(planted),
+            "argv": [],
+            "started_at": "x",
+        },
+    )
+    run = rl.load_run("mine", repo_root=tmp_path)
+    assert run.directory == tmp_path.joinpath(*rl.RUN_DIR_RELPATH, "mine")
+    assert not (run.directory / rl.SENTINEL_NAME).exists()
+
+
+@pytest.mark.parametrize("bad", ["C:/repo\\", "--evidence-dir=x\\"])
+def test_trailing_backslash_is_rejected(bad: str) -> None:
+    """`\\"` is an ESCAPED QUOTE to the Windows CRT argv parser, so the quoting does not close."""
+    with pytest.raises(rl.RemoteLaunchError, match="trailing backslash"):
+        rl.validate_wrapper_token(bad)
+    with pytest.raises(rl.RemoteLaunchError, match="trailing backslash"):
+        rl.validate_wrapper_path("repo root", Path(bad))
+
+
+def test_reap_tasks_deletes_every_owned_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`list` only reports — this is the command that actually removes them."""
+    names = ["ac-harness-a", "ac-harness-b"]
+    calls: list[list[str]] = []
+
+    class _Ok:
+        returncode = 0
+
+    def _fake_run(argv):  # noqa: ANN001, ANN202
+        calls.append(list(argv))
+        return _Ok()
+
+    monkeypatch.setattr(rl, "_run", _fake_run)
+    seq = iter([names, []])
+    monkeypatch.setattr(rl, "list_stale_tasks", lambda: next(seq))
+    outcome = rl.reap_tasks()
+    assert outcome["remaining"] == []
+    assert all(o["deleted"] for o in outcome["reaped"].values())
+    assert calls == [["schtasks", "/delete", "/tn", n, "/f"] for n in names]
