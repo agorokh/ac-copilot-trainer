@@ -164,7 +164,10 @@ def test_parse_task_status_reads_status_and_last_result() -> None:
         ("", None),
         ("[wrapper] exit=0\n", 0),
         ("[wrapper] exit=1\n", 1),
-        ("[wrapper] exit=0\n[wrapper] exit=3\n", 3),
+        (
+            "[wrapper] exit=3\n[wrapper] exit=0\n",
+            3,
+        ),  # first wins: a later append cannot forge success
         ("[wrapper] exit=%ERRORLEVEL%\n", None),
     ],
 )
@@ -950,9 +953,14 @@ def test_execute_control_file_spawns_without_a_shell_and_writes_the_sentinel(
     assert rl.parse_sentinel(rl.sentinel_path_for("ok").read_text(encoding="utf-8")) == 7
 
 
-def test_parse_sentinel_skips_a_poison_trailing_line() -> None:
-    """A garbled or planted final `exit=` must not hide the real one."""
-    assert rl.parse_sentinel("[wrapper] exit=3\n[wrapper] exit=not-an-int\n") == 3
+def test_parse_sentinel_skips_a_poison_line() -> None:
+    """A garbled `exit=` must not hide the real one."""
+    assert rl.parse_sentinel("[wrapper] exit=not-an-int\n[wrapper] exit=3\n") == 3
+
+
+def test_parse_sentinel_ignores_a_forged_success_appended_after_a_real_failure() -> None:
+    """The control dir is same-user writable, so a peer can append after the shim's single write."""
+    assert rl.parse_sentinel("[wrapper] exit=1\n[wrapper] exit=0\n") == 1
 
 
 def test_verdict_reason_names_the_sentinel_it_actually_checks(tmp_path: Path) -> None:
@@ -1144,3 +1152,70 @@ def test_start_run_reports_a_run_dir_collision_as_a_launch_error(
     monkeypatch.setenv("USERNAME", "someone")
     with pytest.raises(rl.RemoteLaunchError, match="already exists"):
         rl.start_run(["-m", "tools.ac_harness.auto_alien"], label="fixed", repo_root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "last_result",
+    [267008, 267010, 267012, 267016, -2147024894],
+)
+def test_verdict_fails_closed_on_scheduler_status_and_launch_failure_codes(
+    last_result: int, tmp_path: Path
+) -> None:
+    """Only two SCHED_S_* codes were rejected; the rest read as 'the payload ran and finished'."""
+    ok, reason = rl.evaluate_deletion(
+        sentinel_exit_code=0,
+        query_rc=0,
+        fields={"status": "Ready", "last_result": str(last_result)},
+        run_id="abc-1",
+    )
+    assert ok is False
+    assert "failing closed" in reason
+
+
+def test_verdict_still_accepts_a_real_process_exit_code(tmp_path: Path) -> None:
+    ok, _ = rl.evaluate_deletion(
+        sentinel_exit_code=0,
+        query_rc=0,
+        fields={"status": "Ready", "last_result": "0"},
+        run_id="abc-1",
+    )
+    assert ok is True
+
+
+def test_exec_refuses_to_append_beneath_a_planted_sentinel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An exclusive create is what makes 'first exit= wins' trustworthy."""
+    control = rl.control_dir_for("planted")
+    control.mkdir(parents=True)
+    (control / rl.CONTROL_NAME).write_text(
+        json.dumps({"argv": ["-m", "tools.ac_harness.auto_alien"]}), encoding="utf-8"
+    )
+    (control / rl.SENTINEL_NAME).write_text("[wrapper] exit=0\n", encoding="utf-8")
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(rl.subprocess, "run", lambda *a, **k: _Done())
+    with pytest.raises(rl.RemoteLaunchError, match="already existed"):
+        rl.execute_control_file("planted")
+
+
+def test_start_run_discards_the_control_dir_when_scheduling_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An unregistered task is invisible to reap, so its control dir would leak forever."""
+    monkeypatch.setattr(rl, "assert_transport_needed", lambda: (0, 1))
+    monkeypatch.setattr(rl, "short_path", lambda p: str(p))
+    monkeypatch.setattr(rl, "build_run_id", lambda label, **kw: "failed-create")
+    monkeypatch.setenv("USERNAME", "someone")
+
+    class _R:
+        returncode = 1
+        stdout = ""
+        stderr = "denied"
+
+    monkeypatch.setattr(rl, "_run", lambda argv: _R())
+    with pytest.raises(rl.RemoteLaunchError, match="/create failed"):
+        rl.start_run(["-m", "tools.ac_harness.auto_alien"], label="x", repo_root=tmp_path)
+    assert not rl.control_dir_for("failed-create").exists()

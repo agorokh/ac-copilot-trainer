@@ -328,7 +328,10 @@ def parse_task_status(text: str) -> dict[str, str]:
 
 def parse_sentinel(text: str) -> int | None:
     """The wrapper's exit code, or ``None`` while the run has not finished."""
-    for line in reversed(text.splitlines()):
+    # FIRST valid `exit=` wins, not the last. The shim writes exactly one, exclusively-created, so
+    # the earliest parsable value is the real one; scanning from the end let a peer append
+    # `[wrapper] exit=0` after a genuine `exit=1` and hand automation a forged success.
+    for line in text.splitlines():
         marker = line.find(SENTINEL_TOKEN)
         if marker >= 0:
             tail = line[marker + len(SENTINEL_TOKEN) :].strip()
@@ -524,9 +527,17 @@ def _execute_validated(requested: str) -> int:
             env=env,
             check=False,
         )
-    sentinel = control_dir_for(requested) / SENTINEL_NAME
-    with sentinel.open("a", encoding="utf-8") as fh:
-        fh.write(f"[wrapper] {SENTINEL_TOKEN}{completed.returncode}\n")
+    sentinel = sentinel_path_for(requested)
+    try:
+        # Exclusive create: the shim is the only writer, so an existing sentinel at this point
+        # means someone else put it there. Failing loudly beats appending beneath a forgery.
+        with sentinel.open("x", encoding="utf-8") as fh:
+            fh.write(f"[wrapper] {SENTINEL_TOKEN}{completed.returncode}\n")
+    except FileExistsError as exc:
+        raise RemoteLaunchError(
+            f"exit sentinel {sentinel} already existed before this run finished — refusing to "
+            "append beneath a value this shim did not write"
+        ) from exc
     return completed.returncode
 
 
@@ -589,6 +600,21 @@ def start_run(
     account = run_as or os.environ.get("USERNAME") or ""
     if not account:
         raise RemoteLaunchError("cannot resolve the logged-on account for /ru (USERNAME unset)")
+    run = RemoteRun(
+        run_id=run_id,
+        task=task,
+        repo_root=str(root),
+        run_dir=str(run_dir),
+        argv=list(resolved_argv),
+        started_at=moment.isoformat(timespec="seconds"),
+    )
+    # Persist the handle BEFORE anything can launch. If this write failed after `/run`, the payload
+    # could already be live with the one-shot trigger still armed and no way for the caller to poll
+    # or clean it up.
+    (run_dir / RUN_JSON_NAME).write_text(
+        json.dumps(run.to_dict(), indent=2) + "\n", encoding="utf-8"
+    )
+
     when = moment + timedelta(minutes=start_delay_minutes)
     # `/tr` runs the repo's own interpreter against a version-controlled shim — NOT a generated
     # script inside the agent-writable scratch tree. Executing that file was command injection: a
@@ -598,6 +624,9 @@ def start_run(
     tr_path = f"{short_path(root / '.venv' / 'Scripts' / 'python.exe')} {short_path(shim)} {run_id}"
     created = _run(schtasks_create_argv(task=task, tr_path=tr_path, when=when, run_as=account))
     if created.returncode != 0:
+        # Nothing is registered, so reap_tasks will never find this run — discard its control
+        # directory here or it leaks in the user's profile for every failed attempt.
+        _discard_control_dir(run_id)
         raise RemoteLaunchError(
             f"schtasks /create failed ({created.returncode}): {created.stdout}{created.stderr}"
         )
@@ -608,6 +637,8 @@ def start_run(
         # fires ~start_delay later with no handle for anyone to poll or clean up.
         removed = _run(["schtasks", "/delete", "/tn", task, "/f"])
         detail = f"schtasks /run failed ({started.returncode}): {started.stdout}{started.stderr}"
+        if removed.returncode == 0:
+            _discard_control_dir(run_id)
         if removed.returncode != 0:
             detail += (
                 f" — AND the cleanup delete failed ({removed.returncode}), so task {task!r} is "
@@ -619,18 +650,6 @@ def start_run(
     # left armed, it fires at its scheduled time and executes the payload a second time if the run
     # already finished. Disabling removes that class outright — no filesystem marker can do it,
     # because every marker lives somewhere a peer can write. A running instance is unaffected.
-    run = RemoteRun(
-        run_id=run_id,
-        task=task,
-        repo_root=str(root),
-        run_dir=str(run_dir),
-        argv=list(resolved_argv),
-        started_at=moment.isoformat(timespec="seconds"),
-    )
-    (run_dir / RUN_JSON_NAME).write_text(
-        json.dumps(run.to_dict(), indent=2) + "\n", encoding="utf-8"
-    )
-
     # The payload is now LIVE. Disabling the one-shot trigger is still required, but a failure here
     # must NOT be "cleaned up" by deleting the task: this module documents that /run is asynchronous
     # and that deleting the definition can cancel a start still spawning — so the old fail-closed
@@ -916,6 +935,11 @@ _KNOWN_DEAD_TASK_STATES = {"ready", "disabled"}
 #: last command is ``echo``, so ``Last Result`` can be 0 while the harness rc was not.
 SCHED_S_TASK_HAS_NOT_YET_RUN = 267011
 SCHED_S_TASK_IS_CURRENTLY_RUNNING = 267009
+#: `Last Result` values in 0x41300-0x41308 are Task Scheduler STATUS codes, not process exit codes.
+#: Rejecting only "not yet run" and "currently running" left SCHED_S_TASK_READY (267008),
+#: SCHED_S_TASK_DISABLED (267010) and the rest reading as "the payload ran and finished" — so the
+#: third gate never actually proved execution. Anything in this range fails closed.
+_SCHED_STATUS_RESULT_RANGE = range(0x41300, 0x41309)
 
 
 def sentinel_path_for(run_id: str) -> Path:
@@ -976,6 +1000,16 @@ def evaluate_deletion(
         return False, "task has not yet run (pre-spawn Ready window) — refusing to cancel a launch"
     if last_result == SCHED_S_TASK_IS_CURRENTLY_RUNNING:
         return False, "last result says the task is currently running — refusing to cancel it"
+    if last_result in _SCHED_STATUS_RESULT_RANGE:
+        return False, (
+            f"last result 0x{last_result:X} is a Task Scheduler status code, not a process exit "
+            "code — the payload's own completion is unproven, failing closed"
+        )
+    if last_result < 0:
+        return False, (
+            f"last result {last_result} is a launch failure (e.g. 0x{last_result & 0xFFFFFFFF:X}), "
+            "so the payload never ran — failing closed"
+        )
     return True, ""
 
 
