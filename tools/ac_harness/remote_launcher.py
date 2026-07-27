@@ -114,12 +114,22 @@ _WRAPPER_TOKEN_RE = re.compile(r"^[ !#$()*+,\-./0-9:;=?@A-Z\[\]_a-z{}~\\]+$")
 #: pointing where they were meant to.
 _WRAPPER_PATH_FORBIDDEN = set('%"<>&|^\r\n\t')
 
-#: The ONLY payload shape this transport will run. Token-level validation is not enough: argv
-#: reaches the interpreter as a JSON string list, so no shell quoting is needed and `-c` plus a
-#: bare expression (`;`, `()`, `+`, `chr(...)`) — or a plain script path — would be console-session
-#: RCE from a tampered control file. The transport exists to run harness modules; anything else
-#: fails closed.
-_ALLOWED_PAYLOAD_MODULE_RE = re.compile(r"^tools\.ac_harness\.[A-Za-z0-9_]+$")
+#: The ONLY payload modules this transport will run — an explicit set, not a namespace pattern.
+#:
+#: A pattern like ``tools.ac_harness.<ident>`` looked tight but left the transport able to schedule
+#: **itself**: ``-m tools.ac_harness.remote_launcher reap --force`` would delete a peer's live /IT
+#: task, and ``-m tools.ac_harness._remote_exec <other-run-id>`` would execute a different run's
+#: control file. Blocking `-c` while leaving those reachable is a confused deputy, so the transport
+#: and its shim are excluded by construction here.
+_ALLOWED_PAYLOAD_MODULES = frozenset(
+    {
+        "tools.ac_harness.auto_alien",
+        "tools.ac_harness.auto_drive",
+        "tools.ac_harness.plant_id",
+        "tools.ac_harness.alien_scientist",
+        "tools.ac_harness.corner_refine",
+    }
+)
 #: Exit code recorded when the console-session shim itself fails before/around the payload, so a
 #: broken run reports a real failure instead of leaving poll/wait hanging until their deadline.
 EXEC_FAILURE_RC = 253
@@ -238,10 +248,12 @@ def validate_payload_argv(argv: Sequence[str]) -> list[str]:
             f"payload argv must start with '-m <module>' (got {tokens[:2]!r}) — the transport runs "
             "harness modules, never -c, stdin, or a script path"
         )
-    if not _ALLOWED_PAYLOAD_MODULE_RE.match(tokens[1]):
+    if tokens[1] not in _ALLOWED_PAYLOAD_MODULES:
         raise RemoteLaunchError(
-            f"module {tokens[1]!r} is not an allowlisted harness module "
-            "(expected tools.ac_harness.<name>)"
+            f"module {tokens[1]!r} is not an allowlisted payload module. Allowed: "
+            + ", ".join(sorted(_ALLOWED_PAYLOAD_MODULES))
+            + " — the transport and its shim are deliberately excluded so a tampered control file "
+            "cannot turn this into `reap --force` against a peer's live task."
         )
     return tokens
 
@@ -581,27 +593,32 @@ def start_run(
         pid=os.getpid(),
         nonce=random.randrange(1000, 9999),  # noqa: S311
     )
+    validate_wrapper_path("repo root", root)
+    # Validate BEFORE creating anything on disk. Rejecting at the boundary is what lets the caller
+    # be told, and doing it after mkdir left an orphan run directory behind for every rejected
+    # argv — a simple operator typo accumulated scratch state. Placeholders can only appear in
+    # later arguments, so the `-m <allowlisted module>` shape is checkable on the raw argv here;
+    # the substituted form is re-validated below.
+    validate_payload_argv(argv)
+
     run_dir = root.joinpath(*RUN_DIR_RELPATH, run_id)
     # exist_ok=False on purpose: a per-run id should never collide, and REUSING a directory would
-    # inherit whatever markers it already holds (a stale or planted sentinel), which is exactly the
-    # vector the wrapper's start-marker guard exists to close. A collision is a loud error.
+    # inherit whatever markers it already holds (a stale or planted sentinel). A collision is a
+    # loud error. EVERY OSError is converted — main() only catches RemoteLaunchError, so a bare
+    # PermissionError would hand automation a traceback instead of the documented exit code.
     try:
         run_dir.mkdir(parents=True, exist_ok=False)
     except FileExistsError as exc:
-        # main() only catches RemoteLaunchError; a bare FileExistsError would crash the CLI with a
-        # traceback instead of the documented exit code.
         raise RemoteLaunchError(
             f"run directory {run_dir} already exists — refusing to reuse it (it could carry a "
             "stale or planted control/sentinel state)"
         ) from exc
+    except OSError as exc:
+        raise RemoteLaunchError(f"cannot create run directory {run_dir}: {exc}") from exc
 
-    resolved_argv = substitute_run_placeholders(argv, run_id=run_id, run_dir=run_dir)
-    validate_wrapper_path("repo root", root)
-    # Validate at the boundary where the caller can still be told. Previously only
-    # execute_control_file() applied the module allowlist, so `start -- -c print(1)` created a
-    # control file, registered AND ran a task, and returned exit 0 — the rejection arrived later,
-    # in the console session, where nobody was listening.
-    resolved_argv = validate_payload_argv(resolved_argv)
+    resolved_argv = validate_payload_argv(
+        substitute_run_placeholders(argv, run_id=run_id, run_dir=run_dir)
+    )
     control = control_dir_for(run_id)
     control.mkdir(parents=True, exist_ok=True)
     (control / CONTROL_NAME).write_text(
@@ -852,9 +869,11 @@ def _discard_control_dir(run_id: str) -> None:
     # peer-planted content in a directory this module itself documents as peer-writable, and
     # `ignore_errors=True` would swallow the very failure that means the leak is still there.
     for name in (CONTROL_NAME, SENTINEL_NAME):
-        with contextlib.suppress(FileNotFoundError):
+        # Best-effort by design: a PermissionError / sharing violation here must not turn a
+        # successful task deletion into a traceback out of cleanup or a reap pass.
+        with contextlib.suppress(OSError):
             (control / name).unlink()
-    with contextlib.suppress(FileNotFoundError, OSError):
+    with contextlib.suppress(OSError):
         control.rmdir()  # refuses if anything unexpected remains — deliberately not forced
 
 

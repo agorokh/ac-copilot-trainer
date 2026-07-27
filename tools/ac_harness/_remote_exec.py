@@ -23,11 +23,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from tools.ac_harness.remote_launcher import (  # noqa: E402
-    EXEC_FAILURE_RC,
-    RemoteLaunchError,
-    execute_control_file,
-)
+from tools.ac_harness.remote_launcher import EXEC_FAILURE_RC, execute_control_file  # noqa: E402
 
 if __name__ == "__main__":
     # Exit with the SAME code the sentinel records. Task Scheduler surfaces this as `Last Result`,
@@ -35,6 +31,12 @@ if __name__ == "__main__":
     # failure exits EXEC_FAILURE_RC rather than letting the traceback pick an unrelated code.
     try:
         raise SystemExit(execute_control_file(sys.argv[1] if len(sys.argv) > 1 else ""))
-    except RemoteLaunchError as exc:
-        print(f"remote-exec: {exc}", file=sys.stderr)
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - deliberate: see below
+        # EVERY failure exits EXEC_FAILURE_RC, not just RemoteLaunchError. execute_control_file
+        # records that code in the sentinel for any exception, and evaluate_deletion now requires
+        # Last Result == sentinel — so letting a FileNotFoundError exit 1 would make the two
+        # disagree permanently and block cleanup/reap on that task forever.
+        print(f"remote-exec: {type(exc).__name__}: {exc}", file=sys.stderr)
         raise SystemExit(EXEC_FAILURE_RC) from exc

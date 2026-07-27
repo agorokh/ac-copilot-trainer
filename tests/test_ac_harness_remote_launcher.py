@@ -986,6 +986,11 @@ def test_verdict_reason_names_the_sentinel_it_actually_checks(tmp_path: Path) ->
         ["-m", "os"],
         ["-"],
         [],
+        # The transport must not be able to schedule ITSELF: these two would let a tampered
+        # control file reap a peer's live task or execute another run's control file.
+        ["-m", "tools.ac_harness.remote_launcher", "reap", "--force"],
+        ["-m", "tools.ac_harness._remote_exec", "some-peer-run-id"],
+        ["-m", "tools.ac_harness.rig_lock"],
     ],
 )
 def test_validate_payload_argv_rejects_everything_but_a_harness_module(argv: list[str]) -> None:
@@ -1271,3 +1276,51 @@ def test_start_run_discards_the_control_dir_when_scheduling_fails(
     with pytest.raises(rl.RemoteLaunchError, match="/create failed"):
         rl.start_run(["-m", "tools.ac_harness.auto_alien"], label="x", repo_root=tmp_path)
     assert not rl.control_dir_for("failed-create").exists()
+
+
+def test_payload_allowlist_is_an_explicit_set_excluding_the_transport() -> None:
+    """A `tools.ac_harness.<ident>` pattern still admitted the transport and its shim."""
+    assert "tools.ac_harness.auto_alien" in rl._ALLOWED_PAYLOAD_MODULES
+    assert "tools.ac_harness.remote_launcher" not in rl._ALLOWED_PAYLOAD_MODULES
+    assert "tools.ac_harness._remote_exec" not in rl._ALLOWED_PAYLOAD_MODULES
+
+
+def test_start_run_leaves_no_run_dir_when_the_argv_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A rejected argv used to leave an orphan scratch directory behind for every typo."""
+    monkeypatch.setattr(rl, "assert_transport_needed", lambda: (0, 1))
+    monkeypatch.setenv("USERNAME", "someone")
+    with pytest.raises(rl.RemoteLaunchError):
+        rl.start_run(["-c", "print(1)"], label="x", repo_root=tmp_path)
+    assert (
+        not list(tmp_path.joinpath(*rl.RUN_DIR_RELPATH).glob("*"))
+        if tmp_path.joinpath(*rl.RUN_DIR_RELPATH).exists()
+        else True
+    )
+
+
+def test_start_run_converts_a_permission_error_on_mkdir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """main() only catches RemoteLaunchError; a raw PermissionError bypassed the documented exit."""
+    monkeypatch.setattr(rl, "assert_transport_needed", lambda: (0, 1))
+    monkeypatch.setenv("USERNAME", "someone")
+    monkeypatch.setattr(
+        Path, "mkdir", lambda self, **kw: (_ for _ in ()).throw(PermissionError("denied"))
+    )
+    with pytest.raises(rl.RemoteLaunchError, match="cannot create run directory"):
+        rl.start_run(["-m", "tools.ac_harness.auto_alien"], label="x", repo_root=tmp_path)
+
+
+def test_discard_control_dir_survives_a_sharing_violation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A best-effort cleanup step must not turn a successful delete into a traceback."""
+    control = rl.control_dir_for("locked")
+    control.mkdir(parents=True)
+    (control / rl.CONTROL_NAME).write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        Path, "unlink", lambda self, **kw: (_ for _ in ()).throw(PermissionError("in use"))
+    )
+    rl._discard_control_dir("locked")  # must not raise
