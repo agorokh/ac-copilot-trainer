@@ -927,13 +927,42 @@ def test_wrapper_suppresses_a_ghost_trigger_rerun(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     text = rl.render_wrapper(tmp_path, ["-m", "x"], run_dir)
     sentinel = run_dir / rl.SENTINEL_NAME
+    started = run_dir / rl.STARTED_NAME
     lines = text.splitlines()
     guard = next(i for i, ln in enumerate(lines) if ln.startswith("if exist") and "exit /b 0" in ln)
     payload = next(i for i, ln in enumerate(lines) if ".venv" in ln)
     # The guard must come BEFORE the redirected python call — `>` truncates, so a ghost run that
     # reached the payload would destroy the first run's logs.
     assert guard < payload
-    assert f'if exist "{sentinel}" exit /b 0' in text
+    assert f'if exist "{started}" if exist "{sentinel}" exit /b 0' in text
+
+
+def test_ghost_guard_requires_evidence_the_payload_actually_started(tmp_path: Path) -> None:
+    """A LONE planted exit sentinel must not turn the task into a no-op that reports success."""
+    run_dir = tmp_path / "run"
+    text = rl.render_wrapper(tmp_path, ["-m", "x"], run_dir)
+    started = run_dir / rl.STARTED_NAME
+    # Every early-exit path is conditioned on the start marker as well as the sentinel...
+    for line in text.splitlines():
+        if "exit /b 0" in line:
+            assert f'if exist "{started}"' in line
+    # ...and the marker is written by the wrapper itself, immediately before the payload.
+    lines = text.splitlines()
+    mark = next(i for i, ln in enumerate(lines) if ln.startswith("echo [wrapper] started"))
+    payload = next(i for i, ln in enumerate(lines) if ".venv" in ln)
+    assert mark < payload
+
+
+def test_start_run_refuses_to_reuse_an_existing_run_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Reusing a run dir would inherit whatever markers it already holds — a plant vector."""
+    monkeypatch.setattr(rl, "assert_transport_needed", lambda: (0, 1))
+    monkeypatch.setattr(rl, "build_run_id", lambda label, **kw: "fixed-id")
+    (tmp_path.joinpath(*rl.RUN_DIR_RELPATH, "fixed-id")).mkdir(parents=True)
+    monkeypatch.setenv("USERNAME", "someone")
+    with pytest.raises(FileExistsError):
+        rl.start_run(["-m", "x"], label="fixed", repo_root=tmp_path)
 
 
 def test_ghost_suppression_note_does_not_corrupt_the_exit_sentinel() -> None:

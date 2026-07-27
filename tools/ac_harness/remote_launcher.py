@@ -85,6 +85,9 @@ STDERR_NAME = "stderr.log"
 SENTINEL_NAME = "wrapper.log"
 SENTINEL_TOKEN = "exit="
 RUN_JSON_NAME = "run.json"
+#: Written by the wrapper immediately BEFORE the payload, so it is evidence the payload actually
+#: started — which a bare exit sentinel is not (that file is plantable in the shared scratch tree).
+STARTED_NAME = "run.started"
 
 #: ``/sd`` format measured as the only accepted one on the rig (see the module docstring).
 SCHTASKS_DATE_FORMAT = "%m/%d/%Y"
@@ -253,6 +256,7 @@ def render_wrapper(repo_root: Path, argv: Sequence[str], run_dir: Path) -> str:
     stdout_path = run_dir / STDOUT_NAME
     stderr_path = run_dir / STDERR_NAME
     sentinel_path = run_dir / SENTINEL_NAME
+    started_path = run_dir / STARTED_NAME
     return (
         "@echo off\r\n"
         f'cd /d "{repo_root}"\r\n'
@@ -263,8 +267,17 @@ def render_wrapper(repo_root: Path, argv: Sequence[str], run_dir: Path) -> str:
         # sentinel only exists once the wrapper has completed, so it is the exact idempotency key.
         # (A trigger that fires *during* the first run is already suppressed by Task Scheduler's
         # default "do not start a new instance" policy; this covers the after-completion case.)
-        f'if exist "{sentinel_path}" echo [wrapper] ghost trigger suppressed>>"{sentinel_path}"\r\n'
-        f'if exist "{sentinel_path}" exit /b 0\r\n'
+        # Suppression requires BOTH markers. Keying only on the exit sentinel would let a peer
+        # plant `[wrapper] exit=0` between /run and the wrapper body and turn the whole task into a
+        # no-op that still reports Ready + Last Result 0 — i.e. `start --wait` returning success
+        # without the harness ever launching. `run.started` is written by the wrapper itself just
+        # before the payload, so requiring it means suppression rests on evidence the payload ran
+        # at least once. A lone planted sentinel no longer stops execution, and the real run
+        # appends its own `exit=` afterwards, which is the one parse_sentinel reads.
+        f'if exist "{started_path}" if exist "{sentinel_path}" '
+        f'echo [wrapper] ghost trigger suppressed>>"{sentinel_path}"\r\n'
+        f'if exist "{started_path}" if exist "{sentinel_path}" exit /b 0\r\n'
+        f'echo [wrapper] started>"{started_path}"\r\n'
         "rem Redirected Python is fully buffered; without this the poll surface looks hung for\r\n"
         "rem minutes on a healthy run.\r\n"
         "set PYTHONUNBUFFERED=1\r\n"
@@ -479,7 +492,10 @@ def start_run(
         nonce=random.randrange(1000, 9999),  # noqa: S311
     )
     run_dir = root.joinpath(*RUN_DIR_RELPATH, run_id)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    # exist_ok=False on purpose: a per-run id should never collide, and REUSING a directory would
+    # inherit whatever markers it already holds (a stale or planted sentinel), which is exactly the
+    # vector the wrapper's start-marker guard exists to close. A collision is a loud error.
+    run_dir.mkdir(parents=True, exist_ok=False)
 
     resolved_argv = substitute_run_placeholders(argv, run_id=run_id, run_dir=run_dir)
     wrapper = run_dir / WRAPPER_NAME
