@@ -441,6 +441,7 @@ def test_reap_tasks_deletes_every_owned_task(monkeypatch: pytest.MonkeyPatch) ->
 
     class _Ok:
         returncode = 0
+        stdout = "Status:  Ready\n"
 
     def _fake_run(argv):  # noqa: ANN001, ANN202
         calls.append(list(argv))
@@ -452,4 +453,90 @@ def test_reap_tasks_deletes_every_owned_task(monkeypatch: pytest.MonkeyPatch) ->
     outcome = rl.reap_tasks()
     assert outcome["remaining"] == []
     assert all(o["deleted"] for o in outcome["reaped"].values())
-    assert calls == [["schtasks", "/delete", "/tn", n, "/f"] for n in names]
+    for n in names:
+        assert ["schtasks", "/delete", "/tn", n, "/f"] in calls
+
+
+# ---------------------------------------------------------------------------
+# reap safety, bounded-wait finiteness, corrupt payload (3rd daemon round)
+# ---------------------------------------------------------------------------
+
+
+def test_reap_skips_a_task_that_is_still_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unconditional sweep would cancel a PEER's live launch — the hazard cleanup refuses."""
+    calls: list[list[str]] = []
+
+    class _Q:
+        returncode = 0
+        stdout = "Status:  Running\n"
+
+    def _fake_run(argv):  # noqa: ANN001, ANN202
+        calls.append(list(argv))
+        return _Q()
+
+    monkeypatch.setattr(rl, "_run", _fake_run)
+    monkeypatch.setattr(rl, "list_stale_tasks", lambda: ["ac-harness-live"])
+    outcome = rl.reap_tasks()
+    assert outcome["reaped"]["ac-harness-live"]["deleted"] is False
+    assert "Running" in outcome["reaped"]["ac-harness-live"]["skipped"]
+    assert not any("/delete" in c for c in calls)
+
+
+def test_reap_force_deletes_even_a_running_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    class _Q:
+        returncode = 0
+        stdout = "Status:  Running\n"
+
+    def _fake_run(argv):  # noqa: ANN001, ANN202
+        calls.append(list(argv))
+        return _Q()
+
+    monkeypatch.setattr(rl, "_run", _fake_run)
+    monkeypatch.setattr(rl, "list_stale_tasks", lambda: ["ac-harness-live"])
+    rl.reap_tasks(force=True)
+    assert ["schtasks", "/delete", "/tn", "ac-harness-live", "/f"] in calls
+
+
+def test_reap_deletes_a_task_that_is_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    class _Q:
+        returncode = 0
+        stdout = "Status:  Ready\n"
+
+    def _fake_run(argv):  # noqa: ANN001, ANN202
+        calls.append(list(argv))
+        return _Q()
+
+    monkeypatch.setattr(rl, "_run", _fake_run)
+    seq = iter([["ac-harness-done"], []])
+    monkeypatch.setattr(rl, "list_stale_tasks", lambda: next(seq))
+    outcome = rl.reap_tasks()
+    assert outcome["reaped"]["ac-harness-done"]["deleted"] is True
+    assert ["schtasks", "/delete", "/tn", "ac-harness-done", "/f"] in calls
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("nan"), -1.0])
+def test_wait_for_run_rejects_a_non_finite_timeout(bad: float, tmp_path: Path) -> None:
+    """`--timeout-s inf` would never expire — the exact hang the bounded wait exists to prevent."""
+    with pytest.raises(rl.RemoteLaunchError, match="finite"):
+        rl.wait_for_run(_run_handle(tmp_path), timeout_s=bad, sleep=lambda _s: None)
+
+
+def test_load_run_reports_a_corrupt_payload_as_a_launch_error(tmp_path: Path) -> None:
+    """A truncated run.json must take the module's error path, not raise a raw JSONDecodeError."""
+    d = tmp_path.joinpath(*rl.RUN_DIR_RELPATH, "mine")
+    d.mkdir(parents=True)
+    (d / rl.RUN_JSON_NAME).write_text('{"run_id": "mi', encoding="utf-8")
+    with pytest.raises(rl.RemoteLaunchError, match="unreadable run payload"):
+        rl.load_run("mine", repo_root=tmp_path)
+
+
+def test_load_run_reports_a_payload_missing_required_keys(tmp_path: Path) -> None:
+    d = tmp_path.joinpath(*rl.RUN_DIR_RELPATH, "mine")
+    d.mkdir(parents=True)
+    (d / rl.RUN_JSON_NAME).write_text('{"nope": 1}', encoding="utf-8")
+    with pytest.raises(rl.RemoteLaunchError, match="unreadable run payload"):
+        rl.load_run("mine", repo_root=tmp_path)

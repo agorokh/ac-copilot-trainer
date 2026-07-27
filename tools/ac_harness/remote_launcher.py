@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import random
 import re
@@ -487,7 +488,15 @@ def load_run(run_id: str, *, repo_root: Path | None = None) -> RemoteRun:
     payload = run_dir / RUN_JSON_NAME
     if not payload.is_file():
         raise RemoteLaunchError(f"no such remote run: {payload}")
-    run = RemoteRun.from_dict(json.loads(payload.read_text(encoding="utf-8")))
+    # The payload lives in a writable scratch tree, so treat it as untrusted INPUT, not as a
+    # trusted structure: a truncated or hand-edited file must surface as the module's own error
+    # (which the CLI turns into a clean exit 3), never as a JSONDecodeError/KeyError traceback.
+    try:
+        run = RemoteRun.from_dict(json.loads(payload.read_text(encoding="utf-8")))
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
+        raise RemoteLaunchError(
+            f"unreadable run payload {payload}: {type(exc).__name__}: {exc}"
+        ) from exc
     expected_task = task_name_for(requested)
     if run.run_id != requested:
         raise RemoteLaunchError(
@@ -550,6 +559,14 @@ def wait_for_run(
     The wait is bounded on purpose: when the run never starts the sentinel never appears, and an
     unbounded loop would hang forever with no diagnosis.
     """
+    for label, value in (("timeout_s", timeout_s), ("interval_s", interval_s)):
+        # argparse's `type=float` happily accepts `inf` and `nan`. With `inf` the deadline is never
+        # reached, so the wait is unbounded — precisely the hang this function exists to prevent;
+        # with `nan` every comparison is False and the sleep collapses toward a busy spin.
+        if not math.isfinite(value) or value < 0:
+            raise RemoteLaunchError(
+                f"{label} must be a finite, non-negative number (got {value!r})"
+            )
     deadline = monotonic() + timeout_s
     while True:
         status = poll_run(run)
@@ -597,16 +614,30 @@ def list_stale_tasks() -> list[str]:
     return names
 
 
-def reap_tasks() -> dict[str, Any]:
-    """Delete every still-registered task this module owns.
+#: Task states that mean a launch is still in flight. Deleting one of these cancels a start that
+#: has not spawned yet and drops the only ``Status`` handle — the same hazard :func:`cleanup_run`
+#: refuses for a single run, which ``reap`` must not reintroduce across every run on the rig.
+_LIVE_TASK_STATES = {"running", "queued"}
+
+
+def reap_tasks(*, force: bool = False) -> dict[str, Any]:
+    """Delete still-registered tasks this module owns, **skipping ones still in flight**.
 
     ``list`` deliberately only reports; this is the command that actually removes them. A session
-    that dies before ``cleanup`` leaves a harmless but accumulating registration behind, and without
-    this the operator is left running raw ``schtasks /delete`` — which is the hand-run path this
-    module exists to retire.
+    that dies before ``cleanup`` leaves an accumulating registration behind, and without this the
+    operator falls back to raw ``schtasks /delete`` — the hand-run path this module retires.
+
+    But this module's threat model is *two agents, one rig*: an unconditional sweep would delete a
+    **peer's live task** mid-launch. So a task reporting ``Running``/``Queued`` is skipped unless
+    ``force`` is set, and the skip is reported rather than silently swallowed.
     """
     results: dict[str, Any] = {}
     for name in list_stale_tasks():
+        queried = _run(["schtasks", "/query", "/tn", name, "/fo", "list", "/v"])
+        state = parse_task_status(queried.stdout).get("status", "")
+        if not force and state.strip().lower() in _LIVE_TASK_STATES:
+            results[name] = {"deleted": False, "skipped": f"task is {state.strip()}"}
+            continue
         deleted = _run(["schtasks", "/delete", "/tn", name, "/f"])
         results[name] = {"deleted": deleted.returncode == 0, "rc": deleted.returncode}
     return {"reaped": results, "remaining": list_stale_tasks()}
@@ -672,7 +703,14 @@ def build_parser() -> argparse.ArgumentParser:
     wait.add_argument("--interval-s", type=float, default=30.0)
 
     sub.add_parser("list", help="list this module's still-registered tasks (read-only)")
-    sub.add_parser("reap", help="DELETE every still-registered task this module owns")
+    reap = sub.add_parser(
+        "reap", help="DELETE still-registered tasks this module owns (skips in-flight ones)"
+    )
+    reap.add_argument(
+        "--force",
+        action="store_true",
+        help="also delete Running/Queued tasks — cancels a live launch, possibly a peer's",
+    )
     return p
 
 
@@ -720,7 +758,7 @@ def main(raw_args: Sequence[str] | None = None) -> int:
             print(json.dumps(list_stale_tasks(), indent=2))
             return 0
         if args.command == "reap":
-            outcome = reap_tasks()
+            outcome = reap_tasks(force=args.force)
             print(json.dumps(outcome, indent=2, default=str))
             return 0 if not outcome["remaining"] else 1
     except RemoteLaunchError as exc:
