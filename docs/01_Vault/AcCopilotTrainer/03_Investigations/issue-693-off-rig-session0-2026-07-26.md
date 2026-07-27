@@ -3,7 +3,7 @@ type: investigation
 status: active
 memory_tier: canonical
 created: 2026-07-26
-updated: 2026-07-26
+updated: 2026-07-27
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/693
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-575-stale-app-junction-2026-07-15.md
@@ -64,3 +64,25 @@ Five rounds, six real Windows defects — the strongest argument for #697:
   found on `chore/issue-677-post-merge-vault` @ `971c103` (already on main as `b80ab38`), i.e. the
   #575/#543 stale-Lua trap, and detached to `origin/main`.
 - `main` may be pinned by a peer worktree — `git switch main` fails; **detach at `origin/main`** instead.
+
+## Post-merge hardening (PR #699, `c5afa50`)
+
+The self-hosted reviewer posted three more findings **2m23s after #694 merged** — never gating, but
+they left `main` carrying a runbook that could **fail open**, so they were fixed immediately rather
+than deferred to #697:
+
+- **`ShortPath` fails open.** `FileSystemObject` returns the LONG path unchanged when 8.3 name
+  generation is disabled, so on a `C:\Users\First Last\…` profile the recipe passes create+run and
+  then silently never launches — the very failure the short path was added to prevent, now costing
+  the whole step-4 deadline. Now throws when `$trPath` still contains whitespace.
+- **`$car`/`$track` were interpolated raw into an executable `.cmd`** (and into the task name and
+  evidence path). Validated against the harness's own `_AC_ID_RE` (`^[A-Za-z0-9._-]+$`) — a first
+  attempt used `^[A-Za-z0-9_]+$`, which was *stricter than the harness* and would have fail-closed
+  legitimate ids carrying `-` or `.`.
+- **`Set-Content -Encoding ascii` mangles non-ASCII paths** to `?`, producing a wrapper whose `cd /d`
+  and redirects point nowhere while `schtasks` still reports success. Repo path rejected up front.
+- Steps 3 and 4 split into separate blocks: step 4 blocks for the length of the run, so an agent
+  pasting the whole thing at once traps its own shell and can neither poll nor report.
+
+**Lesson:** a fail-safe that can *fail open* is worse than none — it converts a loud error into a
+silent multi-hour wait. Every guard added here asserts its own precondition.
