@@ -347,12 +347,18 @@ Behaviours worth knowing before you debug something:
   agents on the one physical rig: a fixed name lets each clobber the other's registration.
 - **`wait` is bounded.** If the run never starts, the sentinel never appears; an unbounded wait
   would hang for hours with no diagnosis.
-- **`list` only reports; `reap` deletes — under `cleanup`'s rule, not a weaker one.** `reap`
-  removes a task only when that run's **exit sentinel** exists (and its status is a known non-live
-  value), so you never need raw `schtasks /delete`. `Status: Ready` is *not* completion: `/run` is
-  asynchronous, so a task reads `Ready` both between `/create` and `/run` and after `/run` until the
-  wrapper spawns — deleting in either window cancels a peer's launch. An unreadable or unrecognised
-  status **fails closed** (skipped, with the reason reported); `--force` overrides both checks.
+- **`cleanup` and `reap` share one deletion rule, and it is the strict one.** A task is deleted
+  only when *all three* hold: its run wrote the **exit sentinel**; the task reports a known non-live
+  status; and `Last Result` shows it has actually executed. `Status: Ready` is *not* completion —
+  `/run` is asynchronous, so `Ready` covers both the pre-spawn window and the finished state, which
+  is why the result code is checked too (a sentinel planted in the writable scratch tree would
+  otherwise authorise deleting a peer's task before it ever ran). Anything unreadable **fails
+  closed**, with the reason reported; `--force` overrides. `cleanup` exits non-zero when it refuses
+  or the delete fails, so automation can see it.
+- **Correlate payload with transport.** `{run_id}` and `{run_dir}` in the harness argv are
+  substituted before validation, so `--evidence-dir .scratch/harness-evidence/{run_id}` makes the
+  in-sim evidence share the transport's run id. The wrapper also exports
+  `AC_HARNESS_REMOTE_RUN_ID`.
 - **The run id you pass is authoritative.** `run.json` lives in a writable scratch tree, so `load`
   binds the payload to the id you asked for and **recomputes** its directory; a forged or stale
   payload cannot redirect `cleanup` onto a peer's task.

@@ -447,7 +447,7 @@ def _seed_finished_run(root: Path, run_id: str) -> None:
 
 class _Ready:
     returncode = 0
-    stdout = "Status:  Ready\n"
+    stdout = "Status:  Ready\nLast Result:  0\n"
 
 
 def test_reap_skips_a_task_with_no_exit_sentinel(
@@ -478,7 +478,7 @@ def test_reap_fails_closed_when_the_status_query_fails(
     monkeypatch.setattr(rl, "list_stale_tasks", lambda: ["ac-harness-done"])
     outcome = rl.reap_tasks(repo_root=tmp_path)
     assert outcome["reaped"]["ac-harness-done"]["deleted"] is False
-    assert "status unknown" in outcome["reaped"]["ac-harness-done"]["skipped"]
+    assert "query failed" in outcome["reaped"]["ac-harness-done"]["skipped"]
     assert not any("/delete" in c for c in calls)
 
 
@@ -490,7 +490,7 @@ def test_reap_fails_closed_on_an_unrecognised_status(
 
     class _Weird:
         returncode = 0
-        stdout = "Status:  Somethingelse\n"
+        stdout = "Status:  Somethingelse\nLast Result:  0\n"
 
     monkeypatch.setattr(rl, "_run", lambda argv: (calls.append(list(argv)), _Weird())[1])
     monkeypatch.setattr(rl, "list_stale_tasks", lambda: ["ac-harness-done"])
@@ -506,7 +506,7 @@ def test_reap_skips_a_running_task_even_with_a_sentinel(
 
     class _Running:
         returncode = 0
-        stdout = "Status:  Running\n"
+        stdout = "Status:  Running\nLast Result:  267009\n"
 
     monkeypatch.setattr(rl, "_run", lambda argv: (calls.append(list(argv)), _Running())[1])
     monkeypatch.setattr(rl, "list_stale_tasks", lambda: ["ac-harness-live"])
@@ -534,7 +534,7 @@ def test_reap_force_bypasses_both_guards(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
     class _Running:
         returncode = 0
-        stdout = "Status:  Running\n"
+        stdout = "Status:  Running\nLast Result:  267009\n"
 
     monkeypatch.setattr(rl, "_run", lambda argv: (calls.append(list(argv)), _Running())[1])
     monkeypatch.setattr(rl, "list_stale_tasks", lambda: ["ac-harness-live"])
@@ -575,3 +575,112 @@ def test_load_run_reports_a_payload_missing_required_keys(tmp_path: Path) -> Non
     (d / rl.RUN_JSON_NAME).write_text('{"nope": 1}', encoding="utf-8")
     with pytest.raises(rl.RemoteLaunchError, match="unreadable run payload"):
         rl.load_run("mine", repo_root=tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Shared deletion verdict, run-id correlation, CLI exit codes (5th daemon round)
+# ---------------------------------------------------------------------------
+
+
+def test_verdict_refuses_a_planted_sentinel_before_the_task_ever_ran(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`Ready` covers the PRE-SPAWN window too, so a planted sentinel must not authorise delete."""
+    _seed_finished_run(tmp_path, "victim")
+
+    class _NeverRan:
+        returncode = 0
+        stdout = f"Status:  Ready\nLast Result:  {rl.SCHED_S_TASK_HAS_NOT_YET_RUN}\n"
+
+    monkeypatch.setattr(rl, "_run", lambda argv: _NeverRan())
+    ok, reason = rl.task_deletion_verdict(
+        "ac-harness-victim", tmp_path.joinpath(*rl.RUN_DIR_RELPATH, "victim")
+    )
+    assert ok is False
+    assert "not yet run" in reason
+
+
+def test_verdict_refuses_an_unreadable_last_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _seed_finished_run(tmp_path, "r")
+
+    class _NoResult:
+        returncode = 0
+        stdout = "Status:  Ready\n"
+
+    monkeypatch.setattr(rl, "_run", lambda argv: _NoResult())
+    ok, reason = rl.task_deletion_verdict(
+        "ac-harness-r", tmp_path.joinpath(*rl.RUN_DIR_RELPATH, "r")
+    )
+    assert ok is False
+    assert "unreadable" in reason
+
+
+def test_cleanup_run_now_applies_the_same_live_status_gate_as_reap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """cleanup was the WEAKER path: a planted sentinel could delete a still-Running task."""
+    d = tmp_path.joinpath(*rl.RUN_DIR_RELPATH, "r")
+    d.mkdir(parents=True)
+    (d / rl.SENTINEL_NAME).write_text("[wrapper] exit=0\n", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    class _Running:
+        returncode = 0
+        stdout = "Status:  Running\nLast Result:  267009\n"
+
+    monkeypatch.setattr(rl, "_run", lambda argv: (calls.append(list(argv)), _Running())[1])
+    monkeypatch.setattr(rl, "poll_run", lambda run, **kw: {"finished": True})
+    run = rl.RemoteRun(
+        run_id="r",
+        task="ac-harness-r",
+        repo_root=str(tmp_path),
+        run_dir=str(d),
+        argv=["-m", "x"],
+        started_at="x",
+    )
+    monkeypatch.setattr(
+        rl, "_await_deletion_verdict", lambda n, rd, **kw: rl.task_deletion_verdict(n, rd)
+    )
+    outcome = rl.cleanup_run(run)
+    assert outcome["deleted"] is False
+    assert not any("/delete" in c for c in calls)
+
+
+def test_substitute_run_placeholders_links_payload_to_transport() -> None:
+    """Without this the payload picks its own evidence dir and cannot be correlated with the run."""
+    argv = ["-m", "tools.ac_harness.auto_alien", "--evidence-dir", ".scratch/e/{run_id}"]
+    out = rl.substitute_run_placeholders(argv, run_id="abc-1", run_dir=Path("/r/abc-1"))
+    assert out[-1] == ".scratch/e/abc-1"
+
+
+def test_substitute_run_placeholders_resolves_run_dir() -> None:
+    out = rl.substitute_run_placeholders(["{run_dir}"], run_id="abc", run_dir=Path("/r/abc"))
+    assert out == [str(Path("/r/abc"))]
+
+
+def test_wrapper_exports_the_run_id_for_correlation(tmp_path: Path) -> None:
+    text = rl.render_wrapper(tmp_path, ["-m", "x"], tmp_path / "run-7")
+    assert "set AC_HARNESS_REMOTE_RUN_ID=run-7" in text
+
+
+def test_cli_cleanup_exits_non_zero_when_delete_was_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Automation cannot see a refusal if the CLI always exits 0."""
+    monkeypatch.setattr(rl, "load_run", lambda rid, **kw: _run_handle(tmp_path))
+    monkeypatch.setattr(
+        rl, "cleanup_run", lambda run, force=False: {"deleted": False, "reason": "x"}
+    )
+    assert rl.main(["cleanup", "r"]) == 1
+
+
+def test_cli_cleanup_exits_zero_on_a_real_delete(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(rl, "load_run", lambda rid, **kw: _run_handle(tmp_path))
+    monkeypatch.setattr(
+        rl, "cleanup_run", lambda run, force=False: {"deleted": True, "delete_rc": 0}
+    )
+    assert rl.main(["cleanup", "r"]) == 0

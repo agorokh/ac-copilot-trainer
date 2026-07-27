@@ -217,6 +217,29 @@ def quote_wrapper_token(token: str) -> str:
     return f'"{token}"'
 
 
+#: Placeholders a caller may use in the harness argv; substituted before token validation so the
+#: payload can name the same run the transport does (e.g. ``--evidence-dir …/{run_id}``).
+RUN_ID_PLACEHOLDER = "{run_id}"
+RUN_DIR_PLACEHOLDER = "{run_dir}"
+
+
+def substitute_run_placeholders(argv: Sequence[str], *, run_id: str, run_dir: Path) -> list[str]:
+    """Resolve ``{run_id}`` / ``{run_dir}`` in the harness argv.
+
+    Without this the payload is blind to the transport's run id: transport logs land under
+    ``.scratch/harness-remote/<run id>/`` while the harness picks its own evidence directory name,
+    so a crash in ``stderr.log`` cannot be correlated with the in-sim evidence it belongs to. (The
+    PowerShell runbook this module replaced linked them by hand with ``--evidence-dir "$rel"``.)
+
+    Substitution happens **before** :func:`validate_wrapper_token`, so the resolved value is
+    validated like any other token rather than trusted for having come from us.
+    """
+    return [
+        token.replace(RUN_ID_PLACEHOLDER, run_id).replace(RUN_DIR_PLACEHOLDER, str(run_dir))
+        for token in argv
+    ]
+
+
 def render_wrapper(repo_root: Path, argv: Sequence[str], run_dir: Path) -> str:
     """Render the ``.cmd`` Task Scheduler executes in the console session.
 
@@ -236,6 +259,8 @@ def render_wrapper(repo_root: Path, argv: Sequence[str], run_dir: Path) -> str:
         "rem Redirected Python is fully buffered; without this the poll surface looks hung for\r\n"
         "rem minutes on a healthy run.\r\n"
         "set PYTHONUNBUFFERED=1\r\n"
+        # Correlation handle for anything that reads the environment rather than argv.
+        f"set AC_HARNESS_REMOTE_RUN_ID={run_dir.name}\r\n"
         f'".venv\\Scripts\\python.exe" -u {tokens} > "{stdout_path}" 2> "{stderr_path}"\r\n'
         f'echo [wrapper] {SENTINEL_TOKEN}%ERRORLEVEL% >> "{sentinel_path}"\r\n'
     )
@@ -433,8 +458,9 @@ def start_run(
     run_dir = root.joinpath(*RUN_DIR_RELPATH, run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    resolved_argv = substitute_run_placeholders(argv, run_id=run_id, run_dir=run_dir)
     wrapper = run_dir / WRAPPER_NAME
-    wrapper.write_text(render_wrapper(root, argv, run_dir), encoding="ascii", newline="")
+    wrapper.write_text(render_wrapper(root, resolved_argv, run_dir), encoding="ascii", newline="")
 
     task = task_name_for(run_id)
     account = run_as or os.environ.get("USERNAME") or ""
@@ -460,7 +486,7 @@ def start_run(
         task=task,
         repo_root=str(root),
         run_dir=str(run_dir),
-        argv=list(argv),
+        argv=list(resolved_argv),
         started_at=moment.isoformat(timespec="seconds"),
     )
     (run_dir / RUN_JSON_NAME).write_text(
@@ -578,6 +604,30 @@ def wait_for_run(
         sleep(min(interval_s, max(0.0, deadline - monotonic())))
 
 
+def _await_deletion_verdict(
+    name: str,
+    run_dir: Path,
+    *,
+    attempts: int = 4,
+    delay_s: float = 2.0,
+    sleep=time.sleep,  # noqa: ANN001 - injectable clock for tests
+) -> tuple[bool, str]:
+    """:func:`task_deletion_verdict` with a short retry for the end-of-wrapper race.
+
+    Immediately after ``wait_for_run`` returns, the sentinel exists but Task Scheduler may still
+    report ``Running`` for a moment while it reaps the wrapper. That is a legitimate transient, not
+    a live peer — so retry briefly rather than refusing a caller who did everything right.
+    """
+    reason = ""
+    for attempt in range(attempts):
+        ok, reason = task_deletion_verdict(name, run_dir)
+        if ok:
+            return True, ""
+        if attempt < attempts - 1:
+            sleep(delay_s)
+    return False, reason
+
+
 def cleanup_run(run: RemoteRun, *, force: bool = False) -> dict[str, Any]:
     """Delete the task once the wrapper has logged its exit code.
 
@@ -595,8 +645,14 @@ def cleanup_run(run: RemoteRun, *, force: bool = False) -> dict[str, Any]:
             f"(expected {expected!r}) — run.json may have been edited or points at a peer's task"
         )
     status = poll_run(run, tail=0)
-    if not status["finished"] and not force:
-        return {"deleted": False, "reason": "run has not written its exit sentinel", **status}
+    if not force:
+        # Historically this required only the exit sentinel, which made it the WEAKER path than
+        # reap despite the docs claiming the reverse: wrapper.log lives in the same agent-writable
+        # tree run.json does, so a planted sentinel while the task was still Running would delete a
+        # live /IT task and kill its console-session process tree. One shared rule now.
+        ok, reason = _await_deletion_verdict(run.task, run.directory)
+        if not ok:
+            return {"deleted": False, "reason": reason, **status}
     deleted = _run(["schtasks", "/delete", "/tn", run.task, "/f"])
     return {"deleted": deleted.returncode == 0, "delete_rc": deleted.returncode, **status}
 
@@ -619,6 +675,55 @@ def list_stale_tasks() -> list[str]:
 #: this set only as a *secondary* signal: it is emphatically **not** proof of completion (see
 #: :func:`reap_tasks`), which is why the sentinel check below is the primary gate.
 _KNOWN_DEAD_TASK_STATES = {"ready", "disabled"}
+#: ``Last Result`` values from ``schtasks``. ``Ready`` alone cannot distinguish "finished" from
+#: "created but never started", so the *result* code separates them: a never-run task reports
+#: ``SCHED_S_TASK_HAS_NOT_YET_RUN``. (``267009`` — currently running — was observed live on this
+#: rig mid-drive.) Deliberately NOT compared against the wrapper's own exit code: the wrapper's
+#: last command is ``echo``, so ``Last Result`` can be 0 while the harness rc was not.
+SCHED_S_TASK_HAS_NOT_YET_RUN = 267011
+SCHED_S_TASK_IS_CURRENTLY_RUNNING = 267009
+
+
+def _sentinel_exit_code(run_dir: Path) -> int | None:
+    """The wrapper's recorded exit code, or ``None`` when the run has not finished."""
+    sentinel = run_dir / SENTINEL_NAME
+    if not sentinel.is_file():
+        return None
+    return parse_sentinel(sentinel.read_text(encoding="utf-8", errors="replace"))
+
+
+def task_deletion_verdict(name: str, run_dir: Path) -> tuple[bool, str]:
+    """May this task be deleted? Returns ``(ok, reason_when_not)``. **Fails closed.**
+
+    Both :func:`cleanup_run` and :func:`reap_tasks` go through here so there is exactly one rule,
+    and it is the strict one. Three independent things must all hold:
+
+    1. **The wrapper wrote its exit sentinel.** ``schtasks /run`` is asynchronous, so nothing about
+       the task's own state proves the run reached its end.
+    2. **The task reports a known non-live status.** An unreadable, missing, or unrecognised status
+       is *not* permission — a guard that fail-opens on a transient query failure removes a live
+       peer task at the one moment the evidence is missing.
+    3. **The task has actually executed.** ``Ready`` covers *both* the pre-spawn window and
+       completion, so a sentinel planted in the writable scratch tree during the pre-spawn window
+       would otherwise authorise deleting a peer's task before it ever ran.
+    """
+    if _sentinel_exit_code(run_dir) is None:
+        return False, f"no exit sentinel at {run_dir / SENTINEL_NAME} — may still be launching"
+    queried = _run(["schtasks", "/query", "/tn", name, "/fo", "list", "/v"])
+    if queried.returncode != 0:
+        return False, f"status query failed (rc={queried.returncode}) — failing closed"
+    fields = parse_task_status(queried.stdout)
+    state = fields.get("status", "").strip().lower()
+    if state not in _KNOWN_DEAD_TASK_STATES:
+        return False, f"status {state!r} is not a known non-live state — failing closed"
+    raw_result = fields.get("last_result", "").strip()
+    try:
+        last_result = int(raw_result, 0)
+    except ValueError:
+        return False, f"last result {raw_result!r} unreadable — failing closed"
+    if last_result in (SCHED_S_TASK_HAS_NOT_YET_RUN, SCHED_S_TASK_IS_CURRENTLY_RUNNING):
+        return False, "task has not yet run (pre-spawn Ready window) — refusing to cancel a launch"
+    return True, ""
 
 
 def _run_dir_for_task(name: str, root: Path) -> Path | None:
@@ -664,23 +769,9 @@ def reap_tasks(*, repo_root: Path | None = None, force: bool = False) -> dict[st
             if run_dir is None:
                 results[name] = {"deleted": False, "skipped": "task name is not a valid run id"}
                 continue
-            sentinel = run_dir / SENTINEL_NAME
-            finished = sentinel.is_file() and (
-                parse_sentinel(sentinel.read_text(encoding="utf-8", errors="replace")) is not None
-            )
-            if not finished:
-                results[name] = {
-                    "deleted": False,
-                    "skipped": f"no exit sentinel at {sentinel} — may still be launching",
-                }
-                continue
-            queried = _run(["schtasks", "/query", "/tn", name, "/fo", "list", "/v"])
-            state = parse_task_status(queried.stdout).get("status", "").strip().lower()
-            if queried.returncode != 0 or state not in _KNOWN_DEAD_TASK_STATES:
-                results[name] = {
-                    "deleted": False,
-                    "skipped": f"status unknown (rc={queried.returncode}, status={state!r})",
-                }
+            ok, reason = task_deletion_verdict(name, run_dir)
+            if not ok:
+                results[name] = {"deleted": False, "skipped": reason}
                 continue
         deleted = _run(["schtasks", "/delete", "/tn", name, "/f"])
         results[name] = {"deleted": deleted.returncode == 0, "rc": deleted.returncode}
@@ -723,8 +814,9 @@ def build_parser() -> argparse.ArgumentParser:
         "argv",
         nargs=argparse.REMAINDER,
         help=(
-            "harness argv after `--`, without the interpreter "
-            "(e.g. -m tools.ac_harness.auto_alien --car … --track …)"
+            "harness argv after `--`, without the interpreter (e.g. -m "
+            "tools.ac_harness.auto_alien --car … --track …). {run_id}/{run_dir} are substituted, "
+            "so --evidence-dir .scratch/harness-evidence/{run_id} correlates payload with transport"
         ),
     )
 
@@ -792,11 +884,12 @@ def main(raw_args: Sequence[str] | None = None) -> int:
             print(json.dumps(status, indent=2, default=str))
             return 2 if status.get("timed_out") else (0 if status.get("exit_code") == 0 else 1)
         if args.command == "cleanup":
-            print(
-                json.dumps(
-                    cleanup_run(load_run(args.run_id), force=args.force), indent=2, default=str
-                )
-            )
+            outcome = cleanup_run(load_run(args.run_id), force=args.force)
+            print(json.dumps(outcome, indent=2, default=str))
+            # A refusal ("still launching", "status unknown") and a failed `schtasks /delete` are
+            # both outcomes automation must be able to see from the exit code alone.
+            if not outcome.get("deleted") or outcome.get("delete_rc", 0) != 0:
+                return 1
             return 0
         if args.command == "list":
             print(json.dumps(list_stale_tasks(), indent=2))
