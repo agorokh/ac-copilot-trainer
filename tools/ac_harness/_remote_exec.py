@@ -23,7 +23,18 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from tools.ac_harness.remote_launcher import execute_control_file  # noqa: E402
+from tools.ac_harness.remote_launcher import (  # noqa: E402
+    EXEC_FAILURE_RC,
+    RemoteLaunchError,
+    execute_control_file,
+)
 
 if __name__ == "__main__":
-    raise SystemExit(execute_control_file(sys.argv[1] if len(sys.argv) > 1 else ""))
+    # Exit with the SAME code the sentinel records. Task Scheduler surfaces this as `Last Result`,
+    # and the deletion verdict now requires the two to agree — a binding that only holds if a
+    # failure exits EXEC_FAILURE_RC rather than letting the traceback pick an unrelated code.
+    try:
+        raise SystemExit(execute_control_file(sys.argv[1] if len(sys.argv) > 1 else ""))
+    except RemoteLaunchError as exc:
+        print(f"remote-exec: {exc}", file=sys.stderr)
+        raise SystemExit(EXEC_FAILURE_RC) from exc

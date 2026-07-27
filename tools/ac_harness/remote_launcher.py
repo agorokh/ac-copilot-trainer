@@ -144,6 +144,13 @@ def control_dir_for(run_id: str, *, local_app_data: str | Path | None = None) ->
 class RemoteLaunchError(RuntimeError):
     """A transport precondition failed. Never raised for a harness-level (in-sim) failure."""
 
+    def __init__(self, message: str, *, run: RemoteRun | None = None) -> None:
+        super().__init__(message)
+        #: Set when the payload is already LIVE despite the error, so the CLI can still emit the
+        #: handle. Without it, automation parsing stdout never learns the run id and cannot
+        #: poll/wait/cleanup a run that is genuinely underway.
+        self.run = run
+
 
 # ---------------------------------------------------------------------------
 # Pure helpers (unit-tested off-rig)
@@ -478,15 +485,31 @@ def execute_control_file(run_id: str) -> int:
         raise
 
 
-def _record_exec_failure(run_id: str, exc: BaseException) -> None:
+def _write_sentinel(run_id: str, rc: int, note: str = "") -> None:
+    """Record the run's real exit code as the FIRST line, overwriting anything already there.
+
+    The shim is the only legitimate writer, so a pre-existing sentinel has no standing — it was
+    planted. **Truncating** rather than appending is what makes `parse_sentinel`'s first-wins rule
+    trustworthy: an earlier forged `exit=0` is erased, and a later appended one loses. (Appending
+    beneath a planted value, which the failure path used to do, silently handed the forgery the
+    authoritative slot and undid the exclusive-create guard it was paired with.)
+    """
     sentinel = sentinel_path_for(run_id)
     try:
+        existed = sentinel.is_file()
         sentinel.parent.mkdir(parents=True, exist_ok=True)
-        with sentinel.open("a", encoding="utf-8") as fh:
-            fh.write(f"[wrapper] {type(exc).__name__}: {exc}\n")
-            fh.write(f"[wrapper] {SENTINEL_TOKEN}{EXEC_FAILURE_RC}\n")
+        with sentinel.open("w", encoding="utf-8") as fh:
+            fh.write(f"[wrapper] {SENTINEL_TOKEN}{rc}\n")
+            if note:
+                fh.write(f"[wrapper] {note}\n")
+            if existed:
+                fh.write("[wrapper] a pre-existing sentinel was overwritten (not written by us)\n")
     except OSError:
         pass  # nothing further we can do; the caller still raises
+
+
+def _record_exec_failure(run_id: str, exc: BaseException) -> None:
+    _write_sentinel(run_id, EXEC_FAILURE_RC, note=f"{type(exc).__name__}: {exc}")
 
 
 def _execute_validated(requested: str) -> int:
@@ -527,17 +550,7 @@ def _execute_validated(requested: str) -> int:
             env=env,
             check=False,
         )
-    sentinel = sentinel_path_for(requested)
-    try:
-        # Exclusive create: the shim is the only writer, so an existing sentinel at this point
-        # means someone else put it there. Failing loudly beats appending beneath a forgery.
-        with sentinel.open("x", encoding="utf-8") as fh:
-            fh.write(f"[wrapper] {SENTINEL_TOKEN}{completed.returncode}\n")
-    except FileExistsError as exc:
-        raise RemoteLaunchError(
-            f"exit sentinel {sentinel} already existed before this run finished — refusing to "
-            "append beneath a value this shim did not write"
-        ) from exc
+    _write_sentinel(requested, completed.returncode)
     return completed.returncode
 
 
@@ -665,7 +678,8 @@ def start_run(
             f"{(disabled.stderr or disabled.stdout or '').strip()[:200]} — the run is ALREADY "
             f"RUNNING and its handle is at {run_dir / RUN_JSON_NAME}, so the task was NOT deleted "
             f"(that would abort it). The one-shot trigger is still ARMED and will re-fire around "
-            f"{when:%Y-%m-%d %H:%M}: disable or delete task {task!r} before then."
+            f"{when:%Y-%m-%d %H:%M}: disable or delete task {task!r} before then.",
+            run=run,
         )
 
     return run
@@ -1010,6 +1024,15 @@ def evaluate_deletion(
             f"last result {last_result} is a launch failure (e.g. 0x{last_result & 0xFFFFFFFF:X}), "
             "so the payload never ran — failing closed"
         )
+    if last_result != sentinel_exit_code:
+        # Task Scheduler's Last Result is now the shim's own process exit code, which the shim sets
+        # equal to the value it records. They can only disagree if something other than the shim
+        # wrote the sentinel. (The old `.cmd` wrapper ended in `echo`, so this cross-check was not
+        # available then; with the Python shim it is, and it binds the file to an off-disk signal.)
+        return False, (
+            f"exit sentinel says {sentinel_exit_code} but Task Scheduler's last result is "
+            f"{last_result} — the sentinel was not written by this run's shim, failing closed"
+        )
     return True, ""
 
 
@@ -1226,6 +1249,10 @@ def main(raw_args: Sequence[str] | None = None) -> int:
             print(json.dumps(outcome, indent=2, default=str))
             return 0 if not outcome["remaining"] else 1
     except RemoteLaunchError as exc:
+        # Emit the handle on stdout even on the error path when the payload is live, so automation
+        # parsing JSON can still poll/wait/cleanup instead of scraping prose from stderr.
+        if getattr(exc, "run", None) is not None:
+            print(json.dumps(exc.run.to_dict(), indent=2))
         print(f"remote-launcher: {exc}", file=sys.stderr)
         return 3
     return 3

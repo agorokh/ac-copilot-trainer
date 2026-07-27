@@ -1182,10 +1182,10 @@ def test_verdict_still_accepts_a_real_process_exit_code(tmp_path: Path) -> None:
     assert ok is True
 
 
-def test_exec_refuses_to_append_beneath_a_planted_sentinel(
+def test_exec_overwrites_a_planted_sentinel_with_the_real_exit_code(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """An exclusive create is what makes 'first exit= wins' trustworthy."""
+    """A planted `exit=0` must be ERASED, not appended beneath — that is first-wins's premise."""
     control = rl.control_dir_for("planted")
     control.mkdir(parents=True)
     (control / rl.CONTROL_NAME).write_text(
@@ -1194,11 +1194,63 @@ def test_exec_refuses_to_append_beneath_a_planted_sentinel(
     (control / rl.SENTINEL_NAME).write_text("[wrapper] exit=0\n", encoding="utf-8")
 
     class _Done:
-        returncode = 0
+        returncode = 7
 
     monkeypatch.setattr(rl.subprocess, "run", lambda *a, **k: _Done())
-    with pytest.raises(rl.RemoteLaunchError, match="already existed"):
-        rl.execute_control_file("planted")
+    assert rl.execute_control_file("planted") == 7
+    recorded = rl.sentinel_path_for("planted").read_text(encoding="utf-8")
+    assert rl.parse_sentinel(recorded) == 7
+    assert "pre-existing sentinel was overwritten" in recorded
+
+
+def test_failure_path_does_not_leave_a_planted_success_authoritative(tmp_path: Path) -> None:
+    """The asked-for regression: plant exit=0, force the failure path, assert it lost."""
+    control = rl.control_dir_for("forged")
+    control.mkdir(parents=True)
+    (control / rl.CONTROL_NAME).write_text(
+        json.dumps({"argv": ["-c", "print(1)"]}),
+        encoding="utf-8",  # rejected by the allowlist
+    )
+    (control / rl.SENTINEL_NAME).write_text("[wrapper] exit=0\n", encoding="utf-8")
+    with pytest.raises(rl.RemoteLaunchError):
+        rl.execute_control_file("forged")
+    recorded = rl.sentinel_path_for("forged").read_text(encoding="utf-8")
+    assert rl.parse_sentinel(recorded) == rl.EXEC_FAILURE_RC
+    assert rl.parse_sentinel(recorded) != 0
+    # ...and the verdict must not call that run complete.
+    ok, _ = rl.evaluate_deletion(
+        sentinel_exit_code=rl.parse_sentinel(recorded),
+        query_rc=0,
+        fields={"status": "Ready", "last_result": "0"},
+        run_id="forged",
+    )
+    assert ok is False
+
+
+def test_verdict_requires_last_result_to_match_the_sentinel(tmp_path: Path) -> None:
+    """Binds the peer-writable file to an off-disk signal the peer does not control."""
+    ok, reason = rl.evaluate_deletion(
+        sentinel_exit_code=0,
+        query_rc=0,
+        fields={"status": "Ready", "last_result": "5"},
+        run_id="abc-1",
+    )
+    assert ok is False
+    assert "not written by this run's shim" in reason
+
+
+def test_cli_emits_the_handle_when_the_run_is_live_but_the_trigger_stayed_armed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Automation parses stdout JSON; without this it cannot poll a run that IS underway."""
+    run = _run_handle(tmp_path)
+
+    def _boom(argv, **kwargs):  # noqa: ANN001, ANN202
+        raise rl.RemoteLaunchError("trigger still ARMED", run=run)
+
+    monkeypatch.setattr(rl, "start_run", _boom)
+    assert rl.main(["start", "--", "-m", "tools.ac_harness.auto_alien"]) == 3
+    assert run.run_id in capsys.readouterr().out
 
 
 def test_start_run_discards_the_control_dir_when_scheduling_fails(
