@@ -67,7 +67,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from tools.ac_harness.auto_drive import harness_repo_root
 from tools.ac_harness.rig_lock import default_rig_session_lock_path, read_rig_session_owner
 
 #: Transport logs live beside (not inside) the harness's own evidence tree: the run directory holds
@@ -95,10 +94,20 @@ DEFAULT_START_DELAY_MINUTES = 5
 
 #: Run-id / task-name alphabet: safe as a Windows path component *and* a Task Scheduler name.
 _RUN_COMPONENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-#: Tokens interpolated into the generated ``.cmd``. Excludes whitespace-free cmd metacharacters
-#: (``& | < > ^ %``), quotes, and everything outside printable ASCII. Spaces are allowed because
-#: :func:`render_wrapper` quotes such tokens; a token may not contain a quote of its own.
+#: Tokens interpolated into the generated ``.cmd``. Excludes the cmd metacharacters that survive
+#: quoting (``%`` expands even inside double quotes) and the quote character itself (it would close
+#: the quoting :func:`quote_wrapper_token` adds), plus everything outside printable ASCII.
+#:
+#: ``(`` and ``)`` ARE allowed even though they are cmd grouping metacharacters: AC setup names
+#: legitimately contain them (``auto_drive._SETUP_NAME_RE``), so rejecting them would fail-close a
+#: valid ``--setup``. They are made inert by :func:`quote_wrapper_token`, which quotes **every**
+#: token — inside double quotes ``(``/``)``/``!``/``^`` are literal.
 _WRAPPER_TOKEN_RE = re.compile(r"^[ !#$()*+,\-./0-9:;=?@A-Z\[\]_a-z{}~\\]+$")
+#: Characters that must never appear in a path interpolated into the wrapper. ``%`` expands inside
+#: double quotes, and ``"`` breaks out of them — both are legal ASCII in a Windows path, so an
+#: ``isascii()`` check alone is not enough to keep ``cd /d``, the redirects, and the sentinel append
+#: pointing where they were meant to.
+_WRAPPER_PATH_FORBIDDEN = set('%"<>&|^\r\n\t')
 
 _INVALID_SESSION = 0xFFFFFFFF
 
@@ -110,6 +119,35 @@ class RemoteLaunchError(RuntimeError):
 # ---------------------------------------------------------------------------
 # Pure helpers (unit-tested off-rig)
 # ---------------------------------------------------------------------------
+
+
+def harness_repo_root() -> Path:
+    """Repo root of the checkout this module was imported from.
+
+    Resolved locally rather than imported from :mod:`tools.ac_harness.auto_drive`: that module is
+    the *payload* this transport launches, and pulling it in at import time would drag the whole
+    in-sim harness (and its dependencies) into a wrapper whose only job is to hand an argv to Task
+    Scheduler. Both live in ``tools/ac_harness/``, so ``parents[2]`` is the same root by
+    construction.
+    """
+    return Path(__file__).resolve().parents[2]
+
+
+def validate_wrapper_path(kind: str, path: Path) -> Path:
+    """Reject a path that would rewrite the generated ``.cmd`` instead of sitting inside it."""
+    text = str(path)
+    if not text.isascii():
+        raise RemoteLaunchError(
+            f"non-ASCII {kind} {text!r} would be mangled to '?' by the ascii-encoded wrapper"
+        )
+    bad = sorted(_WRAPPER_PATH_FORBIDDEN & set(text))
+    if bad:
+        raise RemoteLaunchError(
+            f"unsafe {kind} {text!r}: contains {bad!r}. `%` expands even inside double quotes and "
+            '`"` breaks out of them, so such a path can rewrite `cd /d`, the redirects, or the '
+            "exit sentinel while schtasks still reports success."
+        )
+    return path
 
 
 def validate_run_component(kind: str, value: str) -> str:
@@ -148,8 +186,16 @@ def validate_wrapper_token(token: str) -> str:
 
 
 def quote_wrapper_token(token: str) -> str:
-    """Quote a validated token for ``cmd.exe`` (quotes are already excluded by validation)."""
-    return f'"{token}"' if " " in token else token
+    """Quote a validated token for ``cmd.exe``.
+
+    **Every** token is quoted, not just the ones containing spaces. A space-free token can still
+    carry cmd grouping metacharacters — ``(dir)`` would change how Task Scheduler parses the
+    generated line rather than being passed through to Python. Inside double quotes those become
+    literal, and the Windows CRT strips the quotes before ``argv`` reaches the interpreter, so the
+    harness sees exactly the token that was validated. The quote character itself is excluded by
+    :data:`_WRAPPER_TOKEN_RE`, so this cannot be closed early.
+    """
+    return f'"{token}"'
 
 
 def render_wrapper(repo_root: Path, argv: Sequence[str], run_dir: Path) -> str:
@@ -159,11 +205,8 @@ def render_wrapper(repo_root: Path, argv: Sequence[str], run_dir: Path) -> str:
     The wrapper redirects its own streams so the polling SSH session only ever *reads* files, and
     appends the exit sentinel as its last act.
     """
-    for part in (str(repo_root), str(run_dir)):
-        if not part.isascii():
-            raise RemoteLaunchError(
-                f"non-ASCII path {part!r} would be mangled to '?' by the ascii-encoded wrapper"
-            )
+    validate_wrapper_path("repo root", repo_root)
+    validate_wrapper_path("run directory", run_dir)
     tokens = " ".join(quote_wrapper_token(validate_wrapper_token(a)) for a in argv)
     stdout_path = run_dir / STDOUT_NAME
     stderr_path = run_dir / STDERR_NAME
@@ -483,6 +526,15 @@ def cleanup_run(run: RemoteRun, *, force: bool = False) -> dict[str, Any]:
     definition early can cancel a start that has not spawned yet, and it removes the only ``Status``
     handle while the run is still launching.
     """
+    # The task name comes off disk (`run.json`), which a peer session or a stray edit can change.
+    # Deleting whatever name it holds would let this reap another agent's task on the shared rig and
+    # drop its Status handle mid-run, so bind the name to the run id before touching schtasks.
+    expected = task_name_for(run.run_id)
+    if run.task != expected:
+        raise RemoteLaunchError(
+            f"refusing to delete task {run.task!r}: it does not match this run id "
+            f"(expected {expected!r}) — run.json may have been edited or points at a peer's task"
+        )
     status = poll_run(run, tail=0)
     if not status["finished"] and not force:
         return {"deleted": False, "reason": "run has not written its exit sentinel", **status}

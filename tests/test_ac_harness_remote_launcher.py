@@ -84,9 +84,36 @@ def test_validate_wrapper_token_accepts_real_harness_argv(good: str) -> None:
     assert rl.validate_wrapper_token(good) == good
 
 
-def test_quote_wrapper_token_only_quotes_spaced_values() -> None:
-    assert rl.quote_wrapper_token("--laps") == "--laps"
+def test_quote_wrapper_token_quotes_every_token_not_just_spaced_ones() -> None:
+    """A space-free token can still carry cmd grouping metacharacters (`(dir)`)."""
+    assert rl.quote_wrapper_token("--laps") == '"--laps"'
     assert rl.quote_wrapper_token("Realistic BB v3") == '"Realistic BB v3"'
+    assert rl.quote_wrapper_token("(dir)") == '"(dir)"'
+
+
+def test_parenthesised_setup_names_survive_validation_but_are_inert() -> None:
+    """`(`/`)` are legal in AC setup names, so must not fail-close; quoting neutralises them."""
+    assert rl.validate_wrapper_token("Realistic BB (v3)") == "Realistic BB (v3)"
+    assert rl.quote_wrapper_token("Realistic BB (v3)") == '"Realistic BB (v3)"'
+
+
+@pytest.mark.parametrize("bad", ["C:/repo%USERNAME%", 'C:/re"po', "C:/a&b", "C:/a|b", "C:/a>b"])
+def test_validate_wrapper_path_rejects_cmd_specials_that_survive_quoting(bad: str) -> None:
+    """`%` expands INSIDE double quotes and `"` breaks out — both are legal ASCII path chars."""
+    with pytest.raises(rl.RemoteLaunchError, match="unsafe"):
+        rl.validate_wrapper_path("repo root", Path(bad))
+
+
+def test_render_wrapper_rejects_a_percent_expanding_repo_path(tmp_path: Path) -> None:
+    with pytest.raises(rl.RemoteLaunchError, match="unsafe"):
+        rl.render_wrapper(Path("C:/repo%PATH%"), ["-m", "x"], tmp_path)
+
+
+def test_harness_repo_root_does_not_import_the_payload_module() -> None:
+    """The transport must not drag `auto_drive` (the in-sim payload) in just to resolve a path."""
+    source = (Path(rl.__file__)).read_text(encoding="utf-8")
+    assert "from tools.ac_harness.auto_drive import" not in source
+    assert rl.harness_repo_root().joinpath("tools", "ac_harness").is_dir()
 
 
 def test_render_wrapper_encodes_every_measured_requirement(tmp_path: Path) -> None:
@@ -97,7 +124,9 @@ def test_render_wrapper_encodes_every_measured_requirement(tmp_path: Path) -> No
 
     # Unbuffered both ways: a redirected, buffered Python makes a healthy run look hung.
     assert "set PYTHONUNBUFFERED=1" in text
-    assert '".venv\\Scripts\\python.exe" -u -m tools.ac_harness.auto_alien --laps 3' in text
+    assert (
+        '".venv\\Scripts\\python.exe" -u "-m" "tools.ac_harness.auto_alien" "--laps" "3"'
+    ) in text
     # The polling SSH session must only ever read files.
     assert f'> "{run_dir / rl.STDOUT_NAME}"' in text
     assert f'2> "{run_dir / rl.STDERR_NAME}"' in text
@@ -116,7 +145,7 @@ def test_render_wrapper_rejects_a_non_ascii_repo_path(tmp_path: Path) -> None:
 
 def test_render_wrapper_quotes_a_spaced_argv_value(tmp_path: Path) -> None:
     text = rl.render_wrapper(tmp_path, ["-m", "x", "--setup", "Realistic BB v3"], tmp_path / "r")
-    assert '--setup "Realistic BB v3"' in text
+    assert '"--setup" "Realistic BB v3"' in text
 
 
 # ---------------------------------------------------------------------------
@@ -306,3 +335,22 @@ def test_cli_start_strips_the_argv_separator(monkeypatch: pytest.MonkeyPatch) ->
         rl.main(["start", "--label", "alien-529", "--", "-m", "tools.ac_harness.auto_alien"]) == 0
     )
     assert seen == {"argv": ["-m", "tools.ac_harness.auto_alien"], "label": "alien-529"}
+
+
+def test_cleanup_run_refuses_a_task_name_that_does_not_match_its_run_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`run.json` is on disk; a stray edit must not let cleanup reap a peer's task."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(rl, "_run", lambda argv: calls.append(list(argv)))
+    hijacked = rl.RemoteRun(
+        run_id="r",
+        task="ac-harness-someone-elses-run",
+        repo_root=str(tmp_path),
+        run_dir=str(tmp_path),
+        argv=["-m", "x"],
+        started_at="2026-07-26T19:59:01",
+    )
+    with pytest.raises(rl.RemoteLaunchError, match="does not match this run id"):
+        rl.cleanup_run(hijacked, force=True)
+    assert calls == []
