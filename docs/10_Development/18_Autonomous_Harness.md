@@ -293,135 +293,59 @@ transport, not the harness:
 Get-Process explorer | Select-Object Id,SessionId # the console session (typically 1)
 ```
 
-### Run in the console session with a `/IT` scheduled task
+### Run in the console session: `tools.ac_harness.remote_launcher` (#697)
 
-`schtasks /IT` means "run only when the user is logged on", so the task executes in the console
-session **and needs no stored credential**. Wrap the harness invocation in a `.cmd` that redirects its
-own logs, then create, run, and poll the task:
+The transport is owned by a harness entrypoint — do **not** hand-run `schtasks` any more. PR #694
+shipped this as a copy/paste runbook and five review rounds then found six real Windows defects in
+it (`<`/`>` parsed as redirection inside the generated `.cmd`; a fixed `/st` that fails once local
+time passes it; `/st` without `/sd` rolling to "earlier today" overnight; a space anywhere in the
+path making Task Scheduler report `create=0`/`run=0` and then never launch; buffered Python leaving
+the poll surface empty on a healthy run; an 8.3 `ShortPath` lookup that *fails open*). Every one of
+those is now a guard that asserts its own precondition in
+[`tools/ac_harness/remote_launcher.py`](../../tools/ac_harness/remote_launcher.py), with the pure
+half unit-tested off-rig in `tests/test_ac_harness_remote_launcher.py`.
 
-Derive every path from the environment and give the task a **per-run name** — a fixed task name lets
-two agents clobber each other's registration on the one rig, and leaves stale tasks behind:
+Start a run — everything after `--` is the harness argv, minus the interpreter:
 
-Everything below is copy/paste-runnable as written — set the four values in step 0 and nothing else.
-**Do not introduce `<angle-bracket>` placeholders here**: `cmd.exe` parses `<` and `>` as redirection
-inside the generated `.cmd`, and both are illegal in Windows path components and task names, so an
-angle-bracket "placeholder" fails before the harness ever starts. Use PowerShell variables, which are
-interpolated into the file.
-
-```powershell
-# 0) the only values to set (no hardcoded user or checkout path)
-$repo   = "$env:USERPROFILE\Projects\ac-copilot-trainer"   # or wherever this clone lives
-$car    = "ks_porsche_911_gt3_r_2016"
-$track  = "magione"
-# Unique per run, and Windows-path/task-name safe (no ':' from the timestamp). The PID+random
-# suffix matters: the threat model here is two agents on ONE rig, and a bare second-resolution
-# stamp lets same-second starts share $task and $ev, so each would overwrite the other's wrapper
-# and task registration.
-# Validate before ANY of these values reach a path, a task name, or the generated .cmd. The pattern
-# mirrors the harness's own `_AC_ID_RE` (`auto_drive.py`) so a legitimate id carrying `-` or `.` is
-# not fail-closed here; it still excludes spaces and every cmd metacharacter (`&  |  >  <  ^  %VAR%`)
-# that would become redirection or injection inside the wrapper Task Scheduler executes.
-foreach ($v in @($car, $track)) {
-    if ($v -notmatch '^[A-Za-z0-9._-]+$') { throw "unsafe car/track id: '$v'" }
-}
-if ($repo -match '[^\u0020-\u007e]') { throw "non-ASCII repo path breaks the ascii-encoded wrapper: $repo" }
-$runId  = "alien-$car-$track-" + (Get-Date -Format "yyyyMMdd-HHmmss") + "-$PID-$(Get-Random -Maximum 9999)"
-$task   = "ac-harness-$runId"                              # never a shared fixed name
-$rel    = ".scratch\harness-evidence\$runId"
-$ev     = "$repo\$rel"
-
-# 1) wrapper (writes its own logs; the SSH session only ever reads files)
-New-Item -ItemType Directory -Force -Path $ev | Out-Null
-Set-Content -LiteralPath "$ev\run.cmd" -Encoding ascii -Value @"
-@echo off
-cd /d "$repo"
-rem Unbuffered: redirected Python is fully buffered, so stdout.log stays empty for minutes and the
-rem SSH-side tail in step 3 looks hung when the run is perfectly healthy.
-set PYTHONUNBUFFERED=1
-".venv\Scripts\python.exe" -u -m tools.ac_harness.auto_alien --car $car --track $track ^
-    --laps 3 --iterations 2 --evidence-dir "$rel" > "$ev\stdout.log" 2> "$ev\stderr.log"
-echo [wrapper] exit=%ERRORLEVEL% >> "$ev\wrapper.log"
-"@
-
-# 2) create + run in the console session ($env:USERNAME, not a literal account).
-#    /st alone is not enough. `/sc once` defaults the start DATE to today, so a bare clock time
-#    computed after ~23:55 lands at 00:xx and is read as earlier TODAY — `/create` then fails with
-#    "The start time of the task cannot be earlier than the current time", precisely during the
-#    overnight runs this path exists for. Derive /st and /sd from the SAME DateTime so a rollover
-#    carries the correct day. The trigger never fires anyway; /run starts the task on demand.
-$when = (Get-Date).AddMinutes(5)
-# Hand /tr the 8.3 SHORT path. If any component of the path contains a space, Task Scheduler
-# accepts the create (rc=0) and the run (rc=0) and then never launches the wrapper — the evidence
-# dir just stays empty and `Last Result` reads -2147024894 (file not found). Quoting does not save
-# it; the short path does. Measured on the rig (see the note below this block).
-$trPath = (New-Object -ComObject Scripting.FileSystemObject).GetFile("$ev\run.cmd").ShortPath
-# FAIL CLOSED. ShortPath returns the LONG path unchanged when 8.3 name generation is disabled on the
-# volume, so on a `C:\Users\First Last\…` profile the recipe would sail through create+run and then
-# silently never launch — the exact failure this line exists to prevent, but now costing the whole
-# step-4 deadline. Refuse instead.
-if ($trPath -match '\s') {
-    throw "8.3 short path unavailable (got '$trPath'). Use a space-free repo/evidence path, or enable 8.3 name generation."
-}
-# /f is kept deliberately. The unique run id above is what prevents a peer agent's task being
-# clobbered; /f is what stops schtasks blocking on its interactive "replace it?" prompt, which was
-# measured on the rig to hang a non-interactive create indefinitely rather than return an error.
-schtasks /create /tn $task /tr $trPath /sc once `
-    /st $when.ToString('HH:mm') /sd $when.ToString('MM/dd/yyyy') `
-    /ru $env:USERNAME /it /f
-if ($LASTEXITCODE -ne 0) { throw "schtasks /create failed ($LASTEXITCODE)" }
-schtasks /run /tn $task
-if ($LASTEXITCODE -ne 0) { schtasks /delete /tn $task /f; throw "schtasks /run failed ($LASTEXITCODE)" }
-
+```bash
+python -m tools.ac_harness.remote_launcher start --label alien-529-911-magione -- \
+    -m tools.ac_harness.auto_alien --car ks_porsche_911_gt3_r_2016 --track magione \
+    --laps 3 --ggv-scale 1.0 --scale-step 0.15 --iterations 2 --max-scale 1.2
 ```
 
-**Steps 3 and 4 are separate blocks on purpose** — do not paste them together with the above. Step 4
-blocks for as long as the run takes, so an agent that pastes everything at once traps its own shell
-there and can neither poll nor report progress. Live in step 3; run step 4 once at the end.
+It prints a JSON handle (`run_id`, `task`, `run_dir`) and returns immediately. Transport logs live
+under `.scratch/harness-remote/<run id>/` (`run.cmd`, `stdout.log`, `stderr.log`, `wrapper.log`,
+`run.json`) — deliberately *beside* the harness's own `--evidence-dir` tree, which the harness keeps
+owning.
 
-```powershell
-# 3) poll from the SSH session (reads only — no AC interaction)
-schtasks /query  /tn $task /fo list | Select-String "^Status"
-Get-Content "$ev\stdout.log" -Tail 30
-Get-Process acs -ErrorAction SilentlyContinue | Select-Object Id,Responding
+Then live in `poll` (read-only — it never touches AC and never deletes the task), and reap at the
+end:
 
+```bash
+python -m tools.ac_harness.remote_launcher poll <run id> --tail 40
+python -m tools.ac_harness.remote_launcher wait <run id> --timeout-s 10800
+python -m tools.ac_harness.remote_launcher cleanup <run id>
+python -m tools.ac_harness.remote_launcher list        # reap tasks a dead session left behind
 ```
 
-```powershell
-# 4) clean up ONLY after the wrapper has logged its exit code. `/run` is asynchronous, so deleting
-#    the task definition in the same unguarded paste can cancel a start that has not spawned yet —
-#    and it removes the only Status handle while the run is still launching. Wait for the sentinel,
-#    but BOUND the wait: if the run never starts, the sentinel never appears and an unbounded loop
-#    would hang forever with no diagnosis.
-$sentinel = "$ev\wrapper.log"
-$deadline = (Get-Date).AddHours(3)   # longer than any ladder you should be running unattended
-function Test-Done { Select-String -Path $sentinel -Pattern "exit=" -Quiet -ErrorAction SilentlyContinue }
-while ((Get-Date) -lt $deadline -and -not (Test-Done)) { Start-Sleep -Seconds 30 }
-if (Test-Done) {
-    Get-Content $sentinel
-    schtasks /delete /tn $task /f
-} else {
-    # No sentinel: report the task's own verdict instead of deleting the evidence silently.
-    schtasks /query /tn $task /fo list /v | Select-String "^Status|^Last Result"
-    Write-Warning "run never wrote exit=; inspect $ev\stderr.log before deleting $task"
-}
-```
+`poll` reports the task `Status`/`Last Result`, whether the wrapper has written its exit sentinel,
+`acs.exe` liveness, the current **rig-lock owner** (arbitration stays in `rig_lock` — the launcher
+does not duplicate it), and tails of both streams. `start --wait-timeout-s <s>` composes start +
+bounded wait + cleanup in one call for an unattended run.
 
-An `auto_alien` ladder runs for tens of minutes, so treat step 3 as the loop you actually live in and
-step 4 as end-of-run housekeeping. If a session dies before step 4, the leftover task is harmless but
-should be reaped by name on the next visit (`schtasks /query | Select-String "ac-harness-"`).
+Behaviours worth knowing before you debug something:
 
-> **A space anywhere in the path silently breaks `/tr`.** Measured on the rig with an evidence dir
-> under `…\space test dir\`: the bare path and a quoted path both gave `create=0`, `run=0`, and then
-> **never executed** (`Last Result: -2147024894`, empty evidence dir — the paste just waits out the
-> step-4 deadline). Wrapping as `cmd.exe /c "…"` failed to create at all (`0x80004005`). The 8.3
-> **short path** worked: `create=0`, `run=0`, `Last Result: 0`, wrapper executed. Hence `$trPath`.
->
-> **`/sd` format is locale-dependent.** `MM/dd/yyyy` (zero-padded) is what this rig accepts; the
-> *culture* short-date pattern is **not** interchangeable — measured on the rig, `M/d/yyyy`,
-> `dd/MM/yyyy` and `yyyy/MM/dd` were all rejected with `0x80004005` while `MM/dd/yyyy` succeeded. If
-> `/create` fails on a differently-localised host, probe the accepted form rather than guessing. Note
-> also that `/sc ONDEMAND` — which would remove the date problem entirely — is **not** accepted by
-> `schtasks /create` here (same `0x80004005`), so `/sc once` plus an explicit date is the working path.
+- **It refuses to run in the console session.** There the task hop is pure overhead, so run the
+  harness directly. It also fails loudly when nobody is logged on at the rig, because a `/IT` task
+  can never run then and AC has no desktop to render on.
+- **`cleanup` refuses an unfinished run** (use `--force` only deliberately). `schtasks /run` is
+  asynchronous: deleting the task definition early can cancel a start that has not spawned yet, and
+  it removes the only `Status` handle while the run is still launching. The exit sentinel
+  (`[wrapper] exit=<rc>` in `wrapper.log`), not `Status: Ready`, is what says a run finished.
+- **Task names are per-run** (`ac-harness-<label>-<stamp>-<pid>-<nonce>`). The threat model is two
+  agents on the one physical rig: a fixed name lets each clobber the other's registration.
+- **`wait` is bounded.** If the run never starts, the sentinel never appears; an unbounded wait
+  would hang for hours with no diagnosis.
 
 You landed in the right session when the run's own first lines report the provenance gate passing:
 
@@ -434,7 +358,7 @@ auto-drive: rig lock acquired -> ...\AC Copilot Trainer\Harness\rig-session.lock
 `installed app provenance: match` is the machine-checkable signal — it means the junction was
 traversed *and* the served tree matches the checkout the harness is running from.
 
-### Pre-run rig invariants (check these before creating the task)
+### Pre-run rig invariants (check these before starting a remote run)
 
 - **The AC app junction serves the primary checkout**, which must sit at the merged `main` tip
   (#575/#543 — a stale checkout serves stale Lua and the run fails in confusing ways).
@@ -458,7 +382,7 @@ traversed *and* the served tree matches the checkout the harness is running from
 | `setup.load` error "no loopback Lua peer connected" | The trainer app isn't (yet) connected to the sidecar — the harness retries for `setup_timeout`; persistent = app not installed/enabled in CSP |
 | Run FAILS with `recovery cap exceeded at <N>m` | Real stall: the car repeatedly stopped at the same spot. Inspect `hud.png` plus `report.drive.control_trace` (especially the forced `recovery:*` rows); do **not** raise the cap to make it "pass" |
 | `acs.exe` dies mid-drive | The main physics packet watchdog fails that attempt and the CLI automatically runs one fresh full launch (bounded by `--sim-death-retries`). Inspect `report.attempts`: every failed attempt, reason, and control trace is retained even when the final attempt passes. |
-| `OSError: [WinError 448] … untrusted mount point` on the app junction | You are running in Windows **session 0** (an SSH logon), which cannot traverse the user-created junction and has no desktop for AC to render on. Not a harness bug and **not** a reason to relax the provenance preflight — re-run through a `schtasks /IT` task in the console session (see *Driving the harness from off-rig*) |
+| `OSError: [WinError 448] … untrusted mount point` on the app junction | You are running in Windows **session 0** (an SSH logon), which cannot traverse the user-created junction and has no desktop for AC to render on. Not a harness bug and **not** a reason to relax the provenance preflight — re-run through `python -m tools.ac_harness.remote_launcher start` (see *Driving the harness from off-rig*) |
 | Two agents, one rig | **Yield**: a single AC instance cannot serve two autonomous sessions (see the issue-277 investigation). Check for a running `acs.exe`/peer sidecar before launching |
 | Sidecar port already in use | That's usually the Game Point launcher's supervised sidecar — the harness reuses it; don't spawn a second |
 

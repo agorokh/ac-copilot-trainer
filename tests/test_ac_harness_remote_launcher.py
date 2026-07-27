@@ -1,0 +1,308 @@
+"""Off-rig tests for the #697 console-session transport.
+
+The ``schtasks`` and Windows-session calls are rig-only; everything that decides *what* gets run —
+run ids, wrapper text, ``schtasks`` argv, status/sentinel parsing, the bounded wait, and
+cleanup's refusal to delete an unfinished run — is pure and tested here. Each case pins a defect
+measured on the rig during #693/#699 rather than a hypothetical.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+from tools.ac_harness import remote_launcher as rl
+
+# ---------------------------------------------------------------------------
+# Run ids and task names
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["", "a b", "a/b", "a\\b", "..", "a..b", "a:b", "a<b", "a>b"])
+def test_validate_run_component_rejects_path_and_task_metacharacters(bad: str) -> None:
+    with pytest.raises(rl.RemoteLaunchError):
+        rl.validate_run_component("run label", bad)
+
+
+def test_build_run_id_is_unique_per_pid_and_nonce_within_one_second() -> None:
+    """Second resolution alone would let two same-second agents share a run directory."""
+    moment = datetime(2026, 7, 26, 19, 59, 1, tzinfo=UTC)
+    first = rl.build_run_id("alien-529", now=moment, pid=17748, nonce=7359)
+    second = rl.build_run_id("alien-529", now=moment, pid=17749, nonce=7359)
+    third = rl.build_run_id("alien-529", now=moment, pid=17748, nonce=1111)
+    assert first == "alien-529-20260726-195901-17748-7359"
+    assert len({first, second, third}) == 3
+    # The id becomes a path component and a task name, so it must survive its own validator.
+    assert rl.task_name_for(first) == f"{rl.TASK_PREFIX}{first}"
+
+
+def test_build_run_id_rejects_an_unsafe_label() -> None:
+    with pytest.raises(rl.RemoteLaunchError):
+        rl.build_run_id("alien <529>", now=datetime(2026, 7, 26, tzinfo=UTC), pid=1, nonce=2)
+
+
+# ---------------------------------------------------------------------------
+# Wrapper rendering
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "--car=<car>",  # cmd parses < as stdin redirection before the harness ever starts
+        "out>log",
+        "a&b",
+        "a|b",
+        "a^b",
+        "%USERPROFILE%",
+        'say"hi"',
+        "caf\u00e9",  # non-ASCII is mangled to '?' by the ascii-encoded wrapper
+        "line\nbreak",
+    ],
+)
+def test_validate_wrapper_token_rejects_injection_and_redirection(bad: str) -> None:
+    with pytest.raises(rl.RemoteLaunchError):
+        rl.validate_wrapper_token(bad)
+
+
+@pytest.mark.parametrize(
+    "good",
+    [
+        "-m",
+        "tools.ac_harness.auto_alien",
+        "--car",
+        "ks_porsche_911_gt3_r_2016",
+        "--ggv-scale",
+        "1.15",
+        r".scratch\harness-evidence\alien-529",
+        "C:/Users/arsen/Projects/ac-copilot-trainer",
+    ],
+)
+def test_validate_wrapper_token_accepts_real_harness_argv(good: str) -> None:
+    assert rl.validate_wrapper_token(good) == good
+
+
+def test_quote_wrapper_token_only_quotes_spaced_values() -> None:
+    assert rl.quote_wrapper_token("--laps") == "--laps"
+    assert rl.quote_wrapper_token("Realistic BB v3") == '"Realistic BB v3"'
+
+
+def test_render_wrapper_encodes_every_measured_requirement(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    text = rl.render_wrapper(
+        tmp_path, ["-m", "tools.ac_harness.auto_alien", "--laps", "3"], run_dir
+    )
+
+    # Unbuffered both ways: a redirected, buffered Python makes a healthy run look hung.
+    assert "set PYTHONUNBUFFERED=1" in text
+    assert '".venv\\Scripts\\python.exe" -u -m tools.ac_harness.auto_alien --laps 3' in text
+    # The polling SSH session must only ever read files.
+    assert f'> "{run_dir / rl.STDOUT_NAME}"' in text
+    assert f'2> "{run_dir / rl.STDERR_NAME}"' in text
+    # The exit sentinel is what cleanup waits on (schtasks /run is asynchronous).
+    assert f"echo [wrapper] {rl.SENTINEL_TOKEN}%ERRORLEVEL%" in text
+    assert f'cd /d "{tmp_path}"' in text
+    assert text.isascii()
+
+
+def test_render_wrapper_rejects_a_non_ascii_repo_path(tmp_path: Path) -> None:
+    repo = tmp_path / "caf\u00e9"
+    repo.mkdir()
+    with pytest.raises(rl.RemoteLaunchError, match="non-ASCII"):
+        rl.render_wrapper(repo, ["-m", "x"], repo / "run")
+
+
+def test_render_wrapper_quotes_a_spaced_argv_value(tmp_path: Path) -> None:
+    text = rl.render_wrapper(tmp_path, ["-m", "x", "--setup", "Realistic BB v3"], tmp_path / "r")
+    assert '--setup "Realistic BB v3"' in text
+
+
+# ---------------------------------------------------------------------------
+# schtasks argv
+# ---------------------------------------------------------------------------
+
+
+def test_schtasks_create_argv_carries_the_console_session_flags() -> None:
+    argv = rl.schtasks_create_argv(
+        task="ac-harness-x",
+        tr_path="C:/RUN~1.CMD",
+        when=datetime(2026, 7, 26, 20, 4, tzinfo=UTC),
+        run_as="a",
+    )
+    assert argv[:4] == ["schtasks", "/create", "/tn", "ac-harness-x"]
+    # /it is what puts the task in the console session; /f stops the interactive replace prompt
+    # from blocking a non-interactive create.
+    assert "/it" in argv and "/f" in argv
+    assert argv[argv.index("/sc") + 1] == "once"
+    assert argv[argv.index("/st") + 1] == "20:04"
+    assert argv[argv.index("/sd") + 1] == "07/26/2026"
+
+
+def test_schtasks_create_argv_carries_the_day_across_a_midnight_rollover() -> None:
+    """A bare clock time computed after ~23:55 reads as earlier *today* and fails /create."""
+    argv = rl.schtasks_create_argv(
+        task="t",
+        tr_path="p",
+        when=datetime(2026, 7, 26, 23, 58, tzinfo=UTC) + timedelta(minutes=5),
+        run_as="a",
+    )
+    assert argv[argv.index("/st") + 1] == "00:03"
+    assert argv[argv.index("/sd") + 1] == "07/27/2026"
+
+
+def test_schtasks_date_format_is_the_only_one_the_rig_accepts() -> None:
+    """M/d/yyyy, dd/MM/yyyy and yyyy/MM/dd were all rejected with 0x80004005 (#693)."""
+    assert datetime(2026, 7, 6, tzinfo=UTC).strftime(rl.SCHTASKS_DATE_FORMAT) == "07/06/2026"
+
+
+# ---------------------------------------------------------------------------
+# Status / sentinel parsing
+# ---------------------------------------------------------------------------
+
+
+def test_parse_task_status_reads_status_and_last_result() -> None:
+    text = "TaskName:      \\ac-harness-x\nStatus:        Running\nLast Result:   267009\n"
+    assert rl.parse_task_status(text) == {"status": "Running", "last_result": "267009"}
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("", None),
+        ("[wrapper] exit=0\n", 0),
+        ("[wrapper] exit=1\n", 1),
+        ("[wrapper] exit=0\n[wrapper] exit=3\n", 3),
+        ("[wrapper] exit=%ERRORLEVEL%\n", None),
+    ],
+)
+def test_parse_sentinel(text: str, expected: int | None) -> None:
+    assert rl.parse_sentinel(text) == expected
+
+
+def test_remote_run_round_trips_through_json_payload() -> None:
+    run = rl.RemoteRun(
+        run_id="r",
+        task="ac-harness-r",
+        repo_root="/repo",
+        run_dir="/repo/run",
+        argv=["-m", "x"],
+        started_at="2026-07-26T19:59:01",
+    )
+    assert rl.RemoteRun.from_dict(run.to_dict()) == run
+    assert run.directory == Path("/repo/run")
+
+
+# ---------------------------------------------------------------------------
+# Wait / cleanup behaviour
+# ---------------------------------------------------------------------------
+
+
+def _run_handle(tmp_path: Path) -> rl.RemoteRun:
+    return rl.RemoteRun(
+        run_id="r",
+        task="ac-harness-r",
+        repo_root=str(tmp_path),
+        run_dir=str(tmp_path),
+        argv=["-m", "x"],
+        started_at="2026-07-26T19:59:01",
+    )
+
+
+def test_wait_for_run_returns_as_soon_as_the_sentinel_lands(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    polls = iter([{"finished": False}, {"finished": True, "exit_code": 0}])
+    monkeypatch.setattr(rl, "poll_run", lambda run, **kw: next(polls))
+    slept: list[float] = []
+    status = rl.wait_for_run(
+        _run_handle(tmp_path),
+        timeout_s=600,
+        interval_s=30,
+        sleep=slept.append,
+        monotonic=lambda: 0.0,
+    )
+    assert status == {"finished": True, "exit_code": 0}
+    assert slept == [30]
+
+
+def test_wait_for_run_is_bounded_when_the_run_never_starts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An unbounded wait would hang forever with no diagnosis on a task that never launched."""
+    monkeypatch.setattr(rl, "poll_run", lambda run, **kw: {"finished": False})
+    clock = iter([0.0, 0.0, 10.0, 10.0, 10.0])
+    status = rl.wait_for_run(
+        _run_handle(tmp_path),
+        timeout_s=5,
+        interval_s=30,
+        sleep=lambda _s: None,
+        monotonic=lambda: next(clock),
+    )
+    assert status["timed_out"] is True
+
+
+def test_cleanup_run_refuses_to_delete_an_unfinished_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """schtasks /run is asynchronous — an early delete can cancel a start that has not spawned."""
+    monkeypatch.setattr(rl, "poll_run", lambda run, **kw: {"finished": False})
+    calls: list[list[str]] = []
+    monkeypatch.setattr(rl, "_run", lambda argv: calls.append(list(argv)))
+    result = rl.cleanup_run(_run_handle(tmp_path))
+    assert result["deleted"] is False
+    assert calls == []
+
+
+def test_cleanup_run_force_deletes_without_the_sentinel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(rl, "poll_run", lambda run, **kw: {"finished": False})
+    calls: list[list[str]] = []
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(rl, "_run", lambda argv: (calls.append(list(argv)), _Done())[1])
+    assert rl.cleanup_run(_run_handle(tmp_path), force=True)["deleted"] is True
+    assert calls == [["schtasks", "/delete", "/tn", "ac-harness-r", "/f"]]
+
+
+def test_list_stale_tasks_only_claims_this_modules_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Query:
+        returncode = 0
+        stdout = (
+            "TaskName: \\ac-harness-alien-529-1\n"
+            "TaskName: \\OneDrive Reporting Task\n"
+            "TaskName: \\ac-harness-alien-529-2\n"
+        )
+
+    monkeypatch.setattr(rl, "_run", lambda argv: _Query())
+    assert rl.list_stale_tasks() == ["ac-harness-alien-529-1", "ac-harness-alien-529-2"]
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def test_cli_start_without_an_argv_fails_loudly() -> None:
+    assert rl.main(["start", "--label", "alien-529"]) == 3
+
+
+def test_cli_start_strips_the_argv_separator(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def _fake_start(argv, *, label, **kwargs):  # noqa: ANN001, ANN202
+        seen["argv"] = list(argv)
+        seen["label"] = label
+        return rl.RemoteRun(
+            run_id="r", task="t", repo_root="/r", run_dir="/r/run", argv=list(argv), started_at="x"
+        )
+
+    monkeypatch.setattr(rl, "start_run", _fake_start)
+    assert (
+        rl.main(["start", "--label", "alien-529", "--", "-m", "tools.ac_harness.auto_alien"]) == 0
+    )
+    assert seen == {"argv": ["-m", "tools.ac_harness.auto_alien"], "label": "alien-529"}
