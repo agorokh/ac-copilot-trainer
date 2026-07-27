@@ -2,8 +2,10 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-25T16:20:00Z
+last_updated: 2026-07-27T00:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-695-qss-apex-envelope-2026-07-26.md
+  - AcCopilotTrainer/03_Investigations/issue-693-off-rig-session0-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-675-coach-v2-phase-slots-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-677-esp32-polish-2026-07-25.md
   - AcCopilotTrainer/03_Investigations/issue-671-telemetry-tick-hello-gate-2026-07-25.md
@@ -49,6 +51,24 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-26):** PR [#696](https://github.com/agorokh/ac-copilot-trainer/pull/696)
+MERGED [`7702b42`](https://github.com/agorokh/ac-copilot-trainer/commit/7702b42) — #695 QSS apex
+solve made envelope-feasible by construction (the binned `ay_max` step function was costing the
+self-play ladder its top envelope step). Issue #695 CLOSED. Detail:
+[[issue-695-qss-apex-envelope-2026-07-26]].
+
+**Delivered (2026-07-26):** PR [#694](https://github.com/agorokh/ac-copilot-trainer/pull/694)
+MERGED [`49f90f1`](https://github.com/agorokh/ac-copilot-trainer/commit/49f90f1) — #693 off-rig
+launch path (SSH lands in Windows session 0; `schtasks /IT` recipe, live-verified). Issue #693
+CLOSED; codify-as-script follow-up **#697** OPEN. Detail:
+[[issue-693-off-rig-session0-2026-07-26]].
+
+**In flight (2026-07-26):** EPIC [#529](https://github.com/agorokh/ac-copilot-trainer/issues/529) —
+new best Magione flying lap **88.425 s** (was 92.567 s), gap to the 82.7 s TT floor 11.9% → **6.9%**.
+G1 pace / G2 / G1b still NOT met; **G3 is operator-gated** (needs a human driving multiple sessions).
+The untested `ggv_scale` 1.15/1.20 rungs are blocked on a **rig reboot** to clear the #627 per-boot
+launch accumulator — peer `codex`/MCP processes live in session 1, so that is the operator's call.
 
 **Delivered (2026-07-25):** PR [#687](https://github.com/agorokh/ac-copilot-trainer/pull/687)
 MERGED [`13c60e4`](https://github.com/agorokh/ac-copilot-trainer/commit/13c60e43e58cdc34cb24f96dc4d5862b4690ea17)

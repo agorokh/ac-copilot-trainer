@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-07-25
+updated: 2026-07-26
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -13,6 +13,8 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [issue-695-qss-apex-envelope-2026-07-26.md](issue-695-qss-apex-envelope-2026-07-26.md) | **#695 CLOSED** by PR #696 (`7702b42`): the binned `ay_max` is a STEP function of v, so the bare fixed-point apex solve settled on the high branch of a bin edge and fed its own verifier infeasible input (445/3960 samples, worst 1.40x on the live Magione plant → 0, 1.0000). Every *lowering* now re-checked too; provable floor for the exhausted-budget fallback. Cost the #529 ladder its 1.15 rung. |
+| [issue-693-off-rig-session0-2026-07-26.md](issue-693-off-rig-session0-2026-07-26.md) | **#693 CLOSED** by PR #694 (`49f90f1`): SSH lands in Windows **session 0** — cannot traverse the app junction (`WinError 448`) and has no desktop for AC. `schtasks /IT` recipe, live-verified. Measured Windows facts: `/sd` needs `MM/dd/yyyy` (culture pattern rejected), spaced paths need the 8.3 short path, duplicate create without `/f` HANGS on a prompt, `/sc ONDEMAND` unsupported. Script follow-up #697. |
 | [issue-534-car-enrichment-simhub-audio-2026-07-25.md](issue-534-car-enrichment-simhub-audio-2026-07-25.md) | #534 delivery branch: override-first Python car taxonomy enriches the authoritative `session` snapshot; tablet consumes it; supported SimHub SDK plugin exposes class/id/provenance and fails closed on heartbeat loss. Real 217-car audit total (197 metadata/18 override/2 default); plugin builds against installed SimHub 9.11; no profile auto-edits. #117 fan remains gated, pedal decision is stale/dormant due live TT25, and AC/FMOD 5.1 remains the audio default. |
 | [issue-675-coach-v2-phase-slots-2026-07-25.md](issue-675-coach-v2-phase-slots-2026-07-25.md) | **#675 CLOSED** by PR #687 (`13c60e4`): Coach V2 phase-slot RESLOT, `CoachRuntime` brake calibration (alien-line bypass fixed), between-lap `corner_advice`, off-pace reference refusal. Unit + CI verified; rig timeliness optional. |
 | [issue-677-esp32-polish-2026-07-25.md](issue-677-esp32-polish-2026-07-25.md) | **#677 CLOSED** by PR #680 (`e3e427c`): NVS last-screen + SE sort; USB CDC backpressure probe (primed baseline deltas, paced waves); hidden debug screen. Live COM6 `PASS drop=0 ok=48 last_drain_ms=20`. #86 still owns on-glass smoke. |
