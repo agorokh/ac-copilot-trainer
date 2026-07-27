@@ -16,6 +16,17 @@ import pytest
 
 from tools.ac_harness import remote_launcher as rl
 
+
+@pytest.fixture(autouse=True)
+def _isolated_control_root(monkeypatch: pytest.MonkeyPatch, tmp_path_factory) -> None:  # noqa: ANN001
+    """Keep the control plane (sentinels, control files) out of the real user profile.
+
+    `control_dir_for` resolves under LOCALAPPDATA, falling back to the home directory off-Windows —
+    without this every test that marks a run finished would litter the developer's profile.
+    """
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path_factory.mktemp("localappdata")))
+
+
 # ---------------------------------------------------------------------------
 # Run ids and task names
 # ---------------------------------------------------------------------------
@@ -85,19 +96,6 @@ def test_validate_wrapper_token_accepts_real_harness_argv(good: str) -> None:
     assert rl.validate_wrapper_token(good) == good
 
 
-def test_quote_wrapper_token_quotes_every_token_not_just_spaced_ones() -> None:
-    """A space-free token can still carry cmd grouping metacharacters (`(dir)`)."""
-    assert rl.quote_wrapper_token("--laps") == '"--laps"'
-    assert rl.quote_wrapper_token("Realistic BB v3") == '"Realistic BB v3"'
-    assert rl.quote_wrapper_token("(dir)") == '"(dir)"'
-
-
-def test_parenthesised_setup_names_survive_validation_but_are_inert() -> None:
-    """`(`/`)` are legal in AC setup names, so must not fail-close; quoting neutralises them."""
-    assert rl.validate_wrapper_token("Realistic BB (v3)") == "Realistic BB (v3)"
-    assert rl.quote_wrapper_token("Realistic BB (v3)") == '"Realistic BB (v3)"'
-
-
 @pytest.mark.parametrize("bad", ["C:/repo%USERNAME%", 'C:/re"po', "C:/a&b", "C:/a|b", "C:/a>b"])
 def test_validate_wrapper_path_rejects_cmd_specials_that_survive_quoting(bad: str) -> None:
     """`%` expands INSIDE double quotes and `"` breaks out — both are legal ASCII path chars."""
@@ -105,48 +103,11 @@ def test_validate_wrapper_path_rejects_cmd_specials_that_survive_quoting(bad: st
         rl.validate_wrapper_path("repo root", Path(bad))
 
 
-def test_render_wrapper_rejects_a_percent_expanding_repo_path(tmp_path: Path) -> None:
-    with pytest.raises(rl.RemoteLaunchError, match="unsafe"):
-        rl.render_wrapper(Path("C:/repo%PATH%"), ["-m", "x"], tmp_path)
-
-
 def test_harness_repo_root_does_not_import_the_payload_module() -> None:
     """The transport must not drag `auto_drive` (the in-sim payload) in just to resolve a path."""
     source = (Path(rl.__file__)).read_text(encoding="utf-8")
     assert "from tools.ac_harness.auto_drive import" not in source
     assert rl.harness_repo_root().joinpath("tools", "ac_harness").is_dir()
-
-
-def test_render_wrapper_encodes_every_measured_requirement(tmp_path: Path) -> None:
-    run_dir = tmp_path / "run"
-    text = rl.render_wrapper(
-        tmp_path, ["-m", "tools.ac_harness.auto_alien", "--laps", "3"], run_dir
-    )
-
-    # Unbuffered both ways: a redirected, buffered Python makes a healthy run look hung.
-    assert "set PYTHONUNBUFFERED=1" in text
-    assert (
-        '".venv\\Scripts\\python.exe" -u "-m" "tools.ac_harness.auto_alien" "--laps" "3"'
-    ) in text
-    # The polling SSH session must only ever read files.
-    assert f'> "{run_dir / rl.STDOUT_NAME}"' in text
-    assert f'2> "{run_dir / rl.STDERR_NAME}"' in text
-    # The exit sentinel is what cleanup waits on (schtasks /run is asynchronous).
-    assert f"echo [wrapper] {rl.SENTINEL_TOKEN}%ERRORLEVEL%" in text
-    assert f'cd /d "{tmp_path}"' in text
-    assert text.isascii()
-
-
-def test_render_wrapper_rejects_a_non_ascii_repo_path(tmp_path: Path) -> None:
-    repo = tmp_path / "caf\u00e9"
-    repo.mkdir()
-    with pytest.raises(rl.RemoteLaunchError, match="non-ASCII"):
-        rl.render_wrapper(repo, ["-m", "x"], repo / "run")
-
-
-def test_render_wrapper_quotes_a_spaced_argv_value(tmp_path: Path) -> None:
-    text = rl.render_wrapper(tmp_path, ["-m", "x", "--setup", "Realistic BB v3"], tmp_path / "r")
-    assert '"--setup" "Realistic BB v3"' in text
 
 
 # ---------------------------------------------------------------------------
@@ -446,7 +407,9 @@ def test_trailing_backslash_is_rejected(bad: str) -> None:
 
 
 def _seed_finished_run(root: Path, run_id: str) -> None:
-    d = root.joinpath(*rl.RUN_DIR_RELPATH, run_id)
+    """Mark a run finished. The sentinel lives in the CONTROL dir, keyed by run id."""
+    root.joinpath(*rl.RUN_DIR_RELPATH, run_id).mkdir(parents=True, exist_ok=True)
+    d = rl.control_dir_for(run_id)
     d.mkdir(parents=True, exist_ok=True)
     (d / rl.SENTINEL_NAME).write_text("[wrapper] exit=0\n", encoding="utf-8")
 
@@ -664,11 +627,6 @@ def test_substitute_run_placeholders_links_payload_to_transport() -> None:
 def test_substitute_run_placeholders_resolves_run_dir() -> None:
     out = rl.substitute_run_placeholders(["{run_dir}"], run_id="abc", run_dir=Path("/r/abc"))
     assert out == [str(Path("/r/abc"))]
-
-
-def test_wrapper_exports_the_run_id_for_correlation(tmp_path: Path) -> None:
-    text = rl.render_wrapper(tmp_path, ["-m", "x"], tmp_path / "run-7")
-    assert "set AC_HARNESS_REMOTE_RUN_ID=run-7" in text
 
 
 def test_cli_cleanup_exits_non_zero_when_delete_was_refused(
@@ -922,37 +880,6 @@ def test_evaluate_deletion_is_pure_over_a_snapshot(tmp_path: Path) -> None:
     assert blocked is False and "not yet run" in reason
 
 
-def test_wrapper_suppresses_a_ghost_trigger_rerun(tmp_path: Path) -> None:
-    """`/sc once` really fires: a run that finished first would otherwise execute AGAIN."""
-    run_dir = tmp_path / "run"
-    text = rl.render_wrapper(tmp_path, ["-m", "x"], run_dir)
-    sentinel = run_dir / rl.SENTINEL_NAME
-    started = run_dir / rl.STARTED_NAME
-    lines = text.splitlines()
-    guard = next(i for i, ln in enumerate(lines) if ln.startswith("if exist") and "exit /b 0" in ln)
-    payload = next(i for i, ln in enumerate(lines) if ".venv" in ln)
-    # The guard must come BEFORE the redirected python call — `>` truncates, so a ghost run that
-    # reached the payload would destroy the first run's logs.
-    assert guard < payload
-    assert f'if exist "{started}" if exist "{sentinel}" exit /b 0' in text
-
-
-def test_ghost_guard_requires_evidence_the_payload_actually_started(tmp_path: Path) -> None:
-    """A LONE planted exit sentinel must not turn the task into a no-op that reports success."""
-    run_dir = tmp_path / "run"
-    text = rl.render_wrapper(tmp_path, ["-m", "x"], run_dir)
-    started = run_dir / rl.STARTED_NAME
-    # Every early-exit path is conditioned on the start marker as well as the sentinel...
-    for line in text.splitlines():
-        if "exit /b 0" in line:
-            assert f'if exist "{started}"' in line
-    # ...and the marker is written by the wrapper itself, immediately before the payload.
-    lines = text.splitlines()
-    mark = next(i for i, ln in enumerate(lines) if ln.startswith("echo [wrapper] started"))
-    payload = next(i for i, ln in enumerate(lines) if ".venv" in ln)
-    assert mark < payload
-
-
 def test_start_run_refuses_to_reuse_an_existing_run_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -968,3 +895,78 @@ def test_start_run_refuses_to_reuse_an_existing_run_directory(
 def test_ghost_suppression_note_does_not_corrupt_the_exit_sentinel() -> None:
     """The suppression note must not be mistaken for a second exit code."""
     assert rl.parse_sentinel("[wrapper] exit=0\n[wrapper] ghost trigger suppressed\n") == 0
+
+
+# ---------------------------------------------------------------------------
+# Safe transport: no peer-writable script is ever executed (9th daemon round)
+# ---------------------------------------------------------------------------
+
+
+def test_control_plane_lives_outside_the_shared_scratch_tree(tmp_path: Path) -> None:
+    """`.scratch` is per-worktree and already untrusted — control files must not sit there."""
+    control = rl.control_dir_for("abc-1")
+    assert ".scratch" not in str(control)
+    assert control.name == "abc-1"
+    assert rl.sentinel_path_for("abc-1") == control / rl.SENTINEL_NAME
+
+
+def test_execute_control_file_revalidates_argv_from_disk(tmp_path: Path) -> None:
+    """A tampered control file must fail closed, not inject a command."""
+    control = rl.control_dir_for("evil")
+    control.mkdir(parents=True)
+    (control / rl.CONTROL_NAME).write_text(
+        json.dumps({"repo_root": str(tmp_path), "argv": ["-m", "x & calc.exe"]}), encoding="utf-8"
+    )
+    with pytest.raises(rl.RemoteLaunchError, match="unsafe argv token"):
+        rl.execute_control_file("evil")
+
+
+def test_execute_control_file_rejects_a_corrupt_payload(tmp_path: Path) -> None:
+    control = rl.control_dir_for("bad")
+    control.mkdir(parents=True)
+    (control / rl.CONTROL_NAME).write_text("{not json", encoding="utf-8")
+    with pytest.raises(rl.RemoteLaunchError, match="unreadable control file"):
+        rl.execute_control_file("bad")
+
+
+def test_execute_control_file_rejects_an_empty_argv(tmp_path: Path) -> None:
+    control = rl.control_dir_for("empty")
+    control.mkdir(parents=True)
+    (control / rl.CONTROL_NAME).write_text(
+        json.dumps({"repo_root": str(tmp_path), "argv": []}), encoding="utf-8"
+    )
+    with pytest.raises(rl.RemoteLaunchError, match="no argv"):
+        rl.execute_control_file("empty")
+
+
+def test_execute_control_file_spawns_without_a_shell_and_writes_the_sentinel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    control = rl.control_dir_for("ok")
+    control.mkdir(parents=True)
+    (control / rl.CONTROL_NAME).write_text(
+        json.dumps({"repo_root": str(tmp_path), "argv": ["-m", "payload"]}), encoding="utf-8"
+    )
+    seen: dict = {}
+
+    class _Done:
+        returncode = 7
+
+    def _fake_run(argv, **kwargs):  # noqa: ANN001, ANN202
+        seen["argv"] = list(argv)
+        seen["kwargs"] = kwargs
+        return _Done()
+
+    monkeypatch.setattr(rl.subprocess, "run", _fake_run)
+    assert rl.execute_control_file("ok") == 7
+    # The interpreter and cwd are RECOMPUTED, never taken from the control file.
+    assert seen["argv"][0].endswith("python.exe")
+    assert seen["argv"][1:] == ["-u", "-m", "payload"]
+    assert seen["kwargs"]["cwd"] == str(tmp_path)
+    assert "shell" not in seen["kwargs"]  # subprocess defaults to shell=False
+    assert rl.parse_sentinel(rl.sentinel_path_for("ok").read_text(encoding="utf-8")) == 7
+
+
+def test_parse_sentinel_skips_a_poison_trailing_line() -> None:
+    """A garbled or planted final `exit=` must not hide the real one."""
+    assert rl.parse_sentinel("[wrapper] exit=3\n[wrapper] exit=not-an-int\n") == 3

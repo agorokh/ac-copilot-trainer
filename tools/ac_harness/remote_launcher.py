@@ -76,7 +76,6 @@ RUN_DIR_RELPATH = (".scratch", "harness-remote")
 #: Every task this module creates is named ``ac-harness-<run id>`` so a stale one is reapable by
 #: prefix without touching unrelated scheduled tasks.
 TASK_PREFIX = "ac-harness-"
-WRAPPER_NAME = "run.cmd"
 STDOUT_NAME = "stdout.log"
 STDERR_NAME = "stderr.log"
 #: The wrapper appends ``[wrapper] exit=<rc>`` as its last act. Its presence — not the task's
@@ -85,9 +84,13 @@ STDERR_NAME = "stderr.log"
 SENTINEL_NAME = "wrapper.log"
 SENTINEL_TOKEN = "exit="
 RUN_JSON_NAME = "run.json"
-#: Written by the wrapper immediately BEFORE the payload, so it is evidence the payload actually
-#: started — which a bare exit sentinel is not (that file is plantable in the shared scratch tree).
-STARTED_NAME = "run.started"
+#: Control file (the argv Task Scheduler will run) kept OUT of the repo's shared `.scratch` tree —
+#: that tree is checked out per worktree, trivially discoverable, and the module already treats it
+#: as untrusted. This lives beside the rig lock instead. Same-user isolation is not achievable on
+#: this rig (every agent runs as the logged-on account), so this reduces exposure rather than
+#: eliminating it; the real protection is that `_remote_exec` re-validates every token and spawns
+#: without a shell.
+CONTROL_NAME = "control.json"
 
 #: ``/sd`` format measured as the only accepted one on the rig (see the module docstring).
 SCHTASKS_DATE_FORMAT = "%m/%d/%Y"
@@ -98,14 +101,11 @@ DEFAULT_START_DELAY_MINUTES = 5
 
 #: Run-id / task-name alphabet: safe as a Windows path component *and* a Task Scheduler name.
 _RUN_COMPONENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-#: Tokens interpolated into the generated ``.cmd``. Excludes the cmd metacharacters that survive
-#: quoting (``%`` expands even inside double quotes) and the quote character itself (it would close
-#: the quoting :func:`quote_wrapper_token` adds), plus everything outside printable ASCII.
-#:
-#: ``(`` and ``)`` ARE allowed even though they are cmd grouping metacharacters: AC setup names
-#: legitimately contain them (``auto_drive._SETUP_NAME_RE``), so rejecting them would fail-close a
-#: valid ``--setup``. They are made inert by :func:`quote_wrapper_token`, which quotes **every**
-#: token — inside double quotes ``(``/``)``/``!``/``^`` are literal.
+#: Argv tokens accepted for the payload. The transport no longer builds a shell string — the
+#: payload is spawned with ``shell=False`` — so this is defence in depth rather than quoting: it
+#: keeps a tampered control file from smuggling anything exotic past
+#: :func:`execute_control_file`'s re-validation. ``(``/``)`` stay allowed because AC setup names
+#: legitimately contain them (``auto_drive._SETUP_NAME_RE``).
 _WRAPPER_TOKEN_RE = re.compile(r"^[ !#$()*+,\-./0-9:;=?@A-Z\[\]_a-z{}~\\]+$")
 #: Characters that must never appear in a path interpolated into the wrapper. ``%`` expands inside
 #: double quotes, and ``"`` breaks out of them — both are legal ASCII in a Windows path, so an
@@ -114,6 +114,20 @@ _WRAPPER_TOKEN_RE = re.compile(r"^[ !#$()*+,\-./0-9:;=?@A-Z\[\]_a-z{}~\\]+$")
 _WRAPPER_PATH_FORBIDDEN = set('%"<>&|^\r\n\t')
 
 _INVALID_SESSION = 0xFFFFFFFF
+
+
+def control_dir_for(run_id: str, *, local_app_data: str | Path | None = None) -> Path:
+    """Where a run's control file and exit sentinel live — **outside** the repo's scratch tree.
+
+    ``.scratch`` is checked out per worktree, trivially discoverable, and this module already treats
+    it as untrusted (forged ``run.json``, planted sentinels). Keeping the *control plane* there is
+    what let a peer replace the scheduled command outright. Same-user isolation is not achievable on
+    this rig — every agent runs as the logged-on account — so this reduces exposure rather than
+    eliminating it; the hard part is done by :func:`execute_control_file`, which re-validates every
+    token and spawns without a shell.
+    """
+    base = default_rig_session_lock_path(local_app_data=local_app_data).parent
+    return base / "remote" / validate_run_component("run id", run_id)
 
 
 class RemoteLaunchError(RuntimeError):
@@ -179,13 +193,12 @@ def build_run_id(
 
 
 def _reject_trailing_backslash(kind: str, text: str) -> None:
-    """Reject a trailing ``\\`` — it escapes the closing quote in the Windows CRT argv parser.
+    """Reject a trailing ``\\``.
 
-    :func:`quote_wrapper_token` wraps every token as ``"<token>"``. The CRT parser that builds
-    ``argv`` for ``python.exe`` treats ``\\"`` as an *escaped quote*, so a token ending in a
-    backslash does not close its quoted region: the argument swallows what follows and the harness
-    receives something other than what was validated. Windows paths and AC ids never need a trailing
-    separator, so refusing is cheaper than a doubling routine and cannot silently mis-quote.
+    Kept after the move off a generated ``.cmd``: the Windows CRT argv parser still treats ``\\"``
+    as an escaped quote wherever a value is later re-quoted (``schtasks /tr``, any downstream tool),
+    and Windows paths and AC ids never need a trailing separator — so refusing costs nothing and
+    removes a whole class of mis-parse.
     """
     if text.endswith("\\"):
         raise RemoteLaunchError(
@@ -205,19 +218,6 @@ def validate_wrapper_token(token: str) -> str:
             "cmd metacharacters (& | < > ^ %) may reach the generated .cmd"
         )
     return token
-
-
-def quote_wrapper_token(token: str) -> str:
-    """Quote a validated token for ``cmd.exe``.
-
-    **Every** token is quoted, not just the ones containing spaces. A space-free token can still
-    carry cmd grouping metacharacters — ``(dir)`` would change how Task Scheduler parses the
-    generated line rather than being passed through to Python. Inside double quotes those become
-    literal, and the Windows CRT strips the quotes before ``argv`` reaches the interpreter, so the
-    harness sees exactly the token that was validated. The quote character itself is excluded by
-    :data:`_WRAPPER_TOKEN_RE`, so this cannot be closed early.
-    """
-    return f'"{token}"'
 
 
 #: Placeholders a caller may use in the harness argv; substituted before token validation so the
@@ -241,51 +241,6 @@ def substitute_run_placeholders(argv: Sequence[str], *, run_id: str, run_dir: Pa
         token.replace(RUN_ID_PLACEHOLDER, run_id).replace(RUN_DIR_PLACEHOLDER, str(run_dir))
         for token in argv
     ]
-
-
-def render_wrapper(repo_root: Path, argv: Sequence[str], run_dir: Path) -> str:
-    """Render the ``.cmd`` Task Scheduler executes in the console session.
-
-    ``argv`` is the harness command *without* the interpreter: ``["-m", "tools.ac_harness.…", …]``.
-    The wrapper redirects its own streams so the polling SSH session only ever *reads* files, and
-    appends the exit sentinel as its last act.
-    """
-    validate_wrapper_path("repo root", repo_root)
-    validate_wrapper_path("run directory", run_dir)
-    tokens = " ".join(quote_wrapper_token(validate_wrapper_token(a)) for a in argv)
-    stdout_path = run_dir / STDOUT_NAME
-    stderr_path = run_dir / STDERR_NAME
-    sentinel_path = run_dir / SENTINEL_NAME
-    started_path = run_dir / STARTED_NAME
-    return (
-        "@echo off\r\n"
-        f'cd /d "{repo_root}"\r\n'
-        # `/run` starts this on demand, but the `/sc once` trigger `/create` insists on is REAL and
-        # still fires at its scheduled time. A run that finished before that moment would execute a
-        # SECOND time — `>` truncates, so the ghost silently destroys the first run's stdout/stderr
-        # and overwrites its in-sim evidence while the agent is polling or disconnected. The
-        # sentinel only exists once the wrapper has completed, so it is the exact idempotency key.
-        # (A trigger that fires *during* the first run is already suppressed by Task Scheduler's
-        # default "do not start a new instance" policy; this covers the after-completion case.)
-        # Suppression requires BOTH markers. Keying only on the exit sentinel would let a peer
-        # plant `[wrapper] exit=0` between /run and the wrapper body and turn the whole task into a
-        # no-op that still reports Ready + Last Result 0 — i.e. `start --wait` returning success
-        # without the harness ever launching. `run.started` is written by the wrapper itself just
-        # before the payload, so requiring it means suppression rests on evidence the payload ran
-        # at least once. A lone planted sentinel no longer stops execution, and the real run
-        # appends its own `exit=` afterwards, which is the one parse_sentinel reads.
-        f'if exist "{started_path}" if exist "{sentinel_path}" '
-        f'echo [wrapper] ghost trigger suppressed>>"{sentinel_path}"\r\n'
-        f'if exist "{started_path}" if exist "{sentinel_path}" exit /b 0\r\n'
-        f'echo [wrapper] started>"{started_path}"\r\n'
-        "rem Redirected Python is fully buffered; without this the poll surface looks hung for\r\n"
-        "rem minutes on a healthy run.\r\n"
-        "set PYTHONUNBUFFERED=1\r\n"
-        # Correlation handle for anything that reads the environment rather than argv.
-        f"set AC_HARNESS_REMOTE_RUN_ID={run_dir.name}\r\n"
-        f'".venv\\Scripts\\python.exe" -u {tokens} > "{stdout_path}" 2> "{stderr_path}"\r\n'
-        f'echo [wrapper] {SENTINEL_TOKEN}%ERRORLEVEL% >> "{sentinel_path}"\r\n'
-    )
 
 
 def task_name_for(run_id: str) -> str:
@@ -348,7 +303,10 @@ def parse_sentinel(text: str) -> int | None:
             try:
                 return int(tail)
             except ValueError:
-                return None
+                # Keep scanning older lines. Returning None here let a single garbled (or planted)
+                # trailing `exit=` hide a real one, so wait/cleanup would believe a finished run
+                # never ended — blocking non-force cleanup and reap until timeout.
+                continue
     return None
 
 
@@ -465,6 +423,50 @@ def short_path(path: Path) -> str:
     return resolved
 
 
+def execute_control_file(run_id: str) -> int:
+    """Run a prepared payload in the console session. Invoked by ``_remote_exec`` via ``/tr``.
+
+    Everything load-bearing is **recomputed** from the validated run id rather than trusted from the
+    control file: the interpreter, the working directory, the log paths and the sentinel path. Only
+    the argv and the repo root come from disk, and both are re-validated here — so even a tampered
+    control file cannot inject a command, only fail closed. The payload is spawned with
+    ``shell=False``.
+    """
+    requested = validate_run_component("run id", run_id)
+    control = control_dir_for(requested) / CONTROL_NAME
+    try:
+        payload = json.loads(control.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise RemoteLaunchError(f"unreadable control file {control}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RemoteLaunchError(f"control file {control} is not an object")
+    repo_root = validate_wrapper_path("repo root", Path(str(payload.get("repo_root", ""))))
+    argv = [validate_wrapper_token(str(t)) for t in payload.get("argv", [])]
+    if not argv:
+        raise RemoteLaunchError(f"control file {control} carries no argv")
+
+    run_dir = repo_root.joinpath(*RUN_DIR_RELPATH, requested)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    interpreter = repo_root / ".venv" / "Scripts" / "python.exe"
+    env = dict(os.environ, PYTHONUNBUFFERED="1", AC_HARNESS_REMOTE_RUN_ID=requested)
+    with (
+        (run_dir / STDOUT_NAME).open("w", encoding="utf-8", errors="replace") as out,
+        (run_dir / STDERR_NAME).open("w", encoding="utf-8", errors="replace") as err,
+    ):
+        completed = subprocess.run(  # noqa: S603 - validated argv, shell=False, fixed interpreter
+            [str(interpreter), "-u", *argv],
+            cwd=str(repo_root),
+            stdout=out,
+            stderr=err,
+            env=env,
+            check=False,
+        )
+    sentinel = control_dir_for(requested) / SENTINEL_NAME
+    with sentinel.open("a", encoding="utf-8") as fh:
+        fh.write(f"[wrapper] {SENTINEL_TOKEN}{completed.returncode}\n")
+    return completed.returncode
+
+
 def _run(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603 - fixed argv, no shell
         list(argv), capture_output=True, text=True, check=False
@@ -498,17 +500,28 @@ def start_run(
     run_dir.mkdir(parents=True, exist_ok=False)
 
     resolved_argv = substitute_run_placeholders(argv, run_id=run_id, run_dir=run_dir)
-    wrapper = run_dir / WRAPPER_NAME
-    wrapper.write_text(render_wrapper(root, resolved_argv, run_dir), encoding="ascii", newline="")
+    validate_wrapper_path("repo root", root)
+    for token in resolved_argv:
+        validate_wrapper_token(token)
+    control = control_dir_for(run_id)
+    control.mkdir(parents=True, exist_ok=True)
+    (control / CONTROL_NAME).write_text(
+        json.dumps({"repo_root": str(root), "argv": list(resolved_argv)}, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
     task = task_name_for(run_id)
     account = run_as or os.environ.get("USERNAME") or ""
     if not account:
         raise RemoteLaunchError("cannot resolve the logged-on account for /ru (USERNAME unset)")
     when = moment + timedelta(minutes=start_delay_minutes)
-    created = _run(
-        schtasks_create_argv(task=task, tr_path=short_path(wrapper), when=when, run_as=account)
-    )
+    # `/tr` runs the repo's own interpreter against a version-controlled shim — NOT a generated
+    # script inside the agent-writable scratch tree. Executing that file was command injection: a
+    # peer could replace it between /create and first execution and have Task Scheduler run
+    # anything in the console session as the logged-on user.
+    shim = Path(__file__).resolve().with_name("_remote_exec.py")
+    tr_path = f"{short_path(root / '.venv' / 'Scripts' / 'python.exe')} {short_path(shim)} {run_id}"
+    created = _run(schtasks_create_argv(task=task, tr_path=tr_path, when=when, run_as=account))
     if created.returncode != 0:
         raise RemoteLaunchError(
             f"schtasks /create failed ({created.returncode}): {created.stdout}{created.stderr}"
@@ -519,6 +532,11 @@ def start_run(
         raise RemoteLaunchError(
             f"schtasks /run failed ({started.returncode}): {started.stdout}{started.stderr}"
         )
+    # Disable the trigger now that the on-demand start has happened. `/sc once` is a REAL trigger:
+    # left armed, it fires at its scheduled time and executes the payload a second time if the run
+    # already finished. Disabling removes that class outright — no filesystem marker can do it,
+    # because every marker lives somewhere a peer can write. A running instance is unaffected.
+    _run(["schtasks", "/change", "/tn", task, "/disable"])
 
     run = RemoteRun(
         run_id=run_id,
@@ -778,9 +796,18 @@ SCHED_S_TASK_HAS_NOT_YET_RUN = 267011
 SCHED_S_TASK_IS_CURRENTLY_RUNNING = 267009
 
 
+def sentinel_path_for(run_id: str) -> Path:
+    """Exit-sentinel path for a run id, outside the shared scratch tree."""
+    return control_dir_for(run_id) / SENTINEL_NAME
+
+
 def _sentinel_exit_code(run_dir: Path) -> int | None:
-    """The wrapper's recorded exit code, or ``None`` when the run has not finished."""
-    sentinel = run_dir / SENTINEL_NAME
+    """The recorded exit code for a run, or ``None`` when it has not finished.
+
+    ``run_dir`` is the *log* directory; the sentinel itself is keyed by its run id and lives in the
+    control directory, so a peer writing into ``.scratch`` cannot fabricate completion.
+    """
+    sentinel = sentinel_path_for(run_dir.name)
     try:
         if not sentinel.is_file():
             return None

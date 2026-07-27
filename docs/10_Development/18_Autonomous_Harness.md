@@ -315,9 +315,10 @@ python -m tools.ac_harness.remote_launcher start --label alien-529-911-magione -
 ```
 
 It prints a JSON handle (`run_id`, `task`, `run_dir`) and returns immediately. Transport logs live
-under `.scratch/harness-remote/<run id>/` (`run.cmd`, `stdout.log`, `stderr.log`, `wrapper.log`,
-`run.json`) — deliberately *beside* the harness's own `--evidence-dir` tree, which the harness keeps
-owning.
+under `.scratch/harness-remote/<run id>/` (`stdout.log`, `stderr.log`, `run.json`) — deliberately
+*beside* the harness's own `--evidence-dir` tree, which the harness keeps owning. The control file
+and exit sentinel are **not** there; they live under `%LOCALAPPDATA%\AC Copilot Trainer\Harness\
+remote\<run id>\`.
 
 Then live in `poll` (read-only — it never touches AC and never deletes the task), and reap at the
 end:
@@ -344,12 +345,20 @@ Behaviours worth knowing before you debug something:
   asynchronous: deleting the task definition early can cancel a start that has not spawned yet, and
   it removes the only `Status` handle while the run is still launching. The exit sentinel
   (`[wrapper] exit=<rc>` in `wrapper.log`), not `Status: Ready`, is what says a run finished.
-- **The `/sc once` trigger really fires.** `/run` starts the task on demand, but `/create` insists
-  on a start time and Task Scheduler honours it. A run that *finished* before that moment would be
-  executed a second time — and `>` truncates, so the ghost run would silently destroy the first
-  run's `stdout.log`/`stderr.log` and overwrite its in-sim evidence. The wrapper therefore exits
-  immediately when the exit sentinel already exists. (Earlier runbook text claimed "the trigger
-  never fires"; that only held for runs longer than the delay.)
+- **The `/sc once` trigger really fires** — earlier runbook text claimed it never does, which only
+  held for runs *longer* than the start delay. `/create` insists on a start time and Task Scheduler
+  honours it, so a run that finished first would be executed a second time. The trigger is therefore
+  **disabled immediately after `/run`** succeeds; a running instance is unaffected. This is done in
+  the scheduler rather than with a marker file, because every marker lives somewhere a peer agent
+  can write.
+- **Nothing peer-writable is ever executed.** `/tr` points at the repo's own interpreter running the
+  version-controlled `tools/ac_harness/_remote_exec.py`, not at a generated script in `.scratch`.
+  That shim reads a control file, **re-validates every argv token**, recomputes the interpreter, cwd,
+  log paths and sentinel from the validated run id, and spawns with `shell=False`. The control file
+  and exit sentinel live beside the rig lock under `%LOCALAPPDATA%`, not in the shared scratch tree.
+  *Residual, stated plainly:* every agent on this rig runs as the same Windows account, so no
+  filesystem location is beyond a peer's reach — this removes command **injection** and makes
+  tampering fail closed, it does not create isolation.
 - **Task names are per-run** (`ac-harness-<label>-<stamp>-<pid>-<nonce>`). The threat model is two
   agents on the one physical rig: a fixed name lets each clobber the other's registration.
 - **`wait` is bounded.** If the run never starts, the sentinel never appears; an unbounded wait
