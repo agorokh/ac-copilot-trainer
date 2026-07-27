@@ -59,6 +59,7 @@ import math
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -112,6 +113,16 @@ _WRAPPER_TOKEN_RE = re.compile(r"^[ !#$()*+,\-./0-9:;=?@A-Z\[\]_a-z{}~\\]+$")
 #: ``isascii()`` check alone is not enough to keep ``cd /d``, the redirects, and the sentinel append
 #: pointing where they were meant to.
 _WRAPPER_PATH_FORBIDDEN = set('%"<>&|^\r\n\t')
+
+#: The ONLY payload shape this transport will run. Token-level validation is not enough: argv
+#: reaches the interpreter as a JSON string list, so no shell quoting is needed and `-c` plus a
+#: bare expression (`;`, `()`, `+`, `chr(...)`) — or a plain script path — would be console-session
+#: RCE from a tampered control file. The transport exists to run harness modules; anything else
+#: fails closed.
+_ALLOWED_PAYLOAD_MODULE_RE = re.compile(r"^tools\.ac_harness\.[A-Za-z0-9_]+$")
+#: Exit code recorded when the console-session shim itself fails before/around the payload, so a
+#: broken run reports a real failure instead of leaving poll/wait hanging until their deadline.
+EXEC_FAILURE_RC = 253
 
 _INVALID_SESSION = 0xFFFFFFFF
 
@@ -205,6 +216,27 @@ def _reject_trailing_backslash(kind: str, text: str) -> None:
             f"unsafe {kind} {text!r}: a trailing backslash escapes the closing quote in the "
             "Windows CRT argv parser, so the quoted region does not end where it appears to"
         )
+
+
+def validate_payload_argv(argv: Sequence[str]) -> list[str]:
+    """Accept only ``-m <allowlisted harness module> [args…]``.
+
+    Rejects ``-c``, ``-`` (stdin), ``runpy``-style indirection and any first token that looks like a
+    filesystem path — each of which turns a tampered control file back into arbitrary code in the
+    console session, which is the whole thing this transport exists to prevent.
+    """
+    tokens = [validate_wrapper_token(str(t)) for t in argv]
+    if len(tokens) < 2 or tokens[0] != "-m":
+        raise RemoteLaunchError(
+            f"payload argv must start with '-m <module>' (got {tokens[:2]!r}) — the transport runs "
+            "harness modules, never -c, stdin, or a script path"
+        )
+    if not _ALLOWED_PAYLOAD_MODULE_RE.match(tokens[1]):
+        raise RemoteLaunchError(
+            f"module {tokens[1]!r} is not an allowlisted harness module "
+            "(expected tools.ac_harness.<name>)"
+        )
+    return tokens
 
 
 def validate_wrapper_token(token: str) -> str:
@@ -433,6 +465,28 @@ def execute_control_file(run_id: str) -> int:
     ``shell=False``.
     """
     requested = validate_run_component("run id", run_id)
+    try:
+        return _execute_validated(requested)
+    except BaseException as exc:
+        # ALWAYS leave a sentinel. Without one, an unreadable control file, a rejected argv or a
+        # missing interpreter left poll/wait spinning to their deadline and cleanup/reap refusing
+        # to delete — the "unbounded wait with no diagnosis" the bounded wait exists to avoid.
+        _record_exec_failure(requested, exc)
+        raise
+
+
+def _record_exec_failure(run_id: str, exc: BaseException) -> None:
+    sentinel = sentinel_path_for(run_id)
+    try:
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        with sentinel.open("a", encoding="utf-8") as fh:
+            fh.write(f"[wrapper] {type(exc).__name__}: {exc}\n")
+            fh.write(f"[wrapper] {SENTINEL_TOKEN}{EXEC_FAILURE_RC}\n")
+    except OSError:
+        pass  # nothing further we can do; the caller still raises
+
+
+def _execute_validated(requested: str) -> int:
     control = control_dir_for(requested) / CONTROL_NAME
     try:
         payload = json.loads(control.read_text(encoding="utf-8"))
@@ -441,9 +495,7 @@ def execute_control_file(run_id: str) -> int:
     if not isinstance(payload, dict):
         raise RemoteLaunchError(f"control file {control} is not an object")
     repo_root = validate_wrapper_path("repo root", Path(str(payload.get("repo_root", ""))))
-    argv = [validate_wrapper_token(str(t)) for t in payload.get("argv", [])]
-    if not argv:
-        raise RemoteLaunchError(f"control file {control} carries no argv")
+    argv = validate_payload_argv(payload.get("argv", []))
 
     run_dir = repo_root.joinpath(*RUN_DIR_RELPATH, requested)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -536,7 +588,16 @@ def start_run(
     # left armed, it fires at its scheduled time and executes the payload a second time if the run
     # already finished. Disabling removes that class outright — no filesystem marker can do it,
     # because every marker lives somewhere a peer can write. A running instance is unaffected.
-    _run(["schtasks", "/change", "/tn", task, "/disable"])
+    disabled = _run(["schtasks", "/change", "/tn", task, "/disable"])
+    if disabled.returncode != 0:
+        # Proceeding here would hand back a "successful" start with the `/sc once` trigger still
+        # armed — i.e. a second AC session and truncated logs ~start_delay later. Fail closed.
+        _run(["schtasks", "/delete", "/tn", task, "/f"])
+        raise RemoteLaunchError(
+            f"schtasks /change /disable failed ({disabled.returncode}): "
+            f"{(disabled.stderr or disabled.stdout or '').strip()[:200]} — refusing to start with "
+            "the one-shot trigger still armed"
+        )
 
     run = RemoteRun(
         run_id=run_id,
@@ -637,7 +698,7 @@ def poll_run(run: RemoteRun, *, tail: int = 30) -> dict[str, Any]:
     queried = _run(["schtasks", "/query", "/tn", run.task, "/fo", "list", "/v"])
     # Single sentinel reader: a permission/sharing error on wrapper.log must not abort a poll (and
     # therefore cleanup, which polls first) with a traceback.
-    exit_code = _sentinel_exit_code(run.directory)
+    exit_code = _sentinel_exit_code(run.run_id)
     fields = parse_task_status(queried.stdout)
     # Same snapshot the fields below are reported from — a second query would both double the
     # subprocess cost per poll and let the reported status disagree with the verdict beside it.
@@ -645,7 +706,7 @@ def poll_run(run: RemoteRun, *, tail: int = 30) -> dict[str, Any]:
         sentinel_exit_code=exit_code,
         query_rc=queried.returncode,
         fields=fields,
-        run_dir=run.directory,
+        run_id=run.run_id,
     )
     acs = _run(["tasklist", "/fi", "imagename eq acs.exe", "/nh"])
     return {
@@ -705,9 +766,21 @@ def wait_for_run(
         sleep(min(interval_s, max(0.0, deadline - monotonic())))
 
 
+def _discard_control_dir(run_id: str) -> None:
+    """Remove a run's control directory once its task is gone.
+
+    Run ids are unique per attempt, so without this every single run permanently leaks a folder
+    (control file + sentinel) into the user's profile.
+    """
+    try:
+        shutil.rmtree(control_dir_for(run_id), ignore_errors=True)
+    except RemoteLaunchError:
+        pass  # unvalidatable id — nothing of ours to remove
+
+
 def _await_deletion_verdict(
     name: str,
-    run_dir: Path,
+    run_id: str,
     *,
     attempts: int = 4,
     delay_s: float = 2.0,
@@ -721,7 +794,7 @@ def _await_deletion_verdict(
     """
     reason = ""
     for attempt in range(attempts):
-        ok, reason = task_deletion_verdict(name, run_dir)
+        ok, reason = task_deletion_verdict(name, run_id)
         if ok:
             return True, ""
         if attempt < attempts - 1:
@@ -751,10 +824,12 @@ def cleanup_run(run: RemoteRun, *, force: bool = False) -> dict[str, Any]:
         # reap despite the docs claiming the reverse: wrapper.log lives in the same agent-writable
         # tree run.json does, so a planted sentinel while the task was still Running would delete a
         # live /IT task and kill its console-session process tree. One shared rule now.
-        ok, reason = _await_deletion_verdict(run.task, run.directory)
+        ok, reason = _await_deletion_verdict(run.task, run.run_id)
         if not ok:
             return {"deleted": False, "reason": reason, **status}
     deleted = _run(["schtasks", "/delete", "/tn", run.task, "/f"])
+    if deleted.returncode == 0:
+        _discard_control_dir(run.run_id)
     return {"deleted": deleted.returncode == 0, "delete_rc": deleted.returncode, **status}
 
 
@@ -801,13 +876,15 @@ def sentinel_path_for(run_id: str) -> Path:
     return control_dir_for(run_id) / SENTINEL_NAME
 
 
-def _sentinel_exit_code(run_dir: Path) -> int | None:
+def _sentinel_exit_code(run_id: str) -> int | None:
     """The recorded exit code for a run, or ``None`` when it has not finished.
 
-    ``run_dir`` is the *log* directory; the sentinel itself is keyed by its run id and lives in the
-    control directory, so a peer writing into ``.scratch`` cannot fabricate completion.
+    Keyed by **run id**, not by a directory: the sentinel lives in the control directory, so taking
+    a log path here was structurally misleading — it made a global status check look local, and
+    forced :func:`reap_tasks` to synthesise a fake path inside its own checkout to reap a peer's
+    task.
     """
-    sentinel = sentinel_path_for(run_dir.name)
+    sentinel = sentinel_path_for(run_id)
     try:
         if not sentinel.is_file():
             return None
@@ -821,7 +898,7 @@ def _sentinel_exit_code(run_dir: Path) -> int | None:
 
 
 def evaluate_deletion(
-    *, sentinel_exit_code: int | None, query_rc: int, fields: dict[str, str], run_dir: Path
+    *, sentinel_exit_code: int | None, query_rc: int, fields: dict[str, str], run_id: str
 ) -> tuple[bool, str]:
     """The deletion rule as a **pure** function over one already-taken snapshot.
 
@@ -836,7 +913,7 @@ def evaluate_deletion(
         # file this check never reads — the exact class of misleading diagnostic being fixed here.
         return (
             False,
-            f"no exit sentinel at {sentinel_path_for(run_dir.name)} — may still be launching",
+            f"no exit sentinel at {sentinel_path_for(run_id)} — may still be launching",
         )
     if query_rc != 0:
         return False, f"status query failed (rc={query_rc}) — failing closed"
@@ -855,7 +932,7 @@ def evaluate_deletion(
     return True, ""
 
 
-def task_deletion_verdict(name: str, run_dir: Path) -> tuple[bool, str]:
+def task_deletion_verdict(name: str, run_id: str) -> tuple[bool, str]:
     """May this task be deleted? Returns ``(ok, reason_when_not)``. **Fails closed.**
 
     Both :func:`cleanup_run` and :func:`reap_tasks` go through here so there is exactly one rule,
@@ -870,33 +947,36 @@ def task_deletion_verdict(name: str, run_dir: Path) -> tuple[bool, str]:
        completion, so a sentinel planted in the writable scratch tree during the pre-spawn window
        would otherwise authorise deleting a peer's task before it ever ran.
     """
-    exit_code = _sentinel_exit_code(run_dir)
+    exit_code = _sentinel_exit_code(run_id)
     if exit_code is None:
         # Short-circuit: no sentinel is already dispositive, so skip the subprocess entirely. This
         # is the common case while a run is in flight, and reap calls it once per registered task.
-        return evaluate_deletion(sentinel_exit_code=None, query_rc=0, fields={}, run_dir=run_dir)
+        return evaluate_deletion(sentinel_exit_code=None, query_rc=0, fields={}, run_id=run_id)
     queried = _run(["schtasks", "/query", "/tn", name, "/fo", "list", "/v"])
     return evaluate_deletion(
         sentinel_exit_code=exit_code,
         query_rc=queried.returncode,
         fields=parse_task_status(queried.stdout),
-        run_dir=run_dir,
+        run_id=run_id,
     )
 
 
-def _run_dir_for_task(name: str, root: Path) -> Path | None:
-    """Canonical run directory for a task name, or ``None`` when the name is not ours."""
+def _run_id_for_task(name: str) -> str | None:
+    """Run id behind a task name, or ``None`` when the name is not ours.
+
+    Returns the id rather than a directory: reaping a peer's task must not depend on any path
+    inside *this* checkout.
+    """
     if not name.startswith(TASK_PREFIX):
         return None
     run_id = name[len(TASK_PREFIX) :]
     try:
-        validate_run_component("run id", run_id)
+        return validate_run_component("run id", run_id)
     except RemoteLaunchError:
         return None
-    return root.joinpath(*RUN_DIR_RELPATH, run_id)
 
 
-def reap_tasks(*, repo_root: Path | None = None, force: bool = False) -> dict[str, Any]:
+def reap_tasks(*, force: bool = False) -> dict[str, Any]:
     """Delete still-registered tasks this module owns, using :func:`cleanup_run`'s own rule.
 
     ``list`` deliberately only reports; this is the command that actually removes them. A session
@@ -919,19 +999,20 @@ def reap_tasks(*, repo_root: Path | None = None, force: bool = False) -> dict[st
 
     ``force`` overrides both, and every skip is reported rather than silently swallowed.
     """
-    root = (repo_root or harness_repo_root()).resolve()
     results: dict[str, Any] = {}
     for name in list_stale_tasks():
         if not force:
-            run_dir = _run_dir_for_task(name, root)
-            if run_dir is None:
+            run_id = _run_id_for_task(name)
+            if run_id is None:
                 results[name] = {"deleted": False, "skipped": "task name is not a valid run id"}
                 continue
-            ok, reason = task_deletion_verdict(name, run_dir)
+            ok, reason = task_deletion_verdict(name, run_id)
             if not ok:
                 results[name] = {"deleted": False, "skipped": reason}
                 continue
         deleted = _run(["schtasks", "/delete", "/tn", name, "/f"])
+        if deleted.returncode == 0 and name.startswith(TASK_PREFIX):
+            _discard_control_dir(name[len(TASK_PREFIX) :])
         results[name] = {"deleted": deleted.returncode == 0, "rc": deleted.returncode}
     return {"reaped": results, "remaining": list_stale_tasks()}
 
