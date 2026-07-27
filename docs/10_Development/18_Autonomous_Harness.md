@@ -313,8 +313,11 @@ interpolated into the file.
 $repo   = "$env:USERPROFILE\Projects\ac-copilot-trainer"   # or wherever this clone lives
 $car    = "ks_porsche_911_gt3_r_2016"
 $track  = "magione"
-# Unique per run, and Windows-path/task-name safe (no ':' from the timestamp).
-$runId  = "alien-$car-$track-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+# Unique per run, and Windows-path/task-name safe (no ':' from the timestamp). The PID+random
+# suffix matters: the threat model here is two agents on ONE rig, and a bare second-resolution
+# stamp lets same-second starts share $task and $ev, so each would overwrite the other's wrapper
+# and task registration.
+$runId  = "alien-$car-$track-" + (Get-Date -Format "yyyyMMdd-HHmmss") + "-$PID-$(Get-Random -Maximum 9999)"
 $task   = "ac-harness-$runId"                              # never a shared fixed name
 $rel    = ".scratch\harness-evidence\$runId"
 $ev     = "$repo\$rel"
@@ -324,7 +327,10 @@ New-Item -ItemType Directory -Force -Path $ev | Out-Null
 Set-Content -LiteralPath "$ev\run.cmd" -Encoding ascii -Value @"
 @echo off
 cd /d "$repo"
-".venv\Scripts\python.exe" -m tools.ac_harness.auto_alien --car $car --track $track ^
+rem Unbuffered: redirected Python is fully buffered, so stdout.log stays empty for minutes and the
+rem SSH-side tail in step 3 looks hung when the run is perfectly healthy.
+set PYTHONUNBUFFERED=1
+".venv\Scripts\python.exe" -u -m tools.ac_harness.auto_alien --car $car --track $track ^
     --laps 3 --iterations 2 --evidence-dir "$rel" > "$ev\stdout.log" 2> "$ev\stderr.log"
 echo [wrapper] exit=%ERRORLEVEL% >> "$ev\wrapper.log"
 "@
@@ -336,6 +342,9 @@ echo [wrapper] exit=%ERRORLEVEL% >> "$ev\wrapper.log"
 #    overnight runs this path exists for. Derive /st and /sd from the SAME DateTime so a rollover
 #    carries the correct day. The trigger never fires anyway; /run starts the task on demand.
 $when = (Get-Date).AddMinutes(5)
+# /f is kept deliberately. The unique run id above is what prevents a peer agent's task being
+# clobbered; /f is what stops schtasks blocking on its interactive "replace it?" prompt, which was
+# measured on the rig to hang a non-interactive create indefinitely rather than return an error.
 schtasks /create /tn $task /tr "$ev\run.cmd" /sc once `
     /st $when.ToString('HH:mm') /sd $when.ToString('MM/dd/yyyy') `
     /ru $env:USERNAME /it /f
