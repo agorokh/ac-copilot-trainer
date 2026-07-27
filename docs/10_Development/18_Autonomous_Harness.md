@@ -317,11 +317,12 @@ $track  = "magione"
 # suffix matters: the threat model here is two agents on ONE rig, and a bare second-resolution
 # stamp lets same-second starts share $task and $ev, so each would overwrite the other's wrapper
 # and task registration.
-# Validate before ANY of these values reach a path, a task name, or the generated .cmd. AC content
-# ids are `[A-Za-z0-9_]`; anything else here would either break New-Item/schtasks or, worse, land
-# cmd metacharacters (`&  |  >  <  ^  %VAR%`) inside an executable wrapper.
+# Validate before ANY of these values reach a path, a task name, or the generated .cmd. The pattern
+# mirrors the harness's own `_AC_ID_RE` (`auto_drive.py`) so a legitimate id carrying `-` or `.` is
+# not fail-closed here; it still excludes spaces and every cmd metacharacter (`&  |  >  <  ^  %VAR%`)
+# that would become redirection or injection inside the wrapper Task Scheduler executes.
 foreach ($v in @($car, $track)) {
-    if ($v -notmatch '^[A-Za-z0-9_]+$') { throw "unsafe car/track id: '$v'" }
+    if ($v -notmatch '^[A-Za-z0-9._-]+$') { throw "unsafe car/track id: '$v'" }
 }
 if ($repo -match '[^\u0020-\u007e]') { throw "non-ASCII repo path breaks the ascii-encoded wrapper: $repo" }
 $runId  = "alien-$car-$track-" + (Get-Date -Format "yyyyMMdd-HHmmss") + "-$PID-$(Get-Random -Maximum 9999)"
@@ -359,7 +360,7 @@ $trPath = (New-Object -ComObject Scripting.FileSystemObject).GetFile("$ev\run.cm
 # silently never launch — the exact failure this line exists to prevent, but now costing the whole
 # step-4 deadline. Refuse instead.
 if ($trPath -match '\s') {
-    throw "8.3 short path unavailable (got '$trPath'). Use a space-free \$repo/\$ev, or enable 8.3 name generation."
+    throw "8.3 short path unavailable (got '$trPath'). Use a space-free repo/evidence path, or enable 8.3 name generation."
 }
 # /f is kept deliberately. The unique run id above is what prevents a peer agent's task being
 # clobbered; /f is what stops schtasks blocking on its interactive "replace it?" prompt, which was
