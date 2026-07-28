@@ -93,7 +93,13 @@ ANALYSIS_SCHEMA = "init-perturber-ab-analysis/v2"
 WITHDRAWN_PLAN_SCHEMA = "init-perturber-ab-plan/v1"
 CONDITIONS = ("overlays_on", "overlays_off")
 DEFAULT_ALPHA = 0.05
+#: Seed used only when a caller explicitly asks to reproduce a plan. A REAL plan draws a fresh
+#: seed (see :func:`build_plan`): the design-based claim rests on the schedule having actually
+#: been drawn from the 2**blocks reference set, and a constant seed emits one fixed schedule.
 DEFAULT_RANDOMIZATION_SEED = 625
+#: Upper bound for a drawn seed; wide enough that a collision is irrelevant, small enough to
+#: stay readable in the persisted plan.
+_SEED_SPACE = 2**31
 DEFAULT_CAR = "ks_porsche_911_gt3_r_2016"
 DEFAULT_TRACK = "spa"
 DEFAULT_STABILITY_WINDOW = 140.0
@@ -279,7 +285,7 @@ def build_plan(
     boots_per_arm: int = DEFAULT_BOOTS_PER_ARM,
     *,
     launches_per_boot: int = DEFAULT_LAUNCHES_PER_BOOT,
-    randomization_seed: int = DEFAULT_RANDOMIZATION_SEED,
+    randomization_seed: int | None = None,
     car: str = DEFAULT_CAR,
     track: str = DEFAULT_TRACK,
     layout: str | None = None,
@@ -289,7 +295,15 @@ def build_plan(
     run_nonce: str | None = None,
     allow_undersized: bool = False,
 ) -> dict[str, Any]:
-    """Build a reproducible boot-scoped experiment plan; settings remain operator-owned."""
+    """Build a boot-scoped experiment plan; settings remain operator-owned.
+
+    ``randomization_seed=None`` (the default, and what a real run must use) **draws** a fresh
+    seed and persists it in the plan. That draw is the randomization the primary test claims to
+    enumerate: with a constant seed the planner emits one fixed schedule, no assignment was ever
+    randomized, and enumerating the ``2**blocks`` alternative orientations would not be justified
+    — a boot-slot or time effect could align with the fixed treatment order and there would be no
+    randomization distribution to appeal to. Pass an explicit seed only to reproduce a known plan.
+    """
     if not car.strip() or not track.strip():
         raise ValueError("car and track must not be blank")
     if layout is not None and not layout.strip():
@@ -334,6 +348,8 @@ def build_plan(
             f"{MAX_EXACT_PERMUTATIONS} enumeration limit, so the completed run would not be "
             "analyzable"
         )
+    if randomization_seed is None:
+        randomization_seed = secrets.randbelow(_SEED_SPACE)
     sequence = randomized_block_sequence(boots_per_arm, randomization_seed=randomization_seed)
     stamp = generated_at_utc or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     # Report filenames used to be a pure function of (index, condition), so two plans sharing a
@@ -985,6 +1001,7 @@ def analyze(
     *,
     minimum_boots_per_arm: int = MIN_BOOTS_PER_ARM,
     alpha: float = DEFAULT_ALPHA,
+    expected_blocks: int | None = None,
 ) -> dict[str, Any]:
     if not 0.0 < alpha < 1.0:
         raise ValueError("alpha must be between 0 and 1")
@@ -1096,7 +1113,18 @@ def analyze(
         )
         for condition in CONDITIONS
     }
-    exclusions_present = sum(excluded.values()) > 0
+    # A MISSING report is an exclusion too, and a more worrying one — the reason it is absent is
+    # unobservable, so it could easily be outcome- or treatment-dependent. `analyze` only sees
+    # loaded boots, so a partially-loaded block would otherwise slip past the gate entirely, and
+    # a block with BOTH reports absent would not appear at all. Count incomplete blocks, and let
+    # the caller declare how many blocks were planned so a vanished block is still caught.
+    incomplete_blocks = sum(
+        1
+        for block in blocks
+        if block.unusable_reason and block.unusable_reason.startswith("missing_")
+    )
+    missing_blocks = max(0, (expected_blocks or 0) - len(blocks))
+    exclusions_present = sum(excluded.values()) > 0 or incomplete_blocks > 0 or missing_blocks > 0
     if usable_blocks < endpoint_floor or onset_p is None or blocked_effect is None or short_boots:
         conclusion = "insufficient_sample"
     elif surrogate_tied_blocks and informative_blocks == 0:
@@ -1121,6 +1149,17 @@ def analyze(
         conclusion = "overlays_off_delays_onset"
     else:
         conclusion = "overlays_off_accelerates_onset"
+    # Arm-level censored counts describe every scoring boot, but a censored boot whose PARTNER
+    # was ambiguous or unusable had its whole block dropped and never reached the test. Label
+    # the p-value a BOUND only when censoring actually entered it.
+    by_number = {boot.boot: boot for boot in boots}
+    censored_in_test = sum(
+        1
+        for block in blocks
+        if block.usable
+        for number in (block.overlays_on_boot, block.overlays_off_boot)
+        if number in by_number and by_number[number].onset_censored
+    )
     censored_total = on.censored_boots + off.censored_boots
     return {
         "schema": ANALYSIS_SCHEMA,
@@ -1144,14 +1183,17 @@ def analyze(
         "median_onset_difference_off_minus_on": median_onset_difference,
         "blocked_onset_effect_off_minus_on": blocked_effect,
         "onset_block_permutation_two_sided_p": onset_p,
-        "onset_p_is_bound": censored_total > 0,
+        "onset_p_is_bound": censored_in_test > 0,
         "censored_boots": censored_total,
+        "censored_boots_in_test": censored_in_test,
         "effect_direction_determined": direction_determined,
         "blocked_onset_effect_lower_bound": lower_sum,
         "blocked_onset_effect_upper_bound": upper_sum,
         "ambiguous_onset_boots": on.ambiguous_boots + off.ambiguous_boots,
         "excluded_boots_by_arm": excluded,
         "exclusions_present": exclusions_present,
+        "incomplete_blocks": incomplete_blocks,
+        "missing_blocks": missing_blocks,
         "surrogate_tied_blocks": surrogate_tied_blocks,
         "burst_blocks": len(burst_differences),
         "short_boots_below_launch_floor": len(short_boots),
@@ -1218,7 +1260,7 @@ def render_markdown(analysis: dict[str, Any]) -> str:
             "PRIMARY — onset, exact block permutation (two-sided): "
             f"p={_format_optional(analysis['onset_block_permutation_two_sided_p'], '.6g')}"
             + (
-                f" (BOUND — {analysis['censored_boots']} censored boot(s))"
+                f" (BOUND — {analysis['censored_boots_in_test']} censored boot(s) in the test)"
                 if analysis["onset_p_is_bound"]
                 else ""
             ),
@@ -1407,7 +1449,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_LAUNCHES_PER_BOOT,
         help=f"launches inside each boot; minimum {MIN_LAUNCHES_PER_BOOT}",
     )
-    plan_parser.add_argument("--seed", type=int, default=DEFAULT_RANDOMIZATION_SEED)
+    plan_parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "omit for a real run — the schedule must be DRAWN for the design-based test to "
+            "be exact, and the drawn seed is persisted in the plan. Pass one only to "
+            "reproduce a known plan."
+        ),
+    )
     plan_parser.add_argument("--car", default=DEFAULT_CAR)
     plan_parser.add_argument("--track", default=DEFAULT_TRACK)
     plan_parser.add_argument("--layout", default=None)
@@ -1499,7 +1550,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         plan = load_plan(args.plan)
         observations = load_observations(plan, args.reports_dir)
         # Floor is fixed at MIN_BOOTS_PER_ARM so over-scheduling can absorb unusable boots.
-        result = analyze(observations, minimum_boots_per_arm=MIN_BOOTS_PER_ARM)
+        result = analyze(
+            observations,
+            minimum_boots_per_arm=MIN_BOOTS_PER_ARM,
+            expected_blocks=plan["boots_per_arm"],
+        )
         if args.json_path is not None:
             destination = _output_path(args.json_path)
             _write_new_json(destination, result)

@@ -176,6 +176,27 @@ def test_plan_is_boot_scoped_and_records_the_operator_gate() -> None:
     )
 
 
+def test_a_real_plan_draws_its_seed_rather_than_reusing_a_constant() -> None:
+    """Codex #708 P1: the design-based claim requires the schedule to be DRAWN.
+
+    With a constant default seed the planner emitted one fixed schedule, so no assignment was
+    ever randomized and enumerating the `2**blocks` alternative orientations was not justified —
+    a boot-slot or time effect could align with the fixed order with nothing to appeal to.
+    """
+    stamp = "2026-07-28T12:00:00Z"
+    seeds = {build_plan(6, generated_at_utc=stamp)["randomization_seed"] for _ in range(8)}
+    assert len(seeds) > 1, "a real plan must draw a fresh seed, not reuse a constant"
+    # The drawn seed is persisted, so the schedule stays verifiable and reproducible after the fact.
+    drawn = build_plan(6, generated_at_utc=stamp)
+    assert tuple(boot["condition"] for boot in drawn["boots"]) == randomized_block_sequence(
+        6, randomization_seed=drawn["randomization_seed"]
+    )
+    # An explicit seed is still honoured, for reproducing a known plan.
+    assert (
+        build_plan(6, generated_at_utc=stamp, randomization_seed=625)["randomization_seed"] == 625
+    )
+
+
 def test_build_plan_rejects_sizes_it_could_not_answer_or_analyze() -> None:
     # Too few blocks: 2/2**5 = 0.0625 > alpha, so no result could ever be significant.
     with pytest.raises(ValueError, match="cannot reach alpha"):
@@ -326,10 +347,12 @@ def test_report_names_are_namespaced_to_their_plan() -> None:
     Deterministic `boot-NNN-condition.json` names meant a second run's `analyze` could silently
     consume the FIRST experiment's reports and return a stale conclusion — after a dozen reboots.
     """
-    first = build_plan(6, generated_at_utc="2026-07-28T12:00:00Z")
-    same = build_plan(6, generated_at_utc="2026-07-28T12:00:00Z")
-    later = build_plan(6, generated_at_utc="2026-07-29T12:00:00Z")
-    other_car = build_plan(6, generated_at_utc="2026-07-28T12:00:00Z", car="ks_mazda_mx5_cup")
+    # A real plan DRAWS its seed, so reproducibility needs both the stamp and the seed pinned.
+    pinned = dict(generated_at_utc="2026-07-28T12:00:00Z", randomization_seed=625)
+    first = build_plan(6, **pinned)
+    same = build_plan(6, **pinned)
+    later = build_plan(6, generated_at_utc="2026-07-29T12:00:00Z", randomization_seed=625)
+    other_car = build_plan(6, car="ks_mazda_mx5_cup", **pinned)
     names = lambda plan: [boot["report"] for boot in plan["boots"]]  # noqa: E731
     # Reproducible for identical inputs...
     assert names(first) == names(same)
@@ -345,21 +368,20 @@ def test_run_id_covers_every_plan_input_and_gets_fresh_entropy() -> None:
     `generated_at_utc` is only second-resolution, and a collision is expensive — the second
     physical run burns a whole boot's launch budget before the exclusive report write fails.
     """
-    stamp = "2026-07-28T12:00:00Z"
-    baseline = build_plan(6, generated_at_utc=stamp)["run_id"]
-    # Deterministic when the caller pins the timestamp (reproducible regeneration, tests).
-    assert build_plan(6, generated_at_utc=stamp)["run_id"] == baseline
+    pinned = dict(generated_at_utc="2026-07-28T12:00:00Z", randomization_seed=625)
+    baseline = build_plan(6, **pinned)["run_id"]
+    # Deterministic when the caller pins the inputs (reproducing a known plan, tests).
+    assert build_plan(6, **pinned)["run_id"] == baseline
     # Launch parameters that used to be omitted from the hash now change the namespace.
-    assert build_plan(6, generated_at_utc=stamp, stability_window=99.0)["run_id"] != baseline
-    assert build_plan(6, generated_at_utc=stamp, go_live_timeout=99.0)["run_id"] != baseline
+    assert build_plan(6, stability_window=99.0, **pinned)["run_id"] != baseline
+    assert build_plan(6, go_live_timeout=99.0, **pinned)["run_id"] != baseline
     # The nonce is what breaks a same-second collision: identical inputs AND an identical
     # pinned timestamp still separate once the nonce differs.
     assert (
-        build_plan(6, generated_at_utc=stamp, run_nonce="a")["run_id"]
-        != build_plan(6, generated_at_utc=stamp, run_nonce="b")["run_id"]
+        build_plan(6, run_nonce="a", **pinned)["run_id"]
+        != build_plan(6, run_nonce="b", **pinned)["run_id"]
     )
-    # A real run (no pinned timestamp) draws that nonce automatically, so two plans generated
-    # inside one tick with identical inputs cannot share a namespace.
+    # A real run pins nothing, so two plans generated inside one tick cannot share a namespace.
     assert build_plan(6)["run_id"] != build_plan(6)["run_id"]
 
 
@@ -742,6 +764,38 @@ def test_blocks_are_paired_by_planned_number_not_adjacency() -> None:
     # Only the four intact blocks score — not five fabricated ones.
     assert result["usable_blocks"] == 4
     assert result["conclusion"] == "insufficient_sample"
+
+
+def test_missing_reports_count_as_post_treatment_exclusions() -> None:
+    """Codex + Qodo #708: a missing report is an exclusion whose reason is unobservable.
+
+    `analyze` only sees loaded boots, so a partially-loaded block would slip past the exclusion
+    gate, and a block with BOTH reports absent would not appear at all. An overscheduled run
+    could then keep enough intact blocks and emit a directional causal conclusion despite
+    outcome- or treatment-dependent missingness.
+    """
+    boots = _blocks([6, 7, 8, 6, 7, 8, 6, 7], [15, 16, 17, 15, 16, 17, 15, 16])
+    # Block 1 loses one boot; block 2 loses BOTH (so it vanishes from the observations entirely).
+    partial = [boot for boot in boots if boot.boot not in {1, 3, 4}]
+    result = analyze(partial, expected_blocks=8)
+    assert result["incomplete_blocks"] == 1  # block 1, seen but half-loaded
+    assert result["missing_blocks"] == 1  # block 2, invisible without the plan's block count
+    assert result["exclusions_present"] is True
+    assert result["usable_blocks"] == 6  # enough intact blocks to have concluded...
+    assert result["conclusion"] == "post_treatment_exclusions_present"  # ...but it must not
+
+
+def test_censoring_outside_the_test_does_not_mark_the_p_value_bound() -> None:
+    """Codex #708: a censored boot whose partner was excluded never reached the test."""
+    ambiguous = ["stable"] * 5 + ["never_live"] + ["froze"] + ["stable"] * 13
+    boots = _blocks([6, 7, 8, 6, 7, 8], [15, 16, 17, 15, 16, 17])
+    boots[0] = _boot(1, "overlays_on", ambiguous)  # drops block 1 from the test...
+    boots[1] = _boot(2, "overlays_off", ["stable"] * _LAUNCHES)  # ...and its censored partner
+    result = analyze(boots)
+    assert result["censored_boots"] == 1  # the arm-level count still sees it
+    assert result["censored_boots_in_test"] == 0  # but it never entered the primary test
+    assert result["onset_p_is_bound"] is False
+    assert "BOUND" not in render_markdown(result)
 
 
 def test_zero_difference_blocks_do_not_inflate_the_power_floor() -> None:
