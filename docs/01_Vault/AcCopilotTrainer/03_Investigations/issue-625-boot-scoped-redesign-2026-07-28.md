@@ -73,13 +73,42 @@ It refuses to load a v1 plan, so a stale plan file on disk cannot be analyzed by
 
 ## Known limitation carried forward
 
-`never_live` covers both "acs.exe appeared then exited" (a cycle happened) and "nothing was ever
-spawned", and the report schema cannot distinguish them — so a boot whose onset is preceded by any
-`never_live` is excluded from the primary endpoint rather than scored on an assumption. Recovering
-those boots needs the launcher to record delivery:
-[#710](https://github.com/agorokh/ac-copilot-trainer/issues/710).
+~~`never_live` covers both "acs.exe appeared then exited" (a cycle happened) and "nothing was ever
+spawned"~~ — **RESOLVED 2026-07-28 by [#710](https://github.com/agorokh/ac-copilot-trainer/issues/710)
+(PR #717 merged `d78c10b`).** Every attempt now records `cycle_delivered`; onset is counted in
+delivered cycles, so a boot containing a merely undelivered attempt scores instead of being dropped.
+`onset_ambiguous` narrows to genuinely unknown delivery.
+
+## Open limitation — treatment receipt is NOT verified (#719)
+
+**Read this before spending the 16 reboots.** Each boot's arm label comes only from this plan file —
+the operator's assertion that they toggled the two settings before *that* reboot. Nothing observes
+whether the perturbers were actually injected into `acs.exe`. One boot that does not receive its
+assigned condition corrupts the exact block permutation test with **no detectable signature** in any
+current artifact.
+
+Tracked as [#719](https://github.com/agorokh/ac-copilot-trainer/issues/719), with the full design in
+[[issue-719-treatment-receipt-2026-07-28]]. Until it lands, the run's arm labels rest on manual
+discipline across 16 reboots in randomized order.
+
+## Verified rig facts (AG_PC, 2026-07-28) — do not re-derive
+
+- **Fast Startup is DISABLED** (`HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power`
+  → `HiberbootEnabled = 0`). A shutdown/power-on here is a true cold boot, so step 3's boot-epoch
+  check is sound on this host. This was worth checking: a hybrid boot would **not** reset the
+  launch-cycle accumulator while potentially still passing the epoch check — silently pooling two
+  arms, the exact failure the boot-scoped design exists to prevent.
+- Both perturbers are installed and **do** inject into a live `acs.exe`:
+  `c:/program files (x86)/steam/GameOverlayRenderer64.dll` and
+  `C:\Windows\System32\nvspcap64.dll`.
+- The injection **races process startup** — measured on one `acs.exe` (pid 27616): at 45 modules
+  loaded neither DLL was present; ~3 s later at 115 modules both were. So a perturber check must
+  sample late (or union across samples); **presence is dispositive, absence is not**.
+- The perturbers inject into **games, not globally** — neither appears in `steam.exe`. There is
+  therefore **no pre-flight** that can read the treatment state without starting `acs.exe`.
 
 ## Status
 
-Tooling merged/in review on PR #708. **The physical A/B has still never run** — it remains gated on
-operator sign-off for the two settings and on rig availability.
+Tooling merged (PR #708, plus #710/PR #717). **The physical A/B has still never run** — it remains
+gated on operator sign-off for the two settings and on rig availability. #719 should land first so
+the 16-reboot investment is spent on verifiable arm labels.

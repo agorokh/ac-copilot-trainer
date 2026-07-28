@@ -4,6 +4,8 @@ status: active
 memory_tier: canonical
 last_updated: 2026-07-28T23:15:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/tier3-substrate-unreachable-rig-2026-07-28.md
+  - AcCopilotTrainer/03_Investigations/issue-719-treatment-receipt-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-710-cycle-delivered-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-703-decoupled-ladder-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-625-boot-scoped-redesign-2026-07-28.md
@@ -124,6 +126,72 @@ relates_to:
 ---
 
 # Next session handoff
+
+## BLOCKED (2026-07-28, later) — Tier-3 unreachable from the rig; #719 filed but not implementable
+
+**Start here.** A `/autonomous-deliver 625` session ran on the rig and could not touch code at all.
+Full detail: [[tier3-substrate-unreachable-rig-2026-07-28]] and
+[[issue-719-treatment-receipt-2026-07-28]].
+
+### The blocker — and the correction to the previous handoff
+
+The previous session concluded Tier-3 was *"not unreachable, **slow past the budget**"* and suggested
+an infra look at LightRAG. **That was wrong.** The bridge's
+`query_failed: exceeded the bridge budget of 55s` message is emitted for a **TCP connect that never
+completes**, so it reads like a slow substrate when the host is simply unroutable.
+
+`tailscaled` on AG_PC is wedged: **no Tailscale adapter exists**, and pid 5252 (started 2026-07-25)
+is a **zombie** — `Get-Process` lists it with `HandleCount = 0` while `taskkill /F` answers *"no
+running instance of the task"*. The TUN driver is stuck. Restarting the service hung in stop-pending;
+force-killing spawned a fresh daemon but the zombie survived and still owns the local API socket.
+**Only a reboot of AG_PC appears able to clear it** — the operator's call.
+
+Consequence: `hook_memory_gate.py` hard-blocks every edit under `tools/`, `scripts/`, `tests/`,
+`ops/`. Its only bypass is **human-only and audited** (`CLAUDE_MEMORY_GATE=0` no longer works), so it
+was **not** used. Rationale recorded at `.scratch/.memory_bypass_rationale`.
+Tracking: [workstation-ops#2360](https://github.com/agorokh/workstation-ops/issues/2360).
+
+**Resume recipe:** reboot AG_PC → confirm `Get-NetAdapter` shows a Tailscale interface and
+`verify_server_health(workspace="ac_copilot")` returns `reachable=true` → then implement #719.
+
+### Delivered despite the block
+
+- **[#719](https://github.com/agorokh/ac-copilot-trainer/issues/719) filed** with a complete,
+  measured spec (Parts A/B/C): the #625 A/B never verifies that the **treatment was received**. Each
+  boot's arm label is only the operator's assertion that they toggled the two settings before that
+  reboot; nothing observes whether the perturbers actually injected into `acs.exe`. Everything else
+  in that instrument is measured and defended — this is the last honor-system link, and it is the one
+  input the p-value is *about*.
+- **Measured on the rig, not theorised.** Toolhelp32 module snapshot against a live `acs.exe`
+  (pid 27616): at 45 modules loaded neither `gameoverlayrenderer64.dll` nor `nvspcap64.dll` was
+  present; ~3 s later at 115 modules **both were**. So the check is buildable, **and the injection
+  races startup — presence is dispositive, absence is not**. Exact mirror of #710's lesson; encode it
+  the same way (tri-state, only the positive observation establishes anything). The probed process
+  scored `froze`, so the evidence exists on the attempts the endpoint is built from.
+- **Fast Startup verified DISABLED** on AG_PC (`HiberbootEnabled = 0`) — a hybrid boot would not have
+  reset the launch-cycle accumulator while possibly still passing the boot-epoch check, silently
+  pooling two arms. Recorded in the #625 runbook so nobody re-derives it.
+- **#625 runbook updated** ([[issue-625-boot-scoped-redesign-2026-07-28]]): the #710 limitation marked
+  resolved, the #719 receipt gap added, verified rig facts recorded.
+
+### Design decision to carry forward (it will be re-proposed)
+
+A boot whose treatment is contradicted gets its **block excluded** — it is **never re-labelled** to
+its observed arm. Blocks are scarce, so re-labelling is tempting, but the permutation null is over
+the arm orders the randomization could have emitted: the labels *are* the randomization. Re-labelling
+conditions on post-randomization data, so the reference set stops corresponding to the labels being
+tested. The 2026-07-28 council split on exactly this (`gemini-sub` for re-labelling, `kimi-sub`
+against); the design-based argument wins.
+
+### Also worth knowing
+
+`ops/memory_manifest.yml` pins `repo.tier3_workspace_id: "ac_copilot"`, but both the SessionStart
+hook and the gate resolved `ac_copilot_trainer` — that is [#712](https://github.com/agorokh/ac-copilot-trainer/issues/712),
+and it did **not** cause this outage (both resolve to the same unreachable endpoint). Don't mistake
+the workspace bug for the network fault.
+
+The rig froze **4/4** launches at 72 h uptime — accumulator fully armed on a long-lived boot,
+consistent with the #627/#668 model.
 
 ## Delivered (2026-07-28) — #710 CLOSED: a launch attempt says whether it delivered a cycle (PR #717 MERGED `d78c10b`)
 
