@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-28T17:05:00Z
+last_updated: 2026-07-28T17:10:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-703-decoupled-ladder-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-625-boot-scoped-redesign-2026-07-28.md
@@ -151,13 +151,22 @@ decoupled ladder — #529 ladder 3's rung caps at 1.15 on the first step, so bot
 No Magione ladder has yet retained a refit across a falsified top rung on the rig. Two attempts
 this session both died **before self-play started**:
 
-- `alien-703-live-20260728T165135Z` — base drive failed `stage=hijack`, *"CSP did not accept the
-  carcsw hijack"*, 1 attempt. This is the known shape-2 overlay flake (vault #466: hijack lands
-  ~1/4 on full launch cycles; **retry full cycles**). The pipeline aborted before `run_selfplay`,
-  so **the plant was never mutated** — verified still 7 merges / 7 measured lateral bins, last
-  merge `{adopted: 1, raised: 5}`.
-- A retry was launched at session end; its outcome is in
-  `.scratch/harness-evidence/alien-703-live-retry-*.log`.
+- **3 of 3 attempts failed identically** at `stage=hijack`, *"CSP did not accept the carcsw
+  hijack"*, each on its own full launch cycle with the rig cleared in between
+  (`alien-703-live-20260728T165135Z`, `alien-703-live-retry-20260728T165739Z`,
+  `alien-703-live-try3-20260728T170328Z`). This is the known shape-2 overlay flake (vault #466:
+  hijack lands ~1/4 on full cycles) — but 3/3 with a clean rig each time reads as a **persistent
+  rig/CSP condition today**, not variance. It is the third-party CSP init wedge tracked in
+  #619/#625/#627 and is **not fixable from this repo**.
+- Every attempt aborted in the drive stage **before `run_selfplay`**, so the ladder logic was never
+  exercised live and **the plant was never mutated** — proven by hash, not inference: the live
+  artifact is byte-identical (`sha256[:12] = 65c7b467a9eb`) to the pre-session backup.
+- **One corroborating observation** from attempt 3's preflight, which got far enough to build the
+  line: `alien line cache (QSS 86.27s, vmax 236.9 km/h, plant fit 08e4835fe7f5)`. That is the
+  *refined* floor from #529 ladder 3's retained refit, read back across invocations — the second
+  half of AC 5 ("a later run's line build reports the lower QSS floor") behaving correctly on an
+  inherited plant. It does **not** verify the first half (a refit surviving a *falsified* rung
+  under the decoupled ladder), which still needs a drive that actually starts.
 
 **Plant safety:** backed up before any live attempt to
 `plant_id/ks_porsche_911_gt3_r_2016__magione.json.bak-pre703-20260728` (7 merges verified). Restore
