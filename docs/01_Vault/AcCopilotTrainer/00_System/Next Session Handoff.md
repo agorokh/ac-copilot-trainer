@@ -123,7 +123,7 @@ relates_to:
 
 # Next session handoff
 
-## In flight (2026-07-28) — #625 init-perturber A/B re-pointed to the boot-scoped design (PR #708)
+## Delivered (2026-07-28) — #625 init-perturber A/B re-pointed to the boot-scoped design (PR #708 MERGED)
 
 The merged v1 driver (PR #657) still encoded the design the 2026-07-24 reconciliation withdrew:
 interleaved single launches inside ONE boot, scored as a pooled per-launch freeze rate. Under the
@@ -132,8 +132,10 @@ any boot are clean in both arms — so the tool was a live trap, not merely stal
 simulated data with a large real effect (onset ~8 vs ~14): boot-scoped `p=0.03125`
 (`overlays_off_delays_onset`) vs pooled-rate `p=0.687` (`no_measurable_effect`).
 
-PR [#708](https://github.com/agorokh/ac-copilot-trainer/pull/708) rewrites
-`tools/ac_harness/init_perturber_ab.py` to a **randomized-block, boot-scoped** design:
+PR [#708](https://github.com/agorokh/ac-copilot-trainer/pull/708) **MERGED** as squash
+[`f65c4e1`](https://github.com/agorokh/ac-copilot-trainer/commit/f65c4e1b365244cac09e84edea373a6698db2697)
+(2026-07-28T13:17:54Z). It rewrites `tools/ac_harness/init_perturber_ab.py` to a
+**randomized-block, boot-scoped** design:
 
 - one boot per unit, one `resilient_launch --trials N` invocation per boot, **one reboot per boot**;
 - primary endpoint = onset launch-index via an exact **block permutation** test over the
@@ -158,15 +160,22 @@ PR [#708](https://github.com/agorokh/ac-copilot-trainer/pull/708) rewrites
 operator to "reboot once, run the interleaved schedule", which would have pooled both arms onto one
 boot. That was caught by review, not by us.
 
-Review: 6 rounds, 24 findings (Codex gating, Qodo + the self-hosted daemon advisory), all fixed
-or factually rebutted with the code reference. Most
+Review: **9 rounds, 25 findings** (Codex gating; Qodo + the self-hosted daemon advisory), all
+fixed or factually rebutted with the code reference. Several were substantive statistical
+corrections that invalidated claims the first cuts made — the seed was never actually drawn
+(so the "design-exact" claim did not hold on the default path); tied blocks were counted
+toward the power floor (a false-negative path); censored onsets were treated as exact; the
+conclusion direction came from marginal medians rather than the tested statistic. Two review
+findings were about the VAULT, not the code: the runbook and then the vault entrypoints still
+routed the next operator to the withdrawn v1 protocol. Most
 were substantive statistical corrections (direction taken from the wrong statistic; censored onsets
 treated as exact; unequal post-onset exposure; pooled Wilson on correlated launches; report
 filenames colliding across same-seed plans). Also fixed a Windows-only red on `origin/main`
 (`test_trailing_backslash_is_rejected`) that blocked a clean local `make ci-fast`.
 
-**The physical A/B has still never run** — operator sign-off on the Steam/NVIDIA toggles plus 16
-reboots (8 boots per arm; the 6/arm floor is fragile once a block ties). Follow-up [#710](https://github.com/agorokh/ac-copilot-trainer/issues/710): teach
+**The physical A/B has still never run — this is the remaining work on #625.** It needs operator
+sign-off on the Steam/NVIDIA toggles plus 16 reboots (8 boots per arm; the 6/arm floor is
+fragile once a block ties). Resume at [[issue-625-boot-scoped-redesign-2026-07-28]]. Follow-up [#710](https://github.com/agorokh/ac-copilot-trainer/issues/710): teach
 `resilient_launch` to record whether an attempt actually delivered an AC cycle, so
 ambiguous-onset boots stop being discarded.
 ## Delivered (2026-07-28) — #672 CLOSED: launcher voice-endpoint hygiene MERGED
