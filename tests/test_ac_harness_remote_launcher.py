@@ -400,8 +400,32 @@ def test_trailing_backslash_is_rejected(bad: str) -> None:
     """`\\"` is an ESCAPED QUOTE to the Windows CRT argv parser, so the quoting does not close."""
     with pytest.raises(rl.RemoteLaunchError, match="trailing backslash"):
         rl.validate_wrapper_token(bad)
+    # A Path reaches the wrapper as ``str(path)``, and TWO different mechanisms keep that text
+    # safe depending on the host: on POSIX ``\`` is an ordinary character, so it survives
+    # normalization and the validator rejects it; on Windows ``pathlib`` strips the trailing
+    # separator before the validator is ever called. Asserting the rejection unconditionally
+    # made this test red on Windows — the very platform the rig runs on — while staying green
+    # on Linux CI. Assert the invariant (nothing ending in ``\`` reaches the wrapper), not one
+    # platform's mechanism for upholding it.
+    path = Path(bad)
+    if str(path).endswith("\\"):
+        with pytest.raises(rl.RemoteLaunchError, match="trailing backslash"):
+            rl.validate_wrapper_path("repo root", path)
+    else:
+        assert not str(rl.validate_wrapper_path("repo root", path)).endswith("\\")
+
+
+def test_trailing_backslash_path_guard_is_live_on_windows() -> None:
+    """A Windows drive root is the case where ``pathlib`` DOES keep the trailing separator.
+
+    Without this, the path-side guard would have no Windows coverage at all once the
+    normalization above is accounted for.
+    """
+    root = Path("C:/")
+    if not str(root).endswith("\\"):
+        pytest.skip("pathlib only preserves a trailing separator at a Windows drive root")
     with pytest.raises(rl.RemoteLaunchError, match="trailing backslash"):
-        rl.validate_wrapper_path("repo root", Path(bad))
+        rl.validate_wrapper_path("repo root", root)
 
 
 # ---------------------------------------------------------------------------
