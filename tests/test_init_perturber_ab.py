@@ -699,14 +699,19 @@ def test_differential_exclusion_refuses_to_carry_a_treatment_claim() -> None:
     boots[0] = _boot(1, "overlays_on", ambiguous)
     result = analyze(boots)
     assert result["excluded_boots_by_arm"] == {"overlays_on": 1, "overlays_off": 0}
-    assert result["exclusions_balanced"] is False
+    assert result["exclusions_present"] is True
     assert result["usable_blocks"] == 6  # still enough blocks...
     assert result["onset_block_permutation_two_sided_p"] is not None  # ...and still significant
-    assert result["conclusion"] == "exclusions_may_depend_on_treatment"
+    assert result["conclusion"] == "post_treatment_exclusions_present"
 
 
-def test_balanced_exclusions_still_conclude() -> None:
-    """The guard must not fire when exclusions are symmetric across arms."""
+def test_balanced_exclusions_are_still_withheld() -> None:
+    """Codex + Qodo #708: EQUAL exclusion counts do not prove treatment-independence.
+
+    Equal marginals are consistent with treatment-dependent missingness landing in different
+    blocks, and every exclusion here is decided from a post-treatment outcome. The mechanism
+    cannot be modelled from the reports, so any exclusion withholds the causal conclusion.
+    """
     ambiguous = ["stable"] * 5 + ["never_live"] + ["froze"] + ["stable"] * 13
     # 8 blocks so that knocking out one from each arm still leaves 6 usable — at 7 blocks the
     # run would (correctly) fall under the floor and report insufficient_sample instead.
@@ -715,8 +720,8 @@ def test_balanced_exclusions_still_conclude() -> None:
     boots[3] = _boot(4, "overlays_off", ambiguous)  # ...block 2 loses its off boot
     result = analyze(boots)
     assert result["excluded_boots_by_arm"] == {"overlays_on": 1, "overlays_off": 1}
-    assert result["exclusions_balanced"] is True
-    assert result["conclusion"] == "overlays_off_delays_onset"
+    assert result["exclusions_present"] is True
+    assert result["conclusion"] == "post_treatment_exclusions_present"
 
 
 def test_blocks_are_paired_by_planned_number_not_adjacency() -> None:
@@ -768,8 +773,28 @@ def test_all_tied_blocks_still_read_as_no_measurable_effect() -> None:
     boots = _blocks([8, 10, 12, 9, 11, 13], [8, 10, 12, 9, 11, 13])
     result = analyze(boots)
     assert result["informative_blocks"] == 0
+    assert result["surrogate_tied_blocks"] == 0  # every tie was OBSERVED
     assert result["smallest_attainable_two_sided_p"] is None
     assert result["conclusion"] == "no_measurable_effect"
+
+
+def test_all_doubly_censored_blocks_are_not_a_null_result() -> None:
+    """Qodo #708: equal N+1 surrogates are not equal onsets.
+
+    Two censored boots tie by construction, so an all-doubly-censored run has
+    `informative_blocks == 0` and would have slipped through the carve-out to report
+    `no_measurable_effect` with p=1 — while every true onset difference is unconstrained and
+    nothing whatsoever was learned.
+    """
+    boots: list[BootObservation] = []
+    for _ in range(6):
+        boots.append(_boot(len(boots) + 1, "overlays_on", ["stable"] * _LAUNCHES))
+        boots.append(_boot(len(boots) + 1, "overlays_off", ["stable"] * _LAUNCHES))
+    result = analyze(boots)
+    assert result["informative_blocks"] == 0
+    assert result["surrogate_tied_blocks"] == 6  # every "tie" came from censoring surrogates
+    assert result["onset_block_permutation_two_sided_p"] == pytest.approx(1.0)
+    assert result["conclusion"] == "insufficient_sample"
 
 
 def test_undersized_run_cannot_claim_the_endpoint() -> None:
@@ -810,6 +835,20 @@ def test_burst_endpoint_is_block_paired_not_pooled_launches() -> None:
     # Identical arms -> every block difference is 0 -> the permutation test returns 1.0.
     assert result["burst_block_permutation_two_sided_p"] == pytest.approx(1.0)
     assert all(block["burst_difference"] == 0 for block in result["blocks"])
+    # Codex #708: the secondary p can rest on fewer blocks than the primary, so it names its own.
+    assert result["burst_blocks"] == 6
+    assert "from 6 block(s))" in render_markdown(result)
+
+
+def test_secondary_endpoint_flags_when_it_rests_on_fewer_blocks() -> None:
+    """A late onset leaves no room for the burst window, so that block has no rate at all."""
+    late = _stable_then_freeze(_LAUNCHES - 1)  # window would run past the end of the boot
+    boots = _blocks([8, 8, 8, 8, 8, 8], [8, 8, 8, 8, 8, 8])
+    boots[1] = _boot(2, "overlays_off", late)
+    result = analyze(boots)
+    assert result["burst_blocks"] == 5
+    assert result["usable_blocks"] == 6
+    assert "FEWER than the 6 the primary used" in render_markdown(result)
 
 
 def test_render_markdown_flags_a_bounded_p_value() -> None:

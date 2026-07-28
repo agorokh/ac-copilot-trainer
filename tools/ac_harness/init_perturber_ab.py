@@ -1043,6 +1043,16 @@ def analyze(
     # exact false-negative path this redesign exists to prevent.
     informative_blocks = sum(1 for value in onset_differences if abs(value) > 1e-9)
     smallest_attainable = 2 / 2**informative_blocks if informative_blocks else None
+    # A zero difference means two different things. Both onsets OBSERVED and equal is a real
+    # tie — evidence of no effect in that block. Both CENSORED is not: their N+1 surrogates are
+    # equal by construction while the true onsets are unconstrained, so such a block is
+    # uninformative rather than null. Without this distinction an all-doubly-censored run —
+    # where nothing at all was learned — would report `no_measurable_effect` with p=1.
+    surrogate_tied_blocks = sum(
+        1
+        for block in blocks
+        if block.usable and block.onset_difference == 0 and block.onset_difference_lower is None
+    )
     # Smallest informative-block count that could reach alpha, so a short run says what it needs
     # instead of just refusing. 2/2**k <= alpha  <=>  k >= log2(2/alpha).
     informative_required = math.ceil(math.log2(2.0 / alpha))
@@ -1070,27 +1080,35 @@ def analyze(
     )
     # Exclusion must not depend on the treatment. The block permutation test is exact for the
     # SHARP null (no effect on anything) — under it each boot's outcome, and therefore whether
-    # it is excluded, is fixed regardless of labels. But if an overlay setting changes the rate
-    # of never_live or ambiguous onsets, the surviving block set becomes a function of the
-    # assignment while the test holds it fixed, and the p-value is no longer exact. We cannot
-    # model that mechanism from the reports, so detect its signature — an arm imbalance in
-    # exclusions — and refuse to conclude rather than quote an exactness we no longer have.
+    # it is excluded, is fixed regardless of labels. But every exclusion here is decided from a
+    # POST-TREATMENT outcome (never_live counts, ambiguous onsets), so if an overlay setting
+    # changes those rates the surviving block set is a function of the assignment while the test
+    # holds it fixed, and the fixed-set p-value no longer justifies a causal claim.
+    #
+    # An earlier cut gated on the arm counts being EQUAL. That is not enough, and both reviewers
+    # said so: equal marginal counts are consistent with treatment-dependent missingness landing
+    # in different blocks. Since the mechanism cannot be modelled from the reports, take the
+    # conservative rule — ANY post-treatment exclusion withholds the causal conclusion. The
+    # p-value is still reported; it simply stops carrying a claim it cannot support.
     excluded = {
         condition: sum(
             1 for boot in boots if boot.condition == condition and not _scores_onset(boot)
         )
         for condition in CONDITIONS
     }
-    exclusions_balanced = excluded["overlays_on"] == excluded["overlays_off"]
+    exclusions_present = sum(excluded.values()) > 0
     if usable_blocks < endpoint_floor or onset_p is None or blocked_effect is None or short_boots:
+        conclusion = "insufficient_sample"
+    elif surrogate_tied_blocks and informative_blocks == 0:
+        # Nothing was observed: every block's zero came from two censoring surrogates.
         conclusion = "insufficient_sample"
     elif smallest_attainable is not None and smallest_attainable > alpha:
         # Enough usable blocks, but too few of them carry a nonzero difference for any result
         # to reach alpha. Saying `no_measurable_effect` here would be a false negative.
         conclusion = "insufficient_sample"
-    elif not exclusions_balanced:
-        # Report the p-value, but do not let it carry a treatment claim it can no longer support.
-        conclusion = "exclusions_may_depend_on_treatment"
+    elif exclusions_present:
+        # Report the p-value, but do not let it carry a causal claim it cannot support.
+        conclusion = "post_treatment_exclusions_present"
     elif onset_p >= alpha:
         conclusion = "no_measurable_effect"
     elif blocked_effect == 0:
@@ -1133,7 +1151,9 @@ def analyze(
         "blocked_onset_effect_upper_bound": upper_sum,
         "ambiguous_onset_boots": on.ambiguous_boots + off.ambiguous_boots,
         "excluded_boots_by_arm": excluded,
-        "exclusions_balanced": exclusions_balanced,
+        "exclusions_present": exclusions_present,
+        "surrogate_tied_blocks": surrogate_tied_blocks,
+        "burst_blocks": len(burst_differences),
         "short_boots_below_launch_floor": len(short_boots),
         "minimum_launches_per_boot": MIN_LAUNCHES_PER_BOOT,
         "burst_block_permutation_two_sided_p": burst_p,
@@ -1202,8 +1222,17 @@ def render_markdown(analysis: dict[str, Any]) -> str:
                 if analysis["onset_p_is_bound"]
                 else ""
             ),
+            # The secondary endpoint drops blocks whose burst window did not fit, so it can rest
+            # on far fewer blocks than the primary. Say which, right next to the p-value.
             "SECONDARY — post-onset burst, exact block permutation (two-sided): "
-            f"p={_format_optional(analysis['burst_block_permutation_two_sided_p'], '.6g')}",
+            f"p={_format_optional(analysis['burst_block_permutation_two_sided_p'], '.6g')} "
+            f"(from {analysis['burst_blocks']} block(s)"
+            + (
+                f" — FEWER than the {analysis['usable_blocks']} the primary used, because a "
+                "block whose burst window did not fit contributes no rate)"
+                if analysis["burst_blocks"] != analysis["usable_blocks"]
+                else ")"
+            ),
             "Sensitivity — sign test (two-sided): "
             f"p={sensitivity['sign_test']['exact_two_sided_p']:.6g}; "
             "rank-sum (assumption-dependent, non-gating): "
