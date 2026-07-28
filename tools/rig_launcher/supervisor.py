@@ -48,11 +48,14 @@ _ENDPOINT_STATE_DISTINCT = "distinct"
 _ENDPOINT_STATE_UNDECLARED = "undeclared"
 _ENDPOINT_STATE_UNKNOWN = "unknown"
 
-#: The shortest name length for which a prefix relation is accepted as "same endpoint".
-#: PortAudio's MME host API truncates device names to 31 characters, so the sidecar can
-#: report a strict prefix of the full Windows endpoint name; requiring a reasonably long
-#: shared prefix keeps that from degenerating into "Speakers" matching everything.
-_ENDPOINT_PREFIX_MIN_LEN = 8
+#: PortAudio's MME host API truncates device names to 31 characters (``MAXPNAMELEN`` is 32
+#: including the NUL), so the sidecar can report a strict prefix of the full Windows endpoint
+#: name. Prefix matching exists *only* to absorb that truncation, so it is accepted only when
+#: the shorter name is long enough to actually BE a truncation artifact. A loose floor is not
+#: safe here: a generic 8-character ``Speakers`` would prefix-match ``Speakers (USB Sound
+#: Device)`` and raise a false collision, telling the operator to reroute already-isolated
+#: voice audio — the exact cry-wolf failure this check exists to avoid (PR #707 review).
+_MME_NAME_MAX_LEN = 31
 _WINDOWS_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 
@@ -1550,22 +1553,34 @@ def _normalize_endpoint_name(name: str | None) -> str:
 def endpoints_collide(voice_device: str | None, ac_device: str | None) -> bool:
     """Return True when two device names denote the same Windows output endpoint.
 
-    Equality after :func:`_normalize_endpoint_name`, or a prefix relation when the shorter
-    name is at least :data:`_ENDPOINT_PREFIX_MIN_LEN` characters — PortAudio's MME host API
-    truncates device names to 31 characters, so the sidecar legitimately reports a strict
-    prefix of the full endpoint name. Deliberately **not** a bare substring test: "Speakers"
-    appearing inside an unrelated name must not manufacture a collision, because a check that
-    cries wolf trains the operator to ignore it (the #575 lesson).
+    Two ways to match, and only two:
+
+    1. **Equality** after :func:`_normalize_endpoint_name` — always valid evidence.
+    2. **Prefix**, but only when the shorter side is plausibly an *MME truncation artifact*:
+       its **raw** length must reach :data:`_MME_NAME_MAX_LEN`. Measured raw and un-stripped,
+       because truncation is a property of the original string — the rig's MME name
+       ``'5.1 Speakers (USB Sound Device '`` is exactly 31 characters *including* the trailing
+       space that stripping would remove.
+
+    Deliberately **not** a bare substring test, and deliberately not a short prefix floor:
+    a generic ``Speakers`` must not manufacture a collision with ``Speakers (USB Sound
+    Device)``, because a check that cries wolf trains the operator to ignore it (the #575
+    lesson, and PR #707 review).
     """
-    left = _normalize_endpoint_name(voice_device)
-    right = _normalize_endpoint_name(ac_device)
+    left_raw = voice_device or ""
+    right_raw = ac_device or ""
+    left = _normalize_endpoint_name(left_raw)
+    right = _normalize_endpoint_name(right_raw)
     # Both sides are already casefolded and whitespace-free here.
     if not left or not right:
         return False
     if left == right:
         return True
-    shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
-    return len(shorter) >= _ENDPOINT_PREFIX_MIN_LEN and longer.startswith(shorter)
+    if len(left) <= len(right):
+        shorter, longer, shorter_raw = left, right, left_raw
+    else:
+        shorter, longer, shorter_raw = right, left, right_raw
+    return len(str(shorter_raw)) >= _MME_NAME_MAX_LEN and longer.startswith(shorter)
 
 
 def _shared_endpoint_remediation(device: str) -> str:

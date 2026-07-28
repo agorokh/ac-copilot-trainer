@@ -104,7 +104,13 @@ def _supervisor(
         # Case and whitespace differences still name one endpoint.
         ("5.1 SPEAKERS  (USB Sound Device)", "5.1 speakers (USB Sound Device)", True),
         # PortAudio's MME host API truncates names to 31 chars -> a strict prefix.
-        ("Headset Earphone (Rig Audio In", OWN_HEADSET_DEVICE, True),
+        ("Headset Earphone (Rig Audio Int", OWN_HEADSET_DEVICE, True),
+        # ...but a SHORT generic name is not a truncation artifact and must not match, or the
+        # operator is told to reroute already-isolated voice audio (PR #707 Codex P2).
+        ("Speakers", "Speakers (USB Sound Device)", False),
+        ("Headset Earphone (Rig Audio In", OWN_HEADSET_DEVICE, False),
+        ("Output ()", "Output (Rig Audio Interface)", False),
+        ("Primary Sound Driver", "Primary Sound Driver (USB Sound Device)", False),
         # --- measured on the rig: one physical endpoint, four host-API spellings. The
         # operator declares the name Windows shows them; every spelling must still match,
         # because a false all-clear here is worse than a false alarm.
