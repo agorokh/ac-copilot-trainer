@@ -402,6 +402,27 @@ def _current_plant_fit_sha12(
     return sha12 if isinstance(sha12, str) and sha12 else None
 
 
+def _fit_sha12_of_bytes(raw: bytes | None) -> str | None:
+    """The plant-fit hash of a persisted artifact's raw bytes, or ``None`` when unusable.
+
+    ``load_plant_artifact`` is a plain ``json.loads`` of the file, so hashing the parsed bytes
+    yields exactly the provenance ``auto_drive`` records for the plant it loaded — which is what
+    makes a byte snapshot comparable to a drive report's ``plant_provenance.sha12``.
+    """
+    if raw is None:
+        return None
+    from tools.ac_harness.alien_line import plant_provenance
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    sha12 = plant_provenance(payload).get("sha12")
+    return sha12 if isinstance(sha12, str) and sha12 else None
+
+
 def _read_plant_bytes(plant_path: Path) -> bytes | None:
     """The plant artifact's current bytes, or ``None`` when absent/unreadable (best-effort)."""
     try:
@@ -556,12 +577,20 @@ def run_selfplay(
     # scale, and a plant step "holds the last validated scale" — so seeding this from
     # ``args.ggv_scale`` when the base drove at the override would silently move the envelope
     # during a supposedly plant-only iteration and misattribute its verdict (#703, Codex P1).
+    # This is also the ladder's ANCHOR, not just its starting point. Anchoring the rungs to
+    # `--ggv-scale` while the base actually drove a derated `--stint` pace made the first envelope
+    # step jump two increments (0.85 -> 0.95 with the 0.05 default, skipping 0.90), so a run could
+    # falsify at 0.95 having never tested the envelope in between — doubling the progressive step
+    # the operator asked for (#703 Codex P2, round 7). With no stint override the two are equal
+    # and the ladder is unchanged.
     resolved_base_scale = args.ggv_scale if base_scale is None else float(base_scale)
     selfplay: dict = {
         "iterations_requested": args.iterations,
         "laps_per_iteration": args.laps,
         "base_scale": resolved_base_scale,
-        "ladder_base_scale": args.ggv_scale,
+        # The rung anchor actually in force (== base_scale; `--ggv-scale` is only the default).
+        "ladder_base_scale": resolved_base_scale,
+        "requested_ggv_scale": args.ggv_scale,
         "scale_step": args.scale_step,
         "max_scale": args.max_scale,
         "iterations": [],
@@ -654,12 +683,12 @@ def run_selfplay(
         #    fall-through below reaches the unchanged-envelope stop.
         step_kind = next_step_kind
         usable_rung = next_envelope_rung(
-            args.ggv_scale, args.scale_step, args.max_scale, prev_scale, rung
+            resolved_base_scale, args.scale_step, args.max_scale, prev_scale, rung
         )
         if usable_rung is not None:
             rung = usable_rung
         envelope_scale = (
-            iteration_scale(args.ggv_scale, args.scale_step, rung, args.max_scale)
+            iteration_scale(resolved_base_scale, args.scale_step, rung, args.max_scale)
             if usable_rung is not None
             else None
         )
@@ -689,7 +718,7 @@ def run_selfplay(
                     "ok": False,
                     "reason": "no lap archives from the previous drive",
                 }
-            elif _read_plant_bytes(plant_path) != validated_plant_bytes:
+            elif (pre_refine_bytes := _read_plant_bytes(plant_path)) != validated_plant_bytes:
                 # A peer re-identified the combo since our last validated state. The
                 # `expected_current_bytes` guard below would accept these bytes happily — it only
                 # prevents clobbering a NEWER fit, it does not prove the fit is OURS — so archives
@@ -706,11 +735,14 @@ def run_selfplay(
                     ),
                 }
             else:
-                # Snapshot the artifact bytes BEFORE loading: the refine-save runs outside the
-                # drive stage's machine-global rig lock, so a peer worktree may refresh the same
-                # plant between our load and our save — persisting a refinement of stale bytes
-                # would silently clobber the peer's newer fit (#579 Codex P2).
-                pre_refine_bytes = plant_path.read_bytes() if plant_path.exists() else None
+                # ONE content-bound snapshot serves the equality check above, the refinement, and
+                # the persistence guard below. Re-reading the file here would reopen the window it
+                # just closed: a peer landing between the two reads would become
+                # `pre_refine_bytes`, so `expected_current_bytes` would match the peer's own bytes
+                # and the cross-plant candidate would persist as validated (#703 Qodo, round 7).
+                # The refine-save still runs outside the drive stage's machine-global rig lock, so
+                # a peer that lands after this snapshot makes the save skip rather than clobber a
+                # newer fit (#579 Codex P2) — which the peer-skip stop then turns into a rebase.
                 artifact = load_plant_artifact(
                     user_dir, args.car, args.track, setup_key, setup_ini, layout=args.track_layout
                 )
@@ -917,7 +949,26 @@ def run_selfplay(
         # artifact after `persist_selfplay_refinement` released the rig lock is caught here too.
         # Restricting it to envelope steps let a plant step record a peer's plant as "this refit,
         # validated" (#703 Codex P1, round 3).
-        plant_moved_during_step = _read_plant_bytes(plant_path) != validated_plant_bytes
+        #
+        # Bytes-after-the-drive are necessary but not sufficient: a peer could replace the plant
+        # before `auto_drive` loads it and restore the expected bytes right after the rig lock
+        # releases, and this comparison would pass while the iteration actually ran a different
+        # fit. The drive REPORTS the provenance of the plant its line was built from, so trust
+        # that over inference whenever it is present (#703 Codex P2, round 7).
+        driven_fit = stage_plant_fit_sha12(outcome)
+        expected_fit = _fit_sha12_of_bytes(validated_plant_bytes)
+        entry["driven_plant_fit_sha12"] = driven_fit
+        fit_mismatch = (
+            driven_fit is not None and expected_fit is not None and driven_fit != expected_fit
+        )
+        plant_moved_during_step = (
+            _read_plant_bytes(plant_path) != validated_plant_bytes or fit_mismatch
+        )
+        if fit_mismatch:
+            entry["driven_plant_fit_mismatch"] = {
+                "expected": expected_fit,
+                "driven": driven_fit,
+            }
         if plant_moved_during_step:
             # Set BOTH consequences here, at the single point that knows the fact — a peer change
             # taints the batch and requires a rebase whether the drive passed or failed. Setting

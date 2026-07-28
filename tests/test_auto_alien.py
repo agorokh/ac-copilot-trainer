@@ -970,7 +970,11 @@ def test_selfplay_plant_step_holds_the_scale_the_base_drive_actually_used(monkey
     )
     assert selfplay["base"]["valid"] is True
     assert selfplay["base_scale"] == 0.8
-    assert selfplay["ladder_base_scale"] == 0.9
+    # #703 (Codex P2, round 7): the rung ladder is ANCHORED to the scale actually validated, not
+    # to --ggv-scale, or the first envelope step would jump two increments (0.8 -> 0.9 instead of
+    # 0.85 with the 0.05 default) and skip the envelope in between.
+    assert selfplay["ladder_base_scale"] == 0.8
+    assert selfplay["requested_ggv_scale"] == 0.9
     entry = selfplay["iterations"][0]
     assert entry["step_kind"] == "plant"
     assert entry["ggv_scale"] == 0.8  # held at what the base drive validated, NOT 0.9
@@ -1457,6 +1461,93 @@ def test_selfplay_fails_closed_when_the_current_plant_is_unreadable(monkeypatch,
     assert selfplay["requires_rebase"] is True
     assert selfplay["iterations"] == []  # never drove an envelope rung on a broken plant
     assert "no readable plant fit" in selfplay["stopped"]
+
+
+def test_selfplay_trusts_the_drive_recorded_fit_over_the_bytes_on_disk(monkeypatch, tmp_path):
+    # #703 (Codex P2, round 7): bytes-after-the-drive are necessary but not sufficient. A peer can
+    # replace the plant before auto_drive loads it and restore the expected bytes right after the
+    # rig lock releases — the byte comparison then passes while the iteration actually ran a
+    # different fit. The drive REPORTS the provenance of the plant its line was built from, so
+    # that report must win over inference from the artifact's bytes.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (0, [93000], [True]),  # iteration 1: bytes look right, provenance says otherwise
+        ],
+    )
+    # The bytes on disk are never disturbed, so only the recorded provenance can catch this.
+    # The BASE must agree (that is round 5's gate); only iteration 1's drive reports a foreign fit.
+    monkeypatch.setattr(auto_alien, "_fit_sha12_of_bytes", lambda raw: "expectedfit0")
+    monkeypatch.setattr(auto_alien, "_current_plant_fit_sha12", lambda *a, **kw: "expectedfit0")
+    reads = {"n": 0}
+
+    def fake_stage_fit(outcome):
+        reads["n"] += 1
+        return "expectedfit0" if reads["n"] == 1 else "someoneelsefit"
+
+    monkeypatch.setattr(auto_alien, "stage_plant_fit_sha12", fake_stage_fit)
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0
+    selfplay = report["selfplay"]
+    entry = selfplay["iterations"][0]
+    assert entry["valid"] is True  # the drive passed the oracle...
+    assert entry["driven_plant_fit_mismatch"] == {
+        "expected": "expectedfit0",
+        "driven": "someoneelsefit",
+    }
+    assert entry["plant_changed_during_step"] is True  # ...on a plant we did not choose
+    assert entry["usable_as_evidence"] is False
+    assert selfplay["requires_rebase"] is True
+    assert selfplay["refit_iterations"] == []  # the refit is NOT recorded as validated
+
+
+def test_selfplay_ladder_rungs_step_from_the_validated_base_not_the_flag(monkeypatch, tmp_path):
+    # #703 (Codex P2, round 7): with --stint derating the base below --ggv-scale, anchoring the
+    # rungs to the flag made the first envelope step jump TWO increments and skip the envelope in
+    # between, so a run could falsify at 0.95 having never tested 0.90.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive at the derated stint pace
+            (0, [94000], [True]),  # iteration 1: no refit batch -> falls through to the rung
+        ],
+        refine_ok=False,
+    )
+    args = _args(
+        tmp_path,
+        "--evidence-dir",
+        str(tmp_path / "ev"),
+        "--laps",
+        "1",
+        "--iterations",
+        "1",
+        "--scale-step",
+        "0.05",
+        "--max-scale",
+        "1.1",
+    )
+    runner = harness.runner()
+    base_dir = tmp_path / "ev" / "drive"
+    runner(["--evidence-dir", str(base_dir)])
+    selfplay = auto_alien.run_selfplay(
+        args,
+        run_stage=runner,
+        evidence_root=tmp_path / "ev",
+        user_dir=tmp_path,
+        setup_key=None,
+        setup_ini=None,
+        base_outcome=load_stage_outcome(base_dir),
+        base_scale=0.85,  # the Layer-4 stint pace; --ggv-scale defaults to 0.9
+    )
+    # One requested increment above what the base actually validated — not 0.95.
+    assert selfplay["iterations"][0]["ggv_scale"] == 0.9
+    assert selfplay["ladder_base_scale"] == 0.85
 
 
 def test_stage_plant_fit_sha12_reads_the_recorded_line_provenance():
