@@ -9,6 +9,7 @@ measured on the rig during #693/#699 rather than a hypothetical.
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -400,8 +401,22 @@ def test_trailing_backslash_is_rejected(bad: str) -> None:
     """`\\"` is an ESCAPED QUOTE to the Windows CRT argv parser, so the quoting does not close."""
     with pytest.raises(rl.RemoteLaunchError, match="trailing backslash"):
         rl.validate_wrapper_token(bad)
+
+
+def test_trailing_backslash_is_rejected_on_a_path() -> None:
+    """The same guard, fed a value that survives ``Path`` normalization on THIS platform.
+
+    ``validate_wrapper_path`` takes a ``Path``, and ``Path`` is separator-aware: on Windows
+    ``Path("C:/repo\\")`` normalizes to ``C:\\repo`` and the trailing separator is gone before the
+    validator ever runs, while a drive root keeps it. On POSIX ``\\`` is an ordinary filename
+    character and survives verbatim. Sharing the token parametrization made this assertion pass
+    on Linux CI and go VACUOUS on the Windows rig, where it then failed outright. The
+    ``endswith`` precondition keeps it from silently going vacuous again.
+    """
+    bad = Path("C:/") if os.name == "nt" else Path("repo\\")
+    assert str(bad).endswith("\\"), "precondition: the guard must actually see a trailing backslash"
     with pytest.raises(rl.RemoteLaunchError, match="trailing backslash"):
-        rl.validate_wrapper_path("repo root", Path(bad))
+        rl.validate_wrapper_path("repo root", bad)
 
 
 # ---------------------------------------------------------------------------

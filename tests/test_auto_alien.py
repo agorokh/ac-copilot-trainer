@@ -564,7 +564,10 @@ class _SelfplayHarness:
         return run
 
 
-def test_selfplay_ladder_progresses_and_reports_trajectory(monkeypatch, tmp_path):
+def test_selfplay_ladder_alternates_one_knob_per_iteration(monkeypatch, tmp_path):
+    # #703: each iteration moves exactly ONE knob, starting with a plant step, so a verdict is
+    # attributable. Iteration 1 refits and holds the scale; iteration 2 steps the rung and
+    # leaves the plant alone; iteration 3 refits again at the newly validated scale.
     harness = _SelfplayHarness(
         monkeypatch,
         tmp_path,
@@ -572,6 +575,7 @@ def test_selfplay_ladder_progresses_and_reports_trajectory(monkeypatch, tmp_path
             (0, [95000], [True]),  # base drive
             (0, [93000], [True]),  # iteration 1
             (0, [91000], [True]),  # iteration 2
+            (0, [90000], [True]),  # iteration 3
         ],
     )
     args = _args(
@@ -581,7 +585,7 @@ def test_selfplay_ladder_progresses_and_reports_trajectory(monkeypatch, tmp_path
         "--laps",
         "1",
         "--iterations",
-        "2",
+        "3",
         "--scale-step",
         "0.05",
         "--max-scale",
@@ -591,17 +595,65 @@ def test_selfplay_ladder_progresses_and_reports_trajectory(monkeypatch, tmp_path
     assert code == 0 and report["ok"]
     selfplay = report["selfplay"]
     assert selfplay["stopped"] == "completed"
-    assert selfplay["lap_trajectory_ms"] == [[95000], [93000], [91000]]
-    assert selfplay["best_lap_ms"] == 91000
+    assert selfplay["ladder_mode"] == "decoupled"
+    assert selfplay["lap_trajectory_ms"] == [[95000], [93000], [91000], [90000]]
+    assert selfplay["best_lap_ms"] == 90000
+    kinds = [entry["step_kind"] for entry in selfplay["iterations"]]
     scales = [entry["ggv_scale"] for entry in selfplay["iterations"]]
-    assert scales == [0.95, 1.0]
+    assert kinds == ["plant", "envelope", "plant"]
+    # The plant steps hold the last VALIDATED scale (0.9 base, then 0.95 once the rung landed);
+    # only the envelope step moves the rung. Exactly one knob changes per iteration.
+    assert scales == [0.9, 0.95, 0.95]
     assert all(entry["valid"] for entry in selfplay["iterations"])
+    # The envelope step deliberately leaves the plant alone — it never even attempts a refit.
+    assert selfplay["iterations"][1]["refine_skipped"]
+    assert "refine" not in selfplay["iterations"][1]
     # Each refine consumed the PREVIOUS drive's batch (provenance-bound self-play).
     assert len(harness.refine_calls) == 2
     assert harness.saves == 2
     assert harness.persist_lock_timeouts == [0.0, 0.0]
+    assert selfplay["refit_iterations"] == [1, 3]
     # The plant on disk is the last refined fit (no falsification -> no revert).
     assert _json.loads(harness.plant_path.read_text(encoding="utf-8")) == {"v": "iter2"}
+
+
+def test_selfplay_falsified_envelope_rung_keeps_the_validated_refit(monkeypatch, tmp_path):
+    # #703 core regression: a falsified SCALE rung must not discard the refit that a previous,
+    # independently validated plant step persisted. Before decoupling, both reverted together.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive: valid
+            (0, [93000], [True]),  # iteration 1: plant step, VALID -> refit persisted
+            (0, [92000], [False]),  # iteration 2: envelope rung, AC-invalid lap -> falsified
+        ],
+    )
+    args = _args(
+        tmp_path,
+        "--evidence-dir",
+        str(tmp_path / "ev"),
+        "--laps",
+        "1",
+        "--iterations",
+        "4",
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0 and report["ok"]  # the ladder ended honestly
+    selfplay = report["selfplay"]
+    plant_step, envelope_step = selfplay["iterations"]
+    assert plant_step["step_kind"] == "plant" and plant_step["valid"] is True
+    assert envelope_step["step_kind"] == "envelope" and envelope_step["valid"] is False
+    # The verdict names the knob, and the retained refit is reported rather than silently lost.
+    assert envelope_step["falsified_component"] == "envelope"
+    assert envelope_step["plant_refit_retained"] == [1]
+    assert "envelope step" in selfplay["stopped"]
+    assert "AC-invalid lap" in selfplay["stopped"]
+    # Nothing to revert: the envelope step never touched the artifact.
+    assert "reverted" not in envelope_step
+    assert harness.saves == 1
+    # THE POINT OF #703 — the validated refit survives the falsified rung.
+    assert _json.loads(harness.plant_path.read_text(encoding="utf-8")) == {"v": "iter1"}
 
 
 def test_selfplay_falsified_step_reverts_plant_and_stops(monkeypatch, tmp_path):
@@ -630,7 +682,43 @@ def test_selfplay_falsified_step_reverts_plant_and_stops(monkeypatch, tmp_path):
     assert len(selfplay["iterations"]) == 1  # never silently retried
     entry = selfplay["iterations"][0]
     assert entry["valid"] is False and entry["reverted"] is True
+    # #703: the falsified knob was the PLANT (the scale was held), so the revert — the only
+    # downward path a strictly-monotone selfplay merge has — is the correct, attributed response.
+    assert entry["step_kind"] == "plant"
+    assert entry["falsified_component"] == "plant"
+    assert "plant step (ggv_scale held at" in selfplay["stopped"]
     # Keep-last-valid: the falsified refined fit was rolled back on disk.
+    assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "original"}'
+
+
+def test_selfplay_unavailable_refit_falls_through_to_the_envelope_rung(monkeypatch, tmp_path):
+    # #703 AC: invalid/absent refit + falsified scale. A plant step with nothing to persist has
+    # no envelope of its own to test, so it spends the drive on the rung instead of re-driving an
+    # identical line — and when THAT falsifies there is no refit to lose.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive: valid
+            (0, [94000], [False]),  # iteration 1: falls through to the rung, then falsifies
+        ],
+        refine_ok=False,
+    )
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "3"
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0 and report["ok"]
+    selfplay = report["selfplay"]
+    entry = selfplay["iterations"][0]
+    assert entry["refine"]["ok"] is False  # the refit was attempted and did not land
+    assert entry["fell_back_to_envelope"]
+    assert entry["step_kind"] == "envelope"
+    assert entry["ggv_scale"] == 0.95  # the rung moved, not the plant
+    assert entry["falsified_component"] == "envelope"
+    assert entry["plant_refit_retained"] == []  # no refit had landed, so none was retained
+    assert harness.saves == 0
+    assert "reverted" not in entry
     assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "original"}'
 
 
@@ -773,6 +861,11 @@ def test_selfplay_refine_save_skipped_when_peer_updates_plant(monkeypatch, tmp_p
     entry = report["selfplay"]["iterations"][0]
     assert "save_skipped" in entry["refine"]
     assert harness.saves == 0
+    # #703: a plant step that persisted nothing falls through to the rung, so the peer-clobber
+    # guard still costs no drive — and there is no candidate that a later verdict could revert.
+    assert entry["step_kind"] == "envelope"
+    assert entry["fell_back_to_envelope"]
+    assert "reverted" not in entry
     # The peer's newer artifact survived untouched.
     assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "peer"}'
 

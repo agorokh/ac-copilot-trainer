@@ -350,7 +350,11 @@ def evaluate_selfplay_iteration(
 
 
 def iteration_scale(base: float, step: float, index: int, cap: float) -> float:
-    """The envelope ladder's ggv-scale for iteration ``index`` (1-based), capped."""
+    """The envelope ladder's ggv-scale for rung ``index`` (1-based), capped.
+
+    Since #703 the rung index advances only on *envelope* steps, so it is no longer the same
+    counter as the self-play iteration index (plant steps hold the last validated scale).
+    """
     return round(min(base + step * index, cap), 6)
 
 
@@ -366,14 +370,33 @@ def run_selfplay(
 ) -> dict:
     """Drive the #577 refine -> rebuild -> drive self-play ladder; returns the selfplay report.
 
-    Iteration ``i`` refines the plant from the PREVIOUS valid drive's lap archives (provenance-
-    bound to the pipeline's own stages), persists it through ``save_plant_artifact`` (the fit
-    provenance hash change invalidates the cached alien line, so the next drive rebuilds the
-    line/QSS against the updated plant), steps the envelope ladder's ggv-scale, and drives again.
-    A falsified step (see :func:`evaluate_selfplay_iteration`) reverts the plant to the last
-    valid artifact bytes and stops — the report names the falsification. A step that cannot
-    change the envelope at all (scale already capped AND the refit failed) stops honestly rather
-    than re-driving the identical envelope.
+    **Decoupled ladder (#703).** Every iteration changes exactly ONE knob, so a falsification
+    identifies which knob it falsified:
+
+    * a **plant** step refines the plant from the PREVIOUS valid drive's lap archives (provenance-
+      bound to the pipeline's own stages), persists it through ``save_plant_artifact`` (the fit
+      provenance hash change invalidates the cached alien line, so the drive rebuilds the line/QSS
+      against the updated plant) and drives at the LAST VALIDATED ``ggv_scale``;
+    * an **envelope** step leaves the plant untouched and drives the next rung of the ggv-scale
+      ladder.
+
+    The steps alternate, starting with a plant step. A plant step whose refit is unavailable or a
+    no-op falls through to an envelope step rather than re-driving an identical line, and an
+    envelope step at the scale cap falls back to a plant step — the ladder only stops when neither
+    knob can move.
+
+    Why not one iteration per (refit + scale step)? Because the oracle judges the iteration as a
+    whole, so a falsified scale rung reverted a refit built from independently valid evidence, and
+    the top rung is by construction the one most likely to falsify — the ladder destroyed its own
+    best lever (issue #703; ~3.5 s at identical scale on the #529 Magione ladders). Attributing the
+    verdict by re-driving would cost an extra launch cycle (expensive under #627), and simply
+    keeping every refit is unsafe: :func:`~tools.ac_harness.ggv_profile.merge_selfplay_model` is
+    strictly monotone (it only ever RAISES bins), so the keep-last-valid revert is the only
+    downward path the plant has. Decoupling keeps that safety valve and makes it precise: a
+    falsified plant step still reverts, a falsified envelope step has nothing to revert.
+
+    A falsified step (see :func:`evaluate_selfplay_iteration`) stops the ladder and the report
+    names both the reason and the falsified component (``plant`` vs ``envelope``).
     """
     from tools.ac_harness.auto_drive import generic_gt3_ggv
     from tools.ac_harness.plant_id import (
@@ -398,6 +421,9 @@ def run_selfplay(
         "stopped": "completed",
         "lap_trajectory_ms": [],
         "best_lap_ms": None,
+        # #703: each iteration moves exactly one knob, so a verdict is attributable.
+        "ladder_mode": "decoupled",
+        "refit_iterations": [],
     }
     base_laps = stage_lap_times_ms(base_outcome)
     selfplay["lap_trajectory_ms"].append(base_laps)
@@ -431,9 +457,18 @@ def run_selfplay(
             "the ladder starts without a refit batch"
         )
     prev_scale = args.ggv_scale
+    rung = 1  # next envelope rung to attempt (advances only on envelope steps, #703)
+    next_step_kind = "plant"
     for index in range(1, args.iterations + 1):
-        scale = iteration_scale(args.ggv_scale, args.scale_step, index, args.max_scale)
-        entry: dict = {"index": index, "ggv_scale": scale}
+        # 0) Pick this iteration's single knob (#703). An envelope step whose rung cannot move
+        #    (scale capped) becomes a plant step — the refit is then the only remaining lever;
+        #    if it is also a no-op the fall-through below reaches the unchanged-envelope stop.
+        step_kind = next_step_kind
+        envelope_scale = iteration_scale(args.ggv_scale, args.scale_step, rung, args.max_scale)
+        if step_kind == "envelope" and envelope_scale == prev_scale:
+            step_kind = "plant"
+        scale = prev_scale if step_kind == "plant" else envelope_scale
+        entry: dict = {"index": index, "step_kind": step_kind, "ggv_scale": scale}
         selfplay["iterations"].append(entry)
 
         # 1) Refine the plant from the previous drive's batch (keep-last-valid on any failure).
@@ -444,7 +479,12 @@ def run_selfplay(
         last_valid_bytes: bytes | None = None
         candidate_bytes: bytes | None = None
         try:
-            if not prev_archives:
+            if step_kind == "envelope":
+                # #703: an envelope step moves only ggv_scale. The plant is deliberately left
+                # alone, so a falsification here cannot implicate — or discard — a refit whose
+                # evidence was independently valid.
+                entry["refine_skipped"] = "envelope step (plant deliberately untouched)"
+            elif not prev_archives:
                 entry["refine"] = {
                     "ok": False,
                     "reason": "no lap archives from the previous drive",
@@ -547,7 +587,16 @@ def run_selfplay(
             print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
             break
 
-        # 2) Refuse to re-drive an identical envelope: no refit AND no scale movement means the
+        # 2) A plant step whose refit did not land has nothing of its own to test: spend the
+        #    drive on the envelope rung instead of re-driving the identical line (#703).
+        if step_kind == "plant" and not refined:
+            step_kind = "envelope"
+            scale = envelope_scale
+            entry["step_kind"] = step_kind
+            entry["ggv_scale"] = scale
+            entry["fell_back_to_envelope"] = "refit did not change the plant"
+
+        # 3) Refuse to re-drive an identical envelope: no refit AND no scale movement means the
         #    step could only repeat the previous iteration verbatim (#577 AC: never silently
         #    retry the same envelope).
         if not refined and scale == prev_scale:
@@ -559,12 +608,12 @@ def run_selfplay(
             print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
             break
 
-        # 3) Drive the (possibly rebuilt) line at this iteration's envelope.
+        # 4) Drive the (possibly rebuilt) line at this iteration's envelope.
         settled = wait_sidecar_port_settled(args.sidecar_url or DEFAULT_SIDECAR_URL)
         entry["sidecar_port_before"] = settled
         stage_dir = Path(evidence_root) / f"iter{index:02d}"
         print(
-            f"auto-alien: iteration {index}/{args.iterations} drive "
+            f"auto-alien: iteration {index}/{args.iterations} {step_kind} step drive "
             f"(ggv_scale={scale}, laps={args.laps or 1})"
         )
         code = run_stage(drive_argv(args, stage_dir, ggv_scale=scale))
@@ -591,11 +640,18 @@ def run_selfplay(
         entry["reason"] = reason
 
         if not valid:
-            # 4) Keep-last-valid: revert the refined plant so the falsified envelope never
+            # 5) Keep-last-valid: revert the refined plant so the falsified envelope never
             #    becomes the combo's persisted fit (#244 pattern). Only touch the artifact when
             #    it is still byte-identical to what THIS iteration persisted — a peer worktree
             #    may have re-identified the combo meanwhile.
+            #
+            #    Because the step moved exactly one knob, the verdict is attributable (#703): a
+            #    plant step falsifies the REFIT (revert it — the monotone merge has no other way
+            #    down), an envelope step falsifies the SCALE RUNG and leaves every earlier,
+            #    independently validated refit persisted.
             entry["falsified"] = reason
+            entry["falsified_component"] = "plant" if step_kind == "plant" else "envelope"
+            retained_refits = list(selfplay["refit_iterations"])
             if refined and last_valid_bytes is not None:
                 try:
                     if revert_plant_artifact(
@@ -637,8 +693,25 @@ def run_selfplay(
                     f"auto-alien: iteration {index} FALSIFIED ({reason}) — plant unchanged "
                     "this iteration (nothing to revert)"
                 )
+            if entry["falsified_component"] == "envelope":
+                # The whole point of #703: this rung is disproven, the plant is not.
+                entry["plant_refit_retained"] = retained_refits
+                retained = (
+                    f"the plant refit from iteration(s) {retained_refits} is RETAINED"
+                    if retained_refits
+                    else "no plant refit had landed yet, so nothing was retained"
+                )
+                print(
+                    f"auto-alien: the falsified knob was the ENVELOPE (ggv_scale {scale}); "
+                    f"{retained}"
+                )
+            component = (
+                f"{entry['falsified_component']} step, ggv_scale {scale}"
+                if entry["falsified_component"] == "envelope"
+                else f"plant step (ggv_scale held at {scale})"
+            )
             if selfplay["ok"]:
-                selfplay["stopped"] = f"falsified at iteration {index}: {reason}"
+                selfplay["stopped"] = f"falsified at iteration {index} ({component}): {reason}"
             else:
                 selfplay["stopped"] = (
                     f"rollback failed at iteration {index}: {entry['revert_error']} "
@@ -647,12 +720,19 @@ def run_selfplay(
             break
 
         print(
-            f"auto-alien: iteration {index} VALID — laps "
+            f"auto-alien: iteration {index} VALID ({step_kind} step) — laps "
             + ", ".join(f"{ms / 1000.0:.3f}s" for ms in lap_times)
         )
         if lap_times:
             it_best = min(lap_times)
             best = it_best if best is None else min(best, it_best)
+        if refined:
+            # This refit has now been driven and survived the oracle on its own, with the
+            # envelope held — it is validated evidence, not an untested candidate (#703).
+            selfplay["refit_iterations"].append(index)
+        if step_kind == "envelope":
+            rung += 1
+        next_step_kind = "envelope" if step_kind == "plant" else "plant"
         prev_archives = archives
         prev_scale = scale
 
@@ -1009,14 +1089,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--iterations",
         type=int,
         default=0,
-        help="#577 progressive-envelope self-play: after the base drive, run K refine->rebuild->"
-        "drive iterations with keep-last-valid falsification (0 = off)",
+        help="#577 progressive-envelope self-play: after the base drive, run K drive iterations "
+        "with keep-last-valid falsification (0 = off). #703: iterations ALTERNATE between a "
+        "plant step (refit from the last valid batch, ggv-scale held) and an envelope step "
+        "(next ggv-scale rung, plant untouched), so a falsification names which knob it "
+        "falsified and a falsified rung no longer discards a validated refit. Budget ~2 "
+        "iterations per envelope rung",
     )
     p.add_argument(
         "--scale-step",
         type=float,
         default=0.05,
-        help="per-iteration ggv-scale increment for the self-play envelope ladder (#244 pattern)",
+        help="per-rung ggv-scale increment for the self-play envelope ladder (#244 pattern)",
     )
     p.add_argument(
         "--max-scale",
