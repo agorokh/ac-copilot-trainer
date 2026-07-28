@@ -74,6 +74,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
+from tools.ac_harness.remote_launcher import RemoteLaunchError, validate_wrapper_token
 from tools.ac_harness.resilient_launch import (
     DEFAULT_GO_LIVE_TIMEOUT,
     FREEZE_VERDICTS,
@@ -252,6 +253,17 @@ def build_plan(
         raise ValueError("car and track must not be blank")
     if layout is not None and not layout.strip():
         raise ValueError("layout must not be blank when provided")
+    # Fail BEFORE the plan artifact is written: these values are pasted into cmd.exe on the rig,
+    # so a metacharacter in one of them must not reach a saved plan (see :func:`_shell_quote`).
+    for label, value in (("car", car), ("track", track), ("layout", layout)):
+        if value is None:
+            continue
+        try:
+            validate_wrapper_token(value)
+        except RemoteLaunchError as exc:
+            raise ValueError(
+                f"unsafe {label} {value!r} for a pasted cmd.exe command: {exc}"
+            ) from exc
     if not math.isfinite(stability_window) or stability_window <= 0:
         raise ValueError("stability_window must be finite and > 0")
     if not math.isfinite(go_live_timeout) or go_live_timeout <= 0:
@@ -1068,7 +1080,21 @@ def _shell_quote(token: str) -> str:
 
     Plan generation often runs on a Mac/dev host; the printed lines are pasted onto ``pc``, so
     host-local ``shlex.quote`` / absolute ``cd`` paths are wrong (#657 daemon).
+
+    ``list2cmdline`` implements **CRT argv** quoting, which is not the same thing as ``cmd.exe``
+    escaping: it leaves ``&``, ``|``, ``^``, ``<``, ``>`` untouched, and ``%VAR%`` expands even
+    inside double quotes. Since these lines are pasted straight into ``cmd.exe``, a car/track/
+    layout or a checkout path containing one of those characters could split the command. So
+    validate first with the transport's existing allowlist — ``remote_launcher`` already solved
+    this for the same shell, and a second escaping scheme here would be a competing source of
+    truth for one rule.
     """
+    try:
+        validate_wrapper_token(token)
+    except RemoteLaunchError as exc:
+        raise ValueError(
+            f"refusing to print a pasteable command containing {token!r}: {exc}"
+        ) from exc
     return subprocess.list2cmdline([token])
 
 

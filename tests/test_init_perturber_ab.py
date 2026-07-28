@@ -657,6 +657,31 @@ def test_plan_cli_prints_boot_scoped_protocol_and_windows_quoting(
     assert "'" not in sample  # shlex.quote would wrap with single quotes on POSIX
 
 
+@pytest.mark.parametrize("hostile", ["x&whoami", "%USERPROFILE%", "a|b", "a^b", "a>b", 'a"b'])
+def test_pasted_commands_reject_cmd_metacharacters(hostile: str) -> None:
+    """Codex #708: list2cmdline is CRT-argv quoting, NOT cmd.exe escaping.
+
+    `&`, `|`, `^`, `<`, `>` pass through untouched and `%VAR%` expands even inside double
+    quotes, so a hostile car/track/layout or checkout path could split the pasted command.
+    Reuses the transport's existing allowlist rather than inventing a second escaping scheme.
+    """
+    assert subprocess.list2cmdline([hostile]) != ""  # sanity: it really does not escape these
+    with pytest.raises(ValueError, match="refusing to print"):
+        ab_mod._shell_quote(hostile)
+
+
+def test_build_plan_rejects_cmd_metacharacters_before_writing_anything() -> None:
+    """The failure must land before the plan artifact exists, not at print time."""
+    with pytest.raises(ValueError, match="unsafe car"):
+        build_plan(MIN_BOOTS_PER_ARM, car="ks_car&whoami")
+    with pytest.raises(ValueError, match="unsafe track"):
+        build_plan(MIN_BOOTS_PER_ARM, track="spa|calc")
+    with pytest.raises(ValueError, match="unsafe layout"):
+        build_plan(MIN_BOOTS_PER_ARM, layout="%USERPROFILE%")
+    # The real defaults must still pass.
+    assert build_plan(MIN_BOOTS_PER_ARM)["launch"]["car"]
+
+
 def test_analyze_cli_round_trip(capsys, tmp_path, monkeypatch) -> None:
     """The consumer path: plan -> per-boot reports -> analysis, through main()."""
     from tools.ac_harness.init_perturber_ab import main
