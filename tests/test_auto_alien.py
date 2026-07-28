@@ -1851,6 +1851,84 @@ def test_unproven_base_is_not_offered_as_a_scientist_baseline(tmp_path):
     assert auto_alien._scientist_baseline_outcome(proven, base_outcome) is base_outcome
 
 
+def test_next_envelope_rung_crosses_a_wide_rounding_plateau():
+    # #703 (Codex P2, round 12): a fixed three-probe window past the algebraic candidate wrongly
+    # reported an exhausted ladder when the plateau is wider than two indices. Binary search finds
+    # the exact smallest usable rung instead.
+    from tools.ac_harness.auto_alien import next_envelope_rung
+
+    rung = next_envelope_rung(0.9, 2e-17, 0.91, 0.9, 1)
+    assert rung is not None, "a usable rung exists past the plateau; must not report exhausted"
+    assert iteration_scale(0.9, 2e-17, rung, 0.91) > 0.9
+    # ...and it is the SMALLEST such rung, not a leap to the cap.
+    assert iteration_scale(0.9, 2e-17, rung - 1, 0.91) <= 0.9
+    # A step that genuinely cannot move the envelope at all still reports exhausted (round 5).
+    assert next_envelope_rung(0.9, 2e-309, 1.1, 0.9, 1) is None
+
+
+def test_selfplay_reverts_a_falsified_refit_when_the_post_drive_read_fails(monkeypatch, tmp_path):
+    # #703 (Codex P1 + Qodo + self-hosted HIGH, round 12): the new post-drive read guard sits
+    # BEFORE the keep-last-valid block, so breaking on an OSError skipped the rollback and left a
+    # falsified monotone grip increase as the combo's loadable plant. Only an oracle-VALID step is
+    # protected from an I/O blip; a falsified one must still be rolled back.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (0, [94000], [False]),  # iteration 1: refit persisted, then AC-invalid lap
+        ],
+    )
+    real_read = auto_alien._read_plant_bytes
+    drives = {"n": 0}
+    real_runner = harness.runner()
+
+    def runner(argv):
+        drives["n"] += 1
+        return real_runner(argv)
+
+    def read_or_explode(path):
+        if drives["n"] == 2:  # the post-drive read for the falsified plant step
+            raise OSError("disk on fire")
+        return real_read(path)
+
+    monkeypatch.setattr(auto_alien, "_read_plant_bytes", read_or_explode)
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
+    )
+    code, report = run_pipeline(args, run_stage=runner)
+    selfplay = report["selfplay"]
+    assert selfplay["ok"] is False and code == 1  # still fails closed
+    entry = selfplay["iterations"][0]
+    assert entry["valid"] is False
+    assert entry["reverted"] is True
+    # THE POINT: the rejected higher-grip candidate is not left for future alien runs.
+    assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "original"}'
+
+
+def test_selfplay_refuses_to_start_without_a_valid_plant(monkeypatch, tmp_path):
+    # #703 (Codex P2, round 12): with no valid on-disk artifact the ladder used to run anyway —
+    # the refit reported "unloadable", fell through to an envelope rung, and that drive's
+    # plant-load failure was reported as falsifying the SCALE, on a pipeline that could exit 0.
+    harness = _SelfplayHarness(monkeypatch, tmp_path, stage_specs=[(0, [95000], [True])])
+    monkeypatch.setattr(auto_alien, "plant_artifact_from_bytes", lambda *a, **kw: None)
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
+    )
+    selfplay = auto_alien.run_selfplay(
+        args,
+        run_stage=harness.runner(),
+        evidence_root=tmp_path / "ev",
+        user_dir=tmp_path,
+        setup_key=None,
+        setup_ini=None,
+        base_outcome={"report": {"lap_times_ms": [95000]}, "lap_archives": []},
+    )
+    assert selfplay["ok"] is False
+    assert selfplay["iterations"] == []  # never drove a rung without a plant
+    assert "no valid plant artifact" in selfplay["stopped"]
+
+
 def test_stage_plant_fit_sha12_reads_the_recorded_line_provenance():
     # The ladder's proof of WHICH plant produced a batch. Shape matches auto_drive's report.
     outcome = {"run": {"alien_line": {"plant_provenance": {"sha12": "51fcee4af59a"}}}}

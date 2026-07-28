@@ -420,6 +420,13 @@ def _read_plant_bytes(plant_path: Path) -> bytes | None:
         return None
 
 
+#: How far past the algebraic candidate the rung search will look for the six-decimal rounding
+#: plateau to end. Generous for any real ``--scale-step`` (1e-7 clears it in ~5 rungs); a step that
+#: needs more is below the ladder's own resolution, and leaping that many indices at once would
+#: deliver the rounding floor rather than the requested increment (#703).
+_MAX_PLATEAU_RUNGS = 4096
+
+
 def _rung_reaching(base: float, step: float, target: float) -> int | None:
     """Smallest rung whose raw ladder value reaches ``target``; ``None`` when unrepresentable.
 
@@ -475,12 +482,26 @@ def next_envelope_rung(
     # first envelope drive would then jump straight to `--max-scale` — turning an almost-zero
     # requested step into an immediate leap to the safety cap. A step that cannot move the
     # envelope at its own granularity means the ladder is exhausted, not that the cap is due
-    # (#703 Codex P2, round 5). The window absorbs float error at the rounding plateau; it is
-    # bounded, so the search still cannot spin.
-    for probe in (max(rung, needed), max(rung, needed) + 1, max(rung, needed) + 2):
-        if iteration_scale(base, step, probe, cap) > prev_scale:
-            return probe
-    return None
+    # (#703 Codex P2, round 5).
+    #
+    # The plateau past `needed` can be WIDER than a couple of indices when the step is far below
+    # the six-decimal spacing, so a fixed three-probe window wrongly reported an exhausted ladder
+    # (#703 Codex P2, round 12). Binary-search the plateau instead — `iteration_scale` is monotone
+    # non-decreasing in the rung, so this finds the exact smallest usable rung — bounded by
+    # `_MAX_PLATEAU_RUNGS` past `needed`. That bound is the same principle as the round-5 rule:
+    # a rung the ladder would have to leap thousands of indices to reach is not a step the
+    # operator asked for, it is the rounding floor, and the honest answer is "no rung".
+    lo = max(rung, needed)
+    hi = lo + _MAX_PLATEAU_RUNGS
+    if iteration_scale(base, step, hi, cap) <= prev_scale:
+        return None
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if iteration_scale(base, step, mid, cap) > prev_scale:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo if iteration_scale(base, step, lo, cap) > prev_scale else None
 
 
 def run_selfplay(
@@ -571,6 +592,23 @@ def run_selfplay(
     ladder_start_artifact = plant_artifact_from_bytes(
         validated_plant_bytes, args.car, args.track, setup_key, layout=args.track_layout
     )
+    if ladder_start_artifact is None:
+        # No usable plant on disk. Without this the ladder ran anyway: the refit reported
+        # "artifact unloadable", fell through to an envelope rung, and that drive's plant-load
+        # failure was reported as falsifying the SCALE — a fabricated verdict about the envelope,
+        # on a pipeline that could still exit 0 (#703 Codex P2, round 12).
+        return {
+            "ok": False,
+            "ladder_mode": "decoupled",
+            "iterations": [],
+            "stopped": (
+                f"no valid plant artifact for this combo at {plant_path} — self-play not "
+                "started; a rung driven without a plant would falsify the envelope for the "
+                "wrong reason"
+            ),
+            "lap_trajectory_ms": [],
+            "best_lap_ms": None,
+        }
     selfplay: dict = {
         "iterations_requested": args.iterations,
         "laps_per_iteration": args.laps,
@@ -989,13 +1027,47 @@ def run_selfplay(
         try:
             post_drive_bytes = _read_plant_bytes(plant_path)
         except OSError as exc:
-            # Never let a read blip revert a provenance-validated refit (self-hosted HIGH).
+            # Never let a read blip revert a provenance-VALIDATED refit (self-hosted HIGH). But a
+            # FALSIFIED refit is a different case: breaking here would skip the keep-last-valid
+            # rollback below and leave the rejected monotone grip increase as the combo's loadable
+            # plant. Roll that one back before failing closed — only an oracle-VALID step is
+            # protected from the blip (Codex P1 + Qodo + self-hosted HIGH, round 12).
             selfplay["ok"] = False
             selfplay["stopped"] = (
                 f"cannot read the plant artifact after iteration {index}'s {step_kind} step "
                 f"({exc}) — self-play stopped without judging the plant; an unreadable artifact "
                 "is not evidence that it changed"
             )
+            if not valid and refined and last_valid_bytes is not None:
+                try:
+                    if revert_plant_artifact(
+                        plant_path,
+                        last_valid_bytes,
+                        expected_current_bytes=candidate_bytes,
+                        car_id=args.car,
+                        track_id=args.track,
+                        lock_timeout=lock_timeout,
+                    ):
+                        entry["reverted"] = True
+                        print(
+                            f"auto-alien: iteration {index} FALSIFIED and unreadable afterwards "
+                            "— plant reverted to the last-valid fit"
+                        )
+                    else:
+                        entry["reverted"] = False
+                        entry["revert_skipped"] = (
+                            "plant artifact is no longer this iteration's candidate — revert "
+                            "skipped"
+                        )
+                except (OSError, RigSessionBusy) as revert_exc:
+                    entry["reverted"] = False
+                    entry["revert_error"] = (
+                        f"artifact rollback failed: {type(revert_exc).__name__}: {revert_exc}"
+                    )
+                    print(
+                        f"auto-alien: iteration {index} REVERT FAILED — {entry['revert_error']} "
+                        "(the falsified fit may still be persisted; re-run --force-identify)"
+                    )
             print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
             break
         plant_moved_during_step = (
