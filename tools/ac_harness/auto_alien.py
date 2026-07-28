@@ -366,6 +366,42 @@ def iteration_scale(base: float, step: float, index: int, cap: float) -> float:
     return round(min(base + step * index, cap), 6)
 
 
+def stage_plant_fit_sha12(outcome: dict | None) -> str | None:
+    """The plant-fit hash the stage's alien line was actually built from, or ``None``.
+
+    ``auto_drive`` records ``run.alien_line.plant_provenance`` — a content hash of the exact plant
+    artifact the drive consumed. It is the only evidence of WHICH plant produced a batch, and the
+    self-play ladder needs it to prove that the drive whose archives it is about to refine from
+    ran the same fit the ladder is now holding (#703 Codex P1).
+    """
+    alien_line = (outcome or {}).get("run")
+    alien_line = alien_line.get("alien_line") if isinstance(alien_line, dict) else None
+    provenance = alien_line.get("plant_provenance") if isinstance(alien_line, dict) else None
+    sha12 = provenance.get("sha12") if isinstance(provenance, dict) else None
+    return sha12 if isinstance(sha12, str) and sha12 else None
+
+
+def _current_plant_fit_sha12(
+    user_dir: Path,
+    args: argparse.Namespace,
+    setup_key: str | None,
+    setup_ini: str | Path | None,
+) -> str | None:
+    """The plant-fit hash of the combo's artifact as it stands on disk right now (best-effort)."""
+    from tools.ac_harness.alien_line import plant_provenance
+
+    try:
+        artifact = load_plant_artifact(
+            user_dir, args.car, args.track, setup_key, setup_ini, layout=args.track_layout
+        )
+    except OSError:
+        return None
+    if not isinstance(artifact, dict):
+        return None
+    sha12 = plant_provenance(artifact).get("sha12")
+    return sha12 if isinstance(sha12, str) and sha12 else None
+
+
 def _read_plant_bytes(plant_path: Path) -> bytes | None:
     """The plant artifact's current bytes, or ``None`` when absent/unreadable (best-effort)."""
     try:
@@ -422,15 +458,16 @@ def next_envelope_rung(
     # rungs on the same rounded plateau, and a closed form that ignores it lands *inside* the
     # plateau and wrongly concludes no rung remains (#703 Codex P2).
     needed = _rung_reaching(base, step, prev_scale + 5e-7)
-    # Saturation is a guaranteed hit because `capped > prev_scale` was established above, so this
-    # search is bounded and always finds a rung when one exists — no unbounded scan.
-    saturating = _rung_reaching(base, step, cap)
-    probes = {max(rung, 1)}
-    if needed is not None:
-        probes |= {max(rung, needed), max(rung, needed) + 1}
-    if saturating is not None:
-        probes.add(max(rung, saturating))
-    for probe in sorted(probes):
+    if needed is None:
+        return None
+    # Only rungs derived from the requested step count. A saturating fallback would "find" a rung
+    # for a subnormal step (`2e-309`) whose float product cannot move off `base` at all, and the
+    # first envelope drive would then jump straight to `--max-scale` — turning an almost-zero
+    # requested step into an immediate leap to the safety cap. A step that cannot move the
+    # envelope at its own granularity means the ladder is exhausted, not that the cap is due
+    # (#703 Codex P2, round 5). The window absorbs float error at the rounding plateau; it is
+    # bounded, so the search still cannot spin.
+    for probe in (max(rung, needed), max(rung, needed) + 1, max(rung, needed) + 2):
         if iteration_scale(base, step, probe, cap) > prev_scale:
             return probe
     return None
@@ -579,7 +616,31 @@ def run_selfplay(
     # The plant bytes as of the last VALIDATED state. An envelope step must drive exactly this
     # plant; if a peer re-identified the combo meanwhile, the step would move two knobs and its
     # verdict would not be the envelope's (#703 Codex P1).
+    #
+    # The bytes on disk are NOT self-evidently what the base drive ran: a peer may have
+    # re-identified the combo after the base stage finished and before this snapshot. Adopting
+    # them unchecked would make the first fallback envelope step pass the byte check while
+    # driving a different plant AND a higher scale, or merge the base's evidence into an
+    # unvalidated peer fit. `auto_drive` records the fit its line was built from, so require the
+    # two to agree before treating the snapshot as validated (#703 Codex P1, round 5).
     validated_plant_bytes = _read_plant_bytes(plant_path)
+    base_fit = stage_plant_fit_sha12(base_outcome)
+    current_fit = _current_plant_fit_sha12(user_dir, args, setup_key, setup_ini)
+    selfplay["base_plant_fit_sha12"] = base_fit
+    if base_fit is not None and current_fit is not None and base_fit != current_fit:
+        selfplay["requires_rebase"] = True
+        selfplay["stopped"] = (
+            f"plant changed since the base drive (base ran fit {base_fit}, disk now carries "
+            f"{current_fit}) — self-play stopped before iteration 1; the base evidence and the "
+            "on-disk plant are from different fits, so no step could be attributed"
+        )
+        print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
+        selfplay["best_lap_ms"] = best
+        return selfplay
+    if base_fit is None:
+        # Not a blocker (an older stage report or a failed base drive records no line), but the
+        # ladder's first step then rests on an unverified snapshot — say so rather than imply proof.
+        selfplay["base_plant_fit_unverified"] = True
     next_step_kind = "plant"
     for index in range(1, args.iterations + 1):
         # 0) Pick this iteration's single knob (#703). When no envelope rung can exceed the
@@ -917,8 +978,11 @@ def run_selfplay(
             elif entry["falsified_component"] == "plant":
                 component = f"plant step (ggv_scale held at {scale})"
             else:
+                # Name the kind that actually ran: claiming "envelope" on a falsified PLANT step
+                # would make the headline diagnostic contradict `entry["step_kind"]` exactly where
+                # the decoupled ladder is supposed to identify the knob (#703 Codex P2, round 5).
                 component = (
-                    f"UNATTRIBUTABLE — the plant changed on disk during this envelope step at "
+                    f"UNATTRIBUTABLE — the plant changed on disk during this {step_kind} step at "
                     f"ggv_scale {scale}, so the verdict belongs to neither knob alone"
                 )
             if selfplay["ok"]:

@@ -1319,6 +1319,60 @@ def test_selfplay_failed_unattributable_step_also_requires_a_rebase(monkeypatch,
     assert entry["usable_as_evidence"] is False
     assert report["selfplay"]["requires_rebase"] is True
     assert called["scientist"] is False  # the failed path gates the scientist too
+    # #703 (Codex P2, round 5): the headline diagnostic must name the kind that actually ran —
+    # claiming "envelope step" on a falsified PLANT step contradicts entry["step_kind"] exactly
+    # where the decoupled ladder is supposed to identify the knob.
+    assert entry["step_kind"] == "plant"
+    assert "during this plant step" in report["selfplay"]["stopped"]
+
+
+def test_next_envelope_rung_does_not_jump_a_subnormal_step_to_the_cap():
+    # #703 (Codex P2, round 5): a saturating fallback "finds" a rung for a subnormal step whose
+    # float product cannot move off `base` at all, and the first envelope drive would then leap
+    # straight to --max-scale — turning an almost-zero requested step into an immediate jump to
+    # the safety cap. A step that cannot move the envelope means the ladder is exhausted.
+    from tools.ac_harness.auto_alien import next_envelope_rung
+
+    assert next_envelope_rung(0.9, 2e-309, 1.1, 0.9, 1) is None
+    # A LEGITIMATE saturation on the first rung is still honoured (0.9 + 0.15 -> capped at 1.0).
+    assert next_envelope_rung(0.9, 0.15, 1.0, 0.9, 1) == 1
+    assert iteration_scale(0.9, 0.15, 1, 1.0) == 1.0
+
+
+def test_selfplay_stops_when_the_plant_changed_since_the_base_drive(monkeypatch, tmp_path):
+    # #703 (Codex P1, round 5): the bytes on disk are not self-evidently what the BASE drive ran.
+    # A peer can re-identify the combo after the base stage and before the ladder snapshots it;
+    # adopting those bytes unchecked would let the first fallback envelope step pass the byte
+    # check while driving a different plant AND a higher scale. auto_drive records the fit its
+    # line was built from, so the two must agree before the snapshot counts as validated.
+    harness = _SelfplayHarness(monkeypatch, tmp_path, stage_specs=[(0, [95000], [True])])
+    monkeypatch.setattr(auto_alien, "stage_plant_fit_sha12", lambda outcome: "basefit000000")
+    monkeypatch.setattr(auto_alien, "_current_plant_fit_sha12", lambda *a, **kw: "peerfit000000")
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
+    )
+    selfplay = auto_alien.run_selfplay(
+        args,
+        run_stage=harness.runner(),
+        evidence_root=tmp_path / "ev",
+        user_dir=tmp_path,
+        setup_key=None,
+        setup_ini=None,
+        base_outcome={"report": {"lap_times_ms": [95000]}, "lap_archives": []},
+    )
+    assert selfplay["requires_rebase"] is True
+    assert selfplay["iterations"] == []  # stopped before iteration 1; nothing was driven
+    assert "plant changed since the base drive" in selfplay["stopped"]
+    assert "basefit000000" in selfplay["stopped"]
+    assert "peerfit000000" in selfplay["stopped"]
+
+
+def test_stage_plant_fit_sha12_reads_the_recorded_line_provenance():
+    # The ladder's proof of WHICH plant produced a batch. Shape matches auto_drive's report.
+    outcome = {"run": {"alien_line": {"plant_provenance": {"sha12": "51fcee4af59a"}}}}
+    assert auto_alien.stage_plant_fit_sha12(outcome) == "51fcee4af59a"
+    assert auto_alien.stage_plant_fit_sha12({"run": {"alien_line": {}}}) is None
+    assert auto_alien.stage_plant_fit_sha12(None) is None
 
 
 def test_next_envelope_rung_crosses_a_rounding_plateau():
