@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-27T04:30:00Z
+last_updated: 2026-07-28T11:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-672-voice-endpoint-hygiene-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-529-pace-ladder-115-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-695-qss-apex-envelope-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-693-off-rig-session0-2026-07-26.md
@@ -120,6 +121,43 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-28) — #672 CLOSED: launcher voice-endpoint hygiene MERGED
+
+**PR [#707](https://github.com/agorokh/ac-copilot-trainer/pull/707) MERGED** as squash
+[`1f5ce2b`](https://github.com/agorokh/ac-copilot-trainer/commit/1f5ce2b); issue
+[#672](https://github.com/agorokh/ac-copilot-trainer/issues/672) **CLOSED** 2026-07-28T11:27:12Z.
+
+**Part A** — `AC_COPILOT_AC_AUDIO_DEVICE` (env) / `ac_audio_device` (settings) declares the endpoint
+AC/FMOD plays through. The launcher compares it against the sidecar's live `/health`
+`voice.device_name` and emits a `voice_endpoint` row in `status.json`: `shared` / `distinct` /
+`undeclared` / `unknown` (voice not running) / `unverifiable` (running but the backend reports no
+device). `shared` → amber `SHARED_ENDPOINT` on the Voice row; `unverifiable` → amber
+`ENDPOINT_UNVERIFIED`. **Warn-only by construction** (`ok=True` always) — `start_sidecar` blocks on
+any not-ok preflight row and the rig ships pinned to the shared endpoint.
+
+**Part B** — `voice_bank_source` (env / settings / unset) on the Voice row and in `status.json`, so
+a bank force-armed from the environment, or *parked* by a set-but-blank `AC_COPILOT_VOICE_BANK`, is
+diagnosable. The blank case also now actually reaches the child as parked (it used to leak the
+inherited whitespace value and read as DISABLED).
+
+**Verified on the rig, through the product's own path** — not from the diff:
+real `python -m tools.rig_launcher --once` writing real `status.json`, driven against a real HTTP
+`/health` serving the rig's **verbatim** PortAudio device strings; `shared` and `distinct` both
+observed with `overall: ok`; Voice-row colors read back off the real Tk widgets (`#F4A52C` amber vs
+`#2FBE6E` green). Running it is what caught the two defects a green suite missed — see the node.
+
+**Still operator-gated:** voice re-arm on the rig and any armed-voice soak remain under #627. This
+shipped visibility only.
+
+Detail: [[issue-672-voice-endpoint-hygiene-2026-07-28]].
+
+**Two facts to carry forward:**
+- The **self-hosted reviewer daemon now reviews this repo** (Phase-2 consolidated, `cursor` +
+  `grok`, `EPIC #818 P5`) — clean on the last two SHAs. Older notes saying "does not review this
+  repo (gate vacuous)" are **stale**.
+- `make ci-fast` was **red on Windows** before this work (a `Path("C:/repo\\")` fixture only POSIX
+  can satisfy). Fixed here; if it reds again on a fresh clone, it is not this change.
 
 ## Delivered (2026-07-26 PM) — **#529 G2 MET: 80.791 s** at Magione (floor was 82.7 s); #697 entrypoint live
 
@@ -262,14 +300,14 @@ agent cannot paste itself into a blocking wait. #697 still OPEN for the script.
 both halves: the 1.15/1.20 rungs *were* driven, and no reboot was needed — a ~4 h hold carried
 ~11 landed launch cycles across two full ladders.
 
-**1. PR [#702](https://github.com/agorokh/ac-copilot-trainer/pull/702) (#697) — merge when Codex can
-review.** Head is `279af83`. Everything else is done: 0 review threads, `make ci-fast: OK`,
-72 tests, live-proven on the rig including `cleanup`/`reap`. The only blocker
-is the Codex usage-limit wall — **five** consecutive trigger+cooldown rounds
-(`03:17`, `03:36`, `03:54`, `04:09`, `04:24` UTC) each drew
-*"You have reached your Codex usage limits for code reviews"*. Re-run the atomic
-trigger/cooldown/audit block from `/resolve-pr` § Bot triggers once the quota rolls; if it still
-refuses, that is a genuine operator escalation, not an unfinished loop.
+**1. ~~PR #702 (#697) — merge when Codex can review.~~ DONE — do not carry this forward.**
+Reconciled live 2026-07-28: `gh pr view 702 --json state,mergedAt,mergeCommit` → **`MERGED`** at
+`2026-07-27T17:51:56Z`, squash [`88c1e59`](https://github.com/agorokh/ac-copilot-trainer/commit/88c1e59);
+`gh issue view 697 --json state` → **`CLOSED`**; `git grep -n remote_launcher origin/main --
+tools/ac_harness/remote_launcher.py` → `origin/main:tools/ac_harness/remote_launcher.py:1150`.
+The quota wall cleared on its own. **The Codex usage limit is transient, not a wall:** it recurred
+during PR #707 (round 4 drew the same message), and a single re-trigger one round later returned a
+normal review. Retry once before treating it as an escalation.
 
 **2. #529 — G2 is met; the remaining gates are the cold-start ones.** Still unclaimed: **G1 as
 written** (cold start on an **unseen** combo, ≤20 laps — the pace band is already cleared on the seed

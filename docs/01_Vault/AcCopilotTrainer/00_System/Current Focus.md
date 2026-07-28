@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-27T03:35:00Z
+last_updated: 2026-07-28T11:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-672-voice-endpoint-hygiene-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-529-pace-ladder-115-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-695-qss-apex-envelope-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-693-off-rig-session0-2026-07-26.md
@@ -52,6 +53,17 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-28):** PR [#707](https://github.com/agorokh/ac-copilot-trainer/pull/707)
+MERGED [`1f5ce2b`](https://github.com/agorokh/ac-copilot-trainer/commit/1f5ce2b) — **#672
+launcher voice-endpoint hygiene, CLOSED**. Part A: `AC_COPILOT_AC_AUDIO_DEVICE` declares AC's
+output endpoint and the launcher warns (warn-only, `ok=True`, never blocks START) when the
+sidecar's live `/health` device matches it; five verdicts in `status.json`. Part B: the
+`AC_COPILOT_VOICE_BANK` arm source (env vs settings, including the set-but-blank *park*) is now
+visible on the Voice row. **Voice re-arm on the rig stays operator-gated under #627** — this is
+visibility code only. Five Codex rounds, 8 P2s, none rejected; the self-hosted daemon (now live
+on this repo, `EPIC #818 P5` cursor+grok) was clean. Detail:
+[[issue-672-voice-endpoint-hygiene-2026-07-28]].
 
 **Delivered (2026-07-26 PM):** `/autonomous-deliver 529` — **#529 G2 MET: 81.505 s at Magione**,
 under the 82.7 s Track-Titan floor (two consecutive flying laps, 0 recoveries, all archives
