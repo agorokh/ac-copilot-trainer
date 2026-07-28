@@ -706,6 +706,25 @@ class TestCycleDelivered:
         assert classify(samples, go_live_timeout=2.0) is LaunchVerdict.WEDGED_INIT
         assert cycle_delivered(samples) is True
 
+    def test_a_packet_advance_proves_delivery_without_a_process_sighting(self):
+        """#710 Codex P1 — the Car0 handshake blocks for up to 5 s, so a process can live and die
+        entirely between two ``acs_alive`` reads while still advancing the render packet. Only a
+        LIVE writer can move a packet id; a corpse is a frozen snapshot."""
+        samples = trace([(0.0, 100, False), (1.0, 101, False), (2.0, 101, False)])
+        assert cycle_delivered(samples) is True
+
+    def test_a_pinned_corpse_packet_is_not_delivery(self):
+        """The dead session's section stays mapped at a high, UNCHANGING id (#628)."""
+        samples = trace([(0.0, 16983, False), (1.0, 16983, False), (2.0, 16983, False)])
+        assert cycle_delivered(samples) is False
+
+    def test_a_physics_advance_also_proves_delivery(self):
+        samples = [
+            Sample(t=0.0, gfx_packet=None, acs_alive=False, phys_packet=500),
+            Sample(t=1.0, gfx_packet=None, acs_alive=False, phys_packet=501),
+        ]
+        assert cycle_delivered(samples) is True
+
 
 def test_watch_live_reports_delivery_alongside_the_verdict(monkeypatch):
     """#710 — the rig path derives delivery from the trace it already collected."""
@@ -904,21 +923,22 @@ class TestRetryLoop:
         assert payload["cycles"] == {"delivered": 2, "undelivered": 1, "undetermined": 0}
         assert [row["cycle_delivered"] for row in payload["attempts_log"]] == [False, True, True]
 
-    def test_delivered_never_live_does_not_advance_the_cm_restart_streak(self):
-        """A never_live that DID spawn acs.exe is not a stale-CM symptom (#537/#558 + #710)."""
-        outcomes = [
-            AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=True),
-            AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=True),
-            AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=True),
-        ]
+    def test_delivered_never_live_still_advances_the_cm_restart_streak(self):
+        """Recorded delivery must NOT shorten the #537/#558 streak (#710 Codex P1).
+
+        A delivered never_live also covers a session that rendered but never reached readiness —
+        the stale cached-session / pre-drive-overlay failure whose proven recovery IS this cold
+        restart. Delivery proves AC started, not that CM honored the requested preset.
+        """
+        outcomes = [AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=True)] * 2
         calls: list[int] = []
         run_retry_loop(
             lambda i: outcomes[i - 1],
-            max_attempts=3,
+            max_attempts=2,
             on_never_live_streak=lambda: calls.append(1),
             never_live_before_restart=2,
         )
-        assert calls == []
+        assert calls == [1]
 
     def test_undelivered_never_live_still_cold_restarts_cm(self):
         outcomes = [AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=False)] * 2
@@ -931,11 +951,17 @@ class TestRetryLoop:
         )
         assert calls == [1]
 
-    def test_rejects_a_live_verdict_claimed_as_undelivered(self):
-        """A FROZE/STABLE/WEDGED_INIT verdict is only reachable through a live acs.exe."""
-        with pytest.raises(ValueError, match="undelivered"):
+    @pytest.mark.parametrize("delivery", [False, None])
+    def test_rejects_a_live_verdict_without_a_delivered_cycle(self, delivery):
+        """A FROZE/STABLE/WEDGED_INIT verdict is only reachable through a live acs.exe.
+
+        ``None`` must be rejected too: `_parse_report` requires ``True`` for every non-never_live
+        verdict, so accepting it here would let the producer emit a report its own analyzer
+        considers internally invalid (#710 Codex P2).
+        """
+        with pytest.raises(ValueError, match="requires a live acs.exe"):
             run_retry_loop(
-                lambda _: AttemptOutcome(LaunchVerdict.FROZE, cycle_delivered=False),
+                lambda _: AttemptOutcome(LaunchVerdict.FROZE, cycle_delivered=delivery),
                 max_attempts=1,
             )
 

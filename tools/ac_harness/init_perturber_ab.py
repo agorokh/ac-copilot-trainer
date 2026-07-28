@@ -884,26 +884,38 @@ def summarize_boot(observation: BootObservation) -> BootSummary:
     # Measured in delivered cycles for the same reason the onset is: an undelivered attempt is
     # not exposure, and counting it would shorten the real follow-up of whichever arm suffers
     # more delivery failures.
-    window = [
-        item
-        for item in launches
-        if onset_index is not None and item.launch >= onset_index and item.cycle_delivered is True
-    ][:POST_ONSET_WINDOW]
+    # An UNKNOWN row inside the span is fatal to the window, not skippable: if it really did
+    # deliver, it belongs in the window and the later row that took its slot does not, so the
+    # rate would be computed over the wrong six cycles (#710 Codex P2). Stop at the first one.
+    window: list[LaunchObservation] = []
+    window_unknown = False
+    if onset_index is not None:
+        for item in launches:
+            if item.launch < onset_index:
+                continue
+            if item.cycle_delivered is None:
+                window_unknown = True
+                break
+            if item.cycle_delivered is True:
+                window.append(item)
+                if len(window) == POST_ONSET_WINDOW:
+                    break
     window_fits = len(window) == POST_ONSET_WINDOW
     post_onset_launches = len(window)
     post_onset_freezes = sum(item.verdict in FREEZE_VERDICTS for item in window)
     # The window must deliver the FULL pre-registered exposure to count — the boot has to have
     # run enough cycles past onset, not merely enough report rows. And an ambiguous onset makes
     # the window's own starting point untrustworthy, so it cannot anchor a rate either.
-    window_complete = window_fits and not ambiguous
+    window_complete = window_fits and not ambiguous and not window_unknown
     if not window_complete:
         post_onset_launches = 0
         post_onset_freezes = 0
     unusable_reason: str | None = None
-    if classified == 0:
-        unusable_reason = "no_classified_launches"
-    elif delivered_cycles == 0:
-        # Nothing ever reached AC, so the boot observed no accumulator at all.
+    # "Did this boot observe the accumulator at all?" is now answered by DELIVERY, not by whether
+    # some other verdict happened to occur. The old ``classified == 0`` guard discarded a boot of
+    # 20 delivered never_live cycles — a perfectly good censored observation — while scoring 19
+    # of the same cycles plus one stable row (#710 Codex P2).
+    if delivered_cycles == 0:
         unusable_reason = "no_delivered_cycles"
     elif undelivered > MAX_UNDELIVERED_FRACTION * len(launches):
         unusable_reason = "undelivered_fraction_exceeded"
@@ -1019,7 +1031,22 @@ def _summarize_blocks(boots: Sequence[BootSummary]) -> list[BlockSummary]:
             reason = "unusable_boot"
         elif not (_scores_onset(on) and _scores_onset(off)):
             reason = "ambiguous_onset"
-        onset_difference = None if reason else float(off.onset_value - on.onset_value)
+        # A DOUBLY-censored block contributes no signed evidence: both surrogates are unrelated
+        # lower bounds, so subtracting them fabricates a difference the data does not support.
+        # Before #710 every boot shared the same ``launches + 1`` surrogate and this cancelled to
+        # zero by construction; delivered-cycle surrogates differ per boot, so it must now be
+        # said explicitly or e.g. six such blocks split +1/-1 would clear the informative-block
+        # floor and report ``no_measurable_effect`` having observed no onset at all (#710 Codex
+        # P1). Zero is the honest contribution — flipping it under permutation changes nothing,
+        # which is exactly "this block carries no information", and ``informative_blocks``
+        # already excludes zeros while the (None, None) bounds keep the direction refused.
+        doubly_censored = on.onset_censored and off.onset_censored
+        if reason:
+            onset_difference = None
+        elif doubly_censored:
+            onset_difference = 0.0
+        else:
+            onset_difference = float(off.onset_value - on.onset_value)
         lower, upper = (None, None) if reason else _onset_difference_bounds(on, off)
         # A block excluded from the primary endpoint is excluded from the secondary too: an
         # unusable or ambiguous-onset boot cannot anchor a trustworthy post-onset window either.
@@ -1165,7 +1192,12 @@ def analyze(
     scoring_boots = [boot for boot in boots if _scores_onset(boot)]
     # A hand-edited or allow_undersized plan can hold enough blocks while each boot ends before
     # the pre-registered graceful onset plus burst window. Blocks alone are not eligibility.
-    short_boots = [boot for boot in scoring_boots if boot.launches < MIN_LAUNCHES_PER_BOOT]
+    # Measured in DELIVERED cycles since #710: the floor exists so a boot can cover the
+    # pre-registered graceful onset plus the full follow-up window, and both are now counted in
+    # cycles. A 20-attempt plan may carry up to 4 undelivered attempts without tripping the
+    # exclusion threshold, leaving only 16 cycles — enough report rows, but not enough
+    # accumulator to observe an onset at 14 plus a 6-cycle window (#710 Codex P2).
+    short_boots = [boot for boot in scoring_boots if boot.delivered_cycles < MIN_LAUNCHES_PER_BOOT]
     # Censoring bounds: substituting N+1 for a censored onset is a BOUND, not an observation.
     # Where exactly one boot per block is censored the sign still holds; where both are, the
     # true difference is unconstrained, so the summed statistic can point either way. Only claim

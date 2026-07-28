@@ -384,16 +384,40 @@ def classify(
 def cycle_delivered(samples: Sequence[Sample]) -> bool:
     """Whether this attempt's trace proves an AC launch cycle happened. Pure — no I/O, no clock.
 
-    Delivery is exactly "``acs.exe`` was observed alive at least once": the #625 accumulator arms
-    on launch cycles, and a cycle is a process that actually started. This is deliberately *not*
-    derived from the verdict — ``NEVER_LIVE`` spans both a process that appeared and exited and a
-    launch that was never delivered at all (#710), which is the ambiguity the flag removes.
+    A cycle is delivered when ``acs.exe`` actually started — that is what the #625 accumulator
+    arms on. This is deliberately *not* derived from the verdict: ``NEVER_LIVE`` spans both a
+    process that appeared and exited and a launch that was never delivered at all (#710), which
+    is the ambiguity the flag removes.
 
-    ``Sample.acs_alive`` comes from the debounced liveness probe, which only reports absence-as-
-    alive **after** a real sighting (:func:`_make_process_liveness_probe`), so a debounced sample
-    can never manufacture delivery on its own.
+    Two independent proofs, either of which suffices:
+
+    * **A live process sighting.** ``Sample.acs_alive`` comes from the debounced liveness probe,
+      which only reports absence-as-alive **after** a real sighting
+      (:func:`_make_process_liveness_probe`), so a debounced sample cannot manufacture delivery.
+    * **A packet ADVANCE.** ``acpmf_*`` outlives its creator, but a corpse is a frozen snapshot —
+      only a live writer can move a packet id forward (the load-bearing insight of
+      :class:`SectionOwnershipGate`). The process probe alone is not sufficient: ``_sample_now``
+      reads state through a Car0 handshake that blocks for up to five seconds, so a process that
+      started after the previous poll and exited inside that window advances the packet while
+      every ``acs_alive`` reading is ``False``. Ignoring that evidence would publish
+      ``cycle_delivered=False`` for a cycle that demonstrably ran and shift every subsequent
+      accumulator position (#710 Codex P1). The previous ``acs.exe`` is confirmed gone before the
+      attempt starts, so no other writer can be advancing these sections.
     """
-    return any(sample.acs_alive for sample in samples)
+    if any(sample.acs_alive for sample in samples):
+        return True
+    prev_gfx: int | None = None
+    prev_phys: int | None = None
+    for sample in samples:
+        if sample.gfx_packet is not None:
+            if prev_gfx is not None and sample.gfx_packet > prev_gfx:
+                return True
+            prev_gfx = sample.gfx_packet
+        if sample.phys_packet is not None:
+            if prev_phys is not None and sample.phys_packet > prev_phys:
+                return True
+            prev_phys = sample.phys_packet
+    return False
 
 
 class SectionOwnershipGate:
@@ -715,12 +739,18 @@ def _normalize_attempt_result(result: LaunchVerdict | AttemptOutcome) -> Attempt
             cycle_delivered=None if result is LaunchVerdict.NEVER_LIVE else True,
         )
     )
-    if outcome.verdict is not LaunchVerdict.NEVER_LIVE and outcome.cycle_delivered is False:
-        # Unreachable by construction; a report that claimed it would be evidence of a
-        # classification bug, and silently publishing it would corrupt the accumulator mapping
-        # this flag exists to make trustworthy.
+    if (
+        outcome.verdict is not LaunchVerdict.PENDING
+        and outcome.verdict is not LaunchVerdict.NEVER_LIVE
+        and outcome.cycle_delivered is not True
+    ):
+        # Unreachable by construction. Rejecting only ``False`` would let an explicit
+        # ``AttemptOutcome(STABLE, None)`` publish a v2 report that this repo's own analyzer
+        # (``init_perturber_ab._parse_report``) then rejects as internally invalid, so the
+        # producer must enforce exactly what the consumer requires (#710 Codex P2).
         raise ValueError(
-            f"verdict {outcome.verdict} requires a live acs.exe but was reported as undelivered"
+            f"verdict {outcome.verdict} requires a live acs.exe but was reported with "
+            f"cycle_delivered={outcome.cycle_delivered!r}"
         )
     return outcome
 
@@ -743,12 +773,11 @@ def run_retry_loop(
     (#710). A bare verdict is normalized by :func:`_normalize_attempt_result`.
 
     ``on_never_live_streak`` is invoked once a run of ``never_live_before_restart`` consecutive
-    **undelivered-or-undetermined** ``NEVER_LIVE`` verdicts is seen — the hook the CLI uses to
-    cold-restart a stale Content Manager (#537/#558) rather than pointlessly re-sending the same
-    URL. A ``WEDGED_INIT`` verdict resets that streak like ``FROZE`` does: acs.exe appeared, so
-    CM delivered the launch and restarting it would only add kill-churn (#627 §6.5) — and by the
-    same argument a ``NEVER_LIVE`` that is KNOWN to have spawned acs.exe resets it too, which
-    only became expressible once delivery was recorded.
+    ``NEVER_LIVE`` verdicts is seen — the hook the CLI uses to cold-restart a stale Content
+    Manager (#537/#558) rather than pointlessly re-sending the same URL. A ``WEDGED_INIT``
+    verdict resets that streak like ``FROZE`` does: acs.exe appeared AND published, so CM
+    honored the preset and restarting it would only add kill-churn (#627 §6.5). Recorded
+    delivery does **not** shorten the streak — see the NEVER_LIVE branch below.
 
     With ``stop_on_stable=False`` every attempt in the budget runs regardless of verdict — the
     rate-measurement mode #627 §9.2 needs (``--trials``). Every attempt is recorded in the
@@ -807,15 +836,16 @@ def run_retry_loop(
                 break
         elif verdict is LaunchVerdict.NEVER_LIVE:
             never_live += 1
-            if outcome.cycle_delivered is True:
-                # CM DID deliver an acs.exe that then died or never reached readiness. Restarting
-                # CM would only add kill-churn — the same reason WEDGED_INIT resets the streak.
+            # Delivery deliberately does NOT gate this streak. A delivered NEVER_LIVE also covers
+            # a session that rendered but never reached readiness — the stale cached-session /
+            # pre-drive-overlay failure of #537/#558, whose PROVEN recovery is exactly this cold
+            # restart. Delivery proves AC started, not that CM honored the requested preset, so
+            # resetting here would strand those attempts re-sending URLs at a stale CM (#710
+            # Codex P1).
+            never_live_run += 1
+            if never_live_run >= never_live_before_restart and on_never_live_streak is not None:
+                on_never_live_streak()
                 never_live_run = 0
-            else:
-                never_live_run += 1
-                if never_live_run >= never_live_before_restart and on_never_live_streak is not None:
-                    on_never_live_streak()
-                    never_live_run = 0
         else:
             # FROZE and WEDGED_INIT both prove CM delivered a real acs.exe.
             if verdict is LaunchVerdict.FROZE:

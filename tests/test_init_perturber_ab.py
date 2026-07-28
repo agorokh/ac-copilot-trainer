@@ -712,7 +712,38 @@ def test_boot_that_never_reached_ac_at_all_is_unusable() -> None:
     summary = summarize_boot(_boot(1, "overlays_on", verdicts))
     assert summary.delivered_cycles == 0
     assert summary.usable is False
-    assert summary.unusable_reason == "no_classified_launches"
+    assert summary.unusable_reason == "no_delivered_cycles"
+
+
+def test_all_never_live_boot_stays_usable_when_every_cycle_was_delivered() -> None:
+    """#710 Codex P2 — usability is about DELIVERY, not about another verdict happening to occur.
+
+    20 delivered never_live cycles are a perfectly good censored observation; discarding them
+    while scoring 19 of the same cycles plus one stable row was the old ``classified == 0`` bug.
+    """
+    verdicts = ["never_live"] * _LAUNCHES
+    summary = summarize_boot(_boot(1, "overlays_on", verdicts, delivered=[True] * _LAUNCHES))
+    assert summary.classified == 0
+    assert summary.delivered_cycles == _LAUNCHES
+    assert summary.usable is True
+    assert summary.onset_censored is True
+    assert summary.onset_value == _LAUNCHES + 1
+
+
+def test_unknown_delivery_inside_the_burst_window_voids_it() -> None:
+    """#710 Codex P2 — an unknown row cannot be skipped over to fill the window.
+
+    If it really delivered, it belongs inside the registered six cycles and the later row that
+    took its slot does not, so the computed rate would cover the wrong window.
+    """
+    verdicts = ["stable"] * 5 + ["froze"] + ["never_live"] + ["stable"] * 13
+    delivered = _default_delivery(verdicts)
+    delivered[6] = None  # AFTER onset, so the onset itself stays unambiguous
+    summary = summarize_boot(_boot(1, "overlays_on", verdicts, delivered=delivered))
+    assert summary.onset_cycle == 6
+    assert summary.onset_ambiguous is False
+    assert summary.burst_window_complete is False
+    assert summary.post_onset_burst_rate is None
 
 
 def test_wedged_init_counts_as_onset() -> None:
@@ -802,6 +833,48 @@ def test_censoring_marks_the_p_value_as_a_bound() -> None:
     assert result["arms"]["overlays_off"]["observed_onsets"] == ()
     assert result["arms"]["overlays_off"]["median_burst_rate"] is None
     assert result["conclusion"] == "overlays_off_delays_onset"
+
+
+def test_doubly_censored_blocks_with_unequal_delivery_are_not_informative() -> None:
+    """#710 Codex P1 — delivered-cycle surrogates differ per boot, so subtracting two unrelated
+    lower bounds would fabricate a signed difference.
+
+    Before #710 every boot shared the same ``launches + 1`` surrogate and this cancelled to zero
+    by construction. Without saying it explicitly, six doubly-censored blocks split +1/-1 would
+    clear the informative-block floor and report ``no_measurable_effect`` with p=1 — having
+    observed no onset at all.
+    """
+    boots: list[BootObservation] = []
+    for index in range(6):
+        # Both arms censored, but with different numbers of undelivered attempts, so their
+        # delivered-cycle surrogates differ — and the sign alternates between blocks.
+        on_undelivered, off_undelivered = (1, 0) if index % 2 else (0, 1)
+        for condition, undelivered in (
+            ("overlays_on", on_undelivered),
+            ("overlays_off", off_undelivered),
+        ):
+            verdicts = ["never_live"] * undelivered + ["stable"] * (_LAUNCHES - undelivered)
+            boots.append(_boot(len(boots) + 1, condition, verdicts))
+    result = analyze(boots)
+    assert result["informative_blocks"] == 0
+    assert result["conclusion"] == "insufficient_sample"
+
+
+def test_delivered_cycle_floor_rejects_a_boot_short_on_cycles() -> None:
+    """#710 Codex P2 — enough report rows is not enough accumulator.
+
+    A 20-attempt plan may carry undelivered attempts without tripping the 20% exclusion
+    threshold, leaving too few cycles to cover the pre-registered onset plus follow-up window.
+    """
+    boots = _blocks([6, 7, 8, 6, 7, 8], [15, 16, 17, 15, 16, 17])
+    short = ["never_live"] * 4 + _stable_then_freeze(6)[: _LAUNCHES - 4]
+    boots[0] = _boot(1, "overlays_on", short)
+    summary = summarize_boot(boots[0])
+    assert summary.usable is True  # 4/20 undelivered does not exceed the 20% threshold...
+    assert summary.delivered_cycles == 16 < MIN_LAUNCHES_PER_BOOT  # ...but 16 cycles is short
+    result = analyze(boots)
+    assert result["short_boots_below_launch_floor"] == 1
+    assert result["conclusion"] == "insufficient_sample"
 
 
 def test_doubly_censored_blocks_refuse_a_directional_conclusion() -> None:
