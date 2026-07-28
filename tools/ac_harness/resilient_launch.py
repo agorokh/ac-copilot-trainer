@@ -394,15 +394,24 @@ def cycle_delivered(samples: Sequence[Sample]) -> bool:
     * **A live process sighting.** ``Sample.acs_alive`` comes from the debounced liveness probe,
       which only reports absence-as-alive **after** a real sighting
       (:func:`_make_process_liveness_probe`), so a debounced sample cannot manufacture delivery.
-    * **A packet ADVANCE.** ``acpmf_*`` outlives its creator, but a corpse is a frozen snapshot —
-      only a live writer can move a packet id forward (the load-bearing insight of
-      :class:`SectionOwnershipGate`). The process probe alone is not sufficient: ``_sample_now``
-      reads state through a Car0 handshake that blocks for up to five seconds, so a process that
-      started after the previous poll and exited inside that window advances the packet while
-      every ``acs_alive`` reading is ``False``. Ignoring that evidence would publish
-      ``cycle_delivered=False`` for a cycle that demonstrably ran and shift every subsequent
-      accumulator position (#710 Codex P1). The previous ``acs.exe`` is confirmed gone before the
-      attempt starts, so no other writer can be advancing these sections.
+    * **Any packet MOVEMENT.** ``acpmf_*`` outlives its creator, but a corpse is a frozen
+      snapshot: it never changes on its own, so **any** non-equal movement proves a live writer
+      wrote the section (the load-bearing insight of :class:`SectionOwnershipGate`). The process
+      probe alone is not sufficient: ``_sample_now`` reads state through a Car0 handshake that
+      blocks for up to five seconds, so a process that started after the previous poll and exited
+      inside that window moves the packet while every ``acs_alive`` reading is ``False``.
+      Ignoring that evidence would publish ``cycle_delivered=False`` for a cycle that
+      demonstrably ran and shift every subsequent accumulator position (#710 Codex P1).
+
+      A **regression** counts for the same reason and is the more common shape of that race: the
+      dead session's section stays mapped at a high id for ~6 s into the next ``acs.exe``'s
+      lifetime, so a new generation publishing its own stream from ~0 shows up as
+      ``16983 -> 121`` (#628). ``classify`` already treats a pre-go-live regression as an
+      ordinary handover; requiring a strict *increase* here would miss exactly that trace when
+      the process also died before any liveness poll saw it (#710 Codex P1, round 2).
+
+      The previous ``acs.exe`` is confirmed gone before the attempt starts and the rig lock
+      excludes a peer harness, so no other writer can be moving these sections.
     """
     if any(sample.acs_alive for sample in samples):
         return True
@@ -410,11 +419,11 @@ def cycle_delivered(samples: Sequence[Sample]) -> bool:
     prev_phys: int | None = None
     for sample in samples:
         if sample.gfx_packet is not None:
-            if prev_gfx is not None and sample.gfx_packet > prev_gfx:
+            if prev_gfx is not None and sample.gfx_packet != prev_gfx:
                 return True
             prev_gfx = sample.gfx_packet
         if sample.phys_packet is not None:
-            if prev_phys is not None and sample.phys_packet > prev_phys:
+            if prev_phys is not None and sample.phys_packet != prev_phys:
                 return True
             prev_phys = sample.phys_packet
     return False

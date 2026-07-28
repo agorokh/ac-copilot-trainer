@@ -188,7 +188,7 @@ def test_randomization_reference_set_is_the_full_two_to_the_blocks() -> None:
 
 def test_plan_is_boot_scoped_and_records_the_operator_gate() -> None:
     plan = build_plan(6, generated_at_utc="2026-07-28T12:00:00Z")
-    assert plan["schema"] == "init-perturber-ab-plan/v2"
+    assert plan["schema"] == "init-perturber-ab-plan/v3"
     assert plan["supersedes"] == WITHDRAWN_PLAN_SCHEMA
     assert plan["operator_owned_settings"] is True
     assert plan["protocol"]["reboot_before_every_boot"] is True
@@ -200,7 +200,7 @@ def test_plan_is_boot_scoped_and_records_the_operator_gate() -> None:
         "steam_overlay_enabled": False,
         "nvidia_shadowplay_enabled": False,
     }
-    assert "onset launch-index" in plan["endpoints"]["primary"]
+    assert "onset DELIVERED-CYCLE index" in plan["endpoints"]["primary"]
     assert plan["randomization_reference_set"] == 2**6
     assert plan["smallest_attainable_two_sided_p"] == pytest.approx(2 / 64)
     assert plan["prereg_baselines"]["onset_index_graceful"] == BASELINE_ONSET_INDEX_GRACEFUL
@@ -860,6 +860,72 @@ def test_doubly_censored_blocks_with_unequal_delivery_are_not_informative() -> N
     assert result["conclusion"] == "insufficient_sample"
 
 
+def test_singly_censored_pair_without_a_known_ordering_is_not_informative() -> None:
+    """#710 Codex P1 round 2 — a one-sided bound that fails to exclude zero fixes no sign.
+
+    Pre-#710 every boot shared the ``launches + 1`` surrogate, so a censored boot's surrogate
+    strictly exceeded any onset observable in the same plan and a singly-censored block's sign
+    was guaranteed. With per-boot delivered-cycle budgets, `on` observed LATE against an `off`
+    censored after fewer delivered cycles yields a negative surrogate while the true difference
+    may be zero or positive — so it must not enter the permutation statistic as an observation.
+    """
+    launches = 24
+    # off: 4 undelivered, never freezes -> 20 delivered cycles -> surrogate 21.
+    off_verdicts = ["never_live"] * 4 + ["stable"] * (launches - 4)
+    # on: freezes at cycle 24, all delivered -> observed onset 24.
+    on_verdicts = ["stable"] * 23 + ["froze"]
+    on_boot = _boot(1, "overlays_on", on_verdicts)
+    off_boot = _boot(2, "overlays_off", off_verdicts)
+    on_summary = summarize_boot(on_boot)
+    off_summary = summarize_boot(off_boot)
+    assert on_summary.onset_cycle == 24
+    assert off_summary.onset_censored is True and off_summary.onset_value == 21
+    block = ab_mod._summarize_blocks([on_summary, off_summary])[0]
+    # The raw surrogate would be 21 - 24 = -3, but off's true onset may be 24 or later.
+    assert block.onset_sign_established is False
+    assert block.onset_difference == 0.0
+    assert block.onset_difference_lower == -3.0  # the bound itself is still reported
+
+
+def test_a_run_of_sign_ambiguous_pairs_is_not_a_null_result() -> None:
+    """The aggregate consequence: six such blocks must not read as ``no_measurable_effect``."""
+    launches = 24
+    boots: list[BootObservation] = []
+    for _ in range(6):
+        boots.append(_boot(len(boots) + 1, "overlays_on", ["stable"] * 23 + ["froze"]))
+        boots.append(
+            _boot(
+                len(boots) + 1,
+                "overlays_off",
+                ["never_live"] * 4 + ["stable"] * (launches - 4),
+            )
+        )
+    result = analyze(boots)
+    assert result["informative_blocks"] == 0
+    assert result["censoring_uninformative_blocks"] == 6
+    assert result["conclusion"] == "insufficient_sample"
+
+
+def test_a_short_boot_in_an_excluded_block_does_not_gate_the_run() -> None:
+    """#710 Qodo round 2 — block eligibility is paired, so an untested boot must not gate.
+
+    A boot whose partner is ambiguous never contributes an onset difference; letting its
+    delivered-cycle shortfall force ``insufficient_sample`` would override a correct result from
+    the eligible population. Only reachable in practice once the floor counts delivered cycles.
+    """
+    boots = _blocks([6, 7, 8, 6, 7, 8, 6], [15, 16, 17, 15, 16, 17, 15])
+    # Block 1: the on boot is short on delivered cycles, and its partner is ambiguous, so the
+    # whole block is excluded from the primary test anyway.
+    short = ["never_live"] * 4 + _stable_then_freeze(6)[: _LAUNCHES - 4]
+    boots[0] = _boot(1, "overlays_on", short)
+    boots[1] = _ambiguous_boot(2, "overlays_off")
+    result = analyze(boots)
+    assert summarize_boot(boots[0]).delivered_cycles == 16 < MIN_LAUNCHES_PER_BOOT
+    assert result["short_boots_below_launch_floor"] == 0  # it never reached the test
+    assert result["usable_blocks"] == 6
+    assert result["conclusion"] == "post_treatment_exclusions_present"
+
+
 def test_delivered_cycle_floor_rejects_a_boot_short_on_cycles() -> None:
     """#710 Codex P2 — enough report rows is not enough accumulator.
 
@@ -1053,7 +1119,7 @@ def test_all_tied_blocks_still_read_as_no_measurable_effect() -> None:
     boots = _blocks([8, 10, 12, 9, 11, 13], [8, 10, 12, 9, 11, 13])
     result = analyze(boots)
     assert result["informative_blocks"] == 0
-    assert result["surrogate_tied_blocks"] == 0  # every tie was OBSERVED
+    assert result["censoring_uninformative_blocks"] == 0  # every tie was OBSERVED
     assert result["smallest_attainable_two_sided_p"] is None
     assert result["conclusion"] == "no_measurable_effect"
 
@@ -1072,7 +1138,9 @@ def test_all_doubly_censored_blocks_are_not_a_null_result() -> None:
         boots.append(_boot(len(boots) + 1, "overlays_off", ["stable"] * _LAUNCHES))
     result = analyze(boots)
     assert result["informative_blocks"] == 0
-    assert result["surrogate_tied_blocks"] == 6  # every "tie" came from censoring surrogates
+    assert (
+        result["censoring_uninformative_blocks"] == 6
+    )  # every "tie" came from censoring surrogates
     assert result["onset_block_permutation_two_sided_p"] == pytest.approx(1.0)
     assert result["conclusion"] == "insufficient_sample"
 

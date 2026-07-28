@@ -713,6 +713,18 @@ class TestCycleDelivered:
         samples = trace([(0.0, 100, False), (1.0, 101, False), (2.0, 101, False)])
         assert cycle_delivered(samples) is True
 
+    def test_a_packet_regression_proves_delivery(self):
+        """#710 Codex P1 round 2 — the corpse-handover shape (#628).
+
+        The dead session's section stays mapped at a high id for ~6 s into the next acs.exe's
+        lifetime, so a new generation publishing from ~0 reads as ``16983 -> 121``. A corpse
+        never changes on its own, so a DECREASE proves a new writer just as an increase does —
+        and requiring a strict increase would miss this trace when the process also died before
+        any liveness poll saw it.
+        """
+        samples = trace([(0.0, 16983, False), (1.0, 121, False), (2.0, 121, False)])
+        assert cycle_delivered(samples) is True
+
     def test_a_pinned_corpse_packet_is_not_delivery(self):
         """The dead session's section stays mapped at a high, UNCHANGING id (#628)."""
         samples = trace([(0.0, 16983, False), (1.0, 16983, False), (2.0, 16983, False)])

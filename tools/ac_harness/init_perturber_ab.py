@@ -88,12 +88,18 @@ from tools.ac_harness.resilient_launch import (
     resolve_report_path,
 )
 
-PLAN_SCHEMA = "init-perturber-ab-plan/v2"
+#: v3 registers the endpoints in DELIVERED CYCLES (#710). The plan file IS the pre-registration,
+#: so this had to move with the analysis: a v2 plan's stored ``endpoints`` still say raw
+#: launch-index and a launch-counted burst window, and silently analyzing it under cycle-counted
+#: rules would score it against an endpoint it never registered.
+PLAN_SCHEMA = "init-perturber-ab-plan/v3"
 #: v3 scores onset on delivered cycles and reports the delivery split per boot (#710).
 ANALYSIS_SCHEMA = "init-perturber-ab-analysis/v3"
 #: the interleaved single-boot design this module used to emit; refuted 2026-07-24 and
 #: rejected by :func:`load_plan` so a stale plan file cannot be analyzed as if it were valid.
 WITHDRAWN_PLAN_SCHEMA = "init-perturber-ab-plan/v1"
+#: the raw-launch-index pre-registration superseded by #710; rejected for the same reason.
+SUPERSEDED_PLAN_SCHEMA = "init-perturber-ab-plan/v2"
 CONDITIONS = ("overlays_on", "overlays_off")
 DEFAULT_ALPHA = 0.05
 #: Seed used only when a caller explicitly asks to reproduce a plan. A REAL plan draws a fresh
@@ -252,6 +258,10 @@ class BlockSummary:
     #: its launch budget). Both ``None`` = a doubly-censored block, which constrains nothing.
     onset_difference_lower: float | None
     onset_difference_upper: float | None
+    #: Whether the bounds establish the SIGN of this block's difference. False means censoring
+    #: leaves the ordering open, so ``onset_difference`` was zeroed rather than fed the surrogate
+    #: into the permutation statistic (#710). A zero with this False is uninformative, not a tie.
+    onset_sign_established: bool
     burst_difference: float | None
     usable: bool
     unusable_reason: str | None
@@ -467,12 +477,15 @@ def build_plan(
         },
         "endpoints": {
             "primary": (
-                "onset launch-index (first freeze in the boot), right-censored; exact block "
-                "permutation test over the 2**blocks randomization reference set"
+                "onset DELIVERED-CYCLE index (first freeze in the boot, counted in launch cycles "
+                "that actually reached AC), right-censored at the boot's delivered-cycle count; "
+                "exact block permutation test over the 2**blocks randomization reference set. A "
+                "censoring surrogate enters the statistic only when its bound establishes the "
+                "sign of the block's difference (#710)"
             ),
             "secondary": (
-                f"post-onset burst rate over a fixed {POST_ONSET_WINDOW}-launch window from "
-                "onset, one rate per boot, same block permutation test"
+                f"post-onset burst rate over a fixed {POST_ONSET_WINDOW}-DELIVERED-CYCLE window "
+                "from onset, one rate per boot, same block permutation test"
             ),
             "sensitivity": (
                 "exact sign test over blocks; plus an assumption-dependent rank-sum "
@@ -519,6 +532,14 @@ def load_plan(path: Path) -> dict[str, Any]:
             f"plan schema {WITHDRAWN_PLAN_SCHEMA!r} is the withdrawn interleaved single-boot "
             "design (#625 redesign 2026-07-24) — regenerate the plan; its per-launch endpoint "
             "cannot answer the question under the accumulator model"
+        )
+    if schema == SUPERSEDED_PLAN_SCHEMA:
+        raise ValueError(
+            f"plan schema {SUPERSEDED_PLAN_SCHEMA!r} pre-registered the endpoints in RAW LAUNCH "
+            "INDEX; #710 moved onset and the burst window to DELIVERED CYCLES, so analyzing it "
+            "now would score it against an endpoint it never registered — regenerate the plan. "
+            "No data is lost: pre-#710 boot reports use the withdrawn "
+            "'resilient-launch-report/v1' schema and are rejected regardless"
         )
     if schema != PLAN_SCHEMA:
         raise ValueError(f"plan schema must be {PLAN_SCHEMA!r}")
@@ -1019,6 +1040,7 @@ def _summarize_blocks(boots: Sequence[BootSummary]) -> list[BlockSummary]:
                     onset_difference=None,
                     onset_difference_lower=None,
                     onset_difference_upper=None,
+                    onset_sign_established=False,
                     burst_difference=None,
                     usable=False,
                     unusable_reason=f"missing_{missing[0]}_boot",
@@ -1031,23 +1053,38 @@ def _summarize_blocks(boots: Sequence[BootSummary]) -> list[BlockSummary]:
             reason = "unusable_boot"
         elif not (_scores_onset(on) and _scores_onset(off)):
             reason = "ambiguous_onset"
-        # A DOUBLY-censored block contributes no signed evidence: both surrogates are unrelated
-        # lower bounds, so subtracting them fabricates a difference the data does not support.
-        # Before #710 every boot shared the same ``launches + 1`` surrogate and this cancelled to
-        # zero by construction; delivered-cycle surrogates differ per boot, so it must now be
-        # said explicitly or e.g. six such blocks split +1/-1 would clear the informative-block
-        # floor and report ``no_measurable_effect`` having observed no onset at all (#710 Codex
-        # P1). Zero is the honest contribution — flipping it under permutation changes nothing,
-        # which is exactly "this block carries no information", and ``informative_blocks``
-        # already excludes zeros while the (None, None) bounds keep the direction refused.
-        doubly_censored = on.onset_censored and off.onset_censored
-        if reason:
-            onset_difference = None
-        elif doubly_censored:
-            onset_difference = 0.0
-        else:
-            onset_difference = float(off.onset_value - on.onset_value)
         lower, upper = (None, None) if reason else _onset_difference_bounds(on, off)
+        # A censoring surrogate may only enter the permutation statistic when the BOUNDS
+        # establish its sign. Before #710 every boot shared the same ``launches + 1`` surrogate,
+        # which made that automatic: a censored boot's surrogate strictly exceeded any onset
+        # observable in the same plan, so a singly-censored block's sign was guaranteed and a
+        # doubly-censored block cancelled to zero by construction. Delivered-cycle surrogates are
+        # PER BOOT, so both guarantees are gone and each must now be checked (#710 Codex P1,
+        # rounds 1 and 2):
+        #
+        #   * both observed        -> a real observation, always usable.
+        #   * one censored         -> usable only if its one-sided bound excludes zero. With a
+        #                             24-launch budget, ``on`` observed at 24 against ``off``
+        #                             censored after 20 delivered cycles yields 21-24 = -3 while
+        #                             the true difference may be zero or positive.
+        #   * both censored        -> two unrelated lower bounds; nothing is established.
+        #
+        # Otherwise the block contributes 0.0 — the honest "carries no signed evidence". Flipping
+        # a zero under permutation changes nothing, which is precisely what "no information"
+        # means, and ``informative_blocks`` already excludes zeros. The bounds are retained
+        # either way, so the direction machinery still sees the real constraint.
+        surrogate = None if reason else float(off.onset_value - on.onset_value)
+        sign_established = surrogate is not None and (
+            (lower is not None and upper is not None)
+            or (lower is not None and lower > 0)
+            or (upper is not None and upper < 0)
+        )
+        if surrogate is None:
+            onset_difference = None
+        elif sign_established:
+            onset_difference = surrogate
+        else:
+            onset_difference = 0.0
         # A block excluded from the primary endpoint is excluded from the secondary too: an
         # unusable or ambiguous-onset boot cannot anchor a trustworthy post-onset window either.
         burst_difference = (
@@ -1065,6 +1102,7 @@ def _summarize_blocks(boots: Sequence[BootSummary]) -> list[BlockSummary]:
                 onset_difference=onset_difference,
                 onset_difference_lower=lower,
                 onset_difference_upper=upper,
+                onset_sign_established=sign_established,
                 burst_difference=burst_difference,
                 usable=reason is None,
                 unusable_reason=reason,
@@ -1177,14 +1215,19 @@ def analyze(
     informative_blocks = sum(1 for value in onset_differences if abs(value) > 1e-9)
     smallest_attainable = 2 / 2**informative_blocks if informative_blocks else None
     # A zero difference means two different things. Both onsets OBSERVED and equal is a real
-    # tie — evidence of no effect in that block. Both CENSORED is not: their N+1 surrogates are
-    # equal by construction while the true onsets are unconstrained, so such a block is
-    # uninformative rather than null. Without this distinction an all-doubly-censored run —
-    # where nothing at all was learned — would report `no_measurable_effect` with p=1.
-    surrogate_tied_blocks = sum(
+    # tie — evidence of no effect in that block. A zero produced because CENSORING left the sign
+    # open is not: the true onsets are unconstrained, so such a block is uninformative rather
+    # than null. Without this distinction a run where nothing at all was learned would report
+    # `no_measurable_effect` with p=1.
+    # Scoped by ``onset_sign_established`` rather than by "both bounds are None" since #710: a
+    # SINGLY censored block whose one-sided bound fails to exclude zero also contributes an
+    # uninformative zero, but it has a real (non-None) lower or upper bound, so the old test
+    # would have missed it and an all-sign-ambiguous run would report ``no_measurable_effect``
+    # with p=1 — the same false null this guard exists to prevent (#710 Codex P1, round 2).
+    censoring_uninformative_blocks = sum(
         1
         for block in blocks
-        if block.usable and block.onset_difference == 0 and block.onset_difference_lower is None
+        if block.usable and block.onset_difference == 0 and not block.onset_sign_established
     )
     # Smallest informative-block count that could reach alpha, so a short run says what it needs
     # instead of just refusing. 2/2**k <= alpha  <=>  k >= log2(2/alpha).
@@ -1197,7 +1240,24 @@ def analyze(
     # cycles. A 20-attempt plan may carry up to 4 undelivered attempts without tripping the
     # exclusion threshold, leaving only 16 cycles — enough report rows, but not enough
     # accumulator to observe an onset at 14 plus a 6-cycle window (#710 Codex P2).
-    short_boots = [boot for boot in scoring_boots if boot.delivered_cycles < MIN_LAUNCHES_PER_BOOT]
+    #
+    # Scoped to boots that actually REACH the test. Block eligibility is paired, so a boot whose
+    # partner is unusable or ambiguous never contributes an onset difference; letting such a boot
+    # force `insufficient_sample` would override a correct result computed from an otherwise
+    # eligible population. Before #710 this was mostly theoretical (a short boot required a
+    # hand-edited plan); with the floor now counting delivered cycles, ordinary delivery failures
+    # reach it, so the scoping has to be explicit (#710 Qodo, round 2).
+    tested_boot_numbers = {
+        number
+        for block in blocks
+        if block.usable
+        for number in (block.overlays_on_boot, block.overlays_off_boot)
+    }
+    short_boots = [
+        boot
+        for boot in scoring_boots
+        if boot.boot in tested_boot_numbers and boot.delivered_cycles < MIN_LAUNCHES_PER_BOOT
+    ]
     # Censoring bounds: substituting N+1 for a censored onset is a BOUND, not an observation.
     # Where exactly one boot per block is censored the sign still holds; where both are, the
     # true difference is unconstrained, so the summed statistic can point either way. Only claim
@@ -1248,8 +1308,8 @@ def analyze(
     exclusions_present = sum(excluded.values()) > 0 or incomplete_blocks > 0 or missing_blocks > 0
     if usable_blocks < endpoint_floor or onset_p is None or blocked_effect is None or short_boots:
         conclusion = "insufficient_sample"
-    elif surrogate_tied_blocks and informative_blocks == 0:
-        # Nothing was observed: every block's zero came from two censoring surrogates.
+    elif censoring_uninformative_blocks and informative_blocks == 0:
+        # Nothing was learned: every block's zero came from censoring, not from an observation.
         conclusion = "insufficient_sample"
     elif smallest_attainable is not None and smallest_attainable > alpha:
         # Enough usable blocks, but too few of them carry a nonzero difference for any result
@@ -1323,7 +1383,7 @@ def analyze(
         "exclusions_present": exclusions_present,
         "incomplete_blocks": incomplete_blocks,
         "missing_blocks": missing_blocks,
-        "surrogate_tied_blocks": surrogate_tied_blocks,
+        "censoring_uninformative_blocks": censoring_uninformative_blocks,
         "burst_blocks": len(burst_differences),
         "short_boots_below_launch_floor": len(short_boots),
         "minimum_launches_per_boot": MIN_LAUNCHES_PER_BOOT,
