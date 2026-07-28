@@ -121,6 +121,10 @@ _WARN_STATES = {
     "unavailable",
     "unknown",
     "shared_endpoint",
+    # Voice is speaking through a backend that reports no output device (pyttsx3/SAPI), so it
+    # holds the Windows default endpoint and the own-headset invariant cannot be confirmed.
+    # Amber, not green: an unconfirmable check must not read as an all-clear (#672 / PR #707).
+    "endpoint_unverified",
 }
 
 

@@ -57,16 +57,18 @@ def _health_payload(
     *,
     enabled: bool = True,
     state: str = "enabled",
+    host_api: str = "Windows WASAPI",
+    backend: str = "sounddevice",
 ) -> dict[str, object]:
     voice: dict[str, object] = {
         "configured": True,
         "enabled": enabled,
         "state": state,
-        "backend": "sounddevice",
+        "backend": backend,
     }
     if device_name is not None:
         voice["device_name"] = device_name
-        voice["host_api"] = "Windows WASAPI"
+        voice["host_api"] = host_api
     return {"status": "ok", "connected_peers": 1, "screen_peers": 1, "voice": voice}
 
 
@@ -152,7 +154,11 @@ def test_endpoints_collide_matches_only_the_same_endpoint(
     ac_device: str | None,
     expected: bool,
 ) -> None:
-    assert supervisor_module.endpoints_collide(voice_device, ac_device) is expected
+    """Host API is MME here so the truncation branch is *available*; see the gate tests below."""
+    assert (
+        supervisor_module.endpoints_collide(voice_device, ac_device, voice_host_api="MME")
+        is expected
+    )
 
 
 # --- Part A: the probe ------------------------------------------------------
@@ -267,7 +273,7 @@ def test_mme_truncated_device_from_health_still_collides(tmp_path: Path) -> None
     sup = _supervisor(
         tmp_path,
         ac_audio_device=RIG_SHARED_DEVICE,
-        payload=_health_payload(RIG_DEVICE_AS_MME),
+        payload=_health_payload(RIG_DEVICE_AS_MME, host_api="MME"),
     )
 
     status = sup.poll_status()
@@ -279,6 +285,12 @@ def test_mme_truncated_device_from_health_still_collides(tmp_path: Path) -> None
 
 
 def test_whitespace_only_health_device_is_not_a_device(tmp_path: Path) -> None:
+    """A blank device name yields no comparable endpoint — but voice IS running.
+
+    Round 3 split `unknown` by whether voice is live, so this is `unverifiable` (a caution)
+    rather than the quiet `unknown` it reported when the two states were conflated: a running
+    stream with no reportable device still holds an endpoint.
+    """
     sup = _supervisor(
         tmp_path,
         ac_audio_device=RIG_SHARED_DEVICE,
@@ -286,7 +298,7 @@ def test_whitespace_only_health_device_is_not_a_device(tmp_path: Path) -> None:
     )
 
     rows = {row.name: row for row in sup.poll_status().checks}
-    assert rows["voice_endpoint"].state == "unknown"
+    assert rows["voice_endpoint"].state == "unverifiable"
 
 
 def test_blank_env_bank_is_removed_from_the_sidecar_environment(tmp_path: Path) -> None:
@@ -434,3 +446,123 @@ def test_status_json_carries_the_arm_source(tmp_path: Path) -> None:
 
     saved = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
     assert "bank armed via env" in saved["voice"]["detail"]
+
+
+# --- PR #707 review round 3 ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("host_api", "expected"),
+    [
+        ("MME", True),
+        ("mme", True),
+        ("Windows WASAPI", False),
+        ("Windows DirectSound", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_truncation_branch_requires_the_mme_host_api(host_api: str | None, expected: bool) -> None:
+    """A 31-char name is only a truncation artifact under MME.
+
+    A WASAPI/DirectSound device whose legitimate FULL name happens to be exactly 31 chars is
+    not truncated; treating it as such reports `shared` merely because the declared AC name
+    extends it, telling an operator with isolated endpoints to reroute them.
+    """
+    truncated = "Headset Earphone (Rig Audio Int"
+    assert len(truncated) == 31
+
+    assert (
+        supervisor_module.endpoints_collide(truncated, OWN_HEADSET_DEVICE, voice_host_api=host_api)
+        is expected
+    )
+
+
+def test_equality_still_matches_without_a_known_host_api() -> None:
+    """The host-API gate gates only the prefix branch; equality is unconditional."""
+    assert supervisor_module.endpoints_collide(RIG_DEVICE_AS_WASAPI, RIG_SHARED_DEVICE) is True
+
+
+def test_non_mme_31_char_device_reports_distinct_live(tmp_path: Path) -> None:
+    sup = _supervisor(
+        tmp_path,
+        ac_audio_device=OWN_HEADSET_DEVICE,
+        payload=_health_payload("Headset Earphone (Rig Audio Int", host_api="Windows WASAPI"),
+    )
+
+    rows = {row.name: row for row in sup.poll_status().checks}
+    assert rows["voice_endpoint"].state == "distinct"
+
+
+def test_tts_backend_without_a_device_is_a_visible_caution(tmp_path: Path) -> None:
+    """pyttsx3 speaks through the Windows default endpoint — usually AC's own.
+
+    Round-3 Codex P2: the endpoint verdict was a quiet `unknown` and the Voice row stayed
+    green, so the own-headset warning was silently inoperative for the documented TTS
+    fallback. `unknown` now means "voice is not running"; a running backend that reports no
+    device is `unverifiable` and paints the row amber.
+    """
+    sup = _supervisor(
+        tmp_path,
+        ac_audio_device=RIG_SHARED_DEVICE,
+        payload=_health_payload(None, state="tts", backend="pyttsx3"),
+    )
+
+    status = sup.poll_status()
+
+    rows = {row.name: row for row in status.checks}
+    assert rows["voice_endpoint"].state == "unverifiable"
+    assert rows["voice_endpoint"].ok is True
+    assert "pyttsx3" in rows["voice_endpoint"].detail
+    assert "Windows default endpoint" in rows["voice_endpoint"].detail
+    assert status.voice.state == supervisor_module.VOICE_STATE_ENDPOINT_UNVERIFIED
+    # Still warn-only.
+    assert status.voice.ok is True
+    assert status.ok is True
+    assert theme.tone_for(True, supervisor_module.VOICE_STATE_ENDPOINT_UNVERIFIED) == "lift"
+
+
+def test_voice_not_running_stays_a_quiet_unknown(tmp_path: Path) -> None:
+    """The other half of the split: nothing running cannot be holding an endpoint."""
+    sup = _supervisor(
+        tmp_path,
+        ac_audio_device=RIG_SHARED_DEVICE,
+        payload=_health_payload(None, enabled=False, state="observer_only"),
+    )
+
+    status = sup.poll_status()
+
+    rows = {row.name: row for row in status.checks}
+    assert rows["voice_endpoint"].state == "unknown"
+    assert status.voice.state != supervisor_module.VOICE_STATE_ENDPOINT_UNVERIFIED
+
+
+def test_blank_bank_is_cleared_case_insensitively(tmp_path: Path) -> None:
+    """Windows env names are case-insensitive; an exact-case pop leaks the lowercase key.
+
+    Round-3 Codex P2: `from_env` recognizes `ac_copilot_voice_bank` through
+    `_CaseInsensitiveEnv` and records the bank as cleared, but the child would still inherit
+    the lowercase whitespace value and treat it as a bank path.
+    """
+    _write_settings(tmp_path, voice_bank="settings-bank", reference_archive="ref.json")
+    environ = {"ac_copilot_voice_bank": "  "}
+
+    cfg = GamePointConfig.from_env(environ, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ=environ)
+    child = sup.sidecar_environment()
+
+    assert cfg.voice_bank is None
+    assert [key for key in child if key.upper() == "AC_COPILOT_VOICE_BANK"] == []
+
+
+def test_resolved_bank_replaces_a_differently_cased_inherited_key(tmp_path: Path) -> None:
+    environ = {"ac_copilot_voice_bank": "stale-bank"}
+
+    cfg = GamePointConfig.from_env(
+        {"AC_COPILOT_VOICE_BANK": "env-bank"}, paths=LauncherPaths(tmp_path)
+    )
+    child = GamePointSupervisor(cfg, environ=environ).sidecar_environment()
+
+    keys = [key for key in child if key.upper() == "AC_COPILOT_VOICE_BANK"]
+    assert keys == ["AC_COPILOT_VOICE_BANK"]
+    assert child["AC_COPILOT_VOICE_BANK"].endswith("env-bank")

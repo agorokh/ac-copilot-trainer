@@ -47,6 +47,21 @@ _ENDPOINT_STATE_SHARED = "shared"
 _ENDPOINT_STATE_DISTINCT = "distinct"
 _ENDPOINT_STATE_UNDECLARED = "undeclared"
 _ENDPOINT_STATE_UNKNOWN = "unknown"
+#: Voice IS running but its backend reports no output device (pyttsx3/SAPI). It is holding
+#: the Windows default endpoint — usually AC's — so this is a caution, not an all-clear.
+_ENDPOINT_STATE_UNVERIFIABLE = "unverifiable"
+
+#: Voice-row state for :data:`_ENDPOINT_STATE_UNVERIFIABLE`. Amber like
+#: :data:`VOICE_STATE_SHARED_ENDPOINT`, but distinct: a confirmed collision and an
+#: unconfirmable one are different facts and must not be conflated.
+VOICE_STATE_ENDPOINT_UNVERIFIED = "endpoint_unverified"
+
+#: Endpoint verdicts that promote the rendered Voice row to a warn state. Verdicts absent
+#: here (``distinct`` / ``undeclared`` / ``unknown``) leave the row untouched.
+_VOICE_ROW_WARN_STATES = {
+    _ENDPOINT_STATE_SHARED: VOICE_STATE_SHARED_ENDPOINT,
+    _ENDPOINT_STATE_UNVERIFIABLE: VOICE_STATE_ENDPOINT_UNVERIFIED,
+}
 
 #: PortAudio's MME host API truncates device names to 31 characters (``MAXPNAMELEN`` is 32
 #: including the NUL), so the sidecar can report a strict prefix of the full Windows endpoint
@@ -1098,10 +1113,11 @@ class GamePointSupervisor:
             # An already-failing Voice row carries a more urgent message; do not overwrite it.
             return result
         verdict = self._voice_endpoint_verdict(health_payload)
-        if verdict.state != _ENDPOINT_STATE_SHARED:
+        warn_state = _VOICE_ROW_WARN_STATES.get(verdict.state)
+        if warn_state is None:
             return result
         detail = f"{result.detail}; {verdict.detail}" if result.detail else verdict.detail
-        return replace(result, state=VOICE_STATE_SHARED_ENDPOINT, detail=detail)
+        return replace(result, state=warn_state, detail=detail)
 
     def _voice_endpoint_verdict(
         self,
@@ -1126,6 +1142,22 @@ class GamePointSupervisor:
             )
         voice_device = _health_voice_device(health_payload)
         if not voice_device:
+            # Split, per the #575 precedent that "unknown" hid two states with opposite risk
+            # profiles. Voice NOT running cannot hold an endpoint, so silence is correct. Voice
+            # running through a backend that reports no device (pyttsx3/SAPI, the documented
+            # TTS fallback) IS holding one — the Windows default output, which is exactly where
+            # AC usually plays — so reporting that as quietly fine would make the own-headset
+            # warning silently inoperative for that backend (PR #707 review round 3).
+            if _voice_is_enabled(health_payload):
+                backend = _health_voice_backend(health_payload) or "this backend"
+                return ProbeResult(
+                    "voice_endpoint",
+                    True,
+                    _ENDPOINT_STATE_UNVERIFIABLE,
+                    f"voice is speaking through {backend}, which reports no output device — "
+                    f"it uses the Windows default endpoint, so the own-headset invariant "
+                    f"cannot be confirmed against the declared AC endpoint ({ac_device})",
+                )
             return ProbeResult(
                 "voice_endpoint",
                 True,
@@ -1133,7 +1165,11 @@ class GamePointSupervisor:
                 f"AC endpoint declared ({ac_device}) but the sidecar reports no active voice "
                 "output device",
             )
-        if endpoints_collide(voice_device, ac_device):
+        if endpoints_collide(
+            voice_device,
+            ac_device,
+            voice_host_api=_health_voice_host_api(health_payload),
+        ):
             return ProbeResult(
                 "voice_endpoint",
                 True,
@@ -1543,6 +1579,28 @@ def _health_voice_device(health_payload: Mapping[str, object] | None) -> str:
     return device if device.strip() else ""
 
 
+def _voice_health(health_payload: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    if health_payload is None:
+        return None
+    voice = health_payload.get("voice")
+    return voice if isinstance(voice, Mapping) else None
+
+
+def _voice_is_enabled(health_payload: Mapping[str, object] | None) -> bool:
+    voice = _voice_health(health_payload)
+    return bool(voice and voice.get("enabled"))
+
+
+def _health_voice_host_api(health_payload: Mapping[str, object] | None) -> str:
+    voice = _voice_health(health_payload)
+    return str((voice or {}).get("host_api") or "").strip()
+
+
+def _health_voice_backend(health_payload: Mapping[str, object] | None) -> str:
+    voice = _voice_health(health_payload)
+    return str((voice or {}).get("backend") or "").strip()
+
+
 def _normalize_endpoint_name(name: str | None) -> str:
     """Casefold and drop **all** whitespace so two spellings of one endpoint compare equal.
 
@@ -1563,18 +1621,30 @@ def _normalize_endpoint_name(name: str | None) -> str:
     return "".join(str(name).split()).casefold()
 
 
-def endpoints_collide(voice_device: str | None, ac_device: str | None) -> bool:
+def endpoints_collide(
+    voice_device: str | None,
+    ac_device: str | None,
+    *,
+    voice_host_api: str | None = None,
+) -> bool:
     """Return True when two device names denote the same Windows output endpoint.
 
     Two ways to match, and only two:
 
     1. **Equality** after :func:`_normalize_endpoint_name` — symmetric, always valid evidence.
-    2. **Prefix**, and only in one direction: ``voice_device`` is the name PortAudio reported
-       via ``/health``, so it is the *only* side that can be an MME truncation artifact. The
-       operator's ``ac_device`` declaration is hand-written and is never one. The prefix branch
-       therefore fires only when ``voice_device``'s **raw** length is exactly
-       :data:`_MME_NAME_MAX_LEN` — the precise truncation signature. A name shorter than that
-       was not truncated; a name longer than that cannot have come from MME.
+    2. **Prefix**, and only in one direction, and only under the MME host API:
+       ``voice_device`` is the name PortAudio reported via ``/health``, so it is the *only*
+       side that can be a truncation artifact — the operator's ``ac_device`` declaration is
+       hand-written and never is. The prefix branch fires only when **all three** hold:
+       ``voice_host_api`` is MME, ``voice_device``'s **raw** length is exactly
+       :data:`_MME_NAME_MAX_LEN`, and it prefixes ``ac_device``.
+
+       The host-API condition is not redundant with the length one: a WASAPI or DirectSound
+       device whose legitimate *full* name happens to be exactly 31 characters is not
+       truncated, and treating it as such would report ``shared`` merely because the declared
+       AC name extends it (PR #707 review round 3). An unknown/absent ``voice_host_api``
+       therefore does **not** enable the branch — without knowing the host API there is no
+       evidence of truncation, and guessing costs a false alarm.
 
     That exactness matters twice over (PR #707 review). A loose floor let a generic
     ``Speakers`` collide with ``Speakers (USB Sound Device)``; a ``>=`` floor let two genuinely
@@ -1600,7 +1670,14 @@ def endpoints_collide(voice_device: str | None, ac_device: str | None) -> bool:
         return False
     if voice_name == ac_name:
         return True
+    if not _is_mme_host_api(voice_host_api):
+        return False
     return len(str(voice_raw)) == _MME_NAME_MAX_LEN and ac_name.startswith(voice_name)
+
+
+def _is_mme_host_api(host_api: str | None) -> bool:
+    """True when ``/health`` reports the MME host API — the only one that truncates names."""
+    return _normalize_endpoint_name(host_api) == "mme"
 
 
 def _shared_endpoint_remediation(device: str) -> str:
@@ -1656,11 +1733,16 @@ def _put_or_clear(env: MutableMapping[str, str], key: str, value: str | None) ->
     over the inherited parent environment. Use it wherever "the launcher resolved nothing"
     is a meaningful state the child must observe — otherwise a stale or blank inherited
     value silently overrides the resolution (PR #707 review).
+
+    The clear is **case-insensitive**, matching how :class:`_CaseInsensitiveEnv` reads names:
+    ``GamePointConfig.from_env`` recognizes ``ac_copilot_voice_bank`` on Windows, so an
+    exact-case ``pop`` would leave that lowercase key behind for the child to pick up — the
+    very leak this function exists to close (PR #707 review round 3).
     """
+    for existing in [name for name in env if name.upper() == key.upper()]:
+        del env[existing]
     if value:
         env[key] = value
-    else:
-        env.pop(key, None)
 
 
 def _is_loopback(host: str) -> bool:
