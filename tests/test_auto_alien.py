@@ -489,6 +489,16 @@ class _SelfplayHarness:
         _usable_plant(monkeypatch, True)
         monkeypatch.setattr(auto_alien, "wait_sidecar_port_settled", lambda url, **kw: "released")
         monkeypatch.setattr(auto_alien, "plant_artifact_path", lambda *a, **kw: self.plant_path)
+        # `_usable_plant` fakes `load_plant_artifact` with a synthetic dict, so the product's
+        # provenance helper would hash that instead of the fixture file the fake drive reports
+        # from. Bind both to the artifact ON DISK so "the plant on disk is the plant" holds in the
+        # fake exactly as it does in the product — otherwise every ladder trips the round-5
+        # base-provenance gate on a disagreement that only exists in the harness.
+        monkeypatch.setattr(
+            auto_alien,
+            "_current_plant_fit_sha12",
+            lambda *a, **kw: auto_alien._fit_sha12_of_bytes(self._plant_bytes_direct()),
+        )
 
         def fake_refine(artifact, payloads, prior, **kw):
             self.refine_calls.append(list(payloads))
@@ -541,6 +551,20 @@ class _SelfplayHarness:
         monkeypatch.setattr(plant_id_mod, "persist_selfplay_refinement", fake_persist)
         monkeypatch.setattr(plant_id_mod, "revert_plant_artifact", fake_revert)
 
+    def _plant_bytes_direct(self):
+        """Read the fixture artifact WITHOUT going through ``auto_alien._read_plant_bytes``.
+
+        The peer-window tests count the product's plant reads to place their injection precisely;
+        if the harness's own bookkeeping went through the same (monkeypatched) helper it would
+        shift those counts and silently move what those tests exercise.
+        """
+        try:
+            return self.plant_path.read_bytes() if self.plant_path.exists() else None
+        except OSError:
+            # The filesystem-error test makes reads raise to exercise the PRODUCT's guard; the
+            # fixture's own bookkeeping must not turn that into a harness crash.
+            return None
+
     def runner(self):
         state = {"i": 0}
 
@@ -562,6 +586,17 @@ class _SelfplayHarness:
                     "drive": {"recoveries": 0},
                 },
                 "lap_archives": paths,
+                # A real alien drive records the provenance of the plant its line was built from
+                # (auto_drive -> run.alien_line.plant_provenance). The ladder now treats that as
+                # the only proof of WHICH plant produced a batch, so the fake must emit it too —
+                # computed from the artifact as it stands at drive time, exactly like the product.
+                "run": {
+                    "alien_line": {
+                        "plant_provenance": {
+                            "sha12": auto_alien._fit_sha12_of_bytes(self._plant_bytes_direct())
+                        }
+                    }
+                },
             }
             (stage_dir / "report.json").write_text(_json.dumps(payload), encoding="utf-8")
             return exit_code
@@ -1504,6 +1539,75 @@ def test_selfplay_trusts_the_drive_recorded_fit_over_the_bytes_on_disk(monkeypat
     assert entry["usable_as_evidence"] is False
     assert selfplay["requires_rebase"] is True
     assert selfplay["refit_iterations"] == []  # the refit is NOT recorded as validated
+
+
+def test_selfplay_valid_batch_without_recorded_provenance_is_unusable(monkeypatch, tmp_path):
+    # #703 (Qodo, round 8): fail closed on MISSING proof, not only on contradicted proof. Byte
+    # equality cannot show which plant was driven — a peer swap restored before the post-drive
+    # read looks identical — so an oracle-valid batch with no recorded provenance must not seed
+    # refinement or the scientist baseline.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (0, [93000], [True]),  # iteration 1: passes the oracle, records no provenance
+        ],
+    )
+    calls = {"n": 0}
+    real_stage_fit = auto_alien.stage_plant_fit_sha12
+
+    def fit_missing_after_base(outcome):
+        calls["n"] += 1
+        return real_stage_fit(outcome) if calls["n"] == 1 else None
+
+    monkeypatch.setattr(auto_alien, "stage_plant_fit_sha12", fit_missing_after_base)
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0
+    selfplay = report["selfplay"]
+    entry = selfplay["iterations"][0]
+    assert entry["valid"] is True  # the oracle passed it...
+    assert entry["driven_plant_fit_missing"]  # ...but which plant produced it is unprovable
+    assert entry["usable_as_evidence"] is False
+    assert selfplay["requires_rebase"] is True
+    assert selfplay["refit_iterations"] == []
+
+
+def test_selfplay_invalid_drive_without_provenance_is_still_attributed(monkeypatch, tmp_path):
+    # The complement, and why the rule above is scoped to VALID iterations: a drive that died
+    # before building a line legitimately records no provenance. That is an ordinary stage
+    # failure, not a peer plant change, and must keep its knob attribution instead of demanding
+    # a rebase.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (3, [], []),  # iteration 1: stage failed outright
+        ],
+    )
+    calls = {"n": 0}
+    real_stage_fit = auto_alien.stage_plant_fit_sha12
+
+    def fit_missing_after_base(outcome):
+        calls["n"] += 1
+        return real_stage_fit(outcome) if calls["n"] == 1 else None
+
+    monkeypatch.setattr(auto_alien, "stage_plant_fit_sha12", fit_missing_after_base)
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0
+    selfplay = report["selfplay"]
+    entry = selfplay["iterations"][0]
+    assert entry["valid"] is False
+    assert "driven_plant_fit_missing" not in entry
+    assert entry["falsified_component"] == "plant"  # attributed, not laundered to unattributable
+    assert selfplay.get("requires_rebase") is not True
 
 
 def test_selfplay_ladder_rungs_step_from_the_validated_base_not_the_flag(monkeypatch, tmp_path):

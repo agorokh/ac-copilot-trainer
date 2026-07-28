@@ -961,14 +961,28 @@ def run_selfplay(
         fit_mismatch = (
             driven_fit is not None and expected_fit is not None and driven_fit != expected_fit
         )
+        # Fail CLOSED on missing proof, not just on contradicted proof. Byte equality cannot show
+        # WHICH plant was driven — a peer swap restored before the post-drive read looks identical
+        # — so an oracle-valid batch with no recorded provenance is unusable as evidence even
+        # though nothing contradicts it (#703 Qodo, round 8). Scoped to VALID iterations on
+        # purpose: an invalid drive that died before building a line legitimately records no
+        # provenance, and that is an ordinary stage failure, not a peer plant change.
+        missing_driven_fit = valid and expected_fit is not None and driven_fit is None
         plant_moved_during_step = (
-            _read_plant_bytes(plant_path) != validated_plant_bytes or fit_mismatch
+            _read_plant_bytes(plant_path) != validated_plant_bytes
+            or fit_mismatch
+            or missing_driven_fit
         )
         if fit_mismatch:
             entry["driven_plant_fit_mismatch"] = {
                 "expected": expected_fit,
                 "driven": driven_fit,
             }
+        if missing_driven_fit:
+            entry["driven_plant_fit_missing"] = (
+                "the drive recorded no plant provenance, so which plant produced this batch "
+                "cannot be proven — refusing to use it as ladder or scientist evidence"
+            )
         if plant_moved_during_step:
             # Set BOTH consequences here, at the single point that knows the fact — a peer change
             # taints the batch and requires a rebase whether the drive passed or failed. Setting
