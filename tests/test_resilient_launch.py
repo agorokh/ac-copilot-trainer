@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from tools.ac_harness.resilient_launch import (
+    AttemptOutcome,
     AttemptReadiness,
     LaunchVerdict,
     Sample,
@@ -42,7 +43,9 @@ from tools.ac_harness.resilient_launch import (
     _sample_now,
     _wait_process_exit,
     _watch_live,
+    _watched_delivery,
     classify,
+    cycle_delivered,
     run_retry_loop,
 )
 from tools.ac_harness.shared_memory import SharedMemoryUnavailable
@@ -342,7 +345,7 @@ def test_streaming_watch_extends_deadline_through_pause(monkeypatch):
             go_live_timeout=2.0,
             stability_window=5.0,
             poll_interval=1.0,
-        )
+        ).verdict
         is LaunchVerdict.STABLE
     )
 
@@ -377,7 +380,7 @@ def test_streaming_watch_freezes_dual_stream_hang_past_pause_budget(monkeypatch)
             stability_window=5.0,
             poll_interval=1.0,
             pause_budget=8.0,
-        )
+        ).verdict
         is LaunchVerdict.FROZE
     )
 
@@ -682,6 +685,158 @@ def test_stability_window_is_measured_from_go_live_not_from_launch():
     assert classify(late, go_live_timeout=40.0, stability_window=60.0) is not LaunchVerdict.STABLE
 
 
+class TestCycleDelivered:
+    """#710 — delivery is 'acs.exe was seen alive', never inferred from the verdict."""
+
+    def test_empty_trace_delivered_nothing(self):
+        assert cycle_delivered([]) is False
+
+    def test_a_trace_that_never_saw_acs_delivered_no_cycle(self):
+        samples = trace([(0.0, None, False), (1.0, None, False), (2.0, None, False)])
+        assert classify(samples, go_live_timeout=1.0) is LaunchVerdict.NEVER_LIVE
+        assert cycle_delivered(samples) is False
+
+    def test_a_process_that_appeared_and_exited_delivered_a_cycle(self):
+        """Same NEVER_LIVE verdict as above, opposite physical outcome — that is the bug."""
+        samples = trace([(0.0, None, False), (1.0, 10, True), (2.0, None, False)])
+        assert classify(samples, go_live_timeout=30.0) is LaunchVerdict.NEVER_LIVE
+        assert cycle_delivered(samples) is True
+
+    def test_a_wedged_init_delivered_a_cycle(self):
+        samples = trace([(0.0, 10, True), (1.0, 10, True), (2.0, 10, True)])
+        assert classify(samples, go_live_timeout=2.0) is LaunchVerdict.WEDGED_INIT
+        assert cycle_delivered(samples) is True
+
+    def test_a_packet_advance_proves_delivery_without_a_process_sighting(self):
+        """#710 Codex P1 — the Car0 handshake blocks for up to 5 s, so a process can live and die
+        entirely between two ``acs_alive`` reads while still advancing the render packet. Only a
+        LIVE writer can move a packet id; a corpse is a frozen snapshot."""
+        samples = trace([(0.0, 100, False), (1.0, 101, False), (2.0, 101, False)])
+        assert cycle_delivered(samples) is True
+
+    def test_a_packet_regression_proves_delivery(self):
+        """#710 Codex P1 round 2 — the corpse-handover shape (#628).
+
+        The dead session's section stays mapped at a high id for ~6 s into the next acs.exe's
+        lifetime, so a new generation publishing from ~0 reads as ``16983 -> 121``. A corpse
+        never changes on its own, so a DECREASE proves a new writer just as an increase does —
+        and requiring a strict increase would miss this trace when the process also died before
+        any liveness poll saw it.
+        """
+        samples = trace([(0.0, 16983, False), (1.0, 121, False), (2.0, 121, False)])
+        assert cycle_delivered(samples) is True
+
+    def test_a_pinned_corpse_packet_is_not_delivery(self):
+        """The dead session's section stays mapped at a high, UNCHANGING id (#628)."""
+        samples = trace([(0.0, 16983, False), (1.0, 16983, False), (2.0, 16983, False)])
+        assert cycle_delivered(samples) is False
+
+    def test_a_physics_advance_also_proves_delivery(self):
+        samples = [
+            Sample(t=0.0, gfx_packet=None, acs_alive=False, phys_packet=500),
+            Sample(t=1.0, gfx_packet=None, acs_alive=False, phys_packet=501),
+        ]
+        assert cycle_delivered(samples) is True
+
+
+def test_only_pre_launch_failures_may_assert_non_delivery():
+    """#710 Codex P1 round 4 — the three-state boundary, stated once.
+
+    `False` is a positive claim that nothing was spawned, and only the paths that return BEFORE
+    `actuator.launch()` can make it. A watched trace can prove delivery but never disprove it:
+    an acs.exe that starts and dies inside one inter-poll gap before publishing looks exactly
+    like a launch that never happened, and recording that as `False` would make the analyzer skip
+    a real cycle and shift every later accumulator position.
+    """
+    proven = trace([(0.0, 10, True), (1.0, 11, True)])
+    unproven = trace([(0.0, None, False), (1.0, None, False)])
+    assert _watched_delivery(proven) is True
+    assert _watched_delivery(unproven) is None  # NOT False
+    # The established-non-delivery value still exists — it is just not the sampler's to give.
+    assert AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=False).cycle_delivered is False
+
+
+def test_watch_live_seeds_delivery_from_the_pre_launch_baseline(monkeypatch):
+    """#710 Codex P2 — a session that dies before the first sample completes still delivered.
+
+    Without a pre-launch baseline the evidence window opens at the first post-launch sample, so
+    every sample reads the dead session's final packet, nothing moves, and the attempt is
+    published as `cycle_delivered=False` — silently shifting every later accumulator position.
+    """
+    now = 0.0
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+    # Corpse sat at 16983 before launch; every sampled reading is the dead new session's 240.
+    baseline = Sample(t=0.0, gfx_packet=16983, acs_alive=False)
+    outcome = _watch_live(
+        lambda: (240, None),
+        lambda: False,
+        go_live_timeout=2.0,
+        stability_window=5.0,
+        poll_interval=1.0,
+        delivery_baseline=baseline,
+    )
+    assert outcome == AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=True)
+
+
+def test_watch_live_without_a_baseline_cannot_see_that_movement(monkeypatch):
+    """The same trace, unseeded — pins the value the baseline adds rather than assuming it."""
+    now = 0.0
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+    outcome = _watch_live(
+        lambda: (240, None),
+        lambda: False,
+        go_live_timeout=2.0,
+        stability_window=5.0,
+        poll_interval=1.0,
+    )
+    # UNKNOWN, not False: a watched trace can only prove delivery, never disprove it (#710
+    # Codex P1 round 4). Without the baseline the movement is simply invisible.
+    assert outcome == AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=None)
+
+
+def test_watch_live_reports_delivery_alongside_the_verdict(monkeypatch):
+    """#710 — the rig path derives delivery from the trace it already collected."""
+    now = 0.0
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+    outcome = _watch_live(
+        lambda: (None, None),
+        lambda: False,  # acs.exe never appears
+        go_live_timeout=2.0,
+        stability_window=5.0,
+        poll_interval=1.0,
+    )
+    # A watched trace with no positive evidence is UNKNOWN. Only the pre-launch failure paths
+    # (CM absent / launch() raised) may assert non-delivery (#710 Codex P1 round 4).
+    assert outcome == AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=None)
+
+
 class TestRetryLoop:
     def test_stops_on_first_stable_and_counts_attempts(self):
         verdicts = [LaunchVerdict.FROZE, LaunchVerdict.FROZE, LaunchVerdict.STABLE]
@@ -782,7 +937,7 @@ class TestRetryLoop:
             lambda i: LaunchVerdict.STABLE, max_attempts=1, uptime_hours=lambda: None
         )
         payload = json_module.loads(json_module.dumps(report.as_dict()))
-        assert payload["schema"] == "resilient-launch-report/v1"
+        assert payload["schema"] == "resilient-launch-report/v2"
         assert payload["verdict"] == "stable"
         assert payload["counts"] == {
             "stable": 1,
@@ -790,8 +945,10 @@ class TestRetryLoop:
             "wedged_init": 0,
             "never_live": 0,
         }
+        assert payload["cycles"] == {"delivered": 1, "undelivered": 0, "undetermined": 0}
         assert payload["attempts_log"][0]["attempt"] == 1
         assert payload["attempts_log"][0]["uptime_h"] is None
+        assert payload["attempts_log"][0]["cycle_delivered"] is True
 
     def test_report_as_dict_includes_launch_provenance(self):
         """#657 Qodo — observable ``launch`` field must stay covered by tests."""
@@ -825,6 +982,76 @@ class TestRetryLoop:
                 stable=1,
             ).as_dict()
         )
+
+    def test_bare_verdict_leaves_never_live_delivery_undetermined(self):
+        """#710 — a caller returning a bare verdict supplies no delivery evidence.
+
+        Every other verdict implies a live acs.exe and is derivable; ``never_live`` is exactly
+        the ambiguous one, so it must stay UNKNOWN rather than be guessed either way.
+        """
+        seq = [LaunchVerdict.NEVER_LIVE, LaunchVerdict.WEDGED_INIT, LaunchVerdict.STABLE]
+        report = run_retry_loop(lambda i: seq[i - 1], max_attempts=3)
+        assert [record.cycle_delivered for record in report.attempts_log] == [None, True, True]
+        assert (report.cycles_delivered, report.cycles_undelivered) == (2, 0)
+        assert report.cycles_undetermined == 1
+
+    def test_never_live_records_which_of_its_two_shapes_it_was(self):
+        """#710 — the whole point: 'never spawned' and 'appeared then exited' stop sharing a row."""
+        outcomes = [
+            AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=False),
+            AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=True),
+            AttemptOutcome(LaunchVerdict.STABLE, cycle_delivered=True),
+        ]
+        report = run_retry_loop(lambda i: outcomes[i - 1], max_attempts=3)
+        assert [record.cycle_delivered for record in report.attempts_log] == [False, True, True]
+        assert report.never_live == 2
+        # Two never_live rows, but only ONE of them failed to reach AC.
+        assert (report.cycles_delivered, report.cycles_undelivered) == (2, 1)
+        payload = report.as_dict()
+        assert payload["cycles"] == {"delivered": 2, "undelivered": 1, "undetermined": 0}
+        assert [row["cycle_delivered"] for row in payload["attempts_log"]] == [False, True, True]
+
+    def test_delivered_never_live_still_advances_the_cm_restart_streak(self):
+        """Recorded delivery must NOT shorten the #537/#558 streak (#710 Codex P1).
+
+        A delivered never_live also covers a session that rendered but never reached readiness —
+        the stale cached-session / pre-drive-overlay failure whose proven recovery IS this cold
+        restart. Delivery proves AC started, not that CM honored the requested preset.
+        """
+        outcomes = [AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=True)] * 2
+        calls: list[int] = []
+        run_retry_loop(
+            lambda i: outcomes[i - 1],
+            max_attempts=2,
+            on_never_live_streak=lambda: calls.append(1),
+            never_live_before_restart=2,
+        )
+        assert calls == [1]
+
+    def test_undelivered_never_live_still_cold_restarts_cm(self):
+        outcomes = [AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=False)] * 2
+        calls: list[int] = []
+        run_retry_loop(
+            lambda i: outcomes[i - 1],
+            max_attempts=2,
+            on_never_live_streak=lambda: calls.append(1),
+            never_live_before_restart=2,
+        )
+        assert calls == [1]
+
+    @pytest.mark.parametrize("delivery", [False, None])
+    def test_rejects_a_live_verdict_without_a_delivered_cycle(self, delivery):
+        """A FROZE/STABLE/WEDGED_INIT verdict is only reachable through a live acs.exe.
+
+        ``None`` must be rejected too: `_parse_report` requires ``True`` for every non-never_live
+        verdict, so accepting it here would let the producer emit a report its own analyzer
+        considers internally invalid (#710 Codex P2).
+        """
+        with pytest.raises(ValueError, match="requires a live acs.exe"):
+            run_retry_loop(
+                lambda _: AttemptOutcome(LaunchVerdict.FROZE, cycle_delivered=delivery),
+                max_attempts=1,
+            )
 
     def test_uptime_reader_failure_does_not_fail_the_attempt(self):
         def boom() -> float:
@@ -871,7 +1098,7 @@ def test_streaming_watch_survives_go_live_timeout_until_stability(monkeypatch):
             go_live_timeout=2.0,
             stability_window=5.0,
             poll_interval=1.0,
-        )
+        ).verdict
         is LaunchVerdict.STABLE
     )
 
@@ -1004,7 +1231,7 @@ def test_streaming_watch_waits_through_short_hitch(monkeypatch):
             go_live_timeout=2.0,
             stability_window=5.0,
             poll_interval=1.0,
-        )
+        ).verdict
         is LaunchVerdict.STABLE
     )
 

@@ -48,11 +48,13 @@ next boot.  Restore both settings after the final boot.  If a boot's command abo
 writes its report, that boot's accumulator has already advanced: **reboot again** before
 re-running it, or the retry's launch indices are offset from the accumulator's.
 
-``never_live`` is a launch-delivery failure whose record does **not** prove an AC launch cycle
-occurred (Content Manager absent, or ``actuator.launch()`` raised, means nothing was spawned),
-and the report schema cannot tell those apart from "acs.exe appeared then exited".  So a boot
-whose onset is preceded by any ``never_live`` has an **ambiguous** onset index and is excluded
-from the primary endpoint rather than scored on an assumption.
+The accumulator counts launch **cycles**, not report rows, and those differ: a ``never_live``
+record can mean "Content Manager was absent / ``actuator.launch()`` raised, so nothing was ever
+spawned" (no cycle) or "acs.exe appeared and exited during load" (a real cycle).  Since #710 the
+report states which, per attempt, in ``attempts_log[].cycle_delivered``, so onset is scored at
+its position in the **delivered-cycle** count rather than its raw launch index — an undelivered
+attempt shifts the mapping instead of poisoning the boot.  ``onset_ambiguous`` therefore narrows
+to reports that genuinely do not know (``cycle_delivered: null``), which a rig run never emits.
 """
 
 from __future__ import annotations
@@ -86,11 +88,18 @@ from tools.ac_harness.resilient_launch import (
     resolve_report_path,
 )
 
-PLAN_SCHEMA = "init-perturber-ab-plan/v2"
-ANALYSIS_SCHEMA = "init-perturber-ab-analysis/v2"
+#: v3 registers the endpoints in DELIVERED CYCLES (#710). The plan file IS the pre-registration,
+#: so this had to move with the analysis: a v2 plan's stored ``endpoints`` still say raw
+#: launch-index and a launch-counted burst window, and silently analyzing it under cycle-counted
+#: rules would score it against an endpoint it never registered.
+PLAN_SCHEMA = "init-perturber-ab-plan/v3"
+#: v3 scores onset on delivered cycles and reports the delivery split per boot (#710).
+ANALYSIS_SCHEMA = "init-perturber-ab-analysis/v3"
 #: the interleaved single-boot design this module used to emit; refuted 2026-07-24 and
 #: rejected by :func:`load_plan` so a stale plan file cannot be analyzed as if it were valid.
 WITHDRAWN_PLAN_SCHEMA = "init-perturber-ab-plan/v1"
+#: the raw-launch-index pre-registration superseded by #710; rejected for the same reason.
+SUPERSEDED_PLAN_SCHEMA = "init-perturber-ab-plan/v2"
 CONDITIONS = ("overlays_on", "overlays_off")
 DEFAULT_ALPHA = 0.05
 #: Seed used only when a caller explicitly asks to reproduce a plan. A REAL plan draws a fresh
@@ -139,9 +148,11 @@ BASELINE_POST_ONSET_BURST_RATE = 0.44
 #: baseline-onset boot contributes no secondary observation at all.
 MIN_LAUNCHES_PER_BOOT = BASELINE_ONSET_INDEX_GRACEFUL + POST_ONSET_WINDOW
 DEFAULT_LAUNCHES_PER_BOOT = 24
-#: Above this share of ``never_live`` launches the boot measured Content Manager's delivery
+#: Above this share of **undelivered** launches the boot measured Content Manager's delivery
 #: failures, not the accumulator; it is reported and excluded rather than silently scored.
-MAX_NEVER_LIVE_FRACTION = 0.2
+#: Scoped to undelivered attempts since #710: a ``never_live`` that DID start acs.exe consumed a
+#: real cycle and is ordinary accumulator data, not a plumbing failure.
+MAX_UNDELIVERED_FRACTION = 0.2
 #: Slack when testing whether machine uptime tracked the wall clock across a boot boundary.
 #: Timestamps are second-resolution and ``uptime_h`` is rounded to 4 decimals (~0.36 s), so 36 s
 #: is generous for rounding while far below any real reboot's discontinuity.
@@ -182,13 +193,19 @@ class PlannedBoot:
 
 @dataclass(frozen=True)
 class LaunchObservation:
-    """One launch inside a boot, in the order the accumulator saw it."""
+    """One launch inside a boot, in the order the accumulator saw it.
+
+    ``cycle_delivered`` is the #710 report field: ``True`` when this attempt actually started an
+    ``acs.exe`` (and therefore advanced the accumulator), ``False`` when it never reached AC, and
+    ``None`` only when the report did not know.
+    """
 
     launch: int
     verdict: str
     started_at_utc: str
     elapsed_s: float
     uptime_h: float
+    cycle_delivered: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -205,10 +222,19 @@ class BootSummary:
     launches: int
     never_live: int
     classified: int
+    #: #710 delivery split. ``delivered_cycles`` is the accumulator's own denominator for this
+    #: boot; ``undelivered`` never reached AC; ``undetermined`` is a report that did not say.
+    delivered_cycles: int
+    undelivered_launches: int
+    undetermined_launches: int
+    #: Raw report row of the onset launch (1-based over ALL attempts), kept for traceability.
     onset_index: int | None
     onset_censored: bool
     onset_ambiguous: bool
-    never_live_before_onset: int
+    undetermined_before_onset: int
+    #: Onset expressed in DELIVERED cycles — the position the accumulator actually saw. This is
+    #: what the endpoints compare; ``onset_index`` can exceed it when attempts never reached AC.
+    onset_cycle: int | None
     onset_value: int
     burst_window: int
     burst_window_complete: bool
@@ -232,6 +258,10 @@ class BlockSummary:
     #: its launch budget). Both ``None`` = a doubly-censored block, which constrains nothing.
     onset_difference_lower: float | None
     onset_difference_upper: float | None
+    #: Whether the bounds establish the SIGN of this block's difference. False means censoring
+    #: leaves the ordering open, so ``onset_difference`` was zeroed rather than fed the surrogate
+    #: into the permutation statistic (#710). A zero with this False is uninformative, not a tie.
+    onset_sign_established: bool
     burst_difference: float | None
     usable: bool
     unusable_reason: str | None
@@ -389,7 +419,9 @@ def build_plan(
     ]
     return {
         "schema": PLAN_SCHEMA,
-        "supersedes": WITHDRAWN_PLAN_SCHEMA,
+        # Every schema this plan supersedes, oldest first — both are rejected by `load_plan`, so
+        # the migration path is recorded rather than implied (#710 self-hosted reviewer MEDIUM).
+        "supersedes": [WITHDRAWN_PLAN_SCHEMA, SUPERSEDED_PLAN_SCHEMA],
         "issue": 625,
         "generated_at_utc": stamp,
         "design": "randomized block; one boot per unit, two boots (one per arm) per block",
@@ -433,23 +465,29 @@ def build_plan(
                 "advanced the accumulator. Reboot again before re-running that boot; a plain "
                 "retry restarts launch numbering at 1 and silently offsets the onset index."
             ),
-            "never_live_policy": (
-                "a never_live record does not prove an AC launch cycle occurred (Content "
-                "Manager absent or launch() raised means nothing was spawned) and the report "
-                "schema cannot distinguish that from acs.exe appearing then exiting, so a boot "
-                "whose onset is preceded by any never_live has an AMBIGUOUS onset and is "
-                f"excluded from the primary endpoint; above {MAX_NEVER_LIVE_FRACTION:.0%} "
-                "never_live the whole boot is unusable"
+            # Documentation for the operator; `load_plan` does not read it, so a plan generated
+            # before #710 still loads and analyzes under the current rules.
+            "delivery_policy": (
+                "every attempt records cycle_delivered (#710): onset is scored at its position "
+                "in the DELIVERED-cycle count, so an attempt that never reached AC (Content "
+                "Manager absent or launch() raised) shifts the mapping instead of discarding the "
+                "boot. Only a report that does not know (cycle_delivered null) makes an onset "
+                f"AMBIGUOUS and excludes it from the primary endpoint; above "
+                f"{MAX_UNDELIVERED_FRACTION:.0%} undelivered the boot measured Content Manager, "
+                "not the accumulator, and is unusable"
             ),
         },
         "endpoints": {
             "primary": (
-                "onset launch-index (first freeze in the boot), right-censored; exact block "
-                "permutation test over the 2**blocks randomization reference set"
+                "onset DELIVERED-CYCLE index (first freeze in the boot, counted in launch cycles "
+                "that actually reached AC), right-censored at the boot's delivered-cycle count; "
+                "exact block permutation test over the 2**blocks randomization reference set. A "
+                "censoring surrogate enters the statistic only when its bound establishes the "
+                "sign of the block's difference (#710)"
             ),
             "secondary": (
-                f"post-onset burst rate over a fixed {POST_ONSET_WINDOW}-launch window from "
-                "onset, one rate per boot, same block permutation test"
+                f"post-onset burst rate over a fixed {POST_ONSET_WINDOW}-DELIVERED-CYCLE window "
+                "from onset, one rate per boot, same block permutation test"
             ),
             "sensitivity": (
                 "exact sign test over blocks; plus an assumption-dependent rank-sum "
@@ -473,6 +511,11 @@ def build_plan(
     }
 
 
+#: Sentinel so an ABSENT ``cycle_delivered`` key is rejected while an explicit ``null`` (the
+#: report saying "I do not know") is accepted and carried through as ambiguity.
+_MISSING = object()
+
+
 def _require_mapping(value: object, *, where: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{where} must be a JSON object")
@@ -491,6 +534,14 @@ def load_plan(path: Path) -> dict[str, Any]:
             f"plan schema {WITHDRAWN_PLAN_SCHEMA!r} is the withdrawn interleaved single-boot "
             "design (#625 redesign 2026-07-24) — regenerate the plan; its per-launch endpoint "
             "cannot answer the question under the accumulator model"
+        )
+    if schema == SUPERSEDED_PLAN_SCHEMA:
+        raise ValueError(
+            f"plan schema {SUPERSEDED_PLAN_SCHEMA!r} pre-registered the endpoints in RAW LAUNCH "
+            "INDEX; #710 moved onset and the burst window to DELIVERED CYCLES, so analyzing it "
+            "now would score it against an endpoint it never registered — regenerate the plan. "
+            "No data is lost: pre-#710 boot reports use the withdrawn "
+            "'resilient-launch-report/v1' schema and are rejected regardless"
         )
     if schema != PLAN_SCHEMA:
         raise ValueError(f"plan schema must be {PLAN_SCHEMA!r}")
@@ -548,6 +599,12 @@ def _parse_report(
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"could not read report {path}: {exc}") from exc
     report = _require_mapping(payload, where=f"report {path}")
+    if report.get("schema") == "resilient-launch-report/v1":
+        raise ValueError(
+            f"report {path} uses the withdrawn {'resilient-launch-report/v1'!r} schema, which "
+            "records no per-attempt cycle_delivered flag (#710) — its never_live rows cannot be "
+            "mapped onto accumulator positions. Re-run the boot on the current launcher"
+        )
     if report.get("schema") != REPORT_SCHEMA:
         raise ValueError(f"report {path} schema must be {REPORT_SCHEMA!r}")
     attempts = report.get("attempts")
@@ -577,6 +634,7 @@ def _parse_report(
     for index, raw in enumerate(attempts_log, start=1):
         record = _require_mapping(raw, where=f"report {path} attempts_log[{index - 1}]")
         verdict = record.get("verdict")
+        delivered = record.get("cycle_delivered", _MISSING)
         started_at_utc = record.get("started_at_utc")
         elapsed_s = record.get("elapsed_s")
         uptime_h = record.get("uptime_h")
@@ -584,6 +642,22 @@ def _parse_report(
             raise ValueError(f"report {path} attempt numbers must be contiguous and ordered from 1")
         if verdict not in TERMINAL_VERDICTS:
             raise ValueError(f"report {path} launch {index} has invalid verdict {verdict!r}")
+        if delivered is _MISSING:
+            raise ValueError(
+                f"report {path} launch {index} is missing cycle_delivered; the {REPORT_SCHEMA!r} "
+                "schema records it for every attempt (#710)"
+            )
+        if delivered is not None and not isinstance(delivered, bool):
+            raise ValueError(
+                f"report {path} launch {index} has non-boolean cycle_delivered {delivered!r}"
+            )
+        if verdict != "never_live" and delivered is not True:
+            # Every other terminal verdict requires an observation of a live acs.exe, so a report
+            # claiming otherwise is internally inconsistent and must not be scored.
+            raise ValueError(
+                f"report {path} launch {index} records verdict {verdict!r} with "
+                f"cycle_delivered={delivered!r}; only never_live may lack a delivered cycle"
+            )
         if not isinstance(started_at_utc, str):
             raise ValueError(f"report {path} launch {index} is missing started_at_utc")
         try:
@@ -604,6 +678,7 @@ def _parse_report(
                 started_at_utc=started_at_utc,
                 elapsed_s=float(elapsed_s),
                 uptime_h=float(uptime_h),
+                cycle_delivered=delivered,
             )
         )
     expected_counts = {
@@ -611,6 +686,13 @@ def _parse_report(
     }
     if report.get("counts") != expected_counts:
         raise ValueError(f"report {path} counts do not match its attempts_log")
+    expected_cycles = {
+        "delivered": sum(item.cycle_delivered is True for item in observations),
+        "undelivered": sum(item.cycle_delivered is False for item in observations),
+        "undetermined": sum(item.cycle_delivered is None for item in observations),
+    }
+    if report.get("cycles") != expected_cycles:
+        raise ValueError(f"report {path} cycles block does not match its attempts_log")
     if report.get("verdict") != observations[-1].verdict:
         raise ValueError(f"report {path} summary verdict does not match its final launch")
     stamps = [item.started_at_utc for item in observations]
@@ -776,67 +858,104 @@ def exact_rank_sum_two_sided(
 
 
 def summarize_boot(observation: BootObservation) -> BootSummary:
-    """Reduce one boot to its onset index and its fixed-window post-onset burst rate."""
+    """Reduce one boot to its onset cycle and its fixed-window post-onset burst rate.
+
+    Everything is counted in **delivered launch cycles** (#710), because that is what the #625
+    accumulator arms on. An attempt that never reached AC advanced nothing, so it is skipped
+    rather than either counted (which would overstate how long the arm stayed clean) or used to
+    discard the boot (which was the pre-#710 conservative fallback, at one physical reboot each).
+    """
     launches = observation.launches
     if not launches:
         raise ValueError(f"boot {observation.boot} recorded no launches")
     never_live = sum(item.verdict == "never_live" for item in launches)
     classified = len(launches) - never_live
+    delivered_cycles = sum(item.cycle_delivered is True for item in launches)
+    undelivered = sum(item.cycle_delivered is False for item in launches)
+    undetermined = sum(item.cycle_delivered is None for item in launches)
     onset_index: int | None = None
+    onset_cycle: int | None = None
+    cycles_seen = 0
     for item in launches:
+        if item.cycle_delivered is True:
+            cycles_seen += 1
         if item.verdict in FREEZE_VERDICTS:
             onset_index = item.launch
+            # A freeze verdict is always a delivered cycle (validated in ``_parse_report``), so
+            # ``cycles_seen`` already includes this launch: the onset IS this cycle's position.
+            onset_cycle = cycles_seen
             break
     censored = onset_index is None
-    # A never_live record does NOT prove a launch cycle reached AC (see the module docstring),
-    # and the report schema cannot tell the two apart. If any precedes the onset, the onset's
-    # position in the accumulator's own count is unknown by up to that many launches.
-    #
-    # A CENSORED boot is the same problem one step further out: "no freeze in N launches" only
-    # bounds the onset above the number of cycles actually DELIVERED, which is unknown when any
-    # never_live is present. Scoring it at N+1 would overstate how long that arm stayed clean,
-    # and would bias the comparison whenever never_live rates differ by arm.
+    # Only a launch whose delivery is UNKNOWN can still shift the onset's accumulator position.
+    # A known-undelivered attempt advanced nothing and is simply not counted; a known-delivered
+    # one is counted. A censored boot is the same question one step further out — "no freeze in
+    # N delivered cycles" is only a bound if N itself is known — so any undetermined launch
+    # anywhere in the boot makes its censoring bound ambiguous too.
     if onset_index is None:
-        never_live_before_onset = never_live
+        undetermined_before_onset = undetermined
     else:
-        never_live_before_onset = sum(
-            item.verdict == "never_live" for item in launches if item.launch < onset_index
+        undetermined_before_onset = sum(
+            item.cycle_delivered is None for item in launches if item.launch < onset_index
         )
-    ambiguous = never_live_before_onset > 0
+    ambiguous = undetermined_before_onset > 0
     # A censored boot is "onset later than the budget"; the surrogate must exceed every
-    # observable onset so the tests order it correctly, and the report flags the bound.
-    onset_value = len(launches) + 1 if onset_index is None else onset_index
+    # observable onset so the tests order it correctly, and the report flags the bound. The
+    # budget is the DELIVERED cycle count, not the raw launch count.
+    onset_value = delivered_cycles + 1 if onset_cycle is None else onset_cycle
     # Fixed-length follow-up so a boot that armed early does not get a longer exposure window
     # than one that armed late — unequal windows alone can manufacture a burst-rate difference.
-    window_end = None if onset_index is None else onset_index + POST_ONSET_WINDOW - 1
-    window_fits = window_end is not None and window_end <= len(launches)
-    window = () if not window_fits else launches[onset_index - 1 : window_end]
-    post_onset_launches = sum(item.verdict != "never_live" for item in window)
+    # Measured in delivered cycles for the same reason the onset is: an undelivered attempt is
+    # not exposure, and counting it would shorten the real follow-up of whichever arm suffers
+    # more delivery failures.
+    # An UNKNOWN row inside the span is fatal to the window, not skippable: if it really did
+    # deliver, it belongs in the window and the later row that took its slot does not, so the
+    # rate would be computed over the wrong six cycles (#710 Codex P2). Stop at the first one.
+    window: list[LaunchObservation] = []
+    window_unknown = False
+    if onset_index is not None:
+        for item in launches:
+            if item.launch < onset_index:
+                continue
+            if item.cycle_delivered is None:
+                window_unknown = True
+                break
+            if item.cycle_delivered is True:
+                window.append(item)
+                if len(window) == POST_ONSET_WINDOW:
+                    break
+    window_fits = len(window) == POST_ONSET_WINDOW
+    post_onset_launches = len(window)
     post_onset_freezes = sum(item.verdict in FREEZE_VERDICTS for item in window)
-    # The window must deliver the FULL pre-registered exposure to count. Dropping a never_live
-    # from the denominator would silently shrink it (3/5 instead of 3/6), so an arm with more
-    # delivery failures could show a burst-rate difference with identical freeze behaviour —
-    # the same unequal-exposure bug the fixed window exists to remove. And an ambiguous onset
-    # makes the window's own starting point untrustworthy, so it cannot anchor a rate either.
-    window_complete = window_fits and post_onset_launches == POST_ONSET_WINDOW and not ambiguous
+    # The window must deliver the FULL pre-registered exposure to count — the boot has to have
+    # run enough cycles past onset, not merely enough report rows. And an ambiguous onset makes
+    # the window's own starting point untrustworthy, so it cannot anchor a rate either.
+    window_complete = window_fits and not ambiguous and not window_unknown
     if not window_complete:
         post_onset_launches = 0
         post_onset_freezes = 0
     unusable_reason: str | None = None
-    if classified == 0:
-        unusable_reason = "no_classified_launches"
-    elif never_live > MAX_NEVER_LIVE_FRACTION * len(launches):
-        unusable_reason = "never_live_fraction_exceeded"
+    # "Did this boot observe the accumulator at all?" is now answered by DELIVERY, not by whether
+    # some other verdict happened to occur. The old ``classified == 0`` guard discarded a boot of
+    # 20 delivered never_live cycles — a perfectly good censored observation — while scoring 19
+    # of the same cycles plus one stable row (#710 Codex P2).
+    if delivered_cycles == 0:
+        unusable_reason = "no_delivered_cycles"
+    elif undelivered > MAX_UNDELIVERED_FRACTION * len(launches):
+        unusable_reason = "undelivered_fraction_exceeded"
     return BootSummary(
         boot=observation.boot,
         condition=observation.condition,
         launches=len(launches),
         never_live=never_live,
         classified=classified,
+        delivered_cycles=delivered_cycles,
+        undelivered_launches=undelivered,
+        undetermined_launches=undetermined,
         onset_index=onset_index,
         onset_censored=censored,
         onset_ambiguous=ambiguous,
-        never_live_before_onset=never_live_before_onset,
+        undetermined_before_onset=undetermined_before_onset,
+        onset_cycle=onset_cycle,
         onset_value=onset_value,
         burst_window=POST_ONSET_WINDOW,
         burst_window_complete=window_complete,
@@ -862,7 +981,9 @@ def _summarize_arm(condition: str, boots: Sequence[BootSummary]) -> ArmSummary:
     if not arm:
         raise ValueError(f"no boots for {condition}")
     scoring = [boot for boot in arm if _scores_onset(boot)]
-    observed = tuple(boot.onset_index for boot in scoring if boot.onset_index is not None)
+    # Onsets are reported in DELIVERED cycles (#710) — the accumulator's own coordinate, and the
+    # one ``onset_value`` and the endpoints are expressed in.
+    observed = tuple(boot.onset_cycle for boot in scoring if boot.onset_cycle is not None)
     # Same gate as the block-level burst difference: a boot that cannot score the onset cannot
     # contribute a burst rate either, so the arm aggregate never includes one.
     rates = tuple(
@@ -921,6 +1042,7 @@ def _summarize_blocks(boots: Sequence[BootSummary]) -> list[BlockSummary]:
                     onset_difference=None,
                     onset_difference_lower=None,
                     onset_difference_upper=None,
+                    onset_sign_established=False,
                     burst_difference=None,
                     usable=False,
                     unusable_reason=f"missing_{missing[0]}_boot",
@@ -933,8 +1055,38 @@ def _summarize_blocks(boots: Sequence[BootSummary]) -> list[BlockSummary]:
             reason = "unusable_boot"
         elif not (_scores_onset(on) and _scores_onset(off)):
             reason = "ambiguous_onset"
-        onset_difference = None if reason else float(off.onset_value - on.onset_value)
         lower, upper = (None, None) if reason else _onset_difference_bounds(on, off)
+        # A censoring surrogate may only enter the permutation statistic when the BOUNDS
+        # establish its sign. Before #710 every boot shared the same ``launches + 1`` surrogate,
+        # which made that automatic: a censored boot's surrogate strictly exceeded any onset
+        # observable in the same plan, so a singly-censored block's sign was guaranteed and a
+        # doubly-censored block cancelled to zero by construction. Delivered-cycle surrogates are
+        # PER BOOT, so both guarantees are gone and each must now be checked (#710 Codex P1,
+        # rounds 1 and 2):
+        #
+        #   * both observed        -> a real observation, always usable.
+        #   * one censored         -> usable only if its one-sided bound excludes zero. With a
+        #                             24-launch budget, ``on`` observed at 24 against ``off``
+        #                             censored after 20 delivered cycles yields 21-24 = -3 while
+        #                             the true difference may be zero or positive.
+        #   * both censored        -> two unrelated lower bounds; nothing is established.
+        #
+        # Otherwise the block contributes 0.0 — the honest "carries no signed evidence". Flipping
+        # a zero under permutation changes nothing, which is precisely what "no information"
+        # means, and ``informative_blocks`` already excludes zeros. The bounds are retained
+        # either way, so the direction machinery still sees the real constraint.
+        surrogate = None if reason else float(off.onset_value - on.onset_value)
+        sign_established = surrogate is not None and (
+            (lower is not None and upper is not None)
+            or (lower is not None and lower > 0)
+            or (upper is not None and upper < 0)
+        )
+        if surrogate is None:
+            onset_difference = None
+        elif sign_established:
+            onset_difference = surrogate
+        else:
+            onset_difference = 0.0
         # A block excluded from the primary endpoint is excluded from the secondary too: an
         # unusable or ambiguous-onset boot cannot anchor a trustworthy post-onset window either.
         burst_difference = (
@@ -952,6 +1104,7 @@ def _summarize_blocks(boots: Sequence[BootSummary]) -> list[BlockSummary]:
                 onset_difference=onset_difference,
                 onset_difference_lower=lower,
                 onset_difference_upper=upper,
+                onset_sign_established=sign_established,
                 burst_difference=burst_difference,
                 usable=reason is None,
                 unusable_reason=reason,
@@ -965,23 +1118,26 @@ def _onset_difference_bounds(
 ) -> tuple[float | None, float | None]:
     """Range the TRUE ``off - on`` onset difference can occupy, given right-censoring.
 
-    A censored boot only tells us its onset **exceeds** its launch budget, so substituting
-    ``N+1`` is a lower bound on that arm's onset, not an observation. Where exactly one boot in
-    the block is censored the substitution still gets the *sign* right (the censored arm is
-    provably the later one), so the direction is safe. Where **both** are censored the true
-    difference is unconstrained in either direction, and a summed statistic built from those
-    substitutions can point the wrong way.
+    A censored boot only tells us its onset **exceeds** the cycles it actually delivered, so its
+    ``onset_value`` surrogate (``delivered_cycles + 1``) is a lower bound on that arm's onset,
+    not an observation. Where exactly one boot in the block is censored the substitution still
+    gets the *sign* right (the censored arm is provably the later one), so the direction is safe.
+    Where **both** are censored the true difference is unconstrained in either direction, and a
+    summed statistic built from those substitutions can point the wrong way.
     """
     on_censored, off_censored = on.onset_censored, off.onset_censored
+    # Both arms are already expressed in delivered cycles, so one subtraction serves every case;
+    # only which SIDE the result bounds changes (#710 — the surrogate lives in ``onset_value``
+    # rather than being re-derived from the raw launch count here).
+    difference = float(off.onset_value - on.onset_value)
     if not on_censored and not off_censored:
-        difference = float(off.onset_value - on.onset_value)
         return difference, difference
     if off_censored and not on_censored:
-        # off_onset > off.launches and on_onset is known, so the difference is at least this
-        # much and unbounded above.
-        return float(off.launches + 1 - on.onset_value), None
+        # off's true onset exceeds its surrogate and on's is known: at least this much, and
+        # unbounded above.
+        return difference, None
     if on_censored and not off_censored:
-        return None, float(off.onset_value - (on.launches + 1))
+        return None, difference
     return None, None
 
 
@@ -1061,22 +1217,58 @@ def analyze(
     informative_blocks = sum(1 for value in onset_differences if abs(value) > 1e-9)
     smallest_attainable = 2 / 2**informative_blocks if informative_blocks else None
     # A zero difference means two different things. Both onsets OBSERVED and equal is a real
-    # tie — evidence of no effect in that block. Both CENSORED is not: their N+1 surrogates are
-    # equal by construction while the true onsets are unconstrained, so such a block is
-    # uninformative rather than null. Without this distinction an all-doubly-censored run —
-    # where nothing at all was learned — would report `no_measurable_effect` with p=1.
-    surrogate_tied_blocks = sum(
+    # tie — evidence of no effect in that block. A zero produced because CENSORING left the sign
+    # open is not: the true onsets are unconstrained, so such a block is uninformative rather
+    # than null. Without this distinction a run where nothing at all was learned would report
+    # `no_measurable_effect` with p=1.
+    # Scoped by ``onset_sign_established`` rather than by "both bounds are None" since #710: a
+    # SINGLY censored block whose one-sided bound fails to exclude zero also contributes an
+    # uninformative zero, but it has a real (non-None) lower or upper bound, so the old test
+    # would have missed it and an all-sign-ambiguous run would report ``no_measurable_effect``
+    # with p=1 — the same false null this guard exists to prevent (#710 Codex P1, round 2).
+    censoring_uninformative_blocks = sum(
         1
         for block in blocks
-        if block.usable and block.onset_difference == 0 and block.onset_difference_lower is None
+        if block.usable and block.onset_difference == 0 and not block.onset_sign_established
     )
+    # Blocks that actually carry an OBSERVATION — a nonzero difference, or a zero that is a real
+    # observed tie. A block whose zero came from censoring is not one of these. The endpoint floor
+    # is checked against THIS count, not against `usable_blocks`, so that a run cannot satisfy the
+    # floor on blocks that learned nothing: 2 observed ties plus 5 censoring-uninformative blocks
+    # is not 7 blocks' worth of evidence. Conversely — and this is the bug it replaces — the old
+    # `censoring_uninformative_blocks and informative_blocks == 0` veto downgraded an otherwise
+    # eligible `no_measurable_effect` the moment a single uninformative block was appended to six
+    # fully observed ties, which is exactly backwards (#710 Qodo, round 3).
+    observing_blocks = sum(1 for block in blocks if block.usable and block.onset_sign_established)
     # Smallest informative-block count that could reach alpha, so a short run says what it needs
     # instead of just refusing. 2/2**k <= alpha  <=>  k >= log2(2/alpha).
     informative_required = math.ceil(math.log2(2.0 / alpha))
     scoring_boots = [boot for boot in boots if _scores_onset(boot)]
     # A hand-edited or allow_undersized plan can hold enough blocks while each boot ends before
     # the pre-registered graceful onset plus burst window. Blocks alone are not eligibility.
-    short_boots = [boot for boot in scoring_boots if boot.launches < MIN_LAUNCHES_PER_BOOT]
+    # Measured in DELIVERED cycles since #710: the floor exists so a boot can cover the
+    # pre-registered graceful onset plus the full follow-up window, and both are now counted in
+    # cycles. A 20-attempt plan may carry up to 4 undelivered attempts without tripping the
+    # exclusion threshold, leaving only 16 cycles — enough report rows, but not enough
+    # accumulator to observe an onset at 14 plus a 6-cycle window (#710 Codex P2).
+    #
+    # Scoped to boots that actually REACH the test. Block eligibility is paired, so a boot whose
+    # partner is unusable or ambiguous never contributes an onset difference; letting such a boot
+    # force `insufficient_sample` would override a correct result computed from an otherwise
+    # eligible population. Before #710 this was mostly theoretical (a short boot required a
+    # hand-edited plan); with the floor now counting delivered cycles, ordinary delivery failures
+    # reach it, so the scoping has to be explicit (#710 Qodo, round 2).
+    tested_boot_numbers = {
+        number
+        for block in blocks
+        if block.usable
+        for number in (block.overlays_on_boot, block.overlays_off_boot)
+    }
+    short_boots = [
+        boot
+        for boot in scoring_boots
+        if boot.boot in tested_boot_numbers and boot.delivered_cycles < MIN_LAUNCHES_PER_BOOT
+    ]
     # Censoring bounds: substituting N+1 for a censored onset is a BOUND, not an observation.
     # Where exactly one boot per block is censored the sign still holds; where both are, the
     # true difference is unconstrained, so the summed statistic can point either way. Only claim
@@ -1098,9 +1290,9 @@ def analyze(
     # Exclusion must not depend on the treatment. The block permutation test is exact for the
     # SHARP null (no effect on anything) — under it each boot's outcome, and therefore whether
     # it is excluded, is fixed regardless of labels. But every exclusion here is decided from a
-    # POST-TREATMENT outcome (never_live counts, ambiguous onsets), so if an overlay setting
-    # changes those rates the surviving block set is a function of the assignment while the test
-    # holds it fixed, and the fixed-set p-value no longer justifies a causal claim.
+    # POST-TREATMENT outcome (undelivered-launch counts, ambiguous onsets), so if an overlay
+    # setting changes those rates the surviving block set is a function of the assignment while
+    # the test holds it fixed, and the fixed-set p-value no longer justifies a causal claim.
     #
     # An earlier cut gated on the arm counts being EQUAL. That is not enough, and both reviewers
     # said so: equal marginal counts are consistent with treatment-dependent missingness landing
@@ -1125,10 +1317,16 @@ def analyze(
     )
     missing_blocks = max(0, (expected_blocks or 0) - len(blocks))
     exclusions_present = sum(excluded.values()) > 0 or incomplete_blocks > 0 or missing_blocks > 0
-    if usable_blocks < endpoint_floor or onset_p is None or blocked_effect is None or short_boots:
-        conclusion = "insufficient_sample"
-    elif surrogate_tied_blocks and informative_blocks == 0:
-        # Nothing was observed: every block's zero came from two censoring surrogates.
+    if (
+        usable_blocks < endpoint_floor
+        # Blocks that learned nothing cannot fill the floor. This subsumes the old
+        # "all zeros came from censoring" veto — an all-uninformative run has zero observing
+        # blocks — without vetoing a run whose ties were genuinely observed.
+        or observing_blocks < endpoint_floor
+        or onset_p is None
+        or blocked_effect is None
+        or short_boots
+    ):
         conclusion = "insufficient_sample"
     elif smallest_attainable is not None and smallest_attainable > alpha:
         # Enough usable blocks, but too few of them carry a nonzero difference for any result
@@ -1165,10 +1363,13 @@ def analyze(
         "schema": ANALYSIS_SCHEMA,
         "issue": 625,
         "design": "randomized block (two boots per block, one per arm)",
-        "primary_endpoint": "onset launch-index (first froze/wedged_init launch in the boot)",
+        "primary_endpoint": (
+            "onset DELIVERED-CYCLE index (first froze/wedged_init launch in the boot, counted "
+            "in launch cycles that actually reached AC)"
+        ),
         "secondary_endpoint": (
-            f"post-onset burst rate over a fixed {POST_ONSET_WINDOW}-launch window from onset, "
-            "one rate per boot"
+            f"post-onset burst rate over a fixed {POST_ONSET_WINDOW}-delivered-cycle window from "
+            "onset, one rate per boot"
         ),
         "alpha": alpha,
         "minimum_boots_per_arm": endpoint_floor,
@@ -1190,11 +1391,17 @@ def analyze(
         "blocked_onset_effect_lower_bound": lower_sum,
         "blocked_onset_effect_upper_bound": upper_sum,
         "ambiguous_onset_boots": on.ambiguous_boots + off.ambiguous_boots,
+        # #710 delivery accounting, pooled across arms: how much of the raw attempt count the
+        # accumulator actually saw, and how much never reached AC at all.
+        "delivered_cycles": sum(boot.delivered_cycles for boot in boots),
+        "undelivered_launches": sum(boot.undelivered_launches for boot in boots),
+        "undetermined_launches": sum(boot.undetermined_launches for boot in boots),
         "excluded_boots_by_arm": excluded,
         "exclusions_present": exclusions_present,
         "incomplete_blocks": incomplete_blocks,
         "missing_blocks": missing_blocks,
-        "surrogate_tied_blocks": surrogate_tied_blocks,
+        "censoring_uninformative_blocks": censoring_uninformative_blocks,
+        "observing_blocks": observing_blocks,
         "burst_blocks": len(burst_differences),
         "short_boots_below_launch_floor": len(short_boots),
         "minimum_launches_per_boot": MIN_LAUNCHES_PER_BOOT,
@@ -1257,6 +1464,12 @@ def render_markdown(analysis: dict[str, Any]) -> str:
                 and analysis["informative_blocks"] < analysis["informative_blocks_required"]
                 else ""
             ),
+            # Onsets are cycle positions, so say how many cycles were actually delivered — a
+            # large undelivered count means the raw launch numbering and the accumulator's own
+            # count diverged a lot, which is exactly what #710 made visible.
+            f"Launch cycles delivered: {analysis['delivered_cycles']} "
+            f"({analysis['undelivered_launches']} attempt(s) never reached AC; "
+            f"{analysis['undetermined_launches']} of unknown delivery)",
             "PRIMARY — onset, exact block permutation (two-sided): "
             f"p={_format_optional(analysis['onset_block_permutation_two_sided_p'], '.6g')}"
             + (
@@ -1280,7 +1493,7 @@ def render_markdown(analysis: dict[str, Any]) -> str:
             "rank-sum (assumption-dependent, non-gating): "
             f"p={_format_optional(sensitivity['onset_rank_sum_two_sided_p'], '.6g')}",
             "Blocked onset effect (off - on, the tested statistic): "
-            f"{_format_optional(analysis['blocked_onset_effect_off_minus_on'], '+.1f')} launches"
+            f"{_format_optional(analysis['blocked_onset_effect_off_minus_on'], '+.1f')} cycles"
             + (
                 ""
                 if analysis["effect_direction_determined"]
@@ -1288,7 +1501,7 @@ def render_markdown(analysis: dict[str, Any]) -> str:
             ),
             "Marginal median onset difference (descriptive, not the direction source): "
             f"{_format_optional(analysis['median_onset_difference_off_minus_on'], '+.1f')}"
-            " launches",
+            " cycles",
             "Pre-registered baseline onset (graceful): "
             f"{analysis['prereg_baselines']['onset_index_graceful']}; "
             f"burst {analysis['prereg_baselines']['post_onset_burst_rate']:.0%}",

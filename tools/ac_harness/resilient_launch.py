@@ -74,6 +74,10 @@ class LaunchVerdict(StrEnum):
     go-live budget alive without ever publishing an advancing render stream** — the #627 init
     livelock signature. Any freeze *rate* for #627 must count ``WEDGED_INIT`` with ``FROZE``, or
     the init wedge disappears into launch-plumbing noise and the denominator means nothing.
+
+    ``NEVER_LIVE`` alone still cannot say whether an AC launch *cycle* happened — "appeared and
+    exited" and "was never spawned" share the bucket. That axis is recorded separately as
+    :class:`AttemptOutcome.cycle_delivered` (#710); do not infer it from the verdict.
     """
 
     PENDING = "pending"
@@ -83,7 +87,33 @@ class LaunchVerdict(StrEnum):
     WEDGED_INIT = "wedged_init"
 
 
-REPORT_SCHEMA = "resilient-launch-report/v1"
+@dataclass(frozen=True)
+class AttemptOutcome:
+    """A verdict plus whether the attempt actually consumed an AC launch cycle (#710).
+
+    ``NEVER_LIVE`` still covers two physically different outcomes, and the verdict alone cannot
+    tell them apart:
+
+    * **delivered** — Content Manager started ``acs.exe`` and it exited during load, or it
+      rendered without ever reaching readiness. A real launch cycle happened.
+    * **undelivered** — ``_ensure_cm_running`` failed or ``actuator.launch()`` raised, so nothing
+      was ever spawned. No launch cycle happened.
+
+    The #625 freeze accumulator arms with launch **cycles**, so anything that maps a launch's
+    ordinal position onto an accumulator position (``init_perturber_ab.summarize_boot``) needs the
+    delivered/undelivered split — with only the verdict it must treat every ``never_live`` as
+    potentially undelivered and discard the boot, at the cost of a physical reboot each time.
+
+    ``cycle_delivered`` is ``None`` only when the producer genuinely does not know: a caller that
+    returns a bare :class:`LaunchVerdict` to :func:`run_retry_loop` supplies no delivery evidence,
+    and ``NEVER_LIVE`` is the one verdict whose delivery cannot be derived from the verdict alone.
+    """
+
+    verdict: LaunchVerdict
+    cycle_delivered: bool | None
+
+
+REPORT_SCHEMA = "resilient-launch-report/v2"
 TERMINAL_VERDICTS = frozenset(
     {
         LaunchVerdict.STABLE.value,
@@ -351,6 +381,58 @@ def classify(
     return LaunchVerdict.PENDING
 
 
+def cycle_delivered(samples: Sequence[Sample]) -> bool:
+    """Whether this attempt's trace **proves** an AC launch cycle happened. Pure — no I/O.
+
+    Positive evidence only: ``False`` here means "not proven", **not** "proven not to have
+    happened". Callers on the post-launch path must map that to *unknown* — see
+    :func:`_watched_delivery`. Only the pre-launch failure paths may assert non-delivery.
+
+    A cycle is delivered when ``acs.exe`` actually started — that is what the #625 accumulator
+    arms on. This is deliberately *not* derived from the verdict: ``NEVER_LIVE`` spans both a
+    process that appeared and exited and a launch that was never delivered at all (#710), which
+    is the ambiguity the flag removes.
+
+    Two independent proofs, either of which suffices:
+
+    * **A live process sighting.** ``Sample.acs_alive`` comes from the debounced liveness probe,
+      which only reports absence-as-alive **after** a real sighting
+      (:func:`_make_process_liveness_probe`), so a debounced sample cannot manufacture delivery.
+    * **Any packet MOVEMENT.** ``acpmf_*`` outlives its creator, but a corpse is a frozen
+      snapshot: it never changes on its own, so **any** non-equal movement proves a live writer
+      wrote the section (the load-bearing insight of :class:`SectionOwnershipGate`). The process
+      probe alone is not sufficient: ``_sample_now`` reads state through a Car0 handshake that
+      blocks for up to five seconds, so a process that started after the previous poll and exited
+      inside that window moves the packet while every ``acs_alive`` reading is ``False``.
+      Ignoring that evidence would publish ``cycle_delivered=False`` for a cycle that
+      demonstrably ran and shift every subsequent accumulator position (#710 Codex P1).
+
+      A **regression** counts for the same reason and is the more common shape of that race: the
+      dead session's section stays mapped at a high id for ~6 s into the next ``acs.exe``'s
+      lifetime, so a new generation publishing its own stream from ~0 shows up as
+      ``16983 -> 121`` (#628). ``classify`` already treats a pre-go-live regression as an
+      ordinary handover; requiring a strict *increase* here would miss exactly that trace when
+      the process also died before any liveness poll saw it (#710 Codex P1, round 2).
+
+      The previous ``acs.exe`` is confirmed gone before the attempt starts and the rig lock
+      excludes a peer harness, so no other writer can be moving these sections.
+    """
+    if any(sample.acs_alive for sample in samples):
+        return True
+    prev_gfx: int | None = None
+    prev_phys: int | None = None
+    for sample in samples:
+        if sample.gfx_packet is not None:
+            if prev_gfx is not None and sample.gfx_packet != prev_gfx:
+                return True
+            prev_gfx = sample.gfx_packet
+        if sample.phys_packet is not None:
+            if prev_phys is not None and sample.phys_packet != prev_phys:
+                return True
+            prev_phys = sample.phys_packet
+    return False
+
+
 class SectionOwnershipGate:
     """Trust shared-memory readings only once the render packet proves a LIVE writer owns them.
 
@@ -550,6 +632,10 @@ class AttemptRecord:
     per-launch freeze rate rises with accumulated uptime/launches, so a verdict without a
     recorded denominator and uptime is unusable for rate measurement. ``uptime_h`` is machine
     uptime at attempt start (``None`` when unavailable, e.g. off-rig tests).
+
+    ``cycle_delivered`` (#710) records whether this attempt actually consumed an AC launch cycle
+    — see :class:`AttemptOutcome`. ``None`` means the producer did not know; a rig run always
+    knows, because it either never spawned anything or watched a trace.
     """
 
     attempt: int
@@ -557,11 +643,13 @@ class AttemptRecord:
     started_at_utc: str
     elapsed_s: float
     uptime_h: float | None
+    cycle_delivered: bool | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
             "attempt": self.attempt,
             "verdict": str(self.verdict),
+            "cycle_delivered": self.cycle_delivered,
             "started_at_utc": self.started_at_utc,
             "elapsed_s": round(self.elapsed_s, 3),
             "uptime_h": None if self.uptime_h is None else round(self.uptime_h, 4),
@@ -578,6 +666,11 @@ class LaunchReport:
     never_live: int
     wedged_init: int = 0
     stable: int = 0
+    #: attempts that actually started an ``acs.exe`` — the #625 accumulator's own denominator
+    #: (#710). ``cycles_undetermined`` counts attempts whose producer did not report delivery.
+    cycles_delivered: int = 0
+    cycles_undelivered: int = 0
+    cycles_undetermined: int = 0
     attempts_log: tuple[AttemptRecord, ...] = field(default=())
     launch: dict[str, object] | None = None
 
@@ -586,7 +679,10 @@ class LaunchReport:
         return self.verdict is LaunchVerdict.STABLE
 
     def _counts(self) -> str:
-        return f"froze {self.froze}, wedged_init {self.wedged_init}, never_live {self.never_live}"
+        return (
+            f"froze {self.froze}, wedged_init {self.wedged_init}, never_live {self.never_live}"
+            f"; cycles delivered {self.cycles_delivered}/{self.attempts}"
+        )
 
     def summary(self) -> str:
         if self.succeeded:
@@ -611,6 +707,14 @@ class LaunchReport:
                 "wedged_init": self.wedged_init,
                 "never_live": self.never_live,
             },
+            # Kept OUT of ``counts`` on purpose: ``counts`` is the verdict histogram and
+            # consumers check it for exact equality against the per-attempt log. Delivery is an
+            # orthogonal axis — every terminal verdict has one (#710).
+            "cycles": {
+                "delivered": self.cycles_delivered,
+                "undelivered": self.cycles_undelivered,
+                "undetermined": self.cycles_undetermined,
+            },
             "attempts_log": [record.as_dict() for record in self.attempts_log],
         }
         if self.launch is not None:
@@ -622,8 +726,70 @@ def _utc_stamp(epoch_seconds: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch_seconds))
 
 
+def _watched_delivery(samples: Sequence[Sample]) -> bool | None:
+    """Delivery for an attempt that reached ``actuator.launch()``: ``True`` or **unknown**.
+
+    A watched trace can only ever *prove* delivery — it cannot prove the absence of it. Once the
+    launch URL has been handed to Content Manager, "the sampler saw nothing" is not the same
+    claim as "nothing was spawned": an ``acs.exe`` that starts and dies before publishing a
+    packet, entirely inside one inter-poll gap (an early load crash), leaves a trace identical to
+    a launch that never happened. Recording that as ``False`` would make ``summarize_boot`` skip a
+    real cycle and shift every later accumulator position — silent corruption of the very
+    endpoint this flag exists to protect (#710 Codex P1, round 4).
+
+    So ``False`` is reserved for the paths where non-delivery is **established before launch**:
+    Content Manager absent, or ``actuator.launch()`` raising. Those return it directly and are
+    exactly the "nothing was ever spawned" shapes #710 set out to separate. Anything unproven
+    here stays unknown, and the analyzer treats unknown-before-onset as ambiguous rather than
+    scoring it.
+    """
+    return True if cycle_delivered(samples) else None
+
+
+def _delivery_label(delivered: bool | None) -> str:
+    """Human-readable delivery state for the per-attempt progress trace (#710)."""
+    if delivered is True:
+        return "cycle delivered"
+    if delivered is False:
+        return "no cycle — never reached AC"
+    return "cycle delivery unknown"
+
+
+def _normalize_attempt_result(result: LaunchVerdict | AttemptOutcome) -> AttemptOutcome:
+    """Coerce one ``watch_attempt`` return into an :class:`AttemptOutcome` (#710).
+
+    A bare :class:`LaunchVerdict` carries no delivery evidence. Every verdict except
+    ``NEVER_LIVE`` can only be reached through an observation of a live ``acs.exe`` — go-live for
+    ``STABLE``/``FROZE``, and the sustained alive-without-publishing evidence for
+    ``WEDGED_INIT`` — so their delivery is derivable. ``NEVER_LIVE`` is exactly the ambiguous
+    one, so it stays **undetermined** rather than being guessed in either direction.
+    """
+    outcome = (
+        result
+        if isinstance(result, AttemptOutcome)
+        else AttemptOutcome(
+            verdict=result,
+            cycle_delivered=None if result is LaunchVerdict.NEVER_LIVE else True,
+        )
+    )
+    if (
+        outcome.verdict is not LaunchVerdict.PENDING
+        and outcome.verdict is not LaunchVerdict.NEVER_LIVE
+        and outcome.cycle_delivered is not True
+    ):
+        # Unreachable by construction. Rejecting only ``False`` would let an explicit
+        # ``AttemptOutcome(STABLE, None)`` publish a v2 report that this repo's own analyzer
+        # (``init_perturber_ab._parse_report``) then rejects as internally invalid, so the
+        # producer must enforce exactly what the consumer requires (#710 Codex P2).
+        raise ValueError(
+            f"verdict {outcome.verdict} requires a live acs.exe but was reported with "
+            f"cycle_delivered={outcome.cycle_delivered!r}"
+        )
+    return outcome
+
+
 def run_retry_loop(
-    watch_attempt: Callable[[int], LaunchVerdict],
+    watch_attempt: Callable[[int], LaunchVerdict | AttemptOutcome],
     *,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     on_never_live_streak: Callable[[], None] | None = None,
@@ -635,12 +801,16 @@ def run_retry_loop(
 ) -> LaunchReport:
     """Drive attempts until one is ``STABLE`` or the budget is spent. Pure control flow.
 
-    ``watch_attempt(attempt_number)`` performs one launch+watch and returns its verdict.
+    ``watch_attempt(attempt_number)`` performs one launch+watch and returns its verdict, or an
+    :class:`AttemptOutcome` that also states whether an AC launch cycle was actually delivered
+    (#710). A bare verdict is normalized by :func:`_normalize_attempt_result`.
+
     ``on_never_live_streak`` is invoked once a run of ``never_live_before_restart`` consecutive
     ``NEVER_LIVE`` verdicts is seen — the hook the CLI uses to cold-restart a stale Content
     Manager (#537/#558) rather than pointlessly re-sending the same URL. A ``WEDGED_INIT``
-    verdict resets that streak like ``FROZE`` does: acs.exe appeared, so CM delivered the launch
-    and restarting it would only add kill-churn (#627 §6.5).
+    verdict resets that streak like ``FROZE`` does: acs.exe appeared AND published, so CM
+    honored the preset and restarting it would only add kill-churn (#627 §6.5). Recorded
+    delivery does **not** shorten the streak — see the NEVER_LIVE branch below.
 
     With ``stop_on_stable=False`` every attempt in the budget runs regardless of verdict — the
     rate-measurement mode #627 §9.2 needs (``--trials``). Every attempt is recorded in the
@@ -662,6 +832,7 @@ def run_retry_loop(
 
     records: list[AttemptRecord] = []
     stable = froze = never_live = wedged_init = 0
+    delivered = undelivered = undetermined = 0
     never_live_run = 0
     last_verdict = LaunchVerdict.NEVER_LIVE
     attempts_run = 0
@@ -669,7 +840,8 @@ def run_retry_loop(
         started_wall = wall_clock()
         started = clock()
         uptime = read_uptime()
-        verdict = watch_attempt(attempt)
+        outcome = _normalize_attempt_result(watch_attempt(attempt))
+        verdict = outcome.verdict
         if verdict is LaunchVerdict.PENDING:
             raise ValueError("watch_attempt returned a non-terminal PENDING verdict")
         records.append(
@@ -679,8 +851,15 @@ def run_retry_loop(
                 started_at_utc=_utc_stamp(started_wall),
                 elapsed_s=clock() - started,
                 uptime_h=uptime,
+                cycle_delivered=outcome.cycle_delivered,
             )
         )
+        if outcome.cycle_delivered is True:
+            delivered += 1
+        elif outcome.cycle_delivered is False:
+            undelivered += 1
+        else:
+            undetermined += 1
         last_verdict = verdict
         attempts_run = attempt
         if verdict is LaunchVerdict.STABLE:
@@ -690,6 +869,12 @@ def run_retry_loop(
                 break
         elif verdict is LaunchVerdict.NEVER_LIVE:
             never_live += 1
+            # Delivery deliberately does NOT gate this streak. A delivered NEVER_LIVE also covers
+            # a session that rendered but never reached readiness — the stale cached-session /
+            # pre-drive-overlay failure of #537/#558, whose PROVEN recovery is exactly this cold
+            # restart. Delivery proves AC started, not that CM honored the requested preset, so
+            # resetting here would strand those attempts re-sending URLs at a stale CM (#710
+            # Codex P1).
             never_live_run += 1
             if never_live_run >= never_live_before_restart and on_never_live_streak is not None:
                 on_never_live_streak()
@@ -708,6 +893,9 @@ def run_retry_loop(
         never_live,
         wedged_init=wedged_init,
         stable=stable,
+        cycles_delivered=delivered,
+        cycles_undelivered=undelivered,
+        cycles_undetermined=undetermined,
         attempts_log=tuple(records),
     )
 
@@ -1447,8 +1635,26 @@ def _watch_live(  # pragma: no cover - rig-only
     stability_window: float,
     poll_interval: float = 1.0,
     pause_budget: float = DEFAULT_PAUSE_BUDGET,
-) -> LaunchVerdict:
+    delivery_baseline: Sample | None = None,
+) -> AttemptOutcome:
     """Sample until the attempt resolves, then classify. Streams samples into :func:`classify`.
+
+    Returns the verdict **with** its delivery flag (#710): the trace itself is the evidence, via
+    :func:`cycle_delivered`. The budget-exhaustion ``FROZE`` below is post-go-live by
+    construction — ``classify`` resolves the go-live timeout, which is strictly shorter than this
+    budget, before it can be reached — so it is always a delivered cycle.
+
+    ``delivery_baseline`` is a PRE-LAUNCH packet reading. Without it, delivery evidence begins at
+    the first post-launch sample, so a session that started and exited before that sample
+    completed would leave every later sample pinned at its final value with no movement to
+    detect — publishing ``cycle_delivered=False`` for a cycle that ran (#710 Codex P2). The
+    baseline makes that unreachable by construction instead of by a timing argument about how
+    fast AC can boot.
+
+    It feeds **only** :func:`cycle_delivered`, never :func:`classify`. Seeding the classifier's
+    comparison baseline from a pre-launch reading is the #628 corpse trap: the dead session's
+    section is still mapped at a high id, and the next ``acs.exe`` rendering its own stream from
+    ~0 would read as a regression and throw away a perfectly healthy launch.
 
     The wall-clock budget is ``go_live_timeout + stability_window + 30`` **plus the pause hold**
     ``classify`` reports (capped at ``pause_budget``): a long alt-tab must stay PENDING, never
@@ -1461,6 +1667,11 @@ def _watch_live(  # pragma: no cover - rig-only
     started_at = time.monotonic()
     budget = go_live_timeout + stability_window + 30.0
     paused = 0.0
+
+    def delivery_trace(observed: list[Sample]) -> list[Sample]:
+        """The trace used for DELIVERY only — never for classification (see the docstring)."""
+        return observed if delivery_baseline is None else [delivery_baseline, *observed]
+
     while time.monotonic() < started_at + budget + min(paused, pause_budget):
         samples.append(_sample_now(read_state, acs_alive))
         sink: list[float] = []
@@ -1473,11 +1684,11 @@ def _watch_live(  # pragma: no cover - rig-only
             pause_sink=sink,
         )
         if verdict is not LaunchVerdict.PENDING:
-            return verdict
+            return AttemptOutcome(verdict, _watched_delivery(delivery_trace(samples)))
         if sink:
             paused = sink[-1]
         time.sleep(poll_interval)
-    return LaunchVerdict.FROZE
+    return AttemptOutcome(LaunchVerdict.FROZE, _watched_delivery(delivery_trace(samples)))
 
 
 def _positive_float(value: str) -> float:
@@ -1677,7 +1888,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         # list so the closure can rebind it.
         last_attempt_verdict: list[LaunchVerdict | None] = [None]
 
-        def watch_attempt(attempt: int) -> LaunchVerdict:
+        def watch_attempt(attempt: int) -> AttemptOutcome:
             if release_requested():
                 raise _OperatorRelease
             _log(f"attempt {attempt}/{args.max_attempts}: launching via Content Manager")
@@ -1704,19 +1915,32 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 actuator.cm_exe,
                 release_requested=release_requested,
             ):
-                return LaunchVerdict.NEVER_LIVE
+                # Nothing was spawned, so this attempt did NOT consume a launch cycle (#710).
+                return AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=False)
             if release_requested():
                 raise _OperatorRelease
             minimize_foreground_window()
             if release_requested():
                 raise _OperatorRelease
+            # Pre-launch packet baseline for the #710 delivery check ONLY. acs.exe is confirmed
+            # gone above, so whatever these sections hold now is a corpse (or nothing) — any
+            # later movement therefore proves a new writer, even if the session dies before the
+            # first post-launch sample completes. Deliberately NOT fed to classify (#628).
+            baseline_gfx, _baseline_ready, baseline_phys = read_state()
+            delivery_baseline = Sample(
+                t=time.monotonic(),
+                gfx_packet=baseline_gfx,
+                acs_alive=False,
+                phys_packet=baseline_phys,
+            )
             try:
                 # Cleanup already normalized acs.exe above. Calling relaunch() here would add a
                 # second uninterruptible taskkill window between the final release check and launch.
                 actuator.launch()
             except (OSError, EntryLaunchUnsupported) as exc:
                 _log(f"attempt {attempt}: Content Manager launch failed: {exc}")
-                return LaunchVerdict.NEVER_LIVE
+                # The URL never reached CM, so no acs.exe could have started (#710).
+                return AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=False)
             readiness = AttemptReadiness(
                 lambda: _probe_car0_drivable(
                     release_requested=release_requested,
@@ -1744,19 +1968,22 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 return packet, ready, drivable, phys_packet
 
             try:
-                verdict = _watch_live(
+                outcome = _watch_live(
                     read_attempt_state,
                     acs_alive,
                     go_live_timeout=args.go_live_timeout,
                     stability_window=args.stability_window,
+                    delivery_baseline=delivery_baseline,
                 )
             except _Car0NotDrivable:
                 # CM did start a LIVE session; only the Car0 handoff failed. Treat this as a bad
                 # rendered attempt so it cannot advance the stale-CM/never-live restart streak.
-                verdict = LaunchVerdict.FROZE
-            _log(f"attempt {attempt}: {verdict}")
-            last_attempt_verdict[0] = verdict
-            return verdict
+                # The session was rendering, so the launch cycle WAS delivered (#710).
+                outcome = AttemptOutcome(LaunchVerdict.FROZE, cycle_delivered=True)
+            delivery = _delivery_label(outcome.cycle_delivered)
+            _log(f"attempt {attempt}: {outcome.verdict} ({delivery})")
+            last_attempt_verdict[0] = outcome.verdict
+            return outcome
 
         def cold_restart_cm() -> None:
             _log("two consecutive never_live — cold-restarting Content Manager (stale preset IPC)")
@@ -1837,6 +2064,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 uptime = "?" if record.uptime_h is None else f"{record.uptime_h:.3f}h"
                 _log(
                     f"trial {record.attempt}/{args.trials}: {record.verdict} "
+                    f"[{_delivery_label(record.cycle_delivered)}] "
                     f"elapsed={record.elapsed_s:.1f}s uptime={uptime}"
                 )
             _log(
