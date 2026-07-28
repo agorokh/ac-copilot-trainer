@@ -141,8 +141,10 @@ OPEN for the physical A/B on `pc` (operator-gated Steam/NVIDIA toggles + attache
 
 > **The v1 driver merged by #657 encoded a design that was withdrawn 2026-07-24** — interleaved
 > launches in ONE boot, pooled per-launch rate — which the #627/#668 accumulator refutes. PR
-> [#708](https://github.com/agorokh/ac-copilot-trainer/pull/708) re-points it to boot-scoped
-> randomized blocks (**one reboot per planned boot**). Live runbook:
+> [#708](https://github.com/agorokh/ac-copilot-trainer/pull/708) **MERGED**
+> [`f65c4e1`](https://github.com/agorokh/ac-copilot-trainer/commit/f65c4e1b365244cac09e84edea373a6698db2697)
+> re-points it to boot-scoped randomized blocks (**one reboot per planned boot**, 16 boots at
+> the 8/arm default). Live runbook:
 > [[issue-625-boot-scoped-redesign-2026-07-28]]. The old detail node
 > [[issue-625-init-perturber-ab-prepared-2026-07-22]] is **superseded — do not run its protocol**.
 
