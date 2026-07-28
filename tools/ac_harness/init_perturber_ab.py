@@ -64,6 +64,7 @@ import json
 import math
 import os
 import random
+import secrets
 import statistics
 import subprocess
 import sys
@@ -280,6 +281,7 @@ def build_plan(
     stability_window: float = DEFAULT_STABILITY_WINDOW,
     go_live_timeout: float = DEFAULT_GO_LIVE_TIMEOUT,
     generated_at_utc: str | None = None,
+    run_nonce: str | None = None,
     allow_undersized: bool = False,
 ) -> dict[str, Any]:
     """Build a reproducible boot-scoped experiment plan; settings remain operator-owned."""
@@ -334,6 +336,14 @@ def build_plan(
     # second run's `analyze` would silently consume the FIRST experiment's reports and return a
     # stale conclusion — on an experiment that costs a dozen reboots. Namespace every report to
     # its own plan. The id is a pure function of the plan inputs, so it stays reproducible.
+    # Every plan input feeds the namespace, plus a nonce. ``generated_at_utc`` is only
+    # second-resolution, so two plans generated in the same tick with identical inputs would
+    # otherwise collide — and a collision is expensive: the second physical run spends a whole
+    # boot's launch budget before the exclusive report write fails on the existing filename.
+    # When the caller pins the timestamp (tests, reproducible regeneration) the nonce defaults
+    # to empty so the id stays deterministic; a real run gets fresh entropy.
+    if run_nonce is None:
+        run_nonce = "" if generated_at_utc is not None else secrets.token_hex(8)
     run_id = _run_id(
         generated_at_utc=stamp,
         randomization_seed=randomization_seed,
@@ -342,6 +352,9 @@ def build_plan(
         car=car,
         track=track,
         layout=layout,
+        stability_window=stability_window,
+        go_live_timeout=go_live_timeout,
+        run_nonce=run_nonce,
     )
     boots = [
         asdict(
@@ -859,18 +872,42 @@ def _summarize_arm(condition: str, boots: Sequence[BootSummary]) -> ArmSummary:
 
 def _summarize_blocks(boots: Sequence[BootSummary]) -> list[BlockSummary]:
     """Pair adjacent boots into blocks and compute the within-block off-minus-on differences."""
-    ordered = sorted(boots, key=lambda boot: boot.boot)
-    if len(ordered) % 2:
-        raise ValueError("a randomized-block analysis requires an even number of boots")
+    # Group by the PLANNED block number, never by adjacency. `load_observations(...,
+    # require_complete=False)` can drop one boot from each of two different blocks and leave an
+    # even count, and slicing pairs would then fabricate a pair out of two different randomized
+    # blocks — which the condition check would happily accept and the exact test would score.
+    grouped: dict[int, dict[str, BootSummary]] = {}
+    for boot in sorted(boots, key=lambda item: item.boot):
+        block_number = (boot.boot + 1) // 2
+        slot = grouped.setdefault(block_number, {})
+        if boot.condition in slot:
+            raise ValueError(
+                f"block {block_number} holds two {boot.condition} boots; a block must contain "
+                "one boot per arm"
+            )
+        slot[boot.condition] = boot
     blocks: list[BlockSummary] = []
-    for index, offset in enumerate(range(0, len(ordered), 2), start=1):
-        pair = ordered[offset : offset + 2]
-        if {boot.condition for boot in pair} != set(CONDITIONS):
-            raise ValueError("each block must contain one boot per arm")
-        by_condition = {boot.condition: boot for boot in pair}
-        on = by_condition["overlays_on"]
-        off = by_condition["overlays_off"]
+    for index in sorted(grouped):
+        slot = grouped[index]
         reason: str | None = None
+        if set(slot) != set(CONDITIONS):
+            missing = sorted(set(CONDITIONS) - set(slot))
+            blocks.append(
+                BlockSummary(
+                    block=index,
+                    overlays_on_boot=slot["overlays_on"].boot if "overlays_on" in slot else -1,
+                    overlays_off_boot=slot["overlays_off"].boot if "overlays_off" in slot else -1,
+                    onset_difference=None,
+                    onset_difference_lower=None,
+                    onset_difference_upper=None,
+                    burst_difference=None,
+                    usable=False,
+                    unusable_reason=f"missing_{missing[0]}_boot",
+                )
+            )
+            continue
+        on = slot["overlays_on"]
+        off = slot["overlays_off"]
         if not (on.usable and off.usable):
             reason = "unusable_boot"
         elif not (_scores_onset(on) and _scores_onset(off)):
@@ -1016,6 +1053,20 @@ def analyze(
     direction_determined = (lower_sum is not None and lower_sum > 0) or (
         upper_sum is not None and upper_sum < 0
     )
+    # Exclusion must not depend on the treatment. The block permutation test is exact for the
+    # SHARP null (no effect on anything) — under it each boot's outcome, and therefore whether
+    # it is excluded, is fixed regardless of labels. But if an overlay setting changes the rate
+    # of never_live or ambiguous onsets, the surviving block set becomes a function of the
+    # assignment while the test holds it fixed, and the p-value is no longer exact. We cannot
+    # model that mechanism from the reports, so detect its signature — an arm imbalance in
+    # exclusions — and refuse to conclude rather than quote an exactness we no longer have.
+    excluded = {
+        condition: sum(
+            1 for boot in boots if boot.condition == condition and not _scores_onset(boot)
+        )
+        for condition in CONDITIONS
+    }
+    exclusions_balanced = excluded["overlays_on"] == excluded["overlays_off"]
     if (
         usable_blocks < endpoint_floor
         or onset_p is None
@@ -1025,6 +1076,9 @@ def analyze(
         or short_boots
     ):
         conclusion = "insufficient_sample"
+    elif not exclusions_balanced:
+        # Report the p-value, but do not let it carry a treatment claim it can no longer support.
+        conclusion = "exclusions_may_depend_on_treatment"
     elif onset_p >= alpha:
         conclusion = "no_measurable_effect"
     elif blocked_effect == 0:
@@ -1064,6 +1118,8 @@ def analyze(
         "blocked_onset_effect_lower_bound": lower_sum,
         "blocked_onset_effect_upper_bound": upper_sum,
         "ambiguous_onset_boots": on.ambiguous_boots + off.ambiguous_boots,
+        "excluded_boots_by_arm": excluded,
+        "exclusions_balanced": exclusions_balanced,
         "short_boots_below_launch_floor": len(short_boots),
         "minimum_launches_per_boot": MIN_LAUNCHES_PER_BOOT,
         "burst_block_permutation_two_sided_p": burst_p,

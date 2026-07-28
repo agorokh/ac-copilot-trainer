@@ -339,6 +339,30 @@ def test_report_names_are_namespaced_to_their_plan() -> None:
     assert first["randomization_seed"] == later["randomization_seed"]
 
 
+def test_run_id_covers_every_plan_input_and_gets_fresh_entropy() -> None:
+    """Codex #708: a same-tick regeneration must not reuse the namespace.
+
+    `generated_at_utc` is only second-resolution, and a collision is expensive — the second
+    physical run burns a whole boot's launch budget before the exclusive report write fails.
+    """
+    stamp = "2026-07-28T12:00:00Z"
+    baseline = build_plan(6, generated_at_utc=stamp)["run_id"]
+    # Deterministic when the caller pins the timestamp (reproducible regeneration, tests).
+    assert build_plan(6, generated_at_utc=stamp)["run_id"] == baseline
+    # Launch parameters that used to be omitted from the hash now change the namespace.
+    assert build_plan(6, generated_at_utc=stamp, stability_window=99.0)["run_id"] != baseline
+    assert build_plan(6, generated_at_utc=stamp, go_live_timeout=99.0)["run_id"] != baseline
+    # The nonce is what breaks a same-second collision: identical inputs AND an identical
+    # pinned timestamp still separate once the nonce differs.
+    assert (
+        build_plan(6, generated_at_utc=stamp, run_nonce="a")["run_id"]
+        != build_plan(6, generated_at_utc=stamp, run_nonce="b")["run_id"]
+    )
+    # A real run (no pinned timestamp) draws that nonce automatically, so two plans generated
+    # inside one tick with identical inputs cannot share a namespace.
+    assert build_plan(6)["run_id"] != build_plan(6)["run_id"]
+
+
 def test_reboot_is_accepted_even_when_the_operator_waits_a_long_time(tmp_path: Path) -> None:
     """Qodo #708: a real reboot after a long wait can leave uptime numerically HIGHER.
 
@@ -658,6 +682,60 @@ def test_short_boots_cannot_claim_the_endpoint_even_with_enough_blocks() -> None
     result = analyze(boots)
     assert result["usable_blocks"] == 6  # enough blocks...
     assert result["short_boots_below_launch_floor"] == 12  # ...but every boot is too short
+    assert result["conclusion"] == "insufficient_sample"
+
+
+def test_differential_exclusion_refuses_to_carry_a_treatment_claim() -> None:
+    """Codex #708: if the treatment changes who gets excluded, the test is no longer exact.
+
+    The permutation test is exact for the SHARP null — under it each boot's outcome, and so
+    whether it is excluded, is fixed regardless of labels. But an arm imbalance in exclusions is
+    the signature of treatment-dependent exclusion, and the test holds the survivor set fixed
+    while enumerating assignments under which a different set would have survived.
+    """
+    ambiguous = ["stable"] * 5 + ["never_live"] + ["froze"] + ["stable"] * 13
+    boots = _blocks([6, 7, 8, 6, 7, 8, 6], [15, 16, 17, 15, 16, 17, 15])
+    # Knock out ONE overlays_on boot only -> exclusions are 1 vs 0 across the arms.
+    boots[0] = _boot(1, "overlays_on", ambiguous)
+    result = analyze(boots)
+    assert result["excluded_boots_by_arm"] == {"overlays_on": 1, "overlays_off": 0}
+    assert result["exclusions_balanced"] is False
+    assert result["usable_blocks"] == 6  # still enough blocks...
+    assert result["onset_block_permutation_two_sided_p"] is not None  # ...and still significant
+    assert result["conclusion"] == "exclusions_may_depend_on_treatment"
+
+
+def test_balanced_exclusions_still_conclude() -> None:
+    """The guard must not fire when exclusions are symmetric across arms."""
+    ambiguous = ["stable"] * 5 + ["never_live"] + ["froze"] + ["stable"] * 13
+    # 8 blocks so that knocking out one from each arm still leaves 6 usable — at 7 blocks the
+    # run would (correctly) fall under the floor and report insufficient_sample instead.
+    boots = _blocks([6, 7, 8, 6, 7, 8, 6, 7], [15, 16, 17, 15, 16, 17, 15, 16])
+    boots[0] = _boot(1, "overlays_on", ambiguous)  # block 1 loses its on boot...
+    boots[3] = _boot(4, "overlays_off", ambiguous)  # ...block 2 loses its off boot
+    result = analyze(boots)
+    assert result["excluded_boots_by_arm"] == {"overlays_on": 1, "overlays_off": 1}
+    assert result["exclusions_balanced"] is True
+    assert result["conclusion"] == "overlays_off_delays_onset"
+
+
+def test_blocks_are_paired_by_planned_number_not_adjacency() -> None:
+    """Codex #708: a partial load must not fabricate cross-block pairs.
+
+    Dropping one boot from each of two different blocks leaves an even count, and adjacency
+    pairing would then pair boots from different randomized blocks — passing the condition
+    check and feeding fabricated pairs to the exact test.
+    """
+    boots = _blocks([6, 7, 8, 6, 7, 8], [15, 16, 17, 15, 16, 17])
+    # Drop overlays_on of block 1 (boot 1) and overlays_off of block 2 (boot 4). 10 boots left.
+    partial = [boot for boot in boots if boot.boot not in {1, 4}]
+    assert len(partial) % 2 == 0
+    result = analyze(partial)
+    reasons = {block["block"]: block["unusable_reason"] for block in result["blocks"]}
+    assert reasons[1] == "missing_overlays_on_boot"
+    assert reasons[2] == "missing_overlays_off_boot"
+    # Only the four intact blocks score — not five fabricated ones.
+    assert result["usable_blocks"] == 4
     assert result["conclusion"] == "insufficient_sample"
 
 
