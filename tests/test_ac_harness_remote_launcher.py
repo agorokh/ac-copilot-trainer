@@ -9,6 +9,7 @@ measured on the rig during #693/#699 rather than a hypothetical.
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -400,32 +401,22 @@ def test_trailing_backslash_is_rejected(bad: str) -> None:
     """`\\"` is an ESCAPED QUOTE to the Windows CRT argv parser, so the quoting does not close."""
     with pytest.raises(rl.RemoteLaunchError, match="trailing backslash"):
         rl.validate_wrapper_token(bad)
-    # A Path reaches the wrapper as ``str(path)``, and TWO different mechanisms keep that text
-    # safe depending on the host: on POSIX ``\`` is an ordinary character, so it survives
-    # normalization and the validator rejects it; on Windows ``pathlib`` strips the trailing
-    # separator before the validator is ever called. Asserting the rejection unconditionally
-    # made this test red on Windows — the very platform the rig runs on — while staying green
-    # on Linux CI. Assert the invariant (nothing ending in ``\`` reaches the wrapper), not one
-    # platform's mechanism for upholding it.
-    path = Path(bad)
-    if str(path).endswith("\\"):
-        with pytest.raises(rl.RemoteLaunchError, match="trailing backslash"):
-            rl.validate_wrapper_path("repo root", path)
-    else:
-        assert not str(rl.validate_wrapper_path("repo root", path)).endswith("\\")
 
 
-def test_trailing_backslash_path_guard_is_live_on_windows() -> None:
-    """A Windows drive root is the case where ``pathlib`` DOES keep the trailing separator.
+def test_trailing_backslash_in_a_wrapper_path_is_rejected() -> None:
+    """Same hazard on the path side — but the case must survive ``Path`` normalization.
 
-    Without this, the path-side guard would have no Windows coverage at all once the
-    normalization above is accounted for.
+    ``validate_wrapper_path`` guards ``str(path)``, and ``pathlib`` strips a trailing separator
+    on Windows while keeping a literal ``\\`` on POSIX. Feeding it ``Path("C:/repo\\")`` therefore
+    asserts a raise that only POSIX can produce; on the Windows rig this repo targets, that half
+    of the assertion failed. Build the input from a path whose *string* form really does end in a
+    backslash on the running platform.
     """
-    root = Path("C:/")
-    if not str(root).endswith("\\"):
-        pytest.skip("pathlib only preserves a trailing separator at a Windows drive root")
+    bad = Path("C:\\") if os.name == "nt" else Path("x\\")
+    assert str(bad).endswith("\\")
+
     with pytest.raises(rl.RemoteLaunchError, match="trailing backslash"):
-        rl.validate_wrapper_path("repo root", root)
+        rl.validate_wrapper_path("repo root", bad)
 
 
 # ---------------------------------------------------------------------------

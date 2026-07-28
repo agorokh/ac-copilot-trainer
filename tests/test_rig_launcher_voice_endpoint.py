@@ -1,0 +1,575 @@
+"""Issue #672 — launcher voice-endpoint hygiene.
+
+Part A: the own-headset-endpoint invariant, as a **warn-only** probe that flags when the
+sidecar resolved voice playback onto the very endpoint Assetto Corsa / FMOD plays through.
+Part B: surfacing the ``AC_COPILOT_VOICE_BANK`` arm switch, so a bank parked or force-armed
+from the environment is diagnosable from the Voice row and ``status.json``.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+import tools.rig_launcher.supervisor as supervisor_module
+from tools.rig_launcher import theme
+from tools.rig_launcher.supervisor import (
+    GamePointConfig,
+    GamePointSupervisor,
+    LauncherPaths,
+)
+
+#: The rig's real endpoint today: voice is pinned to the device AC also plays through.
+#: This is the spelling Windows shows the operator, i.e. what they will type into
+#: ``AC_COPILOT_AC_AUDIO_DEVICE``.
+RIG_SHARED_DEVICE = "5.1 Speakers (USB Sound Device)"
+OWN_HEADSET_DEVICE = "Headset Earphone (Rig Audio Interface)"
+
+#: The SAME physical endpoint as :data:`RIG_SHARED_DEVICE`, as PortAudio actually reported it
+#: on the rig (`sounddevice.query_devices()`, 2026-07-28) per host API. Pinned verbatim so the
+#: comparison is anchored to measured reality rather than to a tidied-up fixture: MME truncates
+#: to 31 characters and WASAPI/DirectSound carry internal padding before the closing paren.
+RIG_DEVICE_AS_MME = "5.1 Speakers (USB Sound Device "
+RIG_DEVICE_AS_WASAPI = "5.1 Speakers (USB Sound Device        )"
+RIG_DEVICE_AS_DIRECTSOUND = "5.1 Speakers (USB Sound Device        )"
+
+
+class _Response:
+    """Minimal ``urlopen`` context-manager stand-in mirroring tests/test_rig_launcher.py."""
+
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self) -> _Response:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self._payload
+
+
+def _health_payload(
+    device_name: str | None = RIG_SHARED_DEVICE,
+    *,
+    enabled: bool = True,
+    state: str = "enabled",
+    host_api: str = "Windows WASAPI",
+    backend: str = "sounddevice",
+) -> dict[str, object]:
+    voice: dict[str, object] = {
+        "configured": True,
+        "enabled": enabled,
+        "state": state,
+        "backend": backend,
+    }
+    if device_name is not None:
+        voice["device_name"] = device_name
+        voice["host_api"] = host_api
+    return {"status": "ok", "connected_peers": 1, "screen_peers": 1, "voice": voice}
+
+
+def _supervisor(
+    tmp_path: Path,
+    *,
+    ac_audio_device: str | None,
+    payload: dict[str, object] | None = None,
+    voice_bank_source: str = supervisor_module.VOICE_BANK_SOURCE_UNSET,
+) -> GamePointSupervisor:
+    cfg = GamePointConfig(
+        reference_archive="ref.json",
+        voice_bank="bank",
+        voice_bank_source=voice_bank_source,
+        ac_audio_device=ac_audio_device,
+        paths=LauncherPaths(tmp_path),
+    )
+    resolved = _health_payload() if payload is None else payload
+
+    def fake_urlopen(_url: str, timeout: float) -> _Response:
+        del timeout
+        return _Response(resolved)
+
+    return GamePointSupervisor(cfg, environ={}, urlopen=fake_urlopen)
+
+
+# --- Part A: endpoint-name comparison --------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("voice_device", "ac_device", "expected"),
+    [
+        # The same endpoint, spelled identically.
+        (RIG_SHARED_DEVICE, RIG_SHARED_DEVICE, True),
+        # Case and whitespace differences still name one endpoint.
+        ("5.1 SPEAKERS  (USB Sound Device)", "5.1 speakers (USB Sound Device)", True),
+        # PortAudio's MME host API truncates names to 31 chars -> a strict prefix.
+        ("Headset Earphone (Rig Audio Int", OWN_HEADSET_DEVICE, True),
+        # ...but a SHORT generic name is not a truncation artifact and must not match, or the
+        # operator is told to reroute already-isolated voice audio (PR #707 Codex P2).
+        ("Speakers", "Speakers (USB Sound Device)", False),
+        ("Headset Earphone (Rig Audio In", OWN_HEADSET_DEVICE, False),
+        ("Output ()", "Output (Rig Audio Interface)", False),
+        ("Primary Sound Driver", "Primary Sound Driver (USB Sound Device)", False),
+        # Two genuinely DISTINCT long endpoints that share a prefix are not a truncation
+        # artifact either — neither raw name is exactly 31 chars (PR #707 Codex P2 round 2).
+        (OWN_HEADSET_DEVICE, OWN_HEADSET_DEVICE + " 2", False),
+        (OWN_HEADSET_DEVICE + " 2", OWN_HEADSET_DEVICE, False),
+        # Asymmetric by design: only the health-reported VOICE name can be an MME truncation.
+        # An operator's hand-written AC declaration never is, so the reverse does not match.
+        ("Headset Earphone (Rig Audio Int", OWN_HEADSET_DEVICE, True),
+        (OWN_HEADSET_DEVICE, "Headset Earphone (Rig Audio Int", False),
+        # --- measured on the rig: one physical endpoint, four host-API spellings. The
+        # operator declares the name Windows shows them; every spelling must still match,
+        # because a false all-clear here is worse than a false alarm.
+        (RIG_DEVICE_AS_WASAPI, RIG_SHARED_DEVICE, True),
+        (RIG_DEVICE_AS_DIRECTSOUND, RIG_SHARED_DEVICE, True),
+        (RIG_DEVICE_AS_MME, RIG_SHARED_DEVICE, True),
+        (RIG_DEVICE_AS_MME, RIG_DEVICE_AS_WASAPI, True),
+        # ...and the rig's other real endpoint — the haptic USB-DAC the own-headset
+        # invariant exists to keep voice off — must never collide with it.
+        ("Bass Shakers (USB PnP Sound Device)", RIG_DEVICE_AS_WASAPI, False),
+        ("Bass Shakers (USB PnP Sound Dev", RIG_SHARED_DEVICE, False),
+        # Whitespace INSIDE a token is meaningful: these are two different devices and
+        # must not collapse onto each other (PR #707 review round 4).
+        ("Speakers (USB Audio Device)", "Speakers (USBAudio Device)", False),
+        ("Speakers (USBAudio Device)", "Speakers (USB Audio Device)", False),
+        # ...while padding against punctuation is noise and is still absorbed, which is what
+        # makes the measured WASAPI/DirectSound spellings match the operator's declaration.
+        ("5.1 Speakers (USB Sound Device        )", "5.1 Speakers (USB Sound Device)", True),
+        # KNOWN LIMITATION, pinned deliberately: PortAudio's WDM-KS host API drops the
+        # "5.1 " prefix for this same physical endpoint, leaving no prefix relation to the
+        # declared name. Not papered over with a suffix rule — that would widen the
+        # false-positive surface for a host API the voice stack does not use (#602 resolves
+        # voice on WASAPI). The `distinct` verdict prints BOTH names, so a normalization
+        # miss is self-diagnosing from the status row.
+        ("Speakers (USB Sound Device)", RIG_SHARED_DEVICE, False),
+        # Genuinely different endpoints must never warn (the #575 cry-wolf lesson).
+        (OWN_HEADSET_DEVICE, RIG_SHARED_DEVICE, False),
+        # A short shared token is not a prefix match.
+        ("Speaker", "Speakers (USB Sound Device)", False),
+        # Nothing to compare yields no verdict rather than a guess.
+        ("", RIG_SHARED_DEVICE, False),
+        (None, RIG_SHARED_DEVICE, False),
+        (RIG_SHARED_DEVICE, None, False),
+    ],
+)
+def test_endpoints_collide_matches_only_the_same_endpoint(
+    voice_device: str | None,
+    ac_device: str | None,
+    expected: bool,
+) -> None:
+    """Host API is MME here so the truncation branch is *available*; see the gate tests below."""
+    assert (
+        supervisor_module.endpoints_collide(voice_device, ac_device, voice_host_api="MME")
+        is expected
+    )
+
+
+# --- Part A: the probe ------------------------------------------------------
+
+
+def test_shared_endpoint_is_flagged_visibly_and_warn_only(tmp_path: Path) -> None:
+    """AC #1 — a visible warning when voice landed on AC's own endpoint, never a blocker."""
+    sup = _supervisor(tmp_path, ac_audio_device=RIG_SHARED_DEVICE)
+
+    status = sup.poll_status()
+
+    rows = {row.name: row for row in status.checks}
+    assert rows["voice_endpoint"].state == "shared"
+    assert rows["voice_endpoint"].ok is True
+    assert "AC_COPILOT_VOICE_DEVICE" in rows["voice_endpoint"].detail
+    # Visible on the *rendered* Voice row: the launcher view renders `checks` nowhere.
+    assert status.voice.state == supervisor_module.VOICE_STATE_SHARED_ENDPOINT
+    assert "audio endpoint" in status.voice.detail
+    # Warn-only: the row and the aggregate stay green so START keeps working.
+    assert status.voice.ok is True
+    assert status.ok is True
+    saved = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
+    saved_rows = {row["name"]: row for row in saved["checks"]}
+    assert saved_rows["voice_endpoint"]["state"] == "shared"
+    assert saved["voice"]["state"] == supervisor_module.VOICE_STATE_SHARED_ENDPOINT
+
+
+def test_shared_endpoint_never_blocks_start_sidecar(tmp_path: Path) -> None:
+    """`start_sidecar` refuses to start on any not-ok preflight row; this must not be one."""
+    sup = _supervisor(tmp_path, ac_audio_device=RIG_SHARED_DEVICE)
+
+    checks = sup.preflight(_health_payload())
+
+    assert [row.name for row in checks if not row.ok] == []
+    assert "voice_endpoint" in {row.name for row in checks}
+
+
+def test_own_headset_endpoint_reports_clean(tmp_path: Path) -> None:
+    """AC #2 — voice on a non-AC endpoint reports clean, with no false-positive warning."""
+    sup = _supervisor(
+        tmp_path,
+        ac_audio_device=RIG_SHARED_DEVICE,
+        payload=_health_payload(OWN_HEADSET_DEVICE),
+    )
+
+    status = sup.poll_status()
+
+    rows = {row.name: row for row in status.checks}
+    assert rows["voice_endpoint"].state == "distinct"
+    assert rows["voice_endpoint"].ok is True
+    assert status.voice.state == "enabled"
+    assert "endpoint" not in status.voice.detail
+    assert status.ok is True
+
+
+def test_undeclared_ac_device_reads_undeclared_not_clean(tmp_path: Path) -> None:
+    """An inert check must never be mistaken for a clean bill of health."""
+    sup = _supervisor(tmp_path, ac_audio_device=None)
+
+    status = sup.poll_status()
+
+    rows = {row.name: row for row in status.checks}
+    assert rows["voice_endpoint"].state == "undeclared"
+    assert rows["voice_endpoint"].ok is True
+    assert "AC_COPILOT_AC_AUDIO_DEVICE" in rows["voice_endpoint"].detail
+    assert status.voice.state == "enabled"
+
+
+def test_idle_voice_stream_is_unknown_not_a_collision(tmp_path: Path) -> None:
+    """A device name from a stream that is not open is no evidence of contention."""
+    sup = _supervisor(
+        tmp_path,
+        ac_audio_device=RIG_SHARED_DEVICE,
+        payload=_health_payload(RIG_SHARED_DEVICE, enabled=False, state="observer_only"),
+    )
+
+    status = sup.poll_status()
+
+    rows = {row.name: row for row in status.checks}
+    assert rows["voice_endpoint"].state == "unknown"
+    assert rows["voice_endpoint"].ok is True
+    assert status.voice.state != supervisor_module.VOICE_STATE_SHARED_ENDPOINT
+
+
+def test_a_failing_voice_row_outranks_the_advisory_warning(tmp_path: Path) -> None:
+    sup = _supervisor(
+        tmp_path,
+        ac_audio_device=RIG_SHARED_DEVICE,
+        payload={
+            "status": "ok",
+            "connected_peers": 1,
+            "screen_peers": 1,
+            "voice": {"configured": False, "enabled": False, "state": "skipped"},
+        },
+    )
+
+    status = sup.poll_status()
+
+    assert status.voice.ok is False
+    assert status.voice.state == "DISABLED"
+
+
+def test_mme_truncated_device_from_health_still_collides(tmp_path: Path) -> None:
+    """The MME spelling must survive the /health -> collide path, trailing space intact.
+
+    Round-2 Codex P2: `_health_voice_device` used to `.strip()` the reported name, which cut
+    the rig's real MME spelling `'5.1 Speakers (USB Sound Device '` from 31 chars to 30 and
+    silently defeated the truncation gate — the direct matcher test passed on an unstripped
+    fixture while the live poll reported `distinct`. Assert through `poll_status`, not the
+    matcher, so the two layers cannot disagree again.
+    """
+    sup = _supervisor(
+        tmp_path,
+        ac_audio_device=RIG_SHARED_DEVICE,
+        payload=_health_payload(RIG_DEVICE_AS_MME, host_api="MME"),
+    )
+
+    status = sup.poll_status()
+
+    rows = {row.name: row for row in status.checks}
+    assert rows["voice_endpoint"].state == "shared"
+    assert status.voice.state == supervisor_module.VOICE_STATE_SHARED_ENDPOINT
+    assert status.ok is True
+
+
+def test_whitespace_only_health_device_is_not_a_device(tmp_path: Path) -> None:
+    """A blank device name yields no comparable endpoint — but voice IS running.
+
+    Round 3 split `unknown` by whether voice is live, so this is `unverifiable` (a caution)
+    rather than the quiet `unknown` it reported when the two states were conflated: a running
+    stream with no reportable device still holds an endpoint.
+    """
+    sup = _supervisor(
+        tmp_path,
+        ac_audio_device=RIG_SHARED_DEVICE,
+        payload=_health_payload("   "),
+    )
+
+    rows = {row.name: row for row in sup.poll_status().checks}
+    assert rows["voice_endpoint"].state == "unverifiable"
+
+
+def test_blank_env_bank_is_removed_from_the_sidecar_environment(tmp_path: Path) -> None:
+    """A parked bank must actually reach the child as parked.
+
+    Round-2 Codex P2: `sidecar_environment()` copies the parent env and `_put_if_present`
+    only ever sets, so a set-but-blank `AC_COPILOT_VOICE_BANK` survived into the sidecar,
+    which reads the raw env var, sees a truthy whitespace string, and reports voice DISABLED
+    instead of parked — contradicting what Part B advertises.
+    """
+    _write_settings(tmp_path, voice_bank="settings-bank", reference_archive="ref.json")
+    environ = {"AC_COPILOT_VOICE_BANK": "  "}
+
+    cfg = GamePointConfig.from_env(environ, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ=environ)
+
+    assert cfg.voice_bank is None
+    assert "AC_COPILOT_VOICE_BANK" not in sup.sidecar_environment()
+
+
+def test_resolved_bank_still_reaches_the_sidecar_environment(tmp_path: Path) -> None:
+    environ = {"AC_COPILOT_VOICE_BANK": "env-bank"}
+
+    cfg = GamePointConfig.from_env(environ, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ=environ)
+
+    assert sup.sidecar_environment()["AC_COPILOT_VOICE_BANK"].endswith("env-bank")
+
+
+def test_shared_endpoint_renders_amber_not_red() -> None:
+    assert theme.tone_for(True, supervisor_module.VOICE_STATE_SHARED_ENDPOINT) == "lift"
+
+
+def test_ac_audio_device_env_overrides_settings(tmp_path: Path) -> None:
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"ac_audio_device": "settings-endpoint"}),
+        encoding="utf-8",
+    )
+
+    from_settings = GamePointConfig.from_env({}, paths=LauncherPaths(tmp_path))
+    from_env = GamePointConfig.from_env(
+        {"AC_COPILOT_AC_AUDIO_DEVICE": "env-endpoint"},
+        paths=LauncherPaths(tmp_path),
+    )
+
+    assert from_settings.ac_audio_device == "settings-endpoint"
+    assert from_env.ac_audio_device == "env-endpoint"
+
+
+# --- Part B: arm-source surfacing ------------------------------------------
+
+
+def _write_settings(tmp_path: Path, **payload: object) -> None:
+    (tmp_path / "settings.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_env_voice_bank_wins_and_records_env_as_the_source(tmp_path: Path) -> None:
+    _write_settings(tmp_path, voice_bank="settings-bank", reference_archive="ref.json")
+
+    cfg = GamePointConfig.from_env(
+        {"AC_COPILOT_VOICE_BANK": "env-bank"},
+        paths=LauncherPaths(tmp_path),
+    )
+    sup = GamePointSupervisor(cfg, environ={})
+
+    assert cfg.voice_bank == "env-bank"
+    assert cfg.voice_bank_source == supervisor_module.VOICE_BANK_SOURCE_ENV
+    assert "bank armed via env" in sup.probe_voice().detail
+
+
+def test_blank_env_voice_bank_parks_the_settings_bank_and_says_so(tmp_path: Path) -> None:
+    """AC #3 — set-but-blank env clears the settings bank; that must be diagnosable."""
+    _write_settings(tmp_path, voice_bank="settings-bank", reference_archive="ref.json")
+
+    cfg = GamePointConfig.from_env(
+        {"AC_COPILOT_VOICE_BANK": "  "},
+        paths=LauncherPaths(tmp_path),
+    )
+    sup = GamePointSupervisor(cfg, environ={})
+
+    assert cfg.voice_bank is None
+    assert cfg.voice_bank_source == supervisor_module.VOICE_BANK_SOURCE_ENV
+    assert "bank cleared via env" in sup.probe_voice().detail
+
+
+def test_settings_voice_bank_reports_settings_as_the_source(tmp_path: Path) -> None:
+    _write_settings(tmp_path, voice_bank="settings-bank", reference_archive="ref.json")
+
+    cfg = GamePointConfig.from_env({}, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={})
+
+    assert cfg.voice_bank_source == supervisor_module.VOICE_BANK_SOURCE_SETTINGS
+    assert "bank armed via settings" in sup.probe_voice().detail
+
+
+def test_unset_voice_bank_adds_no_arm_source_noise(tmp_path: Path) -> None:
+    cfg = GamePointConfig.from_env({}, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={})
+
+    assert cfg.voice_bank_source == supervisor_module.VOICE_BANK_SOURCE_UNSET
+    assert "bank" not in sup.probe_voice().detail
+
+
+def test_config_from_args_preserves_every_config_field(tmp_path: Path, monkeypatch) -> None:
+    """`config_from_args` rebuilds the config field-by-field, so it silently drops new ones.
+
+    Caught live: with `AC_COPILOT_AC_AUDIO_DEVICE` exported, the real
+    `python -m tools.rig_launcher --once` still reported `voice_endpoint: undeclared`,
+    because neither #672 field was listed in the rebuild — the feature was inert in the
+    product's own entrypoint while every direct-construction unit test passed. Assert the
+    whole class generically rather than the two fields, so the next one added cannot repeat it.
+    """
+    import dataclasses
+
+    from tools.rig_launcher.app import build_arg_parser, config_from_args
+
+    monkeypatch.setenv("AC_COPILOT_GAME_POINT_DIR", str(tmp_path))
+    monkeypatch.setenv("AC_COPILOT_AC_AUDIO_DEVICE", RIG_SHARED_DEVICE)
+    monkeypatch.setenv("AC_COPILOT_VOICE_BANK", "env-bank")
+
+    args = build_arg_parser().parse_args([])
+    rebuilt = config_from_args(args)
+    direct = GamePointConfig.from_env(paths=rebuilt.paths)
+
+    dropped = [
+        field.name
+        for field in dataclasses.fields(GamePointConfig)
+        if getattr(rebuilt, field.name) != getattr(direct, field.name)
+    ]
+    assert dropped == []
+    # The two this issue adds, named explicitly so a failure reads unambiguously.
+    assert rebuilt.ac_audio_device == RIG_SHARED_DEVICE
+    assert rebuilt.voice_bank_source == supervisor_module.VOICE_BANK_SOURCE_ENV
+
+
+def test_status_json_carries_the_arm_source(tmp_path: Path) -> None:
+    """AC #3 — a force-armed bank is diagnosable from status.json, not only the GUI."""
+    sup = _supervisor(
+        tmp_path,
+        ac_audio_device=OWN_HEADSET_DEVICE,
+        voice_bank_source=supervisor_module.VOICE_BANK_SOURCE_ENV,
+    )
+
+    sup.poll_status()
+
+    saved = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
+    assert "bank armed via env" in saved["voice"]["detail"]
+
+
+# --- PR #707 review round 3 ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("host_api", "expected"),
+    [
+        ("MME", True),
+        ("mme", True),
+        ("Windows WASAPI", False),
+        ("Windows DirectSound", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_truncation_branch_requires_the_mme_host_api(host_api: str | None, expected: bool) -> None:
+    """A 31-char name is only a truncation artifact under MME.
+
+    A WASAPI/DirectSound device whose legitimate FULL name happens to be exactly 31 chars is
+    not truncated; treating it as such reports `shared` merely because the declared AC name
+    extends it, telling an operator with isolated endpoints to reroute them.
+    """
+    truncated = "Headset Earphone (Rig Audio Int"
+    assert len(truncated) == 31
+
+    assert (
+        supervisor_module.endpoints_collide(truncated, OWN_HEADSET_DEVICE, voice_host_api=host_api)
+        is expected
+    )
+
+
+def test_equality_still_matches_without_a_known_host_api() -> None:
+    """The host-API gate gates only the prefix branch; equality is unconditional."""
+    assert supervisor_module.endpoints_collide(RIG_DEVICE_AS_WASAPI, RIG_SHARED_DEVICE) is True
+
+
+def test_non_mme_31_char_device_reports_distinct_live(tmp_path: Path) -> None:
+    sup = _supervisor(
+        tmp_path,
+        ac_audio_device=OWN_HEADSET_DEVICE,
+        payload=_health_payload("Headset Earphone (Rig Audio Int", host_api="Windows WASAPI"),
+    )
+
+    rows = {row.name: row for row in sup.poll_status().checks}
+    assert rows["voice_endpoint"].state == "distinct"
+
+
+def test_tts_backend_without_a_device_is_a_visible_caution(tmp_path: Path) -> None:
+    """pyttsx3 speaks through the Windows default endpoint — usually AC's own.
+
+    Round-3 Codex P2: the endpoint verdict was a quiet `unknown` and the Voice row stayed
+    green, so the own-headset warning was silently inoperative for the documented TTS
+    fallback. `unknown` now means "voice is not running"; a running backend that reports no
+    device is `unverifiable` and paints the row amber.
+    """
+    sup = _supervisor(
+        tmp_path,
+        ac_audio_device=RIG_SHARED_DEVICE,
+        payload=_health_payload(None, state="tts", backend="pyttsx3"),
+    )
+
+    status = sup.poll_status()
+
+    rows = {row.name: row for row in status.checks}
+    assert rows["voice_endpoint"].state == "unverifiable"
+    assert rows["voice_endpoint"].ok is True
+    assert "pyttsx3" in rows["voice_endpoint"].detail
+    assert "Windows default endpoint" in rows["voice_endpoint"].detail
+    assert status.voice.state == supervisor_module.VOICE_STATE_ENDPOINT_UNVERIFIED
+    # Still warn-only.
+    assert status.voice.ok is True
+    assert status.ok is True
+    assert theme.tone_for(True, supervisor_module.VOICE_STATE_ENDPOINT_UNVERIFIED) == "lift"
+
+
+def test_voice_not_running_stays_a_quiet_unknown(tmp_path: Path) -> None:
+    """The other half of the split: nothing running cannot be holding an endpoint."""
+    sup = _supervisor(
+        tmp_path,
+        ac_audio_device=RIG_SHARED_DEVICE,
+        payload=_health_payload(None, enabled=False, state="observer_only"),
+    )
+
+    status = sup.poll_status()
+
+    rows = {row.name: row for row in status.checks}
+    assert rows["voice_endpoint"].state == "unknown"
+    assert status.voice.state != supervisor_module.VOICE_STATE_ENDPOINT_UNVERIFIED
+
+
+def test_blank_bank_is_cleared_case_insensitively(tmp_path: Path) -> None:
+    """Windows env names are case-insensitive; an exact-case pop leaks the lowercase key.
+
+    Round-3 Codex P2: `from_env` recognizes `ac_copilot_voice_bank` through
+    `_CaseInsensitiveEnv` and records the bank as cleared, but the child would still inherit
+    the lowercase whitespace value and treat it as a bank path.
+    """
+    _write_settings(tmp_path, voice_bank="settings-bank", reference_archive="ref.json")
+    environ = {"ac_copilot_voice_bank": "  "}
+
+    cfg = GamePointConfig.from_env(environ, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ=environ)
+    child = sup.sidecar_environment()
+
+    assert cfg.voice_bank is None
+    assert [key for key in child if key.upper() == "AC_COPILOT_VOICE_BANK"] == []
+
+
+def test_resolved_bank_replaces_a_differently_cased_inherited_key(tmp_path: Path) -> None:
+    environ = {"ac_copilot_voice_bank": "stale-bank"}
+
+    cfg = GamePointConfig.from_env(
+        {"AC_COPILOT_VOICE_BANK": "env-bank"}, paths=LauncherPaths(tmp_path)
+    )
+    child = GamePointSupervisor(cfg, environ=environ).sidecar_environment()
+
+    keys = [key for key in child if key.upper() == "AC_COPILOT_VOICE_BANK"]
+    assert keys == ["AC_COPILOT_VOICE_BANK"]
+    assert child["AC_COPILOT_VOICE_BANK"].endswith("env-bank")

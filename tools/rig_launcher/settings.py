@@ -25,6 +25,10 @@ class LauncherSettings:
     alien_line: str | None = None
     voice_bank: str | None = None
     voice_tts: bool | None = None
+    #: Name of the output endpoint Assetto Corsa / FMOD plays through (issue #672). The
+    #: launcher cannot see AC's device directly, so this declares it; the voice-endpoint
+    #: probe warns when the sidecar resolves voice onto the same endpoint.
+    ac_audio_device: str | None = None
     setup_store: str | None = None
     simhub_exe: str | None = None
     start_simhub: bool | None = None
@@ -50,6 +54,7 @@ class LauncherSettings:
             alien_line=_optional_text(payload.get("alien_line")),
             voice_bank=_optional_text(payload.get("voice_bank")),
             voice_tts=_optional_bool(payload.get("voice_tts")),
+            ac_audio_device=_optional_text(payload.get("ac_audio_device")),
             setup_store=_optional_text(payload.get("setup_store")),
             simhub_exe=_optional_text(payload.get("simhub_exe")),
             start_simhub=_optional_bool(payload.get("start_simhub")),
@@ -140,6 +145,7 @@ def default_settings_payload() -> dict[str, object]:
     """Return the editable settings template. Tokens intentionally stay out."""
     return {
         "_schema": SETTINGS_SCHEMA,
+        "ac_audio_device": "",
         "external_bind": "",
         "alien_line": "",
         "reference_archive": "",
