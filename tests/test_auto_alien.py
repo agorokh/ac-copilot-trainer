@@ -1017,6 +1017,119 @@ def test_selfplay_envelope_rung_never_steps_below_the_validated_base(monkeypatch
     assert entry["ggv_scale"] == 1.05
 
 
+def test_next_envelope_rung_never_returns_a_rung_at_or_below_the_validated_scale():
+    # #703 (Codex P2): --max-scale is validated only against --ggv-scale, so with --stint the
+    # VALIDATED base can legally exceed the cap. A saturated candidate that does not exceed the
+    # validated scale is "no rung left", not "a rung to drive downward".
+    from tools.ac_harness.auto_alien import next_envelope_rung
+
+    # Cap below the validated base -> no rung at all (never a downward step).
+    assert next_envelope_rung(0.8, 0.05, 0.9, 1.0, 1) is None
+    # Cap exactly at the validated base -> still no rung (must strictly exceed).
+    assert next_envelope_rung(0.8, 0.05, 0.9, 0.9, 1) is None
+    # Normal upward ladder.
+    assert next_envelope_rung(0.9, 0.05, 1.1, 0.9, 1) == 1
+    # The base drive sat above the opening rungs -> skip to the first that actually raises it.
+    assert next_envelope_rung(0.9, 0.05, 1.1, 1.0, 1) == 3  # 0.95, 1.0 cannot raise 1.0; 1.05 can
+    # Every returned rung strictly exceeds the validated scale.
+    for prev in (0.9, 0.95, 1.0, 1.05):
+        r = next_envelope_rung(0.9, 0.05, 1.1, prev, 1)
+        if r is not None:
+            assert iteration_scale(0.9, 0.05, r, 1.1) > prev
+
+
+def test_next_envelope_rung_terminates_on_a_cap_with_more_than_six_decimals():
+    # #703 (Codex P2): iteration_scale rounds to 6 decimals, so a legal cap with more decimals
+    # saturates every candidate to the same rounded value. A search comparing against the
+    # UNROUNDED cap would spin forever and no drive would ever start. Must terminate.
+    from tools.ac_harness.auto_alien import next_envelope_rung
+
+    assert next_envelope_rung(0.9, 0.05, 0.9000004, 0.9, 1) is None  # rounds to 0.9, cannot raise
+    # And it still finds a rung when the rounded cap genuinely exceeds the validated scale.
+    assert next_envelope_rung(0.9, 0.05, 0.9500004, 0.9, 1) == 1
+
+
+def test_selfplay_stops_when_a_peer_changes_the_plant_before_an_envelope_step(
+    monkeypatch, tmp_path
+):
+    # #703 (Codex P1): auto_drive loads the latest on-disk plant after taking the rig lock, so a
+    # peer re-identification between the validated drive and this envelope step would move the
+    # second knob silently. The verdict would not be the envelope's — stop instead.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (0, [93000], [True]),  # iteration 1: plant step
+            (0, [92000], [True]),  # iteration 2 would be the envelope step (never reached)
+        ],
+    )
+    real_runner = harness.runner()
+    calls = {"n": 0}
+
+    def runner(argv):
+        code = real_runner(argv)
+        calls["n"] += 1
+        if calls["n"] == 2:  # after iteration 1's plant step: a peer rewrites the artifact
+            harness.plant_path.write_text('{"v": "peer-mid-ladder"}', encoding="utf-8")
+        return code
+
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "3"
+    )
+    code, report = run_pipeline(args, run_stage=runner)
+    assert code == 0
+    selfplay = report["selfplay"]
+    assert "plant changed on disk" in selfplay["stopped"]
+    envelope_entry = selfplay["iterations"][1]
+    assert envelope_entry["step_kind"] == "envelope"
+    assert envelope_entry["plant_changed_before_step"] is True
+    assert "exit_code" not in envelope_entry  # refused to drive an unattributable step
+
+
+def test_selfplay_refuses_to_attribute_when_the_plant_moves_during_an_envelope_step(
+    monkeypatch, tmp_path
+):
+    # #703 (Codex P1): the pre-drive check narrows the peer race but cannot close it — auto_drive
+    # loads the plant after taking the rig lock, which the ladder does not hold. A step whose
+    # plant moved WHILE it drove belongs to neither knob, so it must not be attributed, and a PASS
+    # is no safer to build on than a failure.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (0, [93000], [True]),  # iteration 1: plant step
+            (0, [92000], [True]),  # iteration 2: envelope step, peer writes DURING the drive
+        ],
+    )
+    real_runner = harness.runner()
+    calls = {"n": 0}
+
+    def runner(argv):
+        calls["n"] += 1
+        code = real_runner(argv)
+        if calls["n"] == 3:  # mid-flight during the envelope step's own drive
+            harness.plant_path.write_text('{"v": "peer-during-drive"}', encoding="utf-8")
+        return code
+
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "3"
+    )
+    code, report = run_pipeline(args, run_stage=runner)
+    assert code == 0
+    selfplay = report["selfplay"]
+    envelope_entry = selfplay["iterations"][1]
+    assert envelope_entry["step_kind"] == "envelope"
+    assert envelope_entry["valid"] is True  # the drive itself passed...
+    assert (
+        envelope_entry["plant_changed_during_step"] is True
+    )  # ...but under a plant we did not pick
+    assert "plant changed on disk during" in selfplay["stopped"]
+    # The pass is NOT carried forward as ladder evidence.
+    assert len(selfplay["iterations"]) == 2
+
+
 def test_selfplay_reports_an_inherited_refit_as_retained(monkeypatch, tmp_path):
     # #703 (Codex P2): the refit compounds ACROSS invocations. A run whose own plant step is a
     # no-op still protects the inherited fit, so reporting "nothing was retained" would be false
