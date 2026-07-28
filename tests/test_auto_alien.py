@@ -1107,24 +1107,34 @@ def test_selfplay_stops_when_a_peer_changes_the_plant_before_an_envelope_step(
             (0, [92000], [True]),  # iteration 2: envelope step — must never drive
         ],
     )
-    # Mutate between iteration 1's post-drive check and iteration 2's pre-drive check, which is
-    # the only window this guard owns. Call 1 is the ladder-start snapshot, call 2 is iteration
-    # 1's post-drive verification (must still see our candidate), call 3 is the pre-drive check.
+    # Mutate strictly between iteration 1's post-drive check and iteration 2's pre-drive check —
+    # the only window this guard owns. Anchored on the drive count rather than a read index, so
+    # adding plant reads elsewhere cannot silently move the injection point: drive 2 is iteration
+    # 1's, and the first plant read after it is iteration 1's post-drive verification (which must
+    # still observe our own candidate). A peer lands immediately after that.
+    real_runner = harness.runner()
+    drives = {"n": 0}
+
+    def runner(argv):
+        drives["n"] += 1
+        return real_runner(argv)
+
     real_read = auto_alien._read_plant_bytes
-    reads = {"n": 0}
+    reads_after_iter1_drive = {"n": 0}
 
     def counting_read(path):
-        reads["n"] += 1
         value = real_read(path)
-        if reads["n"] == 2:  # iteration 1 verified clean; now a peer lands its own fit
-            harness.plant_path.write_text('{"v": "peer-between-steps"}', encoding="utf-8")
+        if drives["n"] == 2:
+            reads_after_iter1_drive["n"] += 1
+            if reads_after_iter1_drive["n"] == 1:
+                harness.plant_path.write_text('{"v": "peer-between-steps"}', encoding="utf-8")
         return value
 
     monkeypatch.setattr(auto_alien, "_read_plant_bytes", counting_read)
     args = _args(
         tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "3"
     )
-    code, report = run_pipeline(args, run_stage=harness.runner())
+    code, report = run_pipeline(args, run_stage=runner)
     assert code == 0
     selfplay = report["selfplay"]
     assert "plant changed on disk before" in selfplay["stopped"]
@@ -1365,6 +1375,88 @@ def test_selfplay_stops_when_the_plant_changed_since_the_base_drive(monkeypatch,
     assert "plant changed since the base drive" in selfplay["stopped"]
     assert "basefit000000" in selfplay["stopped"]
     assert "peerfit000000" in selfplay["stopped"]
+
+
+def test_selfplay_refuses_to_refine_across_two_fits(monkeypatch, tmp_path):
+    # #703 (Codex P1, round 6): a peer can re-identify the combo after the previous drive's plant
+    # check but before the refit snapshots the artifact. `expected_current_bytes` would accept
+    # those bytes happily — it only prevents clobbering a NEWER fit, it does not prove the fit is
+    # ours — so plant A's archives would be merged into peer plant B, and the candidate would then
+    # become `validated_plant_bytes`, laundering a two-plant transition into a single-knob refit.
+    # The window opens at a LATER plant step: at iteration 1 the ladder-start snapshot and the
+    # refit read are adjacent, so a peer change before iteration 1 is round 5's gate, not this
+    # one. Iteration 3 is the next plant step, and the window is between iteration 2's post-drive
+    # check and iteration 3's pre-refit read.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (0, [93000], [True]),  # iteration 1: plant step
+            (0, [92000], [True]),  # iteration 2: envelope step
+            # iteration 3 (plant step) must never drive
+        ],
+    )
+    real_runner = harness.runner()
+    drives = {"n": 0}
+
+    def runner(argv):
+        drives["n"] += 1
+        return real_runner(argv)
+
+    real_read = auto_alien._read_plant_bytes
+    reads_after_iter2_drive = {"n": 0}
+
+    def counting_read(path):
+        value = real_read(path)
+        if drives["n"] == 3:  # iteration 2's drive is done
+            reads_after_iter2_drive["n"] += 1
+            if reads_after_iter2_drive["n"] == 1:  # its post-drive check just saw a clean plant
+                harness.plant_path.write_text('{"v": "peer-before-refit"}', encoding="utf-8")
+        return value
+
+    monkeypatch.setattr(auto_alien, "_read_plant_bytes", counting_read)
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "4"
+    )
+    code, report = run_pipeline(args, run_stage=runner)
+    assert code == 0
+    selfplay = report["selfplay"]
+    entry = selfplay["iterations"][2]  # iteration 3, the next plant step
+    assert entry["step_kind"] == "plant"
+    assert entry["skipped"] is True
+    assert "refusing to merge" in entry["refine"]["reason"]
+    assert "plant changed before iteration 3's refit" in selfplay["stopped"]
+    assert selfplay["requires_rebase"] is True
+    assert harness.saves == 1  # only iteration 1's refit; nothing merged across the two fits
+    assert "exit_code" not in entry  # never drove
+    # The peer's artifact is untouched.
+    assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "peer-before-refit"}'
+
+
+def test_selfplay_fails_closed_when_the_current_plant_is_unreadable(monkeypatch, tmp_path):
+    # #703 (Codex P2, round 6): if the artifact is deleted or corrupted after a successful base
+    # drive, base_fit stays populated while current_fit becomes None. Treating that as
+    # "compatible" let the refit fail, fall through to an envelope drive, and report the
+    # plant-load failure as falsifying the SCALE RUNG while the bad artifact stayed in place.
+    harness = _SelfplayHarness(monkeypatch, tmp_path, stage_specs=[(0, [95000], [True])])
+    monkeypatch.setattr(auto_alien, "stage_plant_fit_sha12", lambda outcome: "basefit000000")
+    monkeypatch.setattr(auto_alien, "_current_plant_fit_sha12", lambda *a, **kw: None)
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
+    )
+    selfplay = auto_alien.run_selfplay(
+        args,
+        run_stage=harness.runner(),
+        evidence_root=tmp_path / "ev",
+        user_dir=tmp_path,
+        setup_key=None,
+        setup_ini=None,
+        base_outcome={"report": {"lap_times_ms": [95000]}, "lap_archives": []},
+    )
+    assert selfplay["requires_rebase"] is True
+    assert selfplay["iterations"] == []  # never drove an envelope rung on a broken plant
+    assert "no readable plant fit" in selfplay["stopped"]
 
 
 def test_stage_plant_fit_sha12_reads_the_recorded_line_provenance():

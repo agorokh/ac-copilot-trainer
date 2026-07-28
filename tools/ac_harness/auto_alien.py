@@ -627,11 +627,17 @@ def run_selfplay(
     base_fit = stage_plant_fit_sha12(base_outcome)
     current_fit = _current_plant_fit_sha12(user_dir, args, setup_key, setup_ini)
     selfplay["base_plant_fit_sha12"] = base_fit
-    if base_fit is not None and current_fit is not None and base_fit != current_fit:
+    # Fail CLOSED on a missing current provenance. If the artifact was deleted or corrupted after
+    # a successful base drive, `current_fit` is None while `base_fit` is populated; treating that
+    # as "compatible" let the refit fail, fall through to an envelope drive, and report the
+    # resulting plant-load failure as falsifying the SCALE RUNG while the bad artifact stayed in
+    # place (#703 Codex P2, round 6).
+    if base_fit is not None and base_fit != current_fit:
         selfplay["requires_rebase"] = True
+        disk = current_fit if current_fit is not None else "no readable plant fit"
         selfplay["stopped"] = (
             f"plant changed since the base drive (base ran fit {base_fit}, disk now carries "
-            f"{current_fit}) — self-play stopped before iteration 1; the base evidence and the "
+            f"{disk}) — self-play stopped before iteration 1; the base evidence and the "
             "on-disk plant are from different fits, so no step could be attributed"
         )
         print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
@@ -669,6 +675,7 @@ def run_selfplay(
         #    is written (#579 Qodo reliability).
         refined = False
         peer_skipped: str | None = None
+        peer_changed_before_refit = False
         last_valid_bytes: bytes | None = None
         candidate_bytes: bytes | None = None
         try:
@@ -681,6 +688,22 @@ def run_selfplay(
                 entry["refine"] = {
                     "ok": False,
                     "reason": "no lap archives from the previous drive",
+                }
+            elif _read_plant_bytes(plant_path) != validated_plant_bytes:
+                # A peer re-identified the combo since our last validated state. The
+                # `expected_current_bytes` guard below would accept these bytes happily — it only
+                # prevents clobbering a NEWER fit, it does not prove the fit is OURS — so archives
+                # produced by plant A would be merged into peer plant B, and the candidate would
+                # then become `validated_plant_bytes`, letting the post-drive check and the
+                # scientist baseline treat a two-plant transition as this ladder's single-knob
+                # refit (#703 Codex P1, round 6).
+                peer_changed_before_refit = True
+                entry["refine"] = {
+                    "ok": False,
+                    "reason": (
+                        "plant changed since the last validated state (peer re-identification?) "
+                        "— refusing to merge this batch's evidence across two different fits"
+                    ),
                 }
             else:
                 # Snapshot the artifact bytes BEFORE loading: the refine-save runs outside the
@@ -790,6 +813,18 @@ def run_selfplay(
         #    report would blame the envelope for a drive the peer's plant may have caused — the
         #    exact attribution this decoupling exists to guarantee. Stop instead; a fresh run
         #    rebases on the peer's plant honestly (#703, Codex P1).
+        if peer_changed_before_refit:
+            selfplay["stopped"] = (
+                f"plant changed before iteration {index}'s refit (peer re-identification?) — "
+                "self-play stopped; merging this batch's evidence into a fit the ladder never "
+                "validated would corrupt both the attribution and the persisted plant "
+                "(re-run to rebase on the peer's plant)"
+            )
+            entry["skipped"] = True
+            selfplay["requires_rebase"] = True
+            print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
+            break
+
         if peer_skipped:
             selfplay["stopped"] = (
                 f"plant changed by a peer at iteration {index} ({peer_skipped}) — self-play "
