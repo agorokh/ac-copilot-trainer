@@ -58,6 +58,7 @@ from the primary endpoint rather than scored on an assumption.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
 import json
 import math
@@ -137,6 +138,27 @@ _UPTIME_CONTINUITY_TOLERANCE_H = 0.01
 
 def _parse_stamp(value: str) -> datetime:
     return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+
+
+def _run_id(**fields: object) -> str:
+    """Short, reproducible identifier for one generated plan.
+
+    A pure function of the plan's inputs, so regenerating the same plan yields the same id
+    (tests pin ``generated_at_utc``), while any change — including a different generation
+    timestamp — yields a different one.
+    """
+    canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:8]
+
+
+def _boot_epoch_h(launch: LaunchObservation) -> float:
+    """When this launch's machine booted, in hours since the epoch.
+
+    ``started_at_utc - uptime_h``. Two launches from the same boot agree on this value;
+    a reboot moves it forward. This is what distinguishes "the operator rebooted" from "the
+    operator kept going on the same boot", independently of how long they waited.
+    """
+    return _parse_stamp(launch.started_at_utc).timestamp() / 3600.0 - launch.uptime_h
 
 
 @dataclass(frozen=True)
@@ -307,12 +329,26 @@ def build_plan(
         )
     sequence = randomized_block_sequence(boots_per_arm, randomization_seed=randomization_seed)
     stamp = generated_at_utc or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Report filenames used to be a pure function of (index, condition), so two plans sharing a
+    # seed and launch config produced IDENTICAL names. Dropped in one reports directory, the
+    # second run's `analyze` would silently consume the FIRST experiment's reports and return a
+    # stale conclusion — on an experiment that costs a dozen reboots. Namespace every report to
+    # its own plan. The id is a pure function of the plan inputs, so it stays reproducible.
+    run_id = _run_id(
+        generated_at_utc=stamp,
+        randomization_seed=randomization_seed,
+        boots_per_arm=boots_per_arm,
+        launches_per_boot=launches_per_boot,
+        car=car,
+        track=track,
+        layout=layout,
+    )
     boots = [
         asdict(
             PlannedBoot(
                 boot=index,
                 condition=condition,
-                report=f"boot-{index:03d}-{condition}.json",
+                report=f"boot-{index:03d}-{run_id}-{condition}.json",
             )
         )
         for index, condition in enumerate(sequence, start=1)
@@ -328,6 +364,7 @@ def build_plan(
         "launches_per_boot": launches_per_boot,
         "minimum_boots_per_arm": MIN_BOOTS_PER_ARM,
         "randomization_seed": randomization_seed,
+        "run_id": run_id,
         "randomization_reference_set": 2**boots_per_arm,
         "smallest_attainable_two_sided_p": 2 / 2**boots_per_arm,
         "launch": {
@@ -586,19 +623,17 @@ def load_observations(
         # ran (leave it overnight, come back, uptime is legitimately higher) — and that would
         # make an already-completed, 12-reboot experiment un-analyzable.
         #
-        # If the machine did NOT reboot, uptime advances exactly with the wall clock between the
-        # two launches. If it DID reboot, uptime restarted, so it advances by strictly less.
-        uptime_delta = later.launches[0].uptime_h - earlier.launches[-1].uptime_h
-        wall_delta = (
-            _parse_stamp(later.launches[0].started_at_utc)
-            - _parse_stamp(earlier.launches[-1].started_at_utc)
-        ).total_seconds() / 3600.0
-        if uptime_delta >= wall_delta - _UPTIME_CONTINUITY_TOLERANCE_H:
+        # Each launch implies when its machine booted: ``started_at_utc - uptime_h``. Two
+        # launches from the SAME boot agree on that epoch; a reboot moves it forward. Comparing
+        # boot epochs states the invariant directly and is robust to how long the operator
+        # waited between boots.
+        earlier_epoch = _boot_epoch_h(earlier.launches[-1])
+        later_epoch = _boot_epoch_h(later.launches[0])
+        if later_epoch - earlier_epoch < _UPTIME_CONTINUITY_TOLERANCE_H:
             raise ValueError(
-                f"uptime tracked the wall clock across the boot {earlier.boot} -> "
-                f"{later.boot} boundary (uptime +{uptime_delta:.4f}h vs elapsed "
-                f"{wall_delta:.4f}h), so the machine did not reboot — each arm requires "
-                "its own boot"
+                f"boots {earlier.boot} and {later.boot} share a machine boot epoch "
+                f"(implied boot times differ by only {later_epoch - earlier_epoch:.4f}h), so "
+                "the machine did not reboot between them — each arm requires its own boot"
             )
     return tuple(observations)
 
@@ -740,10 +775,19 @@ def summarize_boot(observation: BootObservation) -> BootSummary:
     # Fixed-length follow-up so a boot that armed early does not get a longer exposure window
     # than one that armed late — unequal windows alone can manufacture a burst-rate difference.
     window_end = None if onset_index is None else onset_index + POST_ONSET_WINDOW - 1
-    window_complete = window_end is not None and window_end <= len(launches)
-    window = () if not window_complete else launches[onset_index - 1 : window_end]
+    window_fits = window_end is not None and window_end <= len(launches)
+    window = () if not window_fits else launches[onset_index - 1 : window_end]
     post_onset_launches = sum(item.verdict != "never_live" for item in window)
     post_onset_freezes = sum(item.verdict in FREEZE_VERDICTS for item in window)
+    # The window must deliver the FULL pre-registered exposure to count. Dropping a never_live
+    # from the denominator would silently shrink it (3/5 instead of 3/6), so an arm with more
+    # delivery failures could show a burst-rate difference with identical freeze behaviour —
+    # the same unequal-exposure bug the fixed window exists to remove. And an ambiguous onset
+    # makes the window's own starting point untrustworthy, so it cannot anchor a rate either.
+    window_complete = window_fits and post_onset_launches == POST_ONSET_WINDOW and not ambiguous
+    if not window_complete:
+        post_onset_launches = 0
+        post_onset_freezes = 0
     unusable_reason: str | None = None
     if classified == 0:
         unusable_reason = "no_classified_launches"
@@ -785,10 +829,12 @@ def _summarize_arm(condition: str, boots: Sequence[BootSummary]) -> ArmSummary:
         raise ValueError(f"no boots for {condition}")
     scoring = [boot for boot in arm if _scores_onset(boot)]
     observed = tuple(boot.onset_index for boot in scoring if boot.onset_index is not None)
+    # Same gate as the block-level burst difference: a boot that cannot score the onset cannot
+    # contribute a burst rate either, so the arm aggregate never includes one.
     rates = tuple(
         boot.post_onset_burst_rate
         for boot in arm
-        if boot.usable and boot.post_onset_burst_rate is not None
+        if _scores_onset(boot) and boot.post_onset_burst_rate is not None
     )
     return ArmSummary(
         condition=condition,
@@ -831,10 +877,11 @@ def _summarize_blocks(boots: Sequence[BootSummary]) -> list[BlockSummary]:
             reason = "ambiguous_onset"
         onset_difference = None if reason else float(off.onset_value - on.onset_value)
         lower, upper = (None, None) if reason else _onset_difference_bounds(on, off)
+        # A block excluded from the primary endpoint is excluded from the secondary too: an
+        # unusable or ambiguous-onset boot cannot anchor a trustworthy post-onset window either.
         burst_difference = (
             off.post_onset_burst_rate - on.post_onset_burst_rate
-            if on.usable
-            and off.usable
+            if reason is None
             and on.post_onset_burst_rate is not None
             and off.post_onset_burst_rate is not None
             else None
@@ -1278,6 +1325,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                 go_live_timeout=args.go_live_timeout,
             )
             destination = _output_path(args.out)
+            # Render every command BEFORE publishing the plan. The artifact write is exclusive,
+            # so a rendering failure after the write (e.g. a `.scratch` directory containing a
+            # cmd.exe metacharacter, which `_output_path` accepts but `_shell_quote` rejects)
+            # would leave an unusable plan on disk that the retry then refuses to overwrite.
+            rendered = [
+                (
+                    boot,
+                    _format_boot_command(
+                        car=args.car,
+                        track=args.track,
+                        layout=args.layout,
+                        stability_window=args.stability_window,
+                        go_live_timeout=args.go_live_timeout,
+                        launches_per_boot=args.launches_per_boot,
+                        report_path=_checkout_relative_report_path(destination, boot["report"]),
+                    ),
+                )
+                for boot in plan["boots"]
+            ]
             _write_new_json(destination, plan)
             print(f"plan -> {destination}")
             print(
@@ -1309,24 +1375,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "(cd to the rig's ac-copilot-trainer clone first; report paths are "
                 "checkout-relative under .scratch — never the planner host's absolute path)."
             )
-            for boot in plan["boots"]:
-                report_path = _checkout_relative_report_path(destination, boot["report"])
+            for boot, command in rendered:
                 block = (boot["boot"] + 1) // 2
                 print(
                     f"\n{boot['boot']:03d} (block {block}) {boot['condition']} "
                     "— apply settings, REBOOT, then:"
                 )
-                print(
-                    _format_boot_command(
-                        car=args.car,
-                        track=args.track,
-                        layout=args.layout,
-                        stability_window=args.stability_window,
-                        go_live_timeout=args.go_live_timeout,
-                        launches_per_boot=args.launches_per_boot,
-                        report_path=report_path,
-                    )
-                )
+                print(command)
             return 0
         plan = load_plan(args.plan)
         observations = load_observations(plan, args.reports_dir)

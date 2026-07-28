@@ -1,17 +1,27 @@
 ---
 type: investigation
-status: active
-memory_tier: canonical
+status: superseded
+memory_tier: archive
 created: 2026-07-22
-updated: 2026-07-22
+updated: 2026-07-28
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/625
+superseded_by: AcCopilotTrainer/03_Investigations/issue-625-boot-scoped-redesign-2026-07-28.md
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-625-boot-scoped-redesign-2026-07-28.md
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/03_Investigations/rig-freeze-csp-init-livelock-2026-07-17.md
 ---
 
 # #625 init-perturber A/B — method prepared, physical run gated
+
+> **SUPERSEDED 2026-07-28 — DO NOT RUN THE PROTOCOL ON THIS PAGE.**
+> Everything below describes the **withdrawn v1 design**: one reboot, an interleaved
+> single-boot schedule, a pooled per-launch freeze rate, Wilson intervals and a Fisher test.
+> The #627/#668 accumulator evidence refuted the i.i.d. per-launch model that design assumes,
+> so running it would put **both arms on one boot**, pool the accumulator, and return a near
+> certain false negative. The live protocol is **one reboot per planned boot**; see
+> [[issue-625-boot-scoped-redesign-2026-07-28]]. Kept for the record only.
 
 Draft PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657) adds
 `tools.ac_harness.init_perturber_ab`: a seeded adjacent-pair A/B plan (20 analyzable launches per
@@ -52,6 +62,9 @@ gh issue view 625 --repo agorokh/ac-copilot-trainer --json state,body --jq ...
 ```
 
 This is an operator policy/hardware-state gate; there is no code symbol to anchor. Resume when the
-operator powers on `pc` and explicitly authorizes toggling both settings. Then reboot once, run the
-printed interleaved schedule on the rig, restore both settings, analyze, attach raw counts/CI/p to
-#625, and only then ready/resolve/merge PR #657.
+operator powers on `pc` and explicitly authorizes toggling both settings.
+
+**The resume steps that used to follow here have been removed** — they said "reboot once, run the
+printed interleaved schedule", which is exactly the withdrawn protocol. Follow
+[[issue-625-boot-scoped-redesign-2026-07-28]] instead: regenerate the plan, then apply settings and
+**reboot before every one of the planned boots**.

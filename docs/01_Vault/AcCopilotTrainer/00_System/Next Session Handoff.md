@@ -438,8 +438,11 @@ Post-merge classify: **no** migrations/env/deps/workflow flags.
   G3) — L4/L0/META code is now on main via #674; gates still rig-blocked on #627.
 - Issue [#625](https://github.com/agorokh/ac-copilot-trainer/issues/625) stays **OPEN** — code is not
   the experiment. Operator steps: power on `pc`, authorize Steam/NVIDIA overlay toggles, run the
-  planned A/B schedule, attach stats/evidence to #625, then close. Detail:
-  [[issue-625-init-perturber-ab-prepared-2026-07-22]] / [[pr-657-resolve-blocked-2026-07-22]].
+  planned A/B schedule, attach stats/evidence to #625, then close. **Live runbook:**
+  [[issue-625-boot-scoped-redesign-2026-07-28]] — **one reboot per planned boot** (12 boots at the
+  default 6/arm). [[issue-625-init-perturber-ab-prepared-2026-07-22]] is **SUPERSEDED**: its
+  "reboot once, run the interleaved schedule" steps are the withdrawn v1 protocol and would pool
+  both arms onto one boot. See also [[pr-657-resolve-blocked-2026-07-22]].
 - Next ICE backlog candidates after the 2026-07-24 steward: #675 Coach V2 (incl. calibration
   bypass Part 0), #531 Part G latency, #627 investigation continuation.
 

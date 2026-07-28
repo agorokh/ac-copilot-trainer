@@ -169,7 +169,11 @@ def test_plan_is_boot_scoped_and_records_the_operator_gate() -> None:
     assert "false negative" in plan["withdrawn_design_note"]
     assert plan["launch"]["trials_per_invocation"] == DEFAULT_LAUNCHES_PER_BOOT
     assert len(plan["boots"]) == 12
-    assert plan["boots"][0]["report"] == f"boot-001-{plan['boots'][0]['condition']}.json"
+    assert plan["run_id"]
+    assert (
+        plan["boots"][0]["report"]
+        == f"boot-001-{plan['run_id']}-{plan['boots'][0]['condition']}.json"
+    )
 
 
 def test_build_plan_rejects_sizes_it_could_not_answer_or_analyze() -> None:
@@ -293,8 +297,8 @@ def test_incomplete_experiment_is_refused(tmp_path: Path) -> None:
 def test_continuous_uptime_across_a_boundary_is_refused(tmp_path: Path) -> None:
     """The sharpest boot-scoped guard: two arms on one boot pools the accumulator.
 
-    Detected by CONTINUITY — uptime advancing in lockstep with the wall clock means the machine
-    never rebooted.
+    Detected by comparing the IMPLIED BOOT EPOCH (`started_at_utc - uptime_h`): two launches
+    from the same boot agree on it, and a reboot moves it forward.
     """
     plan = _two_boot_plan()
     # Boot 1 launches at minutes 1..20 -> last uptime 0.5 + 20*0.05 = 1.5h at minute 20.
@@ -312,8 +316,27 @@ def test_continuous_uptime_across_a_boundary_is_refused(tmp_path: Path) -> None:
         start_minute=60,
         uptime_start=1.5 + (41 / 60) - 0.05,
     )
-    with pytest.raises(ValueError, match="tracked the wall clock"):
+    with pytest.raises(ValueError, match="share a machine boot epoch"):
         load_observations(plan, tmp_path)
+
+
+def test_report_names_are_namespaced_to_their_plan() -> None:
+    """Codex #708: two same-seed plans must not collide in one reports directory.
+
+    Deterministic `boot-NNN-condition.json` names meant a second run's `analyze` could silently
+    consume the FIRST experiment's reports and return a stale conclusion — after a dozen reboots.
+    """
+    first = build_plan(6, generated_at_utc="2026-07-28T12:00:00Z")
+    same = build_plan(6, generated_at_utc="2026-07-28T12:00:00Z")
+    later = build_plan(6, generated_at_utc="2026-07-29T12:00:00Z")
+    other_car = build_plan(6, generated_at_utc="2026-07-28T12:00:00Z", car="ks_mazda_mx5_cup")
+    names = lambda plan: [boot["report"] for boot in plan["boots"]]  # noqa: E731
+    # Reproducible for identical inputs...
+    assert names(first) == names(same)
+    # ...and distinct for a different generation time or launch config, even at the same seed.
+    assert set(names(first)).isdisjoint(names(later))
+    assert set(names(first)).isdisjoint(names(other_car))
+    assert first["randomization_seed"] == later["randomization_seed"]
 
 
 def test_reboot_is_accepted_even_when_the_operator_waits_a_long_time(tmp_path: Path) -> None:
@@ -475,8 +498,11 @@ def test_never_live_after_onset_leaves_the_onset_unambiguous() -> None:
     summary = summarize_boot(_boot(1, "overlays_on", verdicts))
     assert summary.onset_index == 6
     assert summary.onset_ambiguous is False
-    # The never_live inside the window leaves the denominator but not the exposure length.
-    assert summary.post_onset_launches == POST_ONSET_WINDOW - 1
+    # Codex #708: dropping the never_live from the denominator would give 5 launches of
+    # exposure instead of the pre-registered 6, so arm-specific delivery failures could
+    # manufacture a burst difference. The window is voided instead.
+    assert summary.burst_window_complete is False
+    assert summary.post_onset_burst_rate is None
 
 
 def test_never_live_heavy_boot_is_unusable_not_scored() -> None:
@@ -821,6 +847,23 @@ def test_analyze_cli_round_trip(capsys, tmp_path, monkeypatch) -> None:
     assert main(["analyze", "--plan", str(plan_path), "--reports-dir", str(scratch)]) == 0
     printed = capsys.readouterr().out
     assert "overlays_off_delays_onset" in printed
+
+
+def test_plan_is_not_published_when_a_command_cannot_be_rendered(tmp_path, monkeypatch) -> None:
+    """Codex #708: an exclusive-write plan must not survive a later rendering failure.
+
+    `_output_path` accepts a `.scratch` directory containing a cmd.exe metacharacter that
+    `_shell_quote` then rejects. If the plan were written first, the retry would hit
+    "refusing to overwrite" and the operator would be stuck with an unusable artifact.
+    """
+    from tools.ac_harness.init_perturber_ab import main
+
+    monkeypatch.setattr(ab_mod, "repo_checkout_root", lambda: tmp_path)
+    hostile_dir = tmp_path / ".scratch" / "run&backup"
+    hostile_dir.mkdir(parents=True, exist_ok=True)
+    out = hostile_dir / "plan.json"
+    assert main(["plan", "--out", str(out), "--boots-per-arm", "6"]) == 2
+    assert not out.exists(), "a rejected render must leave no plan artifact behind"
 
 
 def test_analyze_cli_reports_a_clean_error_for_a_withdrawn_plan(capsys, tmp_path) -> None:
