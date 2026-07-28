@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-28T11:40:00Z
+last_updated: 2026-07-28T16:30:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-703-decoupled-ladder-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-625-boot-scoped-redesign-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-672-voice-endpoint-hygiene-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-529-pace-ladder-115-2026-07-26.md
@@ -122,6 +123,40 @@ relates_to:
 ---
 
 # Next session handoff
+
+## IN REVIEW (2026-07-28) — #703 decoupled self-play ladder (PR #709, NOT merged)
+
+`run_selfplay` bundled a **plant refit** and an **envelope scale step** into one iteration, so a
+falsified rung reverted a refit whose evidence was independently valid — and the top rung is by
+construction the one most likely to falsify. Iterations now alternate: a **plant** step refits and
+drives at the last *validated* scale; an **envelope** step leaves the plant untouched and drives the
+next rung. Worth ~3.5 s at identical scale on the #529 ladders, and it compounds across runs.
+
+Full node: [issue-703-decoupled-ladder-2026-07-28](../03_Investigations/issue-703-decoupled-ladder-2026-07-28.md).
+
+**Resume pointer.** PR #709 head `607547d`; `make ci-fast` OK (3803 passed); CI green; zero blocking
+review threads; `origin/main` already merged in. Two things remain:
+
+1. **The Codex gate.** Absent for 5 of the last 7 triggers, each waited the mandatory 600 s plus
+   10–20 min of polling. Merge is deliberately blocked on it — CI green plus a clean advisory
+   self-hosted review is **not** the independent gate `resolve-pr` requires. Re-trigger
+   `@codex review`, wait, and audit review **bodies** as well as threads (one P1 this session
+   existed only in a body).
+2. **AC 5, the live proof.** A Magione ladder that retains a refit across a falsified top rung, with
+   the next run's line build reporting the lower QSS floor. Rig was free at session end. Baseline
+   captured before the work: the 911/Magione plant carries **7 self-play merges**, the last being
+   #529 ladder 3's retained `{adopted: 1, raised: 5}` (7 of 30 lateral bins measured). Suggested
+   probe: `--ggv-scale 1.0 --scale-step 0.20 --max-scale 1.20 --iterations 3 --laps 2` — 1.20
+   falsified reliably on #529, and under the decoupled ladder iteration 1 is a plant step at 1.0.
+
+**Do not** re-derive the design. Option 3 (blanket keep-the-refit) is ruled out:
+`merge_selfplay_model` is strictly monotone, so the keep-last-valid revert is the plant's only way
+down. The chosen option is the issue's option 2.
+
+**Cost signal worth carrying forward:** 16 review rounds, of which the decoupling itself was ~1. The
+rest was the concurrency surface that *claiming* single-knob attribution opens — once the report
+asserts a verdict belongs to a knob, every way a peer worktree can move the plant becomes a
+correctness bug. If a future change makes a similar attribution claim, budget for that.
 
 ## Delivered (2026-07-28) — #625 init-perturber A/B re-pointed to the boot-scoped design (PR #708 MERGED)
 
