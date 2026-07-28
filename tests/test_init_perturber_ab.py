@@ -9,119 +9,240 @@ import pytest
 from tools.ac_harness import init_perturber_ab as ab_mod
 from tools.ac_harness.init_perturber_ab import (
     ANALYSIS_SCHEMA,
-    MIN_TRIALS_PER_ARM,
-    Observation,
+    BASELINE_ONSET_INDEX_GRACEFUL,
+    DEFAULT_LAUNCHES_PER_BOOT,
+    MAX_BOOTS_PER_ARM,
+    MAX_NEVER_LIVE_FRACTION,
+    MIN_BOOTS_PER_ARM,
+    MIN_LAUNCHES_PER_BOOT,
+    POST_ONSET_WINDOW,
+    WITHDRAWN_PLAN_SCHEMA,
+    BootObservation,
+    LaunchObservation,
     analyze,
     build_plan,
-    counterbalanced_sequence,
-    fisher_exact_two_sided,
+    exact_block_permutation_two_sided,
+    exact_rank_sum_two_sided,
     load_observations,
     load_plan,
     paired_exact_two_sided,
+    randomized_block_sequence,
     render_markdown,
-    wilson_interval,
+    summarize_boot,
 )
 from tools.ac_harness.resilient_launch import DEFAULT_GO_LIVE_TIMEOUT, REPORT_SCHEMA
 
-_DEFAULT_LAUNCH = {
-    "car": "ks_porsche_911_gt3_r_2016",
-    "track": "spa",
-    "layout": None,
-    "stability_window": 140.0,
-    "go_live_timeout": DEFAULT_GO_LIVE_TIMEOUT,
-    "trials_per_invocation": 1,
-}
+_LAUNCHES = 20
 
 
-def _write_report(
-    path: Path,
-    *,
-    verdict: str,
-    started_at_utc: str,
-    uptime_h: float | None,
-    launch: dict[str, object] | None = None,
-) -> None:
-    counts = {"stable": 0, "froze": 0, "wedged_init": 0, "never_live": 0}
-    counts[verdict] = 1
-    payload = {
-        "schema": REPORT_SCHEMA,
-        "verdict": verdict,
-        "attempts": 1,
-        "counts": counts,
-        "launch": launch or dict(_DEFAULT_LAUNCH),
-        "attempts_log": [
-            {
-                "attempt": 1,
-                "verdict": verdict,
-                "started_at_utc": started_at_utc,
-                "elapsed_s": 12.5,
-                "uptime_h": uptime_h,
-            }
-        ],
-    }
-    path.write_text(json.dumps(payload), encoding="utf-8")
-
-
-def test_counterbalanced_sequence_interleaves_every_pair_and_is_seeded() -> None:
-    sequence = counterbalanced_sequence(20)
-    assert len(sequence) == 40
-    assert sequence.count("overlays_on") == sequence.count("overlays_off") == 20
-    assert all(
-        set(sequence[offset : offset + 2]) == {"overlays_on", "overlays_off"}
-        for offset in range(0, len(sequence), 2)
-    )
-    ab_first = sum(1 for offset in range(0, len(sequence), 2) if sequence[offset] == "overlays_on")
-    assert ab_first == 10
-    assert sequence == counterbalanced_sequence(20)
-    assert sequence != counterbalanced_sequence(20, randomization_seed=626)
-
-
-def test_plan_records_operator_gate_and_plain_report_names() -> None:
-    plan = build_plan(2, generated_at_utc="2026-07-22T12:00:00Z", allow_undersized=True)
-    assert plan["operator_owned_settings"] is True
-    assert plan["protocol"]["fresh_reboot_before_run"] is True
-    assert plan["protocol"]["restore_settings_after_run"] is True
-    assert plan["protocol"]["condition_definitions"]["overlays_off"] == {
-        "steam_overlay_enabled": False,
-        "nvidia_shadowplay_enabled": False,
-    }
-    assert plan["launch"] == {
+def _launch_config(launches: int = _LAUNCHES) -> dict[str, object]:
+    return {
         "car": "ks_porsche_911_gt3_r_2016",
         "track": "spa",
         "layout": None,
         "stability_window": 140.0,
         "go_live_timeout": DEFAULT_GO_LIVE_TIMEOUT,
-        "trials_per_invocation": 1,
+        "trials_per_invocation": launches,
     }
-    assert plan["analyzable_minimum_per_arm"] == MIN_TRIALS_PER_ARM
-    assert plan["randomization_seed"] == 625
-    assert all(
-        {plan["trials"][offset]["condition"], plan["trials"][offset + 1]["condition"]}
-        == {"overlays_on", "overlays_off"}
-        for offset in range(0, 4, 2)
+
+
+def _write_boot_report(
+    path: Path,
+    *,
+    verdicts: list[str],
+    start_minute: int,
+    uptime_start: float,
+    launch: dict[str, object] | None = None,
+    attempts: int | None = None,
+) -> None:
+    """Emit one ``resilient_launch --trials N`` style report for a whole boot."""
+    counts = {"stable": 0, "froze": 0, "wedged_init": 0, "never_live": 0}
+    log = []
+    for index, verdict in enumerate(verdicts, start=1):
+        counts[verdict] += 1
+        minute = start_minute + index
+        log.append(
+            {
+                "attempt": index,
+                "verdict": verdict,
+                "started_at_utc": f"2026-07-28T{minute // 60:02d}:{minute % 60:02d}:00Z",
+                "elapsed_s": 12.5,
+                "uptime_h": round(uptime_start + index * 0.05, 4),
+            }
+        )
+    payload = {
+        "schema": REPORT_SCHEMA,
+        "verdict": verdicts[-1],
+        "attempts": len(verdicts) if attempts is None else attempts,
+        "counts": counts,
+        "launch": launch or _launch_config(len(verdicts)),
+        "attempts_log": log,
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _stable_then_freeze(onset: int, total: int = _LAUNCHES) -> list[str]:
+    """``onset``-1 clean launches, then a freeze, then an alternating burst."""
+    verdicts = ["stable"] * (onset - 1)
+    for index in range(onset, total + 1):
+        verdicts.append("froze" if (index - onset) % 2 == 0 else "stable")
+    return verdicts[:total]
+
+
+def _boot(
+    number: int, condition: str, verdicts: list[str], *, uptime_start: float = 0.5
+) -> BootObservation:
+    return BootObservation(
+        boot=number,
+        condition=condition,
+        launches=tuple(
+            LaunchObservation(
+                launch=index,
+                verdict=verdict,
+                started_at_utc=f"2026-07-28T10:{index:02d}:00Z",
+                elapsed_s=12.5,
+                uptime_h=uptime_start + index * 0.05,
+            )
+            for index, verdict in enumerate(verdicts, start=1)
+        ),
     )
-    assert plan["trials"][0]["report"] == f"trial-001-{plan['trials'][0]['condition']}.json"
 
 
-def test_build_plan_rejects_undersized_experiment() -> None:
-    with pytest.raises(ValueError, match=str(MIN_TRIALS_PER_ARM)):
-        build_plan(MIN_TRIALS_PER_ARM - 1)
+# _LAUNCHES == MIN_LAUNCHES_PER_BOOT, so the default fixtures are endpoint-eligible.
+assert _LAUNCHES == MIN_LAUNCHES_PER_BOOT
 
 
-def test_load_plan_rejects_non_interleaved_pair(tmp_path: Path) -> None:
-    plan = build_plan(2, allow_undersized=True)
-    plan["trials"][1]["condition"] = plan["trials"][0]["condition"]
-    path = tmp_path / "plan.json"
-    path.write_text(json.dumps(plan), encoding="utf-8")
-    with pytest.raises(ValueError, match="condition|interleave|randomization_seed"):
-        load_plan(path)
+def _blocks(onsets_on: list[int], onsets_off: list[int]) -> list[BootObservation]:
+    """One block per (on, off) pair, in plan order."""
+    boots: list[BootObservation] = []
+    for on_onset, off_onset in zip(onsets_on, onsets_off, strict=True):
+        boots.append(_boot(len(boots) + 1, "overlays_on", _stable_then_freeze(on_onset)))
+        boots.append(_boot(len(boots) + 1, "overlays_off", _stable_then_freeze(off_onset)))
+    return boots
+
+
+# --------------------------------------------------------------------------- plan
+
+
+def test_randomized_block_sequence_is_seeded_and_one_arm_per_block() -> None:
+    sequence = randomized_block_sequence(6)
+    assert len(sequence) == 12
+    assert sequence.count("overlays_on") == sequence.count("overlays_off") == 6
+    assert all(
+        set(sequence[offset : offset + 2]) == {"overlays_on", "overlays_off"}
+        for offset in range(0, len(sequence), 2)
+    )
+    assert sequence == randomized_block_sequence(6)
+    assert sequence != randomized_block_sequence(6, randomization_seed=626)
+
+
+def test_randomization_reference_set_is_the_full_two_to_the_blocks() -> None:
+    """The whole power argument rests on this: independent per-block orientation gives 2**n.
+
+    The earlier balanced-counterbalancing draft could only emit
+    ``n!/((n//2)!*(n-n//2)!)`` orders — 6 at n=4 — which caps the attainable two-sided p at
+    0.33 and makes the experiment unable to reach alpha at any effect size.
+    """
+    for blocks in (3, 4, 5):
+        emitted = {randomized_block_sequence(blocks, randomization_seed=s) for s in range(4000)}
+        assert len(emitted) == 2**blocks
+
+
+def test_plan_is_boot_scoped_and_records_the_operator_gate() -> None:
+    plan = build_plan(6, generated_at_utc="2026-07-28T12:00:00Z")
+    assert plan["schema"] == "init-perturber-ab-plan/v2"
+    assert plan["supersedes"] == WITHDRAWN_PLAN_SCHEMA
+    assert plan["operator_owned_settings"] is True
+    assert plan["protocol"]["reboot_before_every_boot"] is True
+    assert plan["protocol"]["graceful_first_teardown_both_arms"] is True
+    assert plan["protocol"]["one_invocation_per_boot"] is True
+    assert plan["protocol"]["retry_after_abort_requires_reboot"] is True
+    assert "REBOOT" in plan["protocol"]["abort_policy"].upper()
+    assert plan["protocol"]["condition_definitions"]["overlays_off"] == {
+        "steam_overlay_enabled": False,
+        "nvidia_shadowplay_enabled": False,
+    }
+    assert "onset launch-index" in plan["endpoints"]["primary"]
+    assert plan["randomization_reference_set"] == 2**6
+    assert plan["smallest_attainable_two_sided_p"] == pytest.approx(2 / 64)
+    assert plan["prereg_baselines"]["onset_index_graceful"] == BASELINE_ONSET_INDEX_GRACEFUL
+    assert "false negative" in plan["withdrawn_design_note"]
+    assert plan["launch"]["trials_per_invocation"] == DEFAULT_LAUNCHES_PER_BOOT
+    assert len(plan["boots"]) == 12
+    assert plan["run_id"]
+    assert (
+        plan["boots"][0]["report"]
+        == f"boot-001-{plan['run_id']}-{plan['boots'][0]['condition']}.json"
+    )
+
+
+def test_a_real_plan_draws_its_seed_rather_than_reusing_a_constant() -> None:
+    """Codex #708 P1: the design-based claim requires the schedule to be DRAWN.
+
+    With a constant default seed the planner emitted one fixed schedule, so no assignment was
+    ever randomized and enumerating the `2**blocks` alternative orientations was not justified —
+    a boot-slot or time effect could align with the fixed order with nothing to appeal to.
+    """
+    stamp = "2026-07-28T12:00:00Z"
+    seeds = {build_plan(6, generated_at_utc=stamp)["randomization_seed"] for _ in range(8)}
+    assert len(seeds) > 1, "a real plan must draw a fresh seed, not reuse a constant"
+    # The drawn seed is persisted, so the schedule stays verifiable and reproducible after the fact.
+    drawn = build_plan(6, generated_at_utc=stamp)
+    assert tuple(boot["condition"] for boot in drawn["boots"]) == randomized_block_sequence(
+        6, randomization_seed=drawn["randomization_seed"]
+    )
+    # An explicit seed is still honoured, for reproducing a known plan.
+    assert (
+        build_plan(6, generated_at_utc=stamp, randomization_seed=625)["randomization_seed"] == 625
+    )
+
+
+def test_build_plan_rejects_sizes_it_could_not_answer_or_analyze() -> None:
+    # Too few blocks: 2/2**5 = 0.0625 > alpha, so no result could ever be significant.
+    with pytest.raises(ValueError, match="cannot reach alpha"):
+        build_plan(MIN_BOOTS_PER_ARM - 1)
+    # Too short a boot: no room for the graceful onset plus the fixed burst window.
+    with pytest.raises(ValueError, match=str(MIN_LAUNCHES_PER_BOOT)):
+        build_plan(MIN_BOOTS_PER_ARM, launches_per_boot=MIN_LAUNCHES_PER_BOOT - 1)
+    # Too many blocks: the exact enumeration would exceed the limit, so a COMPLETED (and very
+    # expensive) run would not be analyzable. Refuse at plan time, not after the reboots.
+    with pytest.raises(ValueError, match="would not be analyzable"):
+        build_plan(MAX_BOOTS_PER_ARM + 1)
+    # The cap is derived from the PRIMARY test's enumeration, not picked:
+    # 2**19 fits under the limit, 2**20 does not.
+    assert 2**MAX_BOOTS_PER_ARM <= ab_mod.MAX_EXACT_PERMUTATIONS
+    assert 2 ** (MAX_BOOTS_PER_ARM + 1) > ab_mod.MAX_EXACT_PERMUTATIONS
+
+
+def test_oversized_rank_sum_sensitivity_degrades_instead_of_failing() -> None:
+    """The non-gating rank-sum must never break an analysis the primary test can score."""
+    boots = _blocks(list(range(6, 18)), list(range(8, 20)))  # 12 blocks -> C(24,12) > limit
+    import math
+
+    assert math.comb(24, 12) > ab_mod.MAX_EXACT_PERMUTATIONS
+    result = analyze(boots)
+    assert result["sensitivity"]["onset_rank_sum_two_sided_p"] is None
+    assert result["onset_block_permutation_two_sided_p"] is not None
+    assert result["usable_blocks"] == 12
+
+
+def test_min_launches_per_boot_covers_baseline_onset_plus_the_burst_window() -> None:
+    assert MIN_LAUNCHES_PER_BOOT == BASELINE_ONSET_INDEX_GRACEFUL + POST_ONSET_WINDOW
+
+
+def test_load_plan_rejects_the_withdrawn_v1_design(tmp_path: Path) -> None:
+    """The refuted interleaved single-boot plan must not be analyzable (#625 redesign)."""
+    stale = tmp_path / "plan.json"
+    stale.write_text(json.dumps({"schema": WITHDRAWN_PLAN_SCHEMA}), encoding="utf-8")
+    with pytest.raises(ValueError, match="withdrawn"):
+        load_plan(stale)
 
 
 def test_load_plan_rejects_reordered_schedule(tmp_path: Path) -> None:
-    plan = build_plan(2, allow_undersized=True)
-    plan["trials"][0]["condition"], plan["trials"][1]["condition"] = (
-        plan["trials"][1]["condition"],
-        plan["trials"][0]["condition"],
+    plan = build_plan(2, launches_per_boot=_LAUNCHES, allow_undersized=True)
+    plan["boots"][0]["condition"], plan["boots"][1]["condition"] = (
+        plan["boots"][1]["condition"],
+        plan["boots"][0]["condition"],
     )
     path = tmp_path / "plan.json"
     path.write_text(json.dumps(plan), encoding="utf-8")
@@ -129,89 +250,321 @@ def test_load_plan_rejects_reordered_schedule(tmp_path: Path) -> None:
         load_plan(path)
 
 
-def test_report_summary_must_match_attempt_verdict(tmp_path: Path) -> None:
-    plan = build_plan(1, allow_undersized=True)
-    first = plan["trials"][0]
-    path = tmp_path / first["report"]
-    _write_report(
-        path,
-        verdict="stable",
-        started_at_utc="2026-07-22T12:00:00Z",
-        uptime_h=0.1,
+def test_load_plan_rejects_same_arm_block(tmp_path: Path) -> None:
+    plan = build_plan(2, launches_per_boot=_LAUNCHES, allow_undersized=True)
+    plan["boots"][1]["condition"] = plan["boots"][0]["condition"]
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    with pytest.raises(ValueError, match="condition|arm|randomization_seed"):
+        load_plan(path)
+
+
+# ------------------------------------------------------------------- report load
+
+
+def _two_boot_plan() -> dict[str, object]:
+    return build_plan(1, launches_per_boot=_LAUNCHES, allow_undersized=True)
+
+
+def test_report_must_cover_every_planned_launch(tmp_path: Path) -> None:
+    plan = _two_boot_plan()
+    _write_boot_report(
+        tmp_path / plan["boots"][0]["report"],
+        verdicts=["stable"] * (_LAUNCHES - 1),
+        start_minute=0,
+        uptime_start=0.5,
     )
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["counts"]["stable"] = 0
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(ValueError, match="summary"):
+    with pytest.raises(ValueError, match="requires exactly"):
         load_observations(plan, tmp_path, require_complete=False)
 
 
-def test_observations_require_complete_reports_uptime_and_order(tmp_path: Path) -> None:
-    plan = build_plan(1, allow_undersized=True)
-    _write_report(
-        tmp_path / plan["trials"][0]["report"],
-        verdict="stable",
-        started_at_utc="2026-07-22T12:00:00Z",
-        uptime_h=0.1,
+def test_report_attempts_header_must_match_its_log(tmp_path: Path) -> None:
+    """A truncated log behind a full ``attempts`` header would fake a complete boot."""
+    plan = _two_boot_plan()
+    _write_boot_report(
+        tmp_path / plan["boots"][0]["report"],
+        verdicts=["stable"] * (_LAUNCHES - 2),
+        start_minute=0,
+        uptime_start=0.5,
+        attempts=_LAUNCHES,
+    )
+    with pytest.raises(ValueError, match="must log all"):
+        load_observations(plan, tmp_path, require_complete=False)
+
+
+def test_report_counts_must_match_the_attempts_log(tmp_path: Path) -> None:
+    plan = _two_boot_plan()
+    path = tmp_path / plan["boots"][0]["report"]
+    _write_boot_report(path, verdicts=["stable"] * _LAUNCHES, start_minute=0, uptime_start=0.5)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["counts"]["stable"] = 0
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="counts"):
+        load_observations(plan, tmp_path, require_complete=False)
+
+
+def test_incomplete_experiment_is_refused(tmp_path: Path) -> None:
+    plan = _two_boot_plan()
+    _write_boot_report(
+        tmp_path / plan["boots"][0]["report"],
+        verdicts=["stable"] * _LAUNCHES,
+        start_minute=0,
+        uptime_start=0.5,
     )
     with pytest.raises(ValueError, match="incomplete"):
         load_observations(plan, tmp_path)
 
-    _write_report(
-        tmp_path / plan["trials"][1]["report"],
-        verdict="froze",
-        started_at_utc="2026-07-22T11:59:00Z",
-        uptime_h=0.2,
-    )
-    with pytest.raises(ValueError, match="increase"):
-        load_observations(plan, tmp_path)
 
-    second = tmp_path / plan["trials"][1]["report"]
-    second.unlink()
-    _write_report(
-        second,
-        verdict="froze",
-        started_at_utc="2026-07-22T12:01:00Z",
-        uptime_h=None,
-    )
-    with pytest.raises(ValueError, match="uptime_h"):
-        load_observations(plan, tmp_path)
+def test_continuous_uptime_across_a_boundary_is_refused(tmp_path: Path) -> None:
+    """The sharpest boot-scoped guard: two arms on one boot pools the accumulator.
 
-
-def test_observations_reject_mid_run_reboot(tmp_path: Path) -> None:
-    plan = build_plan(1, allow_undersized=True)
-    _write_report(
-        tmp_path / plan["trials"][0]["report"],
-        verdict="stable",
-        started_at_utc="2026-07-22T12:00:00Z",
-        uptime_h=4.19,
+    Detected by comparing the IMPLIED BOOT EPOCH (`started_at_utc - uptime_h`): two launches
+    from the same boot agree on it, and a reboot moves it forward.
+    """
+    plan = _two_boot_plan()
+    # Boot 1 launches at minutes 1..20 -> last uptime 0.5 + 20*0.05 = 1.5h at minute 20.
+    _write_boot_report(
+        tmp_path / plan["boots"][0]["report"],
+        verdicts=["stable"] * _LAUNCHES,
+        start_minute=0,
+        uptime_start=0.5,
     )
-    _write_report(
-        tmp_path / plan["trials"][1]["report"],
-        verdict="froze",
-        started_at_utc="2026-07-22T12:01:00Z",
-        uptime_h=0.10,
+    # Boot 2's first launch is 41 min later; uptime advanced by exactly the same 41 min
+    # (1.5h + 0.6833h = 2.1833h, minus the +0.05 the writer adds for launch 1) -> no reboot.
+    _write_boot_report(
+        tmp_path / plan["boots"][1]["report"],
+        verdicts=["stable"] * _LAUNCHES,
+        start_minute=60,
+        uptime_start=1.5 + (41 / 60) - 0.05,
     )
-    with pytest.raises(ValueError, match="nondecreasing|reboot"):
+    with pytest.raises(ValueError, match="share a machine boot epoch"):
         load_observations(plan, tmp_path)
 
 
-@pytest.mark.parametrize(
-    ("successes", "total", "expected"),
-    [(0, 20, (0.0, 0.161125)), (10, 20, (0.299298, 0.700702)), (20, 20, (0.838875, 1.0))],
-)
-def test_wilson_interval_known_values(
-    successes: int, total: int, expected: tuple[float, float]
-) -> None:
-    actual = wilson_interval(successes, total)
-    assert actual == pytest.approx(expected, abs=1e-6)
+def test_report_names_are_namespaced_to_their_plan() -> None:
+    """Codex #708: two same-seed plans must not collide in one reports directory.
+
+    Deterministic `boot-NNN-condition.json` names meant a second run's `analyze` could silently
+    consume the FIRST experiment's reports and return a stale conclusion — after a dozen reboots.
+    """
+    # A real plan DRAWS its seed, so reproducibility needs both the stamp and the seed pinned.
+    pinned = dict(generated_at_utc="2026-07-28T12:00:00Z", randomization_seed=625)
+    first = build_plan(6, **pinned)
+    same = build_plan(6, **pinned)
+    later = build_plan(6, generated_at_utc="2026-07-29T12:00:00Z", randomization_seed=625)
+    other_car = build_plan(6, car="ks_mazda_mx5_cup", **pinned)
+    names = lambda plan: [boot["report"] for boot in plan["boots"]]  # noqa: E731
+    # Reproducible for identical inputs...
+    assert names(first) == names(same)
+    # ...and distinct for a different generation time or launch config, even at the same seed.
+    assert set(names(first)).isdisjoint(names(later))
+    assert set(names(first)).isdisjoint(names(other_car))
+    assert first["randomization_seed"] == later["randomization_seed"]
 
 
-def test_fisher_exact_matches_known_tables_and_is_symmetric() -> None:
-    # Canonical tea-tasting table: [[1, 9], [11, 3]].
-    assert fisher_exact_two_sided(1, 10, 11, 14) == pytest.approx(0.002759456, abs=1e-9)
-    assert fisher_exact_two_sided(11, 14, 1, 10) == pytest.approx(0.002759456, abs=1e-9)
-    assert fisher_exact_two_sided(5, 10, 5, 10) == 1.0
+def test_run_id_covers_every_plan_input_and_gets_fresh_entropy() -> None:
+    """Codex #708: a same-tick regeneration must not reuse the namespace.
+
+    `generated_at_utc` is only second-resolution, and a collision is expensive — the second
+    physical run burns a whole boot's launch budget before the exclusive report write fails.
+    """
+    pinned = dict(generated_at_utc="2026-07-28T12:00:00Z", randomization_seed=625)
+    baseline = build_plan(6, **pinned)["run_id"]
+    # Deterministic when the caller pins the inputs (reproducing a known plan, tests).
+    assert build_plan(6, **pinned)["run_id"] == baseline
+    # Launch parameters that used to be omitted from the hash now change the namespace.
+    assert build_plan(6, stability_window=99.0, **pinned)["run_id"] != baseline
+    assert build_plan(6, go_live_timeout=99.0, **pinned)["run_id"] != baseline
+    # The nonce is what breaks a same-second collision: identical inputs AND an identical
+    # pinned timestamp still separate once the nonce differs.
+    assert (
+        build_plan(6, run_nonce="a", **pinned)["run_id"]
+        != build_plan(6, run_nonce="b", **pinned)["run_id"]
+    )
+    # A real run pins nothing, so two plans generated inside one tick cannot share a namespace.
+    assert build_plan(6)["run_id"] != build_plan(6)["run_id"]
+
+
+def test_reboot_is_accepted_even_when_the_operator_waits_a_long_time(tmp_path: Path) -> None:
+    """Qodo #708: a real reboot after a long wait can leave uptime numerically HIGHER.
+
+    The earlier magnitude check (`later.first_uptime < earlier.last_uptime`) false-rejected
+    this, which would make an already-completed 12-reboot experiment un-analyzable.
+    """
+    plan = _two_boot_plan()
+    # Boot 1 ends at uptime 1.5h.
+    _write_boot_report(
+        tmp_path / plan["boots"][0]["report"],
+        verdicts=["stable"] * _LAUNCHES,
+        start_minute=0,
+        uptime_start=0.5,
+    )
+    # Reboot, then the operator leaves the rig up overnight before starting boot 2, so its
+    # first launch sits at uptime 9.0h — HIGHER than boot 1's last (1.5h) — yet uptime clearly
+    # did not track the ~16h of wall clock since boot 1's final launch.
+    _write_boot_report(
+        tmp_path / plan["boots"][1]["report"],
+        verdicts=_stable_then_freeze(14),
+        start_minute=1000,
+        uptime_start=9.0,
+    )
+    observations = load_observations(plan, tmp_path)
+    assert observations[1].launches[0].uptime_h > observations[0].launches[-1].uptime_h
+    assert summarize_boot(observations[1]).onset_index == 14
+
+
+def test_boot_boundary_accepts_a_real_reboot(tmp_path: Path) -> None:
+    plan = _two_boot_plan()
+    _write_boot_report(
+        tmp_path / plan["boots"][0]["report"],
+        verdicts=["stable"] * _LAUNCHES,
+        start_minute=0,
+        uptime_start=2.0,
+    )
+    _write_boot_report(
+        tmp_path / plan["boots"][1]["report"],
+        verdicts=_stable_then_freeze(14),
+        start_minute=200,
+        uptime_start=0.1,
+    )
+    observations = load_observations(plan, tmp_path)
+    assert len(observations) == 2
+    assert summarize_boot(observations[1]).onset_index == 14
+
+
+def test_mid_boot_uptime_drop_is_refused(tmp_path: Path) -> None:
+    plan = _two_boot_plan()
+    path = tmp_path / plan["boots"][0]["report"]
+    _write_boot_report(path, verdicts=["stable"] * _LAUNCHES, start_minute=0, uptime_start=0.5)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["attempts_log"][10]["uptime_h"] = 0.01
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="nondecreasing within a boot"):
+        load_observations(plan, tmp_path, require_complete=False)
+
+
+def test_report_launch_must_match_plan(tmp_path: Path) -> None:
+    plan = _two_boot_plan()
+    wrong = _launch_config()
+    wrong["car"] = "wrong_car"
+    _write_boot_report(
+        tmp_path / plan["boots"][0]["report"],
+        verdicts=["stable"] * _LAUNCHES,
+        start_minute=0,
+        uptime_start=0.5,
+        launch=wrong,
+    )
+    with pytest.raises(ValueError, match="launch.car"):
+        load_observations(plan, tmp_path, require_complete=False)
+
+
+# ------------------------------------------------------------------ boot summary
+
+
+def test_onset_index_and_fixed_burst_window_start_at_onset() -> None:
+    # Reproduces the #668 graceful battery shape: 13 clean, then 14/15 froze, then stable.
+    verdicts = ["stable"] * 13 + ["froze", "froze", "stable"] + ["stable"] * 4
+    summary = summarize_boot(_boot(1, "overlays_on", verdicts))
+    assert summary.onset_index == 14
+    assert summary.onset_censored is False
+    assert summary.onset_value == 14
+    # Fixed window is launches 14..19 inclusive -> 6 launches, 2 freezes (NOT to the boot end).
+    assert summary.burst_window == POST_ONSET_WINDOW
+    assert summary.burst_window_complete is True
+    assert summary.post_onset_launches == 6
+    assert summary.post_onset_freezes == 2
+    assert summary.post_onset_burst_rate == pytest.approx(2 / 6)
+    assert summary.usable is True
+
+
+def test_fixed_window_gives_equal_exposure_regardless_of_onset() -> None:
+    """Codex #708: an early-onset boot must not get a longer follow-up than a late-onset one.
+
+    One freeze at onset then all stable: with a to-the-end window these would report 1/15 vs
+    1/3; with the fixed window both report 1/6.
+    """
+    early = ["stable"] * 5 + ["froze"] + ["stable"] * 14
+    late = ["stable"] * 17 + ["froze"] + ["stable"] * 2
+    early_summary = summarize_boot(_boot(1, "overlays_on", early))
+    late_summary = summarize_boot(_boot(2, "overlays_off", late))
+    assert early_summary.post_onset_launches == POST_ONSET_WINDOW
+    assert early_summary.post_onset_burst_rate == pytest.approx(1 / POST_ONSET_WINDOW)
+    # The late boot's window runs past the end of the boot -> no secondary observation at all,
+    # rather than a short window masquerading as a comparable one.
+    assert late_summary.burst_window_complete is False
+    assert late_summary.post_onset_burst_rate is None
+    assert late_summary.onset_index == 18  # the primary endpoint is unaffected
+
+
+def test_censored_boot_gets_a_surrogate_beyond_every_observable_onset() -> None:
+    summary = summarize_boot(_boot(1, "overlays_off", ["stable"] * _LAUNCHES))
+    assert summary.onset_index is None
+    assert summary.onset_censored is True
+    assert summary.onset_value == _LAUNCHES + 1
+    assert summary.onset_ambiguous is False
+    assert summary.post_onset_launches == 0
+    assert summary.post_onset_burst_rate is None
+    assert summary.usable is True
+
+
+def test_censored_boot_containing_never_live_is_also_ambiguous() -> None:
+    """Codex + Qodo #708: censoring is only known in DELIVERED cycles.
+
+    "No freeze in N launches" bounds the onset above the number of cycles actually delivered,
+    which is unknown when any never_live is present — so N+1 would overstate how long that arm
+    stayed clean, and would bias the comparison if never_live rates differ by arm.
+    """
+    verdicts = ["stable"] * (_LAUNCHES - 1) + ["never_live"]
+    summary = summarize_boot(_boot(1, "overlays_off", verdicts))
+    assert summary.onset_index is None
+    assert summary.onset_censored is True
+    assert summary.never_live_before_onset == 1
+    assert summary.onset_ambiguous is True
+
+
+def test_never_live_before_onset_makes_the_onset_ambiguous() -> None:
+    """Codex #708: a never_live record does not prove a launch cycle reached AC.
+
+    ``resilient_launch`` returns NEVER_LIVE both when acs.exe appeared then exited (a cycle
+    happened) and when Content Manager was absent or ``launch()`` raised (nothing spawned),
+    and the report schema cannot tell them apart. So the onset's position in the accumulator's
+    own count is unknown and the boot must not score the primary endpoint.
+    """
+    verdicts = ["stable"] * 9 + ["never_live"] + ["froze"] + ["stable"] * 9
+    summary = summarize_boot(_boot(1, "overlays_on", verdicts))
+    assert summary.onset_index == 11
+    assert summary.never_live_before_onset == 1
+    assert summary.onset_ambiguous is True
+    # Still a usable boot for reporting; it just cannot contribute an onset observation.
+    assert summary.usable is True
+
+
+def test_never_live_after_onset_leaves_the_onset_unambiguous() -> None:
+    verdicts = ["stable"] * 5 + ["froze"] + ["never_live"] + ["stable"] * 13
+    summary = summarize_boot(_boot(1, "overlays_on", verdicts))
+    assert summary.onset_index == 6
+    assert summary.onset_ambiguous is False
+    # Codex #708: dropping the never_live from the denominator would give 5 launches of
+    # exposure instead of the pre-registered 6, so arm-specific delivery failures could
+    # manufacture a burst difference. The window is voided instead.
+    assert summary.burst_window_complete is False
+    assert summary.post_onset_burst_rate is None
+
+
+def test_never_live_heavy_boot_is_unusable_not_scored() -> None:
+    never_live = int(MAX_NEVER_LIVE_FRACTION * _LAUNCHES) + 1
+    verdicts = ["never_live"] * never_live + ["stable"] * (_LAUNCHES - never_live)
+    summary = summarize_boot(_boot(1, "overlays_on", verdicts))
+    assert summary.usable is False
+    assert summary.unusable_reason == "never_live_fraction_exceeded"
+
+
+def test_wedged_init_counts_as_onset() -> None:
+    verdicts = ["stable"] * 5 + ["wedged_init"] + ["stable"] * 14
+    assert summarize_boot(_boot(1, "overlays_on", verdicts)).onset_index == 6
+
+
+# -------------------------------------------------------------------- statistics
 
 
 def test_paired_exact_uses_only_discordant_pairs() -> None:
@@ -220,192 +573,351 @@ def test_paired_exact_uses_only_discordant_pairs() -> None:
     assert paired_exact_two_sided(5, 5) == 1.0
 
 
-def test_analysis_counts_both_freeze_buckets_and_reports_no_measurable_effect() -> None:
-    observations: list[Observation] = []
-    for index in range(20):
-        for condition, verdict in (
-            ("overlays_on", "froze" if index < 10 else "stable"),
-            ("overlays_off", "wedged_init" if index < 10 else "stable"),
-        ):
-            observations.append(
-                Observation(
-                    trial=len(observations) + 1,
-                    condition=condition,
-                    verdict=verdict,
-                    started_at_utc=f"2026-07-22T12:{len(observations):02d}:00Z",
-                    elapsed_s=10.0,
-                    uptime_h=1.0 + len(observations) / 60,
-                )
-            )
-    result = analyze(observations)
+def test_block_permutation_matches_the_randomization_reference_set() -> None:
+    # All differences same sign -> only the two all-same-sign flips are as extreme: 2/2**n.
+    assert exact_block_permutation_two_sided([3.0] * 6) == pytest.approx(2 / 64)
+    assert exact_block_permutation_two_sided([-3.0] * 6) == pytest.approx(2 / 64)
+    # 5 blocks cannot reach alpha=0.05 even under perfect separation -> hence the floor of 6.
+    assert exact_block_permutation_two_sided([3.0] * 5) == pytest.approx(2 / 32)
+    assert 2 / 32 > 0.05 >= 2 / 64
+    # Symmetric/no-signal data returns 1.0.
+    assert exact_block_permutation_two_sided([0.0, 0.0, 0.0]) == 1.0
+
+
+def test_block_permutation_guards_its_enumeration() -> None:
+    with pytest.raises(ValueError, match="at least one block"):
+        exact_block_permutation_two_sided([])
+    with pytest.raises(ValueError, match="assignments"):
+        exact_block_permutation_two_sided([1.0] * 8, max_permutations=10)
+
+
+def test_exact_rank_sum_known_values_and_ties() -> None:
+    assert exact_rank_sum_two_sided([1, 2], [3, 4]) == pytest.approx(2 / 6)
+    assert exact_rank_sum_two_sided([1, 2, 3, 4], [5, 6, 7, 8]) == pytest.approx(2 / 70)
+    assert exact_rank_sum_two_sided([5, 6, 7, 8], [1, 2, 3, 4]) == pytest.approx(2 / 70)
+    assert exact_rank_sum_two_sided([1, 1], [1, 1]) == 1.0
+    with pytest.raises(ValueError, match="permutations"):
+        exact_rank_sum_two_sided([1] * 12, [2] * 12, max_permutations=10)
+    with pytest.raises(ValueError, match="non-empty"):
+        exact_rank_sum_two_sided([], [1, 2])
+
+
+# ---------------------------------------------------------------------- analysis
+
+
+def test_analysis_reports_no_measurable_effect_when_arms_match() -> None:
+    boots = _blocks([8, 10, 12, 9, 11, 13], [8, 10, 12, 9, 11, 13])
+    result = analyze(boots)
     assert result["schema"] == ANALYSIS_SCHEMA
-    assert result["arms"]["overlays_on"]["freeze_count"] == 10
-    assert result["arms"]["overlays_off"]["freeze_count"] == 10
+    assert result["usable_blocks"] == 6
+    assert result["randomization_reference_set"] == 64
+    assert result["onset_block_permutation_two_sided_p"] == pytest.approx(1.0)
+    assert result["median_onset_difference_off_minus_on"] == 0
     assert result["conclusion"] == "no_measurable_effect"
-    assert "Fisher exact" in render_markdown(result)
+    assert "PRIMARY" in render_markdown(result)
 
 
-def test_never_live_is_separate_and_cannot_complete_the_primary_endpoint() -> None:
-    observations: list[Observation] = []
-    for pair in range(20):
-        for condition in ("overlays_on", "overlays_off"):
-            observations.append(
-                Observation(
-                    trial=len(observations) + 1,
-                    condition=condition,
-                    verdict=(
-                        "never_live" if pair == 0 and condition == "overlays_on" else "stable"
-                    ),
-                    started_at_utc=f"2026-07-22T12:{len(observations):02d}:00Z",
-                    elapsed_s=10.0,
-                    uptime_h=1.0,
-                )
-            )
-    result = analyze(observations)
-    assert result["arms"]["overlays_on"]["total"] == 20
-    assert result["arms"]["overlays_on"]["analyzable_total"] == 19
-    assert result["arms"]["overlays_on"]["never_live"] == 1
-    assert result["paired_sensitivity"]["excluded_never_live_pairs"] == 1
+def test_analysis_detects_overlays_off_delaying_onset() -> None:
+    boots = _blocks([6, 7, 8, 6, 7, 8], [15, 16, 17, 15, 16, 17])
+    result = analyze(boots)
+    assert result["onset_block_permutation_two_sided_p"] == pytest.approx(2 / 64)
+    assert result["median_onset_difference_off_minus_on"] == pytest.approx(9.0)
+    assert result["conclusion"] == "overlays_off_delays_onset"
+    assert result["sensitivity"]["sign_test"]["overlays_off_later_onset_blocks"] == 6
+    assert result["sensitivity"]["onset_rank_sum_two_sided_p"] is not None
+    assert result["onset_p_is_bound"] is False
+
+
+def test_analysis_detects_overlays_off_accelerating_onset() -> None:
+    boots = _blocks([15, 16, 17, 15, 16, 17], [6, 7, 8, 6, 7, 8])
+    result = analyze(boots)
+    assert result["conclusion"] == "overlays_off_accelerates_onset"
+    assert result["sensitivity"]["sign_test"]["overlays_off_earlier_onset_blocks"] == 6
+
+
+def test_censoring_marks_the_p_value_as_a_bound() -> None:
+    boots: list[BootObservation] = []
+    for on_onset in (6, 7, 8, 6, 7, 8):
+        boots.append(_boot(len(boots) + 1, "overlays_on", _stable_then_freeze(on_onset)))
+        boots.append(_boot(len(boots) + 1, "overlays_off", ["stable"] * _LAUNCHES))
+    result = analyze(boots)
+    assert result["censored_boots"] == 6
+    assert result["onset_p_is_bound"] is True
+    assert result["arms"]["overlays_off"]["observed_onsets"] == ()
+    assert result["arms"]["overlays_off"]["median_burst_rate"] is None
+    assert result["conclusion"] == "overlays_off_delays_onset"
+
+
+def test_doubly_censored_blocks_refuse_a_directional_conclusion() -> None:
+    """Codex #708: substituting N+1 is a BOUND, not an observation.
+
+    With exactly one censored boot per block the substitution still gets the sign right, so a
+    direction is claimable. With BOTH boots censored the true difference is unconstrained in
+    either direction, so the summed statistic cannot support a direction — the p-value stays
+    valid, but the conclusion must say so rather than pick a side.
+    """
+    boots: list[BootObservation] = []
+    # Six singly-censored blocks (off never freezes) carry a clear positive effect...
+    for on_onset in (6, 7, 8, 6, 7, 8):
+        boots.append(_boot(len(boots) + 1, "overlays_on", _stable_then_freeze(on_onset)))
+        boots.append(_boot(len(boots) + 1, "overlays_off", ["stable"] * _LAUNCHES))
+    # ...and a seventh block with BOTH arms censored, whose true difference is unconstrained.
+    # Seven blocks keep p (4/128 = 0.03125) under alpha so the direction check is what fires.
+    boots.append(_boot(len(boots) + 1, "overlays_on", ["stable"] * _LAUNCHES))
+    boots.append(_boot(len(boots) + 1, "overlays_off", ["stable"] * _LAUNCHES))
+    result = analyze(boots)
+    assert result["usable_blocks"] == 7
+    assert result["onset_block_permutation_two_sided_p"] < 0.05
+    assert result["onset_block_permutation_two_sided_p"] is not None
+    assert result["effect_direction_determined"] is False
+    assert result["blocked_onset_effect_lower_bound"] is None
+    assert result["conclusion"] == "effect_direction_indeterminate_under_censoring"
+    assert "DIRECTION INDETERMINATE" in render_markdown(result)
+
+
+def test_conclusion_direction_comes_from_the_blocked_statistic() -> None:
+    """Codex #708: the marginal arm medians can disagree in sign with the tested statistic."""
+    boots = _blocks([6, 7, 8, 6, 7, 8], [15, 16, 17, 15, 16, 17])
+    result = analyze(boots)
+    # The tested statistic is the SUM of within-block differences, and it drives the direction.
+    assert result["blocked_onset_effect_off_minus_on"] == pytest.approx(
+        sum(b["onset_difference"] for b in result["blocks"])
+    )
+    assert result["blocked_onset_effect_off_minus_on"] > 0
+    assert result["conclusion"] == "overlays_off_delays_onset"
+    # The marginal median difference is still reported, but only as a descriptive figure.
+    assert result["median_onset_difference_off_minus_on"] is not None
+    assert "not the direction source" in render_markdown(result)
+
+
+def test_short_boots_cannot_claim_the_endpoint_even_with_enough_blocks() -> None:
+    """Codex #708: a block floor alone is not eligibility — each boot must be long enough."""
+    short = MIN_LAUNCHES_PER_BOOT - 4
+    boots: list[BootObservation] = []
+    for on_onset, off_onset in zip((3, 4, 5, 3, 4, 5), (9, 10, 11, 9, 10, 11), strict=True):
+        boots.append(
+            _boot(len(boots) + 1, "overlays_on", _stable_then_freeze(on_onset, total=short))
+        )
+        boots.append(
+            _boot(len(boots) + 1, "overlays_off", _stable_then_freeze(off_onset, total=short))
+        )
+    result = analyze(boots)
+    assert result["usable_blocks"] == 6  # enough blocks...
+    assert result["short_boots_below_launch_floor"] == 12  # ...but every boot is too short
     assert result["conclusion"] == "insufficient_sample"
 
 
-def test_analysis_detects_material_lower_off_rate() -> None:
-    pairs: list[tuple[str, str]] = []
-    for index in range(20):
-        pairs.extend(
-            [
-                ("overlays_on", "froze" if index < 16 else "stable"),
-                ("overlays_off", "froze" if index < 4 else "stable"),
-            ]
-        )
-    observations = tuple(
-        Observation(
-            trial=index + 1,
-            condition=condition,
-            verdict=verdict,
-            started_at_utc=f"2026-07-22T12:{index:02d}:00Z",
-            elapsed_s=10.0,
-            uptime_h=2.0,
-        )
-        for index, (condition, verdict) in enumerate(pairs)
-    )
-    result = analyze(observations)
-    assert result["fisher_exact_two_sided_p"] < 0.001
-    assert result["risk_difference_off_minus_on"] == pytest.approx(-0.6)
-    assert result["conclusion"] == "overlays_off_lower_freeze_rate"
-    assert result["paired_sensitivity"]["exact_two_sided_p"] < 0.001
+def test_differential_exclusion_refuses_to_carry_a_treatment_claim() -> None:
+    """Codex #708: if the treatment changes who gets excluded, the test is no longer exact.
+
+    The permutation test is exact for the SHARP null — under it each boot's outcome, and so
+    whether it is excluded, is fixed regardless of labels. But an arm imbalance in exclusions is
+    the signature of treatment-dependent exclusion, and the test holds the survivor set fixed
+    while enumerating assignments under which a different set would have survived.
+    """
+    ambiguous = ["stable"] * 5 + ["never_live"] + ["froze"] + ["stable"] * 13
+    boots = _blocks([6, 7, 8, 6, 7, 8, 6], [15, 16, 17, 15, 16, 17, 15])
+    # Knock out ONE overlays_on boot only -> exclusions are 1 vs 0 across the arms.
+    boots[0] = _boot(1, "overlays_on", ambiguous)
+    result = analyze(boots)
+    assert result["excluded_boots_by_arm"] == {"overlays_on": 1, "overlays_off": 0}
+    assert result["exclusions_present"] is True
+    assert result["usable_blocks"] == 6  # still enough blocks...
+    assert result["onset_block_permutation_two_sided_p"] is not None  # ...and still significant
+    assert result["conclusion"] == "post_treatment_exclusions_present"
 
 
-def test_undersized_significant_run_stays_insufficient_sample() -> None:
-    """A dry-run with n=5/arm must not claim the experiment endpoint even if Fisher is tiny."""
-    observations: list[Observation] = []
-    for _index in range(5):
-        for condition, verdict in (
-            ("overlays_on", "froze"),
-            ("overlays_off", "stable"),
-        ):
-            observations.append(
-                Observation(
-                    trial=len(observations) + 1,
-                    condition=condition,
-                    verdict=verdict,
-                    started_at_utc=f"2026-07-22T12:{len(observations):02d}:00Z",
-                    elapsed_s=10.0,
-                    uptime_h=1.0 + len(observations) / 60,
-                )
-            )
-    result = analyze(observations, minimum_per_arm=5)
-    assert result["minimum_per_arm"] == MIN_TRIALS_PER_ARM
-    assert result["fisher_exact_two_sided_p"] < 0.01
+def test_balanced_exclusions_are_still_withheld() -> None:
+    """Codex + Qodo #708: EQUAL exclusion counts do not prove treatment-independence.
+
+    Equal marginals are consistent with treatment-dependent missingness landing in different
+    blocks, and every exclusion here is decided from a post-treatment outcome. The mechanism
+    cannot be modelled from the reports, so any exclusion withholds the causal conclusion.
+    """
+    ambiguous = ["stable"] * 5 + ["never_live"] + ["froze"] + ["stable"] * 13
+    # 8 blocks so that knocking out one from each arm still leaves 6 usable — at 7 blocks the
+    # run would (correctly) fall under the floor and report insufficient_sample instead.
+    boots = _blocks([6, 7, 8, 6, 7, 8, 6, 7], [15, 16, 17, 15, 16, 17, 15, 16])
+    boots[0] = _boot(1, "overlays_on", ambiguous)  # block 1 loses its on boot...
+    boots[3] = _boot(4, "overlays_off", ambiguous)  # ...block 2 loses its off boot
+    result = analyze(boots)
+    assert result["excluded_boots_by_arm"] == {"overlays_on": 1, "overlays_off": 1}
+    assert result["exclusions_present"] is True
+    assert result["conclusion"] == "post_treatment_exclusions_present"
+
+
+def test_blocks_are_paired_by_planned_number_not_adjacency() -> None:
+    """Codex #708: a partial load must not fabricate cross-block pairs.
+
+    Dropping one boot from each of two different blocks leaves an even count, and adjacency
+    pairing would then pair boots from different randomized blocks — passing the condition
+    check and feeding fabricated pairs to the exact test.
+    """
+    boots = _blocks([6, 7, 8, 6, 7, 8], [15, 16, 17, 15, 16, 17])
+    # Drop overlays_on of block 1 (boot 1) and overlays_off of block 2 (boot 4). 10 boots left.
+    partial = [boot for boot in boots if boot.boot not in {1, 4}]
+    assert len(partial) % 2 == 0
+    result = analyze(partial)
+    reasons = {block["block"]: block["unusable_reason"] for block in result["blocks"]}
+    assert reasons[1] == "missing_overlays_on_boot"
+    assert reasons[2] == "missing_overlays_off_boot"
+    # Only the four intact blocks score — not five fabricated ones.
+    assert result["usable_blocks"] == 4
     assert result["conclusion"] == "insufficient_sample"
 
 
-def test_duplicate_timestamps_accepted_with_equal_rounded_uptime(
-    tmp_path: Path,
-) -> None:
-    plan = build_plan(1, allow_undersized=True)
-    stamp = "2026-07-22T12:00:00Z"
-    _write_report(
-        tmp_path / plan["trials"][0]["report"],
-        verdict="never_live",
-        started_at_utc=stamp,
-        uptime_h=1.0,
-    )
-    _write_report(
-        tmp_path / plan["trials"][1]["report"],
-        verdict="never_live",
-        started_at_utc=stamp,
-        uptime_h=1.0,
-    )
-    observations = load_observations(plan, tmp_path)
-    assert len(observations) == 2
+def test_missing_reports_count_as_post_treatment_exclusions() -> None:
+    """Codex + Qodo #708: a missing report is an exclusion whose reason is unobservable.
+
+    `analyze` only sees loaded boots, so a partially-loaded block would slip past the exclusion
+    gate, and a block with BOTH reports absent would not appear at all. An overscheduled run
+    could then keep enough intact blocks and emit a directional causal conclusion despite
+    outcome- or treatment-dependent missingness.
+    """
+    boots = _blocks([6, 7, 8, 6, 7, 8, 6, 7], [15, 16, 17, 15, 16, 17, 15, 16])
+    # Block 1 loses one boot; block 2 loses BOTH (so it vanishes from the observations entirely).
+    partial = [boot for boot in boots if boot.boot not in {1, 3, 4}]
+    result = analyze(partial, expected_blocks=8)
+    assert result["incomplete_blocks"] == 1  # block 1, seen but half-loaded
+    assert result["missing_blocks"] == 1  # block 2, invisible without the plan's block count
+    assert result["exclusions_present"] is True
+    assert result["usable_blocks"] == 6  # enough intact blocks to have concluded...
+    assert result["conclusion"] == "post_treatment_exclusions_present"  # ...but it must not
 
 
-def test_report_launch_must_match_plan(tmp_path: Path) -> None:
-    plan = build_plan(1, allow_undersized=True)
-    _write_report(
-        tmp_path / plan["trials"][0]["report"],
-        verdict="stable",
-        started_at_utc="2026-07-22T12:00:00Z",
-        uptime_h=1.0,
-        launch={
-            "car": "wrong_car",
-            "track": "spa",
-            "layout": None,
-            "stability_window": 140.0,
-            "go_live_timeout": DEFAULT_GO_LIVE_TIMEOUT,
-            "trials_per_invocation": 1,
-        },
-    )
-    with pytest.raises(ValueError, match="launch.car"):
-        load_observations(plan, tmp_path, require_complete=False)
+def test_censoring_outside_the_test_does_not_mark_the_p_value_bound() -> None:
+    """Codex #708: a censored boot whose partner was excluded never reached the test."""
+    ambiguous = ["stable"] * 5 + ["never_live"] + ["froze"] + ["stable"] * 13
+    boots = _blocks([6, 7, 8, 6, 7, 8], [15, 16, 17, 15, 16, 17])
+    boots[0] = _boot(1, "overlays_on", ambiguous)  # drops block 1 from the test...
+    boots[1] = _boot(2, "overlays_off", ["stable"] * _LAUNCHES)  # ...and its censored partner
+    result = analyze(boots)
+    assert result["censored_boots"] == 1  # the arm-level count still sees it
+    assert result["censored_boots_in_test"] == 0  # but it never entered the primary test
+    assert result["onset_p_is_bound"] is False
+    assert "BOUND" not in render_markdown(result)
 
 
-def test_overscheduled_plan_can_absorb_never_live() -> None:
-    """Scheduled n can exceed the analyzable floor so never_live does not auto-fail the run."""
-    observations: list[Observation] = []
-    for _index in range(21):
-        for condition, verdict in (
-            ("overlays_on", "never_live" if _index == 0 else "stable"),
-            ("overlays_off", "stable"),
-        ):
-            observations.append(
-                Observation(
-                    trial=len(observations) + 1,
-                    condition=condition,
-                    verdict=verdict,
-                    started_at_utc=f"2026-07-22T12:{len(observations):02d}:00Z",
-                    elapsed_s=10.0,
-                    uptime_h=1.0 + len(observations) / 60,
-                )
-            )
-    # 21 scheduled / arm, one never_live on overlays_on → 20 analyzable.
-    result = analyze(observations, minimum_per_arm=MIN_TRIALS_PER_ARM)
-    assert result["arms"]["overlays_on"]["analyzable_total"] == 20
+def test_zero_difference_blocks_do_not_inflate_the_power_floor() -> None:
+    """Self-hosted reviewer #708 HIGH: tied blocks carry no information.
+
+    Flipping a zero-difference block's sign leaves the permutation sum unchanged, so it doubles
+    the extreme count and the reference set alike and cancels. Counting it toward the floor let
+    an underpowered run pass the eligibility check and then report `no_measurable_effect` for a
+    p it could never have driven under alpha — the exact false-negative path this redesign
+    exists to prevent.
+    """
+    # 5 same-sign informative blocks + 1 block whose arms tie -> 6 usable, 5 informative.
+    boots = _blocks([6, 7, 8, 6, 7, 9], [15, 16, 17, 15, 16, 9])
+    result = analyze(boots)
+    assert result["usable_blocks"] == 6  # the naive floor check would have passed here
+    assert result["informative_blocks"] == 5
+    # Best attainable is 2/2**5 = 0.0625, NOT 2/2**6 = 0.03125 ...
+    assert result["smallest_attainable_two_sided_p"] == pytest.approx(2 / 32)
+    # ... and the observed p indeed cannot clear alpha, so this must not read as "no effect".
+    assert result["onset_block_permutation_two_sided_p"] == pytest.approx(4 / 64)
+    assert result["conclusion"] == "insufficient_sample"
+    # A refusal must say what it would take, not just refuse: 2/2**k <= 0.05 needs k >= 6.
+    assert result["informative_blocks_required"] == 6
+    assert "NEEDS 6 informative blocks" in render_markdown(result)
+
+
+def test_all_tied_blocks_still_read_as_no_measurable_effect() -> None:
+    """The carve-out: genuinely identical arms are a null result, not an underpowered one."""
+    boots = _blocks([8, 10, 12, 9, 11, 13], [8, 10, 12, 9, 11, 13])
+    result = analyze(boots)
+    assert result["informative_blocks"] == 0
+    assert result["surrogate_tied_blocks"] == 0  # every tie was OBSERVED
+    assert result["smallest_attainable_two_sided_p"] is None
     assert result["conclusion"] == "no_measurable_effect"
 
 
-def test_all_never_live_arm_reports_insufficient_sample() -> None:
-    observations: list[Observation] = []
-    for _index in range(20):
-        for condition, verdict in (
-            ("overlays_on", "never_live"),
-            ("overlays_off", "stable"),
-        ):
-            observations.append(
-                Observation(
-                    trial=len(observations) + 1,
-                    condition=condition,
-                    verdict=verdict,
-                    started_at_utc=f"2026-07-22T12:{len(observations):02d}:00Z",
-                    elapsed_s=10.0,
-                    uptime_h=1.0 + len(observations) / 60,
-                )
-            )
-    result = analyze(observations)
-    assert result["arms"]["overlays_on"]["analyzable_total"] == 0
-    assert result["arms"]["overlays_on"]["never_live"] == 20
+def test_all_doubly_censored_blocks_are_not_a_null_result() -> None:
+    """Qodo #708: equal N+1 surrogates are not equal onsets.
+
+    Two censored boots tie by construction, so an all-doubly-censored run has
+    `informative_blocks == 0` and would have slipped through the carve-out to report
+    `no_measurable_effect` with p=1 — while every true onset difference is unconstrained and
+    nothing whatsoever was learned.
+    """
+    boots: list[BootObservation] = []
+    for _ in range(6):
+        boots.append(_boot(len(boots) + 1, "overlays_on", ["stable"] * _LAUNCHES))
+        boots.append(_boot(len(boots) + 1, "overlays_off", ["stable"] * _LAUNCHES))
+    result = analyze(boots)
+    assert result["informative_blocks"] == 0
+    assert result["surrogate_tied_blocks"] == 6  # every "tie" came from censoring surrogates
+    assert result["onset_block_permutation_two_sided_p"] == pytest.approx(1.0)
     assert result["conclusion"] == "insufficient_sample"
+
+
+def test_undersized_run_cannot_claim_the_endpoint() -> None:
+    """5 blocks under perfect separation still cannot reach alpha, so it must not conclude."""
+    boots = _blocks([6, 7, 8, 6, 7], [16, 17, 18, 16, 17])
+    result = analyze(boots, minimum_boots_per_arm=5)
+    assert result["minimum_boots_per_arm"] == MIN_BOOTS_PER_ARM
+    assert result["usable_blocks"] == 5
+    assert result["smallest_attainable_two_sided_p"] == pytest.approx(2 / 32)
+    assert result["onset_block_permutation_two_sided_p"] == pytest.approx(2 / 32)
+    assert result["conclusion"] == "insufficient_sample"
+
+
+def test_ambiguous_and_unusable_boots_drop_their_whole_block() -> None:
+    never_live = int(MAX_NEVER_LIVE_FRACTION * _LAUNCHES) + 1
+    broken = ["never_live"] * never_live + ["stable"] * (_LAUNCHES - never_live)
+    ambiguous = ["stable"] * 5 + ["never_live"] + ["froze"] + ["stable"] * 13
+    boots = _blocks([6, 7, 8, 6, 7, 8], [16, 17, 18, 16, 17, 18])
+    boots[0] = _boot(1, "overlays_on", broken)
+    boots[2] = _boot(3, "overlays_on", ambiguous)
+    result = analyze(boots)
+    assert result["usable_blocks"] == 4
+    assert result["ambiguous_onset_boots"] == 1
+    assert [b["unusable_reason"] for b in result["blocks"][:2]] == [
+        "unusable_boot",
+        "ambiguous_onset",
+    ]
+    assert result["conclusion"] == "insufficient_sample"
+
+
+def test_burst_endpoint_is_block_paired_not_pooled_launches() -> None:
+    """Codex #708: within-boot launches are correlated, so the burst test uses boot summaries."""
+    boots = _blocks([8, 8, 8, 8, 8, 8], [8, 8, 8, 8, 8, 8])
+    result = analyze(boots)
+    on = result["arms"]["overlays_on"]
+    assert len(on["boot_burst_rates"]) == 6
+    assert on["median_burst_rate"] == pytest.approx(on["boot_burst_rates"][0])
+    # Identical arms -> every block difference is 0 -> the permutation test returns 1.0.
+    assert result["burst_block_permutation_two_sided_p"] == pytest.approx(1.0)
+    assert all(block["burst_difference"] == 0 for block in result["blocks"])
+    # Codex #708: the secondary p can rest on fewer blocks than the primary, so it names its own.
+    assert result["burst_blocks"] == 6
+    assert "from 6 block(s))" in render_markdown(result)
+
+
+def test_secondary_endpoint_flags_when_it_rests_on_fewer_blocks() -> None:
+    """A late onset leaves no room for the burst window, so that block has no rate at all."""
+    late = _stable_then_freeze(_LAUNCHES - 1)  # window would run past the end of the boot
+    boots = _blocks([8, 8, 8, 8, 8, 8], [8, 8, 8, 8, 8, 8])
+    boots[1] = _boot(2, "overlays_off", late)
+    result = analyze(boots)
+    assert result["burst_blocks"] == 5
+    assert result["usable_blocks"] == 6
+    assert "FEWER than the 6 the primary used" in render_markdown(result)
+
+
+def test_render_markdown_flags_a_bounded_p_value() -> None:
+    boots: list[BootObservation] = []
+    for on_onset in (6, 7, 8, 6, 7, 8):
+        boots.append(_boot(len(boots) + 1, "overlays_on", _stable_then_freeze(on_onset)))
+        boots.append(_boot(len(boots) + 1, "overlays_off", ["stable"] * _LAUNCHES))
+    rendered = render_markdown(analyze(boots))
+    assert "BOUND" in rendered
+    assert "n/a" in rendered  # the fully-censored arm has no burst rate
+    assert "Pre-registered baseline onset (graceful): 14" in rendered
+    assert "non-gating" in rendered
+
+
+# --------------------------------------------------------------------------- IO
 
 
 def test_write_new_json_maps_oserror_to_valueerror(tmp_path, monkeypatch) -> None:
@@ -435,20 +947,133 @@ def test_write_new_json_is_exclusive_and_atomic(tmp_path) -> None:
     assert json.loads(path.read_text(encoding="utf-8"))["n"] == 1
 
 
-def test_plan_commands_use_windows_quoting_on_any_host(capsys, tmp_path, monkeypatch) -> None:
-    """#657 — plan paste target is the Windows rig, even when planning on macOS/Linux."""
+def test_plan_cli_prints_boot_scoped_protocol_and_windows_quoting(
+    capsys, tmp_path, monkeypatch
+) -> None:
+    """#657 — paste target is the Windows rig; #625 redesign — one command per boot."""
     from tools.ac_harness.init_perturber_ab import main
 
     monkeypatch.setattr(ab_mod, "repo_checkout_root", lambda: tmp_path)
-    monkeypatch.setattr(ab_mod, "MIN_TRIALS_PER_ARM", 2)
     out = tmp_path / ".scratch" / "plan.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    assert main(["plan", "--out", str(out), "--trials-per-arm", "2", "--seed", "1"]) == 0
+    assert (
+        main(
+            [
+                "plan",
+                "--out",
+                str(out),
+                "--boots-per-arm",
+                "6",
+                "--launches-per-boot",
+                "20",
+                "--seed",
+                "1",
+            ]
+        )
+        == 0
+    )
     printed = capsys.readouterr().out
     assert "Windows rig" in printed
+    assert "BOOT-SCOPED" in printed
+    assert "REBOOT AGAIN before re-running that boot" in printed  # abort/retry guidance
+    assert "REBOOT, then:" in printed
+    assert "--trials 20" in printed
+    assert "1 of 64 arm orders" in printed
+    assert printed.count("resilient_launch") == 12  # one invocation per boot, not per launch
     assert f"cd {tmp_path}" not in printed
     assert "planner host's absolute path" in printed
     # Spaces in tokens must use list2cmdline quoting, not shlex.
     sample = ab_mod._shell_quote("path with spaces")
     assert sample == subprocess.list2cmdline(["path with spaces"])
     assert "'" not in sample  # shlex.quote would wrap with single quotes on POSIX
+
+
+@pytest.mark.parametrize("hostile", ["x&whoami", "%USERPROFILE%", "a|b", "a^b", "a>b", 'a"b'])
+def test_pasted_commands_reject_cmd_metacharacters(hostile: str) -> None:
+    """Codex #708: list2cmdline is CRT-argv quoting, NOT cmd.exe escaping.
+
+    `&`, `|`, `^`, `<`, `>` pass through untouched and `%VAR%` expands even inside double
+    quotes, so a hostile car/track/layout or checkout path could split the pasted command.
+    Reuses the transport's existing allowlist rather than inventing a second escaping scheme.
+    """
+    assert subprocess.list2cmdline([hostile]) != ""  # sanity: it really does not escape these
+    with pytest.raises(ValueError, match="refusing to print"):
+        ab_mod._shell_quote(hostile)
+
+
+def test_build_plan_rejects_cmd_metacharacters_before_writing_anything() -> None:
+    """The failure must land before the plan artifact exists, not at print time."""
+    with pytest.raises(ValueError, match="unsafe car"):
+        build_plan(MIN_BOOTS_PER_ARM, car="ks_car&whoami")
+    with pytest.raises(ValueError, match="unsafe track"):
+        build_plan(MIN_BOOTS_PER_ARM, track="spa|calc")
+    with pytest.raises(ValueError, match="unsafe layout"):
+        build_plan(MIN_BOOTS_PER_ARM, layout="%USERPROFILE%")
+    # The real defaults must still pass.
+    assert build_plan(MIN_BOOTS_PER_ARM)["launch"]["car"]
+
+
+def test_analyze_cli_round_trip(capsys, tmp_path, monkeypatch) -> None:
+    """The consumer path: plan -> per-boot reports -> analysis, through main()."""
+    from tools.ac_harness.init_perturber_ab import main
+
+    monkeypatch.setattr(ab_mod, "repo_checkout_root", lambda: tmp_path)
+    scratch = tmp_path / ".scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    plan_path = scratch / "plan.json"
+    assert (
+        main(
+            [
+                "plan",
+                "--out",
+                str(plan_path),
+                "--boots-per-arm",
+                "6",
+                "--launches-per-boot",
+                "20",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    onsets = {
+        "overlays_on": iter([6, 7, 8, 6, 7, 8]),
+        "overlays_off": iter([15, 16, 17, 15, 16, 17]),
+    }
+    for index, boot in enumerate(plan["boots"]):
+        _write_boot_report(
+            scratch / boot["report"],
+            verdicts=_stable_then_freeze(next(onsets[boot["condition"]])),
+            start_minute=index * 100,
+            uptime_start=0.1,
+        )
+    assert main(["analyze", "--plan", str(plan_path), "--reports-dir", str(scratch)]) == 0
+    printed = capsys.readouterr().out
+    assert "overlays_off_delays_onset" in printed
+
+
+def test_plan_is_not_published_when_a_command_cannot_be_rendered(tmp_path, monkeypatch) -> None:
+    """Codex #708: an exclusive-write plan must not survive a later rendering failure.
+
+    `_output_path` accepts a `.scratch` directory containing a cmd.exe metacharacter that
+    `_shell_quote` then rejects. If the plan were written first, the retry would hit
+    "refusing to overwrite" and the operator would be stuck with an unusable artifact.
+    """
+    from tools.ac_harness.init_perturber_ab import main
+
+    monkeypatch.setattr(ab_mod, "repo_checkout_root", lambda: tmp_path)
+    hostile_dir = tmp_path / ".scratch" / "run&backup"
+    hostile_dir.mkdir(parents=True, exist_ok=True)
+    out = hostile_dir / "plan.json"
+    assert main(["plan", "--out", str(out), "--boots-per-arm", "6"]) == 2
+    assert not out.exists(), "a rejected render must leave no plan artifact behind"
+
+
+def test_analyze_cli_reports_a_clean_error_for_a_withdrawn_plan(capsys, tmp_path) -> None:
+    from tools.ac_harness.init_perturber_ab import main
+
+    stale = tmp_path / "plan.json"
+    stale.write_text(json.dumps({"schema": WITHDRAWN_PLAN_SCHEMA}), encoding="utf-8")
+    assert main(["analyze", "--plan", str(stale), "--reports-dir", str(tmp_path)]) == 2
+    assert "withdrawn" in capsys.readouterr().err

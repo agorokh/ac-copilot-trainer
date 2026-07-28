@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-27T03:35:00Z
+last_updated: 2026-07-28T11:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-672-voice-endpoint-hygiene-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-529-pace-ladder-115-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-695-qss-apex-envelope-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-693-off-rig-session0-2026-07-26.md
@@ -52,6 +53,17 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-28):** PR [#707](https://github.com/agorokh/ac-copilot-trainer/pull/707)
+MERGED [`1f5ce2b`](https://github.com/agorokh/ac-copilot-trainer/commit/1f5ce2b) — **#672
+launcher voice-endpoint hygiene, CLOSED**. Part A: `AC_COPILOT_AC_AUDIO_DEVICE` declares AC's
+output endpoint and the launcher warns (warn-only, `ok=True`, never blocks START) when the
+sidecar's live `/health` device matches it; five verdicts in `status.json`. Part B: the
+`AC_COPILOT_VOICE_BANK` arm source (env vs settings, including the set-but-blank *park*) is now
+visible on the Voice row. **Voice re-arm on the rig stays operator-gated under #627** — this is
+visibility code only. Five Codex rounds, 8 P2s, none rejected; the self-hosted daemon (now live
+on this repo, `EPIC #818 P5` cursor+grok) was clean. Detail:
+[[issue-672-voice-endpoint-hygiene-2026-07-28]].
 
 **Delivered (2026-07-26 PM):** `/autonomous-deliver 529` — **#529 G2 MET: 81.505 s at Magione**,
 under the 82.7 s Track-Titan floor (two consecutive flying laps, 0 recoveries, all archives
@@ -124,9 +136,17 @@ cyan-panel deletion + conformance lock). Issue #673 CLOSED. Detail:
 
 **Delivered (2026-07-23):** PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657)
 MERGED [`ce70add1e`](https://github.com/agorokh/ac-copilot-trainer/commit/ce70add1edaa700fefaabb27914fbb47a2edeaa2) — #625
-**driver** (honest init-perturber / overlay A/B experiment planner+analyzer). Issue #625 stays
-OPEN for the physical A/B on `pc` (operator-gated Steam/NVIDIA toggles + attached stats). Detail:
-[[issue-625-init-perturber-ab-prepared-2026-07-22]].
+**driver** (init-perturber / overlay A/B experiment planner+analyzer). Issue #625 stays
+OPEN for the physical A/B on `pc` (operator-gated Steam/NVIDIA toggles + attached stats).
+
+> **The v1 driver merged by #657 encoded a design that was withdrawn 2026-07-24** — interleaved
+> launches in ONE boot, pooled per-launch rate — which the #627/#668 accumulator refutes. PR
+> [#708](https://github.com/agorokh/ac-copilot-trainer/pull/708) **MERGED**
+> [`f65c4e1`](https://github.com/agorokh/ac-copilot-trainer/commit/f65c4e1b365244cac09e84edea373a6698db2697)
+> re-points it to boot-scoped randomized blocks (**one reboot per planned boot**, 16 boots at
+> the 8/arm default). Live runbook:
+> [[issue-625-boot-scoped-redesign-2026-07-28]]. The old detail node
+> [[issue-625-init-perturber-ab-prepared-2026-07-22]] is **superseded — do not run its protocol**.
 
 **In flight (2026-07-25):** issue [#625](https://github.com/agorokh/ac-copilot-trainer/issues/625)
 physical overlay A/B — code on `main`. #529 live gates still blocked on #627. Next ICE after

@@ -2,8 +2,10 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-27T04:30:00Z
+last_updated: 2026-07-28T11:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-625-boot-scoped-redesign-2026-07-28.md
+  - AcCopilotTrainer/03_Investigations/issue-672-voice-endpoint-hygiene-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-529-pace-ladder-115-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-695-qss-apex-envelope-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-693-off-rig-session0-2026-07-26.md
@@ -120,6 +122,98 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-28) — #625 init-perturber A/B re-pointed to the boot-scoped design (PR #708 MERGED)
+
+The merged v1 driver (PR #657) still encoded the design the 2026-07-24 reconciliation withdrew:
+interleaved single launches inside ONE boot, scored as a pooled per-launch freeze rate. Under the
+#627/#668 accumulator that returns a near-certain **false negative** — the first ~8-14 launches of
+any boot are clean in both arms — so the tool was a live trap, not merely stale. Demonstrated on
+simulated data with a large real effect (onset ~8 vs ~14): boot-scoped `p=0.03125`
+(`overlays_off_delays_onset`) vs pooled-rate `p=0.687` (`no_measurable_effect`).
+
+PR [#708](https://github.com/agorokh/ac-copilot-trainer/pull/708) **MERGED** as squash
+[`f65c4e1`](https://github.com/agorokh/ac-copilot-trainer/commit/f65c4e1b365244cac09e84edea373a6698db2697)
+(2026-07-28T13:17:54Z). It rewrites `tools/ac_harness/init_perturber_ab.py` to a
+**randomized-block, boot-scoped** design:
+
+- one boot per unit, one `resilient_launch --trials N` invocation per boot, **one reboot per boot**;
+- primary endpoint = onset launch-index via an exact **block permutation** test over the
+  `2**blocks` arm orders the randomization can emit (design-based; assumes nothing about the boots);
+- **power floor re-derived and the cost went up**: `MIN_BOOTS_PER_ARM` 4 -> **6**, because
+  `2/2**informative_blocks` is the smallest attainable two-sided p and `2/2**6 = 0.03125`.
+  Balanced counterbalancing was dropped — it shrank the reference set to 6 schedules at 4 blocks
+  (min p 0.33) and could never have reached alpha;
+- **ties cost blocks, so the default is 8/arm = 16 boots**: only a block whose two arms *differ*
+  carries information (flipping a tied block leaves the statistic unchanged). Onsets are small
+  integers so ties are expected, and a run scheduled at exactly the floor reports
+  `insufficient_sample` the moment one block ties. This is the single most likely way to waste
+  the run; the plan output and runbook both say so up front, and a short run now names how many
+  informative blocks it would need;
+- secondary = post-onset burst over a fixed 6-launch window, one rate per boot;
+- boot boundaries verified by the implied boot epoch (`started_at_utc - uptime_h`), which accepts a
+  real reboot even after a long wait and rejects two arms sharing one boot;
+- refuses to load a v1 plan, so a stale plan file cannot be analyzed by mistake.
+
+**Runbook moved.** [[issue-625-boot-scoped-redesign-2026-07-28]] is the live protocol.
+[[issue-625-init-perturber-ab-prepared-2026-07-22]] is **superseded/archived** — it told the
+operator to "reboot once, run the interleaved schedule", which would have pooled both arms onto one
+boot. That was caught by review, not by us.
+
+Review: **9 rounds, 25 findings** (Codex gating; Qodo + the self-hosted daemon advisory), all
+fixed or factually rebutted with the code reference. Several were substantive statistical
+corrections that invalidated claims the first cuts made — the seed was never actually drawn
+(so the "design-exact" claim did not hold on the default path); tied blocks were counted
+toward the power floor (a false-negative path); censored onsets were treated as exact; the
+conclusion direction came from marginal medians rather than the tested statistic. Two review
+findings were about the VAULT, not the code: the runbook and then the vault entrypoints still
+routed the next operator to the withdrawn v1 protocol. Most
+were substantive statistical corrections (direction taken from the wrong statistic; censored onsets
+treated as exact; unequal post-onset exposure; pooled Wilson on correlated launches; report
+filenames colliding across same-seed plans). Also fixed a Windows-only red on `origin/main`
+(`test_trailing_backslash_is_rejected`) that blocked a clean local `make ci-fast`.
+
+**The physical A/B has still never run — this is the remaining work on #625.** It needs operator
+sign-off on the Steam/NVIDIA toggles plus 16 reboots (8 boots per arm; the 6/arm floor is
+fragile once a block ties). Resume at [[issue-625-boot-scoped-redesign-2026-07-28]]. Follow-up [#710](https://github.com/agorokh/ac-copilot-trainer/issues/710): teach
+`resilient_launch` to record whether an attempt actually delivered an AC cycle, so
+ambiguous-onset boots stop being discarded.
+## Delivered (2026-07-28) — #672 CLOSED: launcher voice-endpoint hygiene MERGED
+
+**PR [#707](https://github.com/agorokh/ac-copilot-trainer/pull/707) MERGED** as squash
+[`1f5ce2b`](https://github.com/agorokh/ac-copilot-trainer/commit/1f5ce2b); issue
+[#672](https://github.com/agorokh/ac-copilot-trainer/issues/672) **CLOSED** 2026-07-28T11:27:12Z.
+
+**Part A** — `AC_COPILOT_AC_AUDIO_DEVICE` (env) / `ac_audio_device` (settings) declares the endpoint
+AC/FMOD plays through. The launcher compares it against the sidecar's live `/health`
+`voice.device_name` and emits a `voice_endpoint` row in `status.json`: `shared` / `distinct` /
+`undeclared` / `unknown` (voice not running) / `unverifiable` (running but the backend reports no
+device). `shared` → amber `SHARED_ENDPOINT` on the Voice row; `unverifiable` → amber
+`ENDPOINT_UNVERIFIED`. **Warn-only by construction** (`ok=True` always) — `start_sidecar` blocks on
+any not-ok preflight row and the rig ships pinned to the shared endpoint.
+
+**Part B** — `voice_bank_source` (env / settings / unset) on the Voice row and in `status.json`, so
+a bank force-armed from the environment, or *parked* by a set-but-blank `AC_COPILOT_VOICE_BANK`, is
+diagnosable. The blank case also now actually reaches the child as parked (it used to leak the
+inherited whitespace value and read as DISABLED).
+
+**Verified on the rig, through the product's own path** — not from the diff:
+real `python -m tools.rig_launcher --once` writing real `status.json`, driven against a real HTTP
+`/health` serving the rig's **verbatim** PortAudio device strings; `shared` and `distinct` both
+observed with `overall: ok`; Voice-row colors read back off the real Tk widgets (`#F4A52C` amber vs
+`#2FBE6E` green). Running it is what caught the two defects a green suite missed — see the node.
+
+**Still operator-gated:** voice re-arm on the rig and any armed-voice soak remain under #627. This
+shipped visibility only.
+
+Detail: [[issue-672-voice-endpoint-hygiene-2026-07-28]].
+
+**Two facts to carry forward:**
+- The **self-hosted reviewer daemon now reviews this repo** (Phase-2 consolidated, `cursor` +
+  `grok`, `EPIC #818 P5`) — clean on the last two SHAs. Older notes saying "does not review this
+  repo (gate vacuous)" are **stale**.
+- `make ci-fast` was **red on Windows** before this work (a `Path("C:/repo\\")` fixture only POSIX
+  can satisfy). Fixed here; if it reds again on a fresh clone, it is not this change.
 
 ## Delivered (2026-07-26 PM) — **#529 G2 MET: 80.791 s** at Magione (floor was 82.7 s); #697 entrypoint live
 
@@ -262,14 +356,14 @@ agent cannot paste itself into a blocking wait. #697 still OPEN for the script.
 both halves: the 1.15/1.20 rungs *were* driven, and no reboot was needed — a ~4 h hold carried
 ~11 landed launch cycles across two full ladders.
 
-**1. PR [#702](https://github.com/agorokh/ac-copilot-trainer/pull/702) (#697) — merge when Codex can
-review.** Head is `279af83`. Everything else is done: 0 review threads, `make ci-fast: OK`,
-72 tests, live-proven on the rig including `cleanup`/`reap`. The only blocker
-is the Codex usage-limit wall — **five** consecutive trigger+cooldown rounds
-(`03:17`, `03:36`, `03:54`, `04:09`, `04:24` UTC) each drew
-*"You have reached your Codex usage limits for code reviews"*. Re-run the atomic
-trigger/cooldown/audit block from `/resolve-pr` § Bot triggers once the quota rolls; if it still
-refuses, that is a genuine operator escalation, not an unfinished loop.
+**1. ~~PR #702 (#697) — merge when Codex can review.~~ DONE — do not carry this forward.**
+Reconciled live 2026-07-28: `gh pr view 702 --json state,mergedAt,mergeCommit` → **`MERGED`** at
+`2026-07-27T17:51:56Z`, squash [`88c1e59`](https://github.com/agorokh/ac-copilot-trainer/commit/88c1e59);
+`gh issue view 697 --json state` → **`CLOSED`**; `git grep -n remote_launcher origin/main --
+tools/ac_harness/remote_launcher.py` → `origin/main:tools/ac_harness/remote_launcher.py:1150`.
+The quota wall cleared on its own. **The Codex usage limit is transient, not a wall:** it recurred
+during PR #707 (round 4 drew the same message), and a single re-trigger one round later returned a
+normal review. Retry once before treating it as an escalation.
 
 **2. #529 — G2 is met; the remaining gates are the cold-start ones.** Still unclaimed: **G1 as
 written** (cold start on an **unseen** combo, ≤20 laps — the pace band is already cleared on the seed
@@ -438,8 +532,11 @@ Post-merge classify: **no** migrations/env/deps/workflow flags.
   G3) — L4/L0/META code is now on main via #674; gates still rig-blocked on #627.
 - Issue [#625](https://github.com/agorokh/ac-copilot-trainer/issues/625) stays **OPEN** — code is not
   the experiment. Operator steps: power on `pc`, authorize Steam/NVIDIA overlay toggles, run the
-  planned A/B schedule, attach stats/evidence to #625, then close. Detail:
-  [[issue-625-init-perturber-ab-prepared-2026-07-22]] / [[pr-657-resolve-blocked-2026-07-22]].
+  planned A/B schedule, attach stats/evidence to #625, then close. **Live runbook:**
+  [[issue-625-boot-scoped-redesign-2026-07-28]] — **one reboot per planned boot** (16 boots at the
+  default 8/arm; the floor is 6/arm but ties eat blocks, so do not plan at the minimum). [[issue-625-init-perturber-ab-prepared-2026-07-22]] is **SUPERSEDED**: its
+  "reboot once, run the interleaved schedule" steps are the withdrawn v1 protocol and would pool
+  both arms onto one boot. See also [[pr-657-resolve-blocked-2026-07-22]].
 - Next ICE backlog candidates after the 2026-07-24 steward: #675 Coach V2 (incl. calibration
   bypass Part 0), #531 Part G latency, #627 investigation continuation.
 

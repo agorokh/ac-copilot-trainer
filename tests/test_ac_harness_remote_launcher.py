@@ -403,18 +403,18 @@ def test_trailing_backslash_is_rejected(bad: str) -> None:
         rl.validate_wrapper_token(bad)
 
 
-def test_trailing_backslash_is_rejected_on_a_path() -> None:
-    """The same guard, fed a value that survives ``Path`` normalization on THIS platform.
+def test_trailing_backslash_in_a_wrapper_path_is_rejected() -> None:
+    """Same hazard on the path side — but the case must survive ``Path`` normalization.
 
-    ``validate_wrapper_path`` takes a ``Path``, and ``Path`` is separator-aware: on Windows
-    ``Path("C:/repo\\")`` normalizes to ``C:\\repo`` and the trailing separator is gone before the
-    validator ever runs, while a drive root keeps it. On POSIX ``\\`` is an ordinary filename
-    character and survives verbatim. Sharing the token parametrization made this assertion pass
-    on Linux CI and go VACUOUS on the Windows rig, where it then failed outright. The
-    ``endswith`` precondition keeps it from silently going vacuous again.
+    ``validate_wrapper_path`` guards ``str(path)``, and ``pathlib`` strips a trailing separator
+    on Windows while keeping a literal ``\\`` on POSIX. Feeding it ``Path("C:/repo\\")`` therefore
+    asserts a raise that only POSIX can produce; on the Windows rig this repo targets, that half
+    of the assertion failed. Build the input from a path whose *string* form really does end in a
+    backslash on the running platform.
     """
-    bad = Path("C:/") if os.name == "nt" else Path("repo\\")
-    assert str(bad).endswith("\\"), "precondition: the guard must actually see a trailing backslash"
+    bad = Path("C:\\") if os.name == "nt" else Path("x\\")
+    assert str(bad).endswith("\\")
+
     with pytest.raises(rl.RemoteLaunchError, match="trailing backslash"):
         rl.validate_wrapper_path("repo root", bad)
 

@@ -112,7 +112,20 @@ _IDLE_STATES = {"absent", "skipped", "loopback", "available", "stopped"}
 # States that are in-progress / attention-but-not-failure. "waiting" is NOT in
 # this set: a missing screen peer is a failure the driver must fix (the render
 # shows SCREEN WAITING in brake red), not progress.
-_WARN_STATES = {"initializing", "starting", "unavailable", "unknown"}
+# "shared_endpoint" (#672) is voice running correctly *on Assetto Corsa's own audio
+# endpoint* — amber, because it is a live FMOD/WASAPI contention risk the driver should
+# fix, but never red: the rig deliberately ships pinned there and START must still work.
+_WARN_STATES = {
+    "initializing",
+    "starting",
+    "unavailable",
+    "unknown",
+    "shared_endpoint",
+    # Voice is speaking through a backend that reports no output device (pyttsx3/SAPI), so it
+    # holds the Windows default endpoint and the own-headset invariant cannot be confirmed.
+    # Amber, not green: an unconfirmable check must not read as an all-clear (#672 / PR #707).
+    "endpoint_unverified",
+}
 
 
 def tone_for(ok: bool, state: str) -> str:
