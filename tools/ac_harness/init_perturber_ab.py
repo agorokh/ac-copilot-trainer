@@ -419,7 +419,9 @@ def build_plan(
     ]
     return {
         "schema": PLAN_SCHEMA,
-        "supersedes": WITHDRAWN_PLAN_SCHEMA,
+        # Every schema this plan supersedes, oldest first — both are rejected by `load_plan`, so
+        # the migration path is recorded rather than implied (#710 self-hosted reviewer MEDIUM).
+        "supersedes": [WITHDRAWN_PLAN_SCHEMA, SUPERSEDED_PLAN_SCHEMA],
         "issue": 625,
         "generated_at_utc": stamp,
         "design": "randomized block; one boot per unit, two boots (one per arm) per block",

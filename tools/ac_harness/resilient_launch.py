@@ -382,7 +382,11 @@ def classify(
 
 
 def cycle_delivered(samples: Sequence[Sample]) -> bool:
-    """Whether this attempt's trace proves an AC launch cycle happened. Pure — no I/O, no clock.
+    """Whether this attempt's trace **proves** an AC launch cycle happened. Pure — no I/O.
+
+    Positive evidence only: ``False`` here means "not proven", **not** "proven not to have
+    happened". Callers on the post-launch path must map that to *unknown* — see
+    :func:`_watched_delivery`. Only the pre-launch failure paths may assert non-delivery.
 
     A cycle is delivered when ``acs.exe`` actually started — that is what the #625 accumulator
     arms on. This is deliberately *not* derived from the verdict: ``NEVER_LIVE`` spans both a
@@ -720,6 +724,26 @@ class LaunchReport:
 
 def _utc_stamp(epoch_seconds: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch_seconds))
+
+
+def _watched_delivery(samples: Sequence[Sample]) -> bool | None:
+    """Delivery for an attempt that reached ``actuator.launch()``: ``True`` or **unknown**.
+
+    A watched trace can only ever *prove* delivery — it cannot prove the absence of it. Once the
+    launch URL has been handed to Content Manager, "the sampler saw nothing" is not the same
+    claim as "nothing was spawned": an ``acs.exe`` that starts and dies before publishing a
+    packet, entirely inside one inter-poll gap (an early load crash), leaves a trace identical to
+    a launch that never happened. Recording that as ``False`` would make ``summarize_boot`` skip a
+    real cycle and shift every later accumulator position — silent corruption of the very
+    endpoint this flag exists to protect (#710 Codex P1, round 4).
+
+    So ``False`` is reserved for the paths where non-delivery is **established before launch**:
+    Content Manager absent, or ``actuator.launch()`` raising. Those return it directly and are
+    exactly the "nothing was ever spawned" shapes #710 set out to separate. Anything unproven
+    here stays unknown, and the analyzer treats unknown-before-onset as ambiguous rather than
+    scoring it.
+    """
+    return True if cycle_delivered(samples) else None
 
 
 def _delivery_label(delivered: bool | None) -> str:
@@ -1660,11 +1684,11 @@ def _watch_live(  # pragma: no cover - rig-only
             pause_sink=sink,
         )
         if verdict is not LaunchVerdict.PENDING:
-            return AttemptOutcome(verdict, cycle_delivered(delivery_trace(samples)))
+            return AttemptOutcome(verdict, _watched_delivery(delivery_trace(samples)))
         if sink:
             paused = sink[-1]
         time.sleep(poll_interval)
-    return AttemptOutcome(LaunchVerdict.FROZE, cycle_delivered(delivery_trace(samples)))
+    return AttemptOutcome(LaunchVerdict.FROZE, _watched_delivery(delivery_trace(samples)))
 
 
 def _positive_float(value: str) -> float:

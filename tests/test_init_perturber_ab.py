@@ -16,6 +16,7 @@ from tools.ac_harness.init_perturber_ab import (
     MIN_BOOTS_PER_ARM,
     MIN_LAUNCHES_PER_BOOT,
     POST_ONSET_WINDOW,
+    SUPERSEDED_PLAN_SCHEMA,
     WITHDRAWN_PLAN_SCHEMA,
     BootObservation,
     LaunchObservation,
@@ -189,7 +190,7 @@ def test_randomization_reference_set_is_the_full_two_to_the_blocks() -> None:
 def test_plan_is_boot_scoped_and_records_the_operator_gate() -> None:
     plan = build_plan(6, generated_at_utc="2026-07-28T12:00:00Z")
     assert plan["schema"] == "init-perturber-ab-plan/v3"
-    assert plan["supersedes"] == WITHDRAWN_PLAN_SCHEMA
+    assert plan["supersedes"] == [WITHDRAWN_PLAN_SCHEMA, SUPERSEDED_PLAN_SCHEMA]
     assert plan["operator_owned_settings"] is True
     assert plan["protocol"]["reboot_before_every_boot"] is True
     assert plan["protocol"]["graceful_first_teardown_both_arms"] is True

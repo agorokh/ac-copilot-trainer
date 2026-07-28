@@ -43,6 +43,7 @@ from tools.ac_harness.resilient_launch import (
     _sample_now,
     _wait_process_exit,
     _watch_live,
+    _watched_delivery,
     classify,
     cycle_delivered,
     run_retry_loop,
@@ -738,6 +739,23 @@ class TestCycleDelivered:
         assert cycle_delivered(samples) is True
 
 
+def test_only_pre_launch_failures_may_assert_non_delivery():
+    """#710 Codex P1 round 4 — the three-state boundary, stated once.
+
+    `False` is a positive claim that nothing was spawned, and only the paths that return BEFORE
+    `actuator.launch()` can make it. A watched trace can prove delivery but never disprove it:
+    an acs.exe that starts and dies inside one inter-poll gap before publishing looks exactly
+    like a launch that never happened, and recording that as `False` would make the analyzer skip
+    a real cycle and shift every later accumulator position.
+    """
+    proven = trace([(0.0, 10, True), (1.0, 11, True)])
+    unproven = trace([(0.0, None, False), (1.0, None, False)])
+    assert _watched_delivery(proven) is True
+    assert _watched_delivery(unproven) is None  # NOT False
+    # The established-non-delivery value still exists — it is just not the sampler's to give.
+    assert AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=False).cycle_delivered is False
+
+
 def test_watch_live_seeds_delivery_from_the_pre_launch_baseline(monkeypatch):
     """#710 Codex P2 — a session that dies before the first sample completes still delivered.
 
@@ -789,7 +807,9 @@ def test_watch_live_without_a_baseline_cannot_see_that_movement(monkeypatch):
         stability_window=5.0,
         poll_interval=1.0,
     )
-    assert outcome == AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=False)
+    # UNKNOWN, not False: a watched trace can only prove delivery, never disprove it (#710
+    # Codex P1 round 4). Without the baseline the movement is simply invisible.
+    assert outcome == AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=None)
 
 
 def test_watch_live_reports_delivery_alongside_the_verdict(monkeypatch):
@@ -812,7 +832,9 @@ def test_watch_live_reports_delivery_alongside_the_verdict(monkeypatch):
         stability_window=5.0,
         poll_interval=1.0,
     )
-    assert outcome == AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=False)
+    # A watched trace with no positive evidence is UNKNOWN. Only the pre-launch failure paths
+    # (CM absent / launch() raised) may assert non-delivery (#710 Codex P1 round 4).
+    assert outcome == AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=None)
 
 
 class TestRetryLoop:
