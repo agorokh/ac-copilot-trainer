@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-28T16:30:00Z
+last_updated: 2026-07-28T17:05:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-703-decoupled-ladder-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-625-boot-scoped-redesign-2026-07-28.md
@@ -124,39 +124,73 @@ relates_to:
 
 # Next session handoff
 
-## IN REVIEW (2026-07-28) — #703 decoupled self-play ladder (PR #709, NOT merged)
+## Delivered (2026-07-28) — #703 CLOSED: decoupled self-play ladder (PR #709 MERGED `f9a1408`)
 
 `run_selfplay` bundled a **plant refit** and an **envelope scale step** into one iteration, so a
 falsified rung reverted a refit whose evidence was independently valid — and the top rung is by
-construction the one most likely to falsify. Iterations now alternate: a **plant** step refits and
-drives at the last *validated* scale; an **envelope** step leaves the plant untouched and drives the
-next rung. Worth ~3.5 s at identical scale on the #529 ladders, and it compounds across runs.
+construction the one most likely to falsify. Iterations now **alternate**: a **plant** step refits
+and drives at the last *validated* scale; an **envelope** step leaves the plant untouched and drives
+the next rung. Each moves exactly one knob, so a falsification names which knob it falsified.
+Report gains `ladder_mode`, `step_kind`, `falsified_component`, `refit_iterations`,
+`inherited_selfplay_merges`, `requires_rebase`, `driven_plant_fit_sha12`.
 
-Full node: [issue-703-decoupled-ladder-2026-07-28](../03_Investigations/issue-703-decoupled-ladder-2026-07-28.md).
+Worth ~3.5 s at identical scale on the #529 ladders, and it compounds across runs. Merged
+`f9a1408` 2026-07-28T16:49:59Z; issue #703 CLOSED. Post-merge classification: **no flags** (no
+migrations, env vars, deps or workflow changes). Full node:
+[issue-703-decoupled-ladder-2026-07-28](../03_Investigations/issue-703-decoupled-ladder-2026-07-28.md).
 
-**Resume pointer.** PR #709 head `607547d`; `make ci-fast` OK (3803 passed); CI green; zero blocking
-review threads; `origin/main` already merged in. Two things remain:
-
-1. **The Codex gate.** Absent for 5 of the last 7 triggers, each waited the mandatory 600 s plus
-   10–20 min of polling. Merge is deliberately blocked on it — CI green plus a clean advisory
-   self-hosted review is **not** the independent gate `resolve-pr` requires. Re-trigger
-   `@codex review`, wait, and audit review **bodies** as well as threads (one P1 this session
-   existed only in a body).
-2. **AC 5, the live proof.** A Magione ladder that retains a refit across a falsified top rung, with
-   the next run's line build reporting the lower QSS floor. Rig was free at session end. Baseline
-   captured before the work: the 911/Magione plant carries **7 self-play merges**, the last being
-   #529 ladder 3's retained `{adopted: 1, raised: 5}` (7 of 30 lateral bins measured). Suggested
-   probe: `--ggv-scale 1.0 --scale-step 0.20 --max-scale 1.20 --iterations 3 --laps 2` — 1.20
-   falsified reliably on #529, and under the decoupled ladder iteration 1 is a plant step at 1.0.
-
-**Do not** re-derive the design. Option 3 (blanket keep-the-refit) is ruled out:
+**Design settled — do not re-derive.** The issue's option 3 (blanket keep-the-refit) is ruled out:
 `merge_selfplay_model` is strictly monotone, so the keep-last-valid revert is the plant's only way
-down. The chosen option is the issue's option 2.
+down. Chosen: option 2 (decouple). The operator's proven G2 recipe was *already* a hand-run
+decoupled ladder — #529 ladder 3's rung caps at 1.15 on the first step, so both iterations drove at
+1.15 and the second was effectively refit-only. Pinned by
+`test_selfplay_reproduces_the_529_g2_recipe_unchanged`.
 
-**Cost signal worth carrying forward:** 16 review rounds, of which the decoupling itself was ~1. The
-rest was the concurrency surface that *claiming* single-knob attribution opens — once the report
-asserts a verdict belongs to a knob, every way a peer worktree can move the plant becomes a
-correctness bug. If a future change makes a similar attribution claim, budget for that.
+### ⚠️ AC 5 (live proof) is STILL OPEN — the one acceptance criterion not met
+
+No Magione ladder has yet retained a refit across a falsified top rung on the rig. Two attempts
+this session both died **before self-play started**:
+
+- `alien-703-live-20260728T165135Z` — base drive failed `stage=hijack`, *"CSP did not accept the
+  carcsw hijack"*, 1 attempt. This is the known shape-2 overlay flake (vault #466: hijack lands
+  ~1/4 on full launch cycles; **retry full cycles**). The pipeline aborted before `run_selfplay`,
+  so **the plant was never mutated** — verified still 7 merges / 7 measured lateral bins, last
+  merge `{adopted: 1, raised: 5}`.
+- A retry was launched at session end; its outcome is in
+  `.scratch/harness-evidence/alien-703-live-retry-*.log`.
+
+**Plant safety:** backed up before any live attempt to
+`plant_id/ks_porsche_911_gt3_r_2016__magione.json.bak-pre703-20260728` (7 merges verified). Restore
+from it if a future ladder corrupts the G2-winning fit.
+
+**Resume recipe** (designed to produce AC 5's exact case under the decoupled ladder):
+`--car ks_porsche_911_gt3_r_2016 --track magione --laps 2 --ggv-scale 1.0 --scale-step 0.15
+--iterations 3 --max-scale 1.2`. Expected: iter1 plant step at 1.0 refits from the base batch (likely
+a no-op on the converged plant) → falls through to the 1.15 rung; iter2 plant step refits from that
+supra-LCB evidence (should land); iter3 steps to 1.20, which falsified reliably on #529 → **the
+iter2 refit must survive**. Then a second invocation's line build should report the *lower* QSS
+floor. Budget several launch attempts for the hijack flake.
+
+### Review cost — carry this forward
+
+16 review rounds, of which the decoupling itself was ~1. The rest was the concurrency surface that
+*claiming* single-knob attribution opens: once the report asserts a verdict belongs to a knob, every
+way a peer worktree can move the plant becomes a correctness bug. Three recurring shapes, all
+self-inflicted: guards that fire only when both sides are present; fixing the symptom and leaving
+the shape; tests that silently stop testing. If a future change makes a similar attribution claim,
+budget for that.
+
+**Reviewer-process findings** (cost real rework): a fixed deadline is **not** proof of absence —
+Codex landed 46 s and 73 s after two audit windows and I twice reported "no review" wrongly; the
+self-hosted daemon (~500–700 s) landed after *every* fixed check, leaving four reviews unread, one
+of which flagged a defect a full round before Codex did. One P1 lived only in a review **body**,
+where no `reviewThreads` query would see it. **Poll after the mandatory cooldown; audit bodies as
+well as threads.**
+
+**Merged without a current-SHA Codex round.** Codex went silent for the last six triggers
+(`f02b674` → `607547d`), each waited 600 s + 10–20 min of polling; I escalated rather than merge,
+and the operator merged. At merge time: CI green, 0 blocking threads, self-hosted reviewer clean on
+both lenses (cursor + antigravity, 0 raw findings), Qodo clean.
 
 ## Delivered (2026-07-28) — #625 init-perturber A/B re-pointed to the boot-scoped design (PR #708 MERGED)
 

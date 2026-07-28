@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-28T16:30:00Z
+last_updated: 2026-07-28T17:05:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-703-decoupled-ladder-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-672-voice-endpoint-hygiene-2026-07-28.md
@@ -789,6 +789,19 @@ Part-G KPI residual). Full state:
 [`autonomous-drive-multitrack-generality-2026-06-27`](../03_Investigations/autonomous-drive-multitrack-generality-2026-06-27.md).
 
 **Infra (2026-05-20):** PR [#111](https://github.com/agorokh/ac-copilot-trainer/pull/111) closed the [#108](https://github.com/agorokh/ac-copilot-trainer/issues/108) agent-surface campaign (closeout doc only; five agent SHA alignments deferred). PR [#109](https://github.com/agorokh/ac-copilot-trainer/pull/109) memory-contract cursor rule fix remains on `main`.
+
+## Active — #703 merged, AC 5 live proof outstanding (2026-07-28)
+
+#703 (PR #709, `f9a1408`) merged and CLOSED: the self-play ladder now alternates a **plant** step
+with an **envelope** step so a falsification names its knob and a failed rung no longer discards a
+validated refit. **The one acceptance criterion still unmet is AC 5** — a live Magione ladder that
+retains a refit across a falsified top rung, and a following run whose line build reports the lower
+QSS floor.
+
+Two live attempts this session both died at `stage=hijack` before self-play started (the known
+shape-2 overlay flake, #466 — retry full cycles). The plant was never mutated and is backed up
+(`…__magione.json.bak-pre703-20260728`, 7 merges). Resume recipe and expected step sequence are in
+[Next Session Handoff](Next%20Session%20Handoff.md).
 
 ## Stream A — Rig screen Phase-2 UI (PR #91 merged — Parts A–D on `main`)
 
