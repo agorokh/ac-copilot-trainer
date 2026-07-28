@@ -469,6 +469,8 @@ class _SelfplayHarness:
         self.tmp_path = tmp_path
         self.stage_specs = list(stage_specs)  # per drive call: (exit, lap_times, archive_valids)
         self.refine_ok = refine_ok
+        # A dict applies to every refine call; a list scripts them per call (the last entry
+        # repeats), so a test can replay a real ladder whose first refit was a no-op.
         self.merge_stats = merge_stats or {
             "lateral_bins_adopted": 0,
             "lateral_bins_raised": 1,
@@ -494,7 +496,10 @@ class _SelfplayHarness:
                 self.plant_path.write_text('{"v": "peer"}', encoding="utf-8")
             if not self.refine_ok:
                 return None, {"ok": False, "reason": "batch refit degraded (test)"}
-            return {"ok": True}, {"ok": True, "selfplay_merge": dict(self.merge_stats)}
+            stats = self.merge_stats
+            if isinstance(stats, list):
+                stats = stats[min(len(self.refine_calls) - 1, len(stats) - 1)]
+            return {"ok": True}, {"ok": True, "selfplay_merge": dict(stats)}
 
         def fake_persist(
             user_dir,
@@ -615,6 +620,67 @@ def test_selfplay_ladder_alternates_one_knob_per_iteration(monkeypatch, tmp_path
     assert selfplay["refit_iterations"] == [1, 3]
     # The plant on disk is the last refined fit (no falsification -> no revert).
     assert _json.loads(harness.plant_path.read_text(encoding="utf-8")) == {"v": "iter2"}
+
+
+def test_selfplay_reproduces_the_529_g2_recipe_unchanged(monkeypatch, tmp_path):
+    """The hand-run recipe that produced G2 must drive the SAME sequence after #703.
+
+    Ladder 3 of the #529 Magione session ran ``--ggv-scale 1.0 --scale-step 0.15 --max-scale
+    1.15 --iterations 2 --laps 3`` and both iterations drove at 1.15 (the rung is capped at the
+    first step), with iteration 1's refit a no-op and iteration 2's real. That recipe IS a
+    decoupled ladder run by hand — capping the rung so the top step can never falsify is exactly
+    how the operator kept the refit — so decoupling must reproduce it rather than perturb the
+    configuration that broke the 82.7 s floor.
+    """
+    no_op = {
+        "lateral_bins_adopted": 0,
+        "lateral_bins_raised": 0,
+        "mu_lat_g_before": 1.5,
+        "mu_lat_g_after": 1.5,
+    }
+    real = {
+        "lateral_bins_adopted": 1,
+        "lateral_bins_raised": 5,
+        "mu_lat_g_before": 1.5,
+        "mu_lat_g_after": 1.5,
+    }
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [96286], [True]),  # base drive at 1.00
+            (0, [108748, 81492, 81512], [True, True, True]),  # iteration 1
+            (0, [106655, 80791, 95122], [True, True, True]),  # iteration 2
+        ],
+        merge_stats=[no_op, real],
+    )
+    args = _args(
+        tmp_path,
+        "--evidence-dir",
+        str(tmp_path / "ev"),
+        "--laps",
+        "3",
+        "--iterations",
+        "2",
+        "--ggv-scale",
+        "1.0",
+        "--scale-step",
+        "0.15",
+        "--max-scale",
+        "1.15",
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0 and report["ok"]
+    selfplay = report["selfplay"]
+    assert selfplay["stopped"] == "completed"
+    # Identical drive sequence to the recorded ladder: both iterations at the capped 1.15 rung.
+    assert [entry["ggv_scale"] for entry in selfplay["iterations"]] == [1.15, 1.15]
+    # Iteration 1's no-op refit falls through to the rung; iteration 2 is the plant step that
+    # actually raised bins — and it is retained, exactly as the live ladder recorded.
+    assert [entry["step_kind"] for entry in selfplay["iterations"]] == ["envelope", "plant"]
+    assert selfplay["refit_iterations"] == [2]
+    assert selfplay["best_lap_ms"] == 80791
+    assert _json.loads(harness.plant_path.read_text(encoding="utf-8")) == {"v": "iter1"}
 
 
 def test_selfplay_falsified_envelope_rung_keeps_the_validated_refit(monkeypatch, tmp_path):
@@ -861,13 +927,134 @@ def test_selfplay_refine_save_skipped_when_peer_updates_plant(monkeypatch, tmp_p
     entry = report["selfplay"]["iterations"][0]
     assert "save_skipped" in entry["refine"]
     assert harness.saves == 0
-    # #703: a plant step that persisted nothing falls through to the rung, so the peer-clobber
-    # guard still costs no drive — and there is no candidate that a later verdict could revert.
-    assert entry["step_kind"] == "envelope"
-    assert entry["fell_back_to_envelope"]
+    # #703 (Codex P1): the plant on disk is now the PEER's, not the one the previous drive
+    # validated. Falling through to the rung would move BOTH knobs and let a failure be blamed on
+    # the envelope, destroying the attribution this decoupling exists to guarantee — so the ladder
+    # stops instead of driving an unattributable step.
+    assert entry["skipped"] is True
+    assert "changed by a peer" in report["selfplay"]["stopped"]
+    assert "exit_code" not in entry  # never drove
     assert "reverted" not in entry
     # The peer's newer artifact survived untouched.
     assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "peer"}'
+
+
+def test_selfplay_plant_step_holds_the_scale_the_base_drive_actually_used(monkeypatch, tmp_path):
+    # #703 (Codex P1): --stint can drive the base stage at the Layer-4 pace scale instead of
+    # --ggv-scale. A plant step holds "the last validated scale", so seeding it from --ggv-scale
+    # would silently move the envelope during a plant-only iteration and misattribute its verdict.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive (ran at the stint override, not --ggv-scale)
+            (0, [93000], [True]),  # iteration 1: plant step
+        ],
+    )
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "1"
+    )
+    runner = harness.runner()
+    # Produce a real, oracle-valid base batch so iteration 1 is a genuine plant step.
+    base_dir = tmp_path / "ev" / "drive"
+    runner(["--evidence-dir", str(base_dir)])
+    selfplay = auto_alien.run_selfplay(
+        args,
+        run_stage=runner,
+        evidence_root=tmp_path / "ev",
+        user_dir=tmp_path,
+        setup_key=None,
+        setup_ini=None,
+        base_outcome=load_stage_outcome(base_dir),
+        base_scale=0.8,  # the base drive really ran here; --ggv-scale defaults to 0.9
+    )
+    assert selfplay["base"]["valid"] is True
+    assert selfplay["base_scale"] == 0.8
+    assert selfplay["ladder_base_scale"] == 0.9
+    entry = selfplay["iterations"][0]
+    assert entry["step_kind"] == "plant"
+    assert entry["ggv_scale"] == 0.8  # held at what the base drive validated, NOT 0.9
+
+
+def test_selfplay_envelope_rung_never_steps_below_the_validated_base(monkeypatch, tmp_path):
+    # #703: a --stint override can sit ABOVE the ladder's opening rungs. A "rung" that lowered the
+    # envelope would be a knob moving the wrong way, so the ladder skips to the first rung that
+    # actually exceeds the validated base scale.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),
+            (0, [93000], [True]),
+        ],
+        refine_ok=False,  # no refit -> iteration 1 falls straight through to the rung
+    )
+    args = _args(
+        tmp_path,
+        "--evidence-dir",
+        str(tmp_path / "ev"),
+        "--laps",
+        "1",
+        "--iterations",
+        "1",
+        "--scale-step",
+        "0.05",
+        "--max-scale",
+        "1.1",
+    )
+    selfplay = auto_alien.run_selfplay(
+        args,
+        run_stage=harness.runner(),
+        evidence_root=tmp_path / "ev",
+        user_dir=tmp_path,
+        setup_key=None,
+        setup_ini=None,
+        base_outcome=None,
+        base_scale=1.0,  # rungs 0.95 and 1.0 cannot raise this; the first usable rung is 1.05
+    )
+    entry = selfplay["iterations"][0]
+    assert entry["step_kind"] == "envelope"
+    assert entry["ggv_scale"] == 1.05
+
+
+def test_selfplay_reports_an_inherited_refit_as_retained(monkeypatch, tmp_path):
+    # #703 (Codex P2): the refit compounds ACROSS invocations. A run whose own plant step is a
+    # no-op still protects the inherited fit, so reporting "nothing was retained" would be false
+    # in exactly the cross-invocation case this change exists to expose.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (0, [94000], [False]),  # iteration 1: no-op refit -> rung -> falsified
+        ],
+        merge_stats={
+            "lateral_bins_adopted": 0,
+            "lateral_bins_raised": 0,
+            "mu_lat_g_before": 1.5,
+            "mu_lat_g_after": 1.5,
+        },
+    )
+    # The plant already carries two self-play merges from earlier invocations.
+    monkeypatch.setattr(
+        auto_alien,
+        "load_plant_artifact",
+        lambda *a, **kw: {
+            "fit": 1,
+            "ggv": {"model": {"provenance": {"selfplay_merges": [{"n": 1}, {"n": 2}]}}},
+        },
+    )
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0
+    selfplay = report["selfplay"]
+    assert selfplay["inherited_selfplay_merges"] == 2
+    entry = selfplay["iterations"][0]
+    assert entry["falsified_component"] == "envelope"
+    assert entry["plant_refit_retained"] == []  # none landed THIS run...
+    assert entry["inherited_selfplay_merges"] == 2  # ...but the inherited fit is still protected
 
 
 def test_selfplay_oracle_ignores_foreign_combo_archives(monkeypatch, tmp_path):
