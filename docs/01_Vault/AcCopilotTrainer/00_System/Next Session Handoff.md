@@ -138,9 +138,15 @@ PR [#708](https://github.com/agorokh/ac-copilot-trainer/pull/708) rewrites
 - primary endpoint = onset launch-index via an exact **block permutation** test over the
   `2**blocks` arm orders the randomization can emit (design-based; assumes nothing about the boots);
 - **power floor re-derived and the cost went up**: `MIN_BOOTS_PER_ARM` 4 -> **6**, because
-  `2/2**6 = 0.03125` is the smallest attainable two-sided p. The run is **12 boots / 12 reboots**,
-  not 8. Balanced counterbalancing was dropped — it shrank the reference set to 6 schedules at
-  4 blocks (min p 0.33) and could never have reached alpha;
+  `2/2**informative_blocks` is the smallest attainable two-sided p and `2/2**6 = 0.03125`.
+  Balanced counterbalancing was dropped — it shrank the reference set to 6 schedules at 4 blocks
+  (min p 0.33) and could never have reached alpha;
+- **ties cost blocks, so the default is 8/arm = 16 boots**: only a block whose two arms *differ*
+  carries information (flipping a tied block leaves the statistic unchanged). Onsets are small
+  integers so ties are expected, and a run scheduled at exactly the floor reports
+  `insufficient_sample` the moment one block ties. This is the single most likely way to waste
+  the run; the plan output and runbook both say so up front, and a short run now names how many
+  informative blocks it would need;
 - secondary = post-onset burst over a fixed 6-launch window, one rate per boot;
 - boot boundaries verified by the implied boot epoch (`started_at_utc - uptime_h`), which accepts a
   real reboot even after a long wait and rejects two arms sharing one boot;
@@ -151,7 +157,8 @@ PR [#708](https://github.com/agorokh/ac-copilot-trainer/pull/708) rewrites
 operator to "reboot once, run the interleaved schedule", which would have pooled both arms onto one
 boot. That was caught by review, not by us.
 
-Review: 4 Codex rounds, 19 findings, all fixed or factually rebutted with the code reference. Most
+Review: 6 rounds, 24 findings (Codex gating, Qodo + the self-hosted daemon advisory), all fixed
+or factually rebutted with the code reference. Most
 were substantive statistical corrections (direction taken from the wrong statistic; censored onsets
 treated as exact; unequal post-onset exposure; pooled Wilson on correlated launches; report
 filenames colliding across same-seed plans). Also fixed a Windows-only red on `origin/main`

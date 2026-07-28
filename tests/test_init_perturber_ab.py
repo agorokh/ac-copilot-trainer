@@ -739,6 +739,39 @@ def test_blocks_are_paired_by_planned_number_not_adjacency() -> None:
     assert result["conclusion"] == "insufficient_sample"
 
 
+def test_zero_difference_blocks_do_not_inflate_the_power_floor() -> None:
+    """Self-hosted reviewer #708 HIGH: tied blocks carry no information.
+
+    Flipping a zero-difference block's sign leaves the permutation sum unchanged, so it doubles
+    the extreme count and the reference set alike and cancels. Counting it toward the floor let
+    an underpowered run pass the eligibility check and then report `no_measurable_effect` for a
+    p it could never have driven under alpha — the exact false-negative path this redesign
+    exists to prevent.
+    """
+    # 5 same-sign informative blocks + 1 block whose arms tie -> 6 usable, 5 informative.
+    boots = _blocks([6, 7, 8, 6, 7, 9], [15, 16, 17, 15, 16, 9])
+    result = analyze(boots)
+    assert result["usable_blocks"] == 6  # the naive floor check would have passed here
+    assert result["informative_blocks"] == 5
+    # Best attainable is 2/2**5 = 0.0625, NOT 2/2**6 = 0.03125 ...
+    assert result["smallest_attainable_two_sided_p"] == pytest.approx(2 / 32)
+    # ... and the observed p indeed cannot clear alpha, so this must not read as "no effect".
+    assert result["onset_block_permutation_two_sided_p"] == pytest.approx(4 / 64)
+    assert result["conclusion"] == "insufficient_sample"
+    # A refusal must say what it would take, not just refuse: 2/2**k <= 0.05 needs k >= 6.
+    assert result["informative_blocks_required"] == 6
+    assert "NEEDS 6 informative blocks" in render_markdown(result)
+
+
+def test_all_tied_blocks_still_read_as_no_measurable_effect() -> None:
+    """The carve-out: genuinely identical arms are a null result, not an underpowered one."""
+    boots = _blocks([8, 10, 12, 9, 11, 13], [8, 10, 12, 9, 11, 13])
+    result = analyze(boots)
+    assert result["informative_blocks"] == 0
+    assert result["smallest_attainable_two_sided_p"] is None
+    assert result["conclusion"] == "no_measurable_effect"
+
+
 def test_undersized_run_cannot_claim_the_endpoint() -> None:
     """5 blocks under perfect separation still cannot reach alpha, so it must not conclude."""
     boots = _blocks([6, 7, 8, 6, 7], [16, 17, 18, 16, 17])

@@ -41,7 +41,7 @@ It refuses to load a v1 plan, so a stale plan file on disk cannot be analyzed by
 1. **Operator gate (unchanged).** Disabling the Steam overlay and NVIDIA ShadowPlay are
    operator-owned settings changes: explicit sign-off before toggling, restore both afterward.
 2. `python -m tools.ac_harness.init_perturber_ab plan --out .scratch/<name>.json` — prints one
-   command per planned boot. Defaults: **6 boots per arm = 12 boots**, 24 launches each.
+   command per planned boot. Defaults: **8 boots per arm = 16 boots**, 24 launches each.
 3. For **each** planned boot in order: apply that boot's two settings → **REBOOT** → run that
    boot's single printed command. **One reboot per boot** — never two arms on one boot, or the
    accumulator is pooled and the onset endpoint is void. The analysis enforces this by comparing
@@ -57,9 +57,14 @@ It refuses to load a v1 plan, so a stale plan file on disk cannot be analyzed by
 - **Primary:** onset launch-index, via an exact **block permutation** test over the `2**blocks`
   arm orders the randomization could actually have produced. Design-based — assumes nothing about
   the boots beyond the randomization performed.
-- **Power floor is real, not advisory.** The smallest attainable two-sided p is `2/2**blocks`:
-  0.0625 at 5 blocks, **0.03125 at 6**. Below 6 the tool returns `insufficient_sample` no matter
-  how cleanly the arms separate — that is why the run costs 12 boots rather than 8.
+- **Power floor is real, not advisory.** The smallest attainable two-sided p is
+  `2/2**informative_blocks`: 0.0625 at 5, **0.03125 at 6**. Below 6 the tool returns
+  `insufficient_sample` no matter how cleanly the arms separate.
+- **Ties cost blocks.** Only a block whose two arms *differ* carries information — flipping a
+  tied block's labels leaves the statistic unchanged. Onsets are small integers, so ties are
+  expected, and each one effectively removes a block. A run scheduled at exactly 6/arm reports
+  `insufficient_sample` the moment one block ties; the default is **8/arm (16 boots)** to carry
+  two ties of headroom. This is the single most likely way to waste the run.
 - **Secondary:** post-onset burst rate over a fixed 6-launch window from onset, one rate per boot.
 - It will report `insufficient_sample` if usable blocks fall below the floor (unusable or
   ambiguous-onset boots drop their whole block), and

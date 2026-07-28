@@ -108,7 +108,12 @@ DEFAULT_STABILITY_WINDOW = 140.0
 #: reference set — 6 schedules at 4 blocks, min p=0.33 — so it was dropped in favour of the
 #: textbook independent per-block randomization below.)
 MIN_BOOTS_PER_ARM = 6
-DEFAULT_BOOTS_PER_ARM = 6
+#: Default deliberately ABOVE the floor. Only blocks with a nonzero onset difference carry
+#: information, and onset ties between arms are entirely expected (onsets are small integers,
+#: and under the null the arms agree by construction) — a run scheduled at exactly the floor
+#: therefore reports ``insufficient_sample`` as soon as one block ties. Two blocks of headroom
+#: costs four extra boots and is far cheaper than re-running the whole experiment.
+DEFAULT_BOOTS_PER_ARM = 8
 #: Enumeration guard for the exact tests, and therefore the largest plan that stays analyzable.
 #: ``build_plan`` refuses anything beyond it so a costly reboot run can never be un-analyzable.
 #: The binding constraint is the PRIMARY (gating) test: it enumerates ``2**blocks``, and
@@ -1030,7 +1035,17 @@ def analyze(
     # The direction MUST come from the same within-block effect the permutation test evaluates.
     blocked_effect = math.fsum(onset_differences) if onset_differences else None
     usable_blocks = len(onset_differences)
-    smallest_attainable = 2 / 2**usable_blocks if usable_blocks else None
+    # Only blocks with a NONZERO difference carry information: flipping a zero block's sign
+    # leaves the permutation sum unchanged, so it doubles both the extreme count and the
+    # reference set and cancels. The attainable floor is therefore 2/2**informative, not
+    # 2/2**usable — quoting the latter lets an underpowered run pass the floor check and then
+    # report `no_measurable_effect` for a p it could never have driven under alpha, which is the
+    # exact false-negative path this redesign exists to prevent.
+    informative_blocks = sum(1 for value in onset_differences if abs(value) > 1e-9)
+    smallest_attainable = 2 / 2**informative_blocks if informative_blocks else None
+    # Smallest informative-block count that could reach alpha, so a short run says what it needs
+    # instead of just refusing. 2/2**k <= alpha  <=>  k >= log2(2/alpha).
+    informative_required = math.ceil(math.log2(2.0 / alpha))
     scoring_boots = [boot for boot in boots if _scores_onset(boot)]
     # A hand-edited or allow_undersized plan can hold enough blocks while each boot ends before
     # the pre-registered graceful onset plus burst window. Blocks alone are not eligibility.
@@ -1067,14 +1082,11 @@ def analyze(
         for condition in CONDITIONS
     }
     exclusions_balanced = excluded["overlays_on"] == excluded["overlays_off"]
-    if (
-        usable_blocks < endpoint_floor
-        or onset_p is None
-        or blocked_effect is None
-        or smallest_attainable is None
-        or smallest_attainable > alpha
-        or short_boots
-    ):
+    if usable_blocks < endpoint_floor or onset_p is None or blocked_effect is None or short_boots:
+        conclusion = "insufficient_sample"
+    elif smallest_attainable is not None and smallest_attainable > alpha:
+        # Enough usable blocks, but too few of them carry a nonzero difference for any result
+        # to reach alpha. Saying `no_measurable_effect` here would be a false negative.
         conclusion = "insufficient_sample"
     elif not exclusions_balanced:
         # Report the p-value, but do not let it carry a treatment claim it can no longer support.
@@ -1104,6 +1116,8 @@ def analyze(
         "alpha": alpha,
         "minimum_boots_per_arm": endpoint_floor,
         "usable_blocks": usable_blocks,
+        "informative_blocks": informative_blocks,
+        "informative_blocks_required": informative_required,
         "randomization_reference_set": 2**usable_blocks if usable_blocks else None,
         "smallest_attainable_two_sided_p": smallest_attainable,
         "arms": {condition: asdict(summary) for condition, summary in arms.items()},
@@ -1171,9 +1185,16 @@ def render_markdown(analysis: dict[str, Any]) -> str:
         [
             "",
             f"Usable blocks: {analysis['usable_blocks']} "
-            f"(randomization reference set {analysis['randomization_reference_set']}; "
+            f"({analysis['informative_blocks']} with a nonzero difference; "
             "smallest attainable two-sided p "
-            f"{_format_optional(analysis['smallest_attainable_two_sided_p'], '.4g')})",
+            f"{_format_optional(analysis['smallest_attainable_two_sided_p'], '.4g')})"
+            + (
+                f"  [NEEDS {analysis['informative_blocks_required']} informative blocks to reach "
+                f"alpha={analysis['alpha']:g} — tied blocks carry no information]"
+                if analysis["informative_blocks"]
+                and analysis["informative_blocks"] < analysis["informative_blocks_required"]
+                else ""
+            ),
             "PRIMARY — onset, exact block permutation (two-sided): "
             f"p={_format_optional(analysis['onset_block_permutation_two_sided_p'], '.6g')}"
             + (
@@ -1425,6 +1446,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"run can attain is {2 / 2**args.boots_per_arm:.4g}. Pre-registered graceful "
                 f"onset ~{BASELINE_ONSET_INDEX_GRACEFUL}, post-onset burst "
                 f"~{BASELINE_POST_ONSET_BURST_RATE:.0%}."
+            )
+            print(
+                "POWER NOTE: only blocks whose two arms differ carry information — a block "
+                "where both onsets tie contributes nothing to the test. Every tie effectively "
+                f"costs one block, so a run scheduled at exactly {MIN_BOOTS_PER_ARM}/arm "
+                "reports insufficient_sample as soon as one block ties. Schedule headroom "
+                f"(the default is {DEFAULT_BOOTS_PER_ARM}/arm) rather than re-running."
             )
             print(
                 "Paste each command on the Windows rig from that checkout's root "
