@@ -311,8 +311,17 @@ Start a run — everything after `--` is the harness argv, minus the interpreter
 python -m tools.ac_harness.remote_launcher start --label alien-529-911-magione -- \
     -m tools.ac_harness.auto_alien --car ks_porsche_911_gt3_r_2016 --track magione \
     --evidence-dir .scratch/harness-evidence/{run_id} \
-    --laps 3 --ggv-scale 1.0 --scale-step 0.15 --iterations 2 --max-scale 1.2
+    --laps 3 --ggv-scale 1.0 --scale-step 0.15 --iterations 4 --max-scale 1.2
 ```
+
+`--iterations` counts **drives, not rungs**. Since [#703](https://github.com/agorokh/ac-copilot-trainer/issues/703)
+the ladder alternates a **plant** step (refit from the last valid batch, ggv-scale held) with an
+**envelope** step (next rung, plant untouched) so that a falsification names which knob it
+falsified — and a falsified rung no longer discards a refit whose evidence was valid. Budget
+**~2 iterations per rung**: reaching the second rung (1.2 here) when both refits land needs 4, not
+2. With `--iterations 2` and successful refits you get one plant step at 1.0 and one envelope step
+at 1.15, and the `--max-scale 1.2` cap is never probed. A plant step whose refit is a no-op falls
+through to the rung, so a converged plant costs no extra drives.
 
 It prints a JSON handle (`run_id`, `task`, `run_dir`) and returns immediately. Transport logs live
 under `.scratch/harness-remote/<run id>/` (`stdout.log`, `stderr.log`, `run.json`) — deliberately

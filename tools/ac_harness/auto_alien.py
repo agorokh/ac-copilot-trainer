@@ -18,19 +18,27 @@ there is no silent degrade to the stock line or the generic plant anywhere in th
 
 #577 (EPIC #529 P3) adds **flying-lap windows** (``--laps N`` — the drive stage holds its window
 open through N timed laps, per-lap times in the report) and **progressive-envelope self-play**
-(``--iterations K``): after the base drive, each iteration refines the friction fit from the
-previous drive's lap archives only (monotonic merge — measured lateral bins tighten, longitudinal
-evidence is never lost), persists it through the canonical plant gates (invalidating the cached
-alien line via the fit provenance hash), steps the ggv-scale envelope ladder, and drives the
-rebuilt line. Every step is falsifiable: an invalid lap / spin / failed stage reverts the plant to
-the last-valid fit (the #244 keep-last-valid pattern) and the report names the falsification —
-the ladder never silently retries the same envelope.
+(``--iterations K``): after the base drive, the ladder alternates two kinds of iteration, each
+moving exactly ONE knob so a falsification is attributable (#703):
+
+* a **plant** step refines the friction fit from the previous drive's lap archives only (monotonic
+  merge — measured lateral bins tighten, longitudinal evidence is never lost), persists it through
+  the canonical plant gates (invalidating the cached alien line via the fit provenance hash), and
+  drives the rebuilt line at the last VALIDATED ggv-scale;
+* an **envelope** step leaves the plant untouched and drives the next ggv-scale ladder rung.
+
+Every step is falsifiable: an invalid lap / spin / failed stage stops the ladder and the report
+names both the reason and the falsified component. A falsified **plant** step reverts the plant to
+the last-valid fit (the #244 keep-last-valid pattern); a falsified **envelope** rung has nothing to
+revert, so a refit that was independently validated survives it. The ladder never silently retries
+the same envelope.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 import traceback
 from collections.abc import Callable, Sequence
@@ -45,7 +53,9 @@ from tools.ac_harness.auto_drive import (
     validate_ac_id,
 )
 from tools.ac_harness.plant_id import (
+    artifact_selfplay_merge_count,
     load_plant_artifact,
+    plant_artifact_from_bytes,
     plant_artifact_path,
     plant_ready_for_full_consumption,
 )
@@ -350,8 +360,147 @@ def evaluate_selfplay_iteration(
 
 
 def iteration_scale(base: float, step: float, index: int, cap: float) -> float:
-    """The envelope ladder's ggv-scale for iteration ``index`` (1-based), capped."""
+    """The envelope ladder's ggv-scale for rung ``index`` (1-based), capped.
+
+    Since #703 the rung index advances only on *envelope* steps, so it is no longer the same
+    counter as the self-play iteration index (plant steps hold the last validated scale).
+    """
     return round(min(base + step * index, cap), 6)
+
+
+def stage_plant_fit_sha12(outcome: dict | None) -> str | None:
+    """The plant-fit hash the stage's alien line was actually built from, or ``None``.
+
+    ``auto_drive`` records ``run.alien_line.plant_provenance`` — a content hash of the exact plant
+    artifact the drive consumed. It is the only evidence of WHICH plant produced a batch, and the
+    self-play ladder needs it to prove that the drive whose archives it is about to refine from
+    ran the same fit the ladder is now holding (#703 Codex P1).
+    """
+    alien_line = (outcome or {}).get("run")
+    alien_line = alien_line.get("alien_line") if isinstance(alien_line, dict) else None
+    provenance = alien_line.get("plant_provenance") if isinstance(alien_line, dict) else None
+    sha12 = provenance.get("sha12") if isinstance(provenance, dict) else None
+    return sha12 if isinstance(sha12, str) and sha12 else None
+
+
+def _fit_sha12_of_artifact(artifact: dict | None) -> str | None:
+    """The plant-fit hash of an ALREADY-VALIDATED artifact, or ``None``.
+
+    Takes the parsed dict rather than raw bytes on purpose: decoding and ``json.loads``-ing the
+    bytes here duplicated `plant_id.plant_artifact_from_bytes` and bypassed its schema/identity
+    validation, contradicting that function's own "exactly one definition of a usable plant
+    artifact" contract (self-hosted reviewer, antigravity). Callers parse once through the shared
+    gate and pass the result.
+
+    The hash matches what ``auto_drive`` records for the plant it loaded, which is what makes a
+    ladder snapshot comparable to a drive report's ``plant_provenance.sha12``.
+    """
+    if not isinstance(artifact, dict):
+        return None
+    from tools.ac_harness.alien_line import plant_provenance
+
+    sha12 = plant_provenance(artifact).get("sha12")
+    return sha12 if isinstance(sha12, str) and sha12 else None
+
+
+def _read_plant_bytes(plant_path: Path) -> bytes | None:
+    """The plant artifact's current bytes, or ``None`` when the file does not exist.
+
+    An **unreadable** artifact raises. Swallowing every ``OSError`` into ``None`` made a transient
+    read failure indistinguishable from "the bytes changed" at each comparison site, so a blip
+    after a successful plant step read as a peer change: it tripped keep-last-valid and dropped a
+    provenance-validated refit, and reported an I/O fault as peer re-identification with
+    ``selfplay.ok`` still true — regressing the #579 fail-closed filesystem path
+    (self-hosted reviewer HIGH). Absent and unreadable are different facts; only absence is None.
+    """
+    try:
+        return plant_path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+#: How far past the algebraic candidate the rung search will look for the six-decimal rounding
+#: plateau to end. Generous for any real ``--scale-step`` (1e-7 clears it in ~5 rungs); a step that
+#: needs more is below the ladder's own resolution, and leaping that many indices at once would
+#: deliver the rounding floor rather than the requested increment (#703).
+_MAX_PLATEAU_RUNGS = 4096
+
+
+def _rung_reaching(base: float, step: float, target: float) -> int | None:
+    """Smallest rung whose raw ladder value reaches ``target``; ``None`` when unrepresentable.
+
+    ``--scale-step`` is validated only as finite and > 0, so a legal but absurd value (``1e-320``)
+    makes ``(target - base) / step`` overflow to infinity and ``math.ceil`` raise ``OverflowError``
+    — crashing the pipeline before it can write its composed report. Returning ``None`` instead
+    lets the caller fall back to its other probes and, failing those, stop honestly with "no rung
+    above the validated scale": a rung at index ~1e320 is unreachable within any real
+    ``--iterations`` budget anyway (#703 Codex P2, round 4).
+    """
+    try:
+        quotient = (target - base) / step
+    except (OverflowError, ZeroDivisionError):
+        return None
+    if not math.isfinite(quotient):
+        return None
+    try:
+        return math.ceil(quotient)
+    except (OverflowError, ValueError):
+        return None
+
+
+def next_envelope_rung(
+    base: float, step: float, cap: float, prev_scale: float, rung: int
+) -> int | None:
+    """Smallest rung index >= ``rung`` whose ladder scale strictly EXCEEDS ``prev_scale``.
+
+    ``None`` means there is no envelope rung left at all — which is NOT the same as "the rung is
+    capped at the current scale": with ``--stint`` the validated base can sit **above**
+    ``--max-scale``, because the cap is validated only against ``--ggv-scale``. A saturated
+    candidate that does not exceed ``prev_scale`` is therefore no rung, not a rung to drive; a
+    "ladder rung" that lowered the envelope would be the second knob moving the wrong way.
+
+    Computed algebraically rather than by scanning, because :func:`iteration_scale` rounds to six
+    decimals: a legal cap with more decimals (``--max-scale 0.9000004``) saturates every candidate
+    to the same rounded value, and a scan comparing against the UNROUNDED cap would never
+    terminate (#703 Codex P2). The cap comparison here uses the same rounding as the ladder.
+    """
+    capped = round(cap, 6)
+    if capped <= prev_scale:
+        return None
+    if iteration_scale(base, step, rung, cap) > prev_scale:
+        return rung
+    # The smallest rung whose UNSATURATED value rounds strictly above prev_scale. The +5e-7 is the
+    # six-decimal rounding threshold: a small `--scale-step` (1e-7) leaves several consecutive
+    # rungs on the same rounded plateau, and a closed form that ignores it lands *inside* the
+    # plateau and wrongly concludes no rung remains (#703 Codex P2).
+    needed = _rung_reaching(base, step, prev_scale + 5e-7)
+    if needed is None:
+        return None
+    # Only rungs derived from the requested step count. A saturating fallback would "find" a rung
+    # for a subnormal step (`2e-309`) whose float product cannot move off `base` at all, and the
+    # first envelope drive would then jump straight to `--max-scale` — turning an almost-zero
+    # requested step into an immediate leap to the safety cap. A step that cannot move the
+    # envelope at its own granularity means the ladder is exhausted, not that the cap is due
+    # (#703 Codex P2, round 5).
+    #
+    # The plateau past `needed` can be WIDER than a couple of indices when the step is far below
+    # the six-decimal spacing, so a fixed three-probe window wrongly reported an exhausted ladder
+    # (#703 Codex P2, round 12). Binary-search the plateau instead — `iteration_scale` is monotone
+    # non-decreasing in the rung, so this finds the exact smallest usable rung — bounded by
+    # `_MAX_PLATEAU_RUNGS` past `needed`. That bound is the same principle as the round-5 rule:
+    # a rung the ladder would have to leap thousands of indices to reach is not a step the
+    # operator asked for, it is the rounding floor, and the honest answer is "no rung".
+    lo = max(rung, needed)
+    hi = lo + _MAX_PLATEAU_RUNGS
+    if iteration_scale(base, step, hi, cap) <= prev_scale:
+        return None
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if iteration_scale(base, step, mid, cap) > prev_scale:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo if iteration_scale(base, step, lo, cap) > prev_scale else None
 
 
 def run_selfplay(
@@ -363,17 +512,37 @@ def run_selfplay(
     setup_key: str | None,
     setup_ini: str | Path | None,
     base_outcome: dict | None,
+    base_scale: float | None = None,
 ) -> dict:
     """Drive the #577 refine -> rebuild -> drive self-play ladder; returns the selfplay report.
 
-    Iteration ``i`` refines the plant from the PREVIOUS valid drive's lap archives (provenance-
-    bound to the pipeline's own stages), persists it through ``save_plant_artifact`` (the fit
-    provenance hash change invalidates the cached alien line, so the next drive rebuilds the
-    line/QSS against the updated plant), steps the envelope ladder's ggv-scale, and drives again.
-    A falsified step (see :func:`evaluate_selfplay_iteration`) reverts the plant to the last
-    valid artifact bytes and stops — the report names the falsification. A step that cannot
-    change the envelope at all (scale already capped AND the refit failed) stops honestly rather
-    than re-driving the identical envelope.
+    **Decoupled ladder (#703).** Every iteration changes exactly ONE knob, so a falsification
+    identifies which knob it falsified:
+
+    * a **plant** step refines the plant from the PREVIOUS valid drive's lap archives (provenance-
+      bound to the pipeline's own stages), persists it through ``save_plant_artifact`` (the fit
+      provenance hash change invalidates the cached alien line, so the drive rebuilds the line/QSS
+      against the updated plant) and drives at the LAST VALIDATED ``ggv_scale``;
+    * an **envelope** step leaves the plant untouched and drives the next rung of the ggv-scale
+      ladder.
+
+    The steps alternate, starting with a plant step. A plant step whose refit is unavailable or a
+    no-op falls through to an envelope step rather than re-driving an identical line, and an
+    envelope step at the scale cap falls back to a plant step — the ladder only stops when neither
+    knob can move.
+
+    Why not one iteration per (refit + scale step)? Because the oracle judges the iteration as a
+    whole, so a falsified scale rung reverted a refit built from independently valid evidence, and
+    the top rung is by construction the one most likely to falsify — the ladder destroyed its own
+    best lever (issue #703; ~3.5 s at identical scale on the #529 Magione ladders). Attributing the
+    verdict by re-driving would cost an extra launch cycle (expensive under #627), and simply
+    keeping every refit is unsafe: :func:`~tools.ac_harness.ggv_profile.merge_selfplay_model` is
+    strictly monotone (it only ever RAISES bins), so the keep-last-valid revert is the only
+    downward path the plant has. Decoupling keeps that safety valve and makes it precise: a
+    falsified plant step still reverts, a falsified envelope step has nothing to revert.
+
+    A falsified step (see :func:`evaluate_selfplay_iteration`) stops the ladder and the report
+    names both the reason and the falsified component (``plant`` vs ``envelope``).
     """
     from tools.ac_harness.auto_drive import generic_gt3_ggv
     from tools.ac_harness.plant_id import (
@@ -387,10 +556,65 @@ def run_selfplay(
         user_dir, args.car, args.track, setup_key, setup_ini, layout=args.track_layout
     )
     lock_timeout = args.rig_lock_timeout if args.rig_lock_timeout is not None else 0.0
+    # The scale the BASE drive actually ran. ``--stint`` can override it with the Layer-4 pace
+    # scale, and a plant step "holds the last validated scale" — so seeding this from
+    # ``args.ggv_scale`` when the base drove at the override would silently move the envelope
+    # during a supposedly plant-only iteration and misattribute its verdict (#703, Codex P1).
+    # This is also the ladder's ANCHOR, not just its starting point. Anchoring the rungs to
+    # `--ggv-scale` while the base actually drove a derated `--stint` pace made the first envelope
+    # step jump two increments (0.85 -> 0.95 with the 0.05 default, skipping 0.90), so a run could
+    # falsify at 0.95 having never tested the envelope in between — doubling the progressive step
+    # the operator asked for (#703 Codex P2, round 7). With no stint override the two are equal
+    # and the ladder is unchanged.
+    resolved_base_scale = args.ggv_scale if base_scale is None else float(base_scale)
+    # ONE read of the artifact serves every ladder-start fact: the byte snapshot the guards
+    # compare against, the provenance the base drive must agree with, and the inherited merge
+    # count. Reading it three times let a peer land between them, so the ladder could validate the
+    # provenance of one fit while snapshotting another — defeating the very guards these facts
+    # feed (self-hosted reviewer HIGH, antigravity).
+    try:
+        validated_plant_bytes = _read_plant_bytes(plant_path)
+    except OSError as exc:
+        # Fail closed rather than start a ladder whose every guard compares against bytes we
+        # could not read (self-hosted reviewer HIGH).
+        return {
+            "ok": False,
+            "ladder_mode": "decoupled",
+            "iterations": [],
+            "stopped": (
+                f"cannot read the plant artifact ({exc}) — self-play not started; every "
+                "attribution guard compares against these bytes"
+            ),
+            "lap_trajectory_ms": [],
+            "best_lap_ms": None,
+        }
+    ladder_start_artifact = plant_artifact_from_bytes(
+        validated_plant_bytes, args.car, args.track, setup_key, layout=args.track_layout
+    )
+    if ladder_start_artifact is None:
+        # No usable plant on disk. Without this the ladder ran anyway: the refit reported
+        # "artifact unloadable", fell through to an envelope rung, and that drive's plant-load
+        # failure was reported as falsifying the SCALE — a fabricated verdict about the envelope,
+        # on a pipeline that could still exit 0 (#703 Codex P2, round 12).
+        return {
+            "ok": False,
+            "ladder_mode": "decoupled",
+            "iterations": [],
+            "stopped": (
+                f"no valid plant artifact for this combo at {plant_path} — self-play not "
+                "started; a rung driven without a plant would falsify the envelope for the "
+                "wrong reason"
+            ),
+            "lap_trajectory_ms": [],
+            "best_lap_ms": None,
+        }
     selfplay: dict = {
         "iterations_requested": args.iterations,
         "laps_per_iteration": args.laps,
-        "base_scale": args.ggv_scale,
+        "base_scale": resolved_base_scale,
+        # The rung anchor actually in force (== base_scale; `--ggv-scale` is only the default).
+        "ladder_base_scale": resolved_base_scale,
+        "requested_ggv_scale": args.ggv_scale,
         "scale_step": args.scale_step,
         "max_scale": args.max_scale,
         "iterations": [],
@@ -398,6 +622,14 @@ def run_selfplay(
         "stopped": "completed",
         "lap_trajectory_ms": [],
         "best_lap_ms": None,
+        # #703: each iteration moves exactly one knob, so a verdict is attributable.
+        "ladder_mode": "decoupled",
+        "refit_iterations": [],
+        # Self-play merges the plant already carried when this invocation started. The refit
+        # compounds ACROSS runs, so a run whose own plant step is a no-op can still be protecting
+        # an inherited fit — reporting "nothing was retained" from `refit_iterations` alone would
+        # be false in exactly the cross-invocation case this change exists to expose (#703).
+        "inherited_selfplay_merges": artifact_selfplay_merge_count(ladder_start_artifact),
     }
     base_laps = stage_lap_times_ms(base_outcome)
     selfplay["lap_trajectory_ms"].append(base_laps)
@@ -430,10 +662,79 @@ def run_selfplay(
             f"auto-alien: base drive not usable as refinement evidence ({base_reason}) — "
             "the ladder starts without a refit batch"
         )
-    prev_scale = args.ggv_scale
+    prev_scale = resolved_base_scale
+    rung = 1  # next envelope rung to attempt (advances only on envelope steps, #703)
+    # The plant bytes as of the last VALIDATED state. An envelope step must drive exactly this
+    # plant; if a peer re-identified the combo meanwhile, the step would move two knobs and its
+    # verdict would not be the envelope's (#703 Codex P1).
+    #
+    # The bytes on disk are NOT self-evidently what the base drive ran: a peer may have
+    # re-identified the combo after the base stage finished and before this snapshot. Adopting
+    # them unchecked would make the first fallback envelope step pass the byte check while
+    # driving a different plant AND a higher scale, or merge the base's evidence into an
+    # unvalidated peer fit. `auto_drive` records the fit its line was built from, so require the
+    # two to agree before treating the snapshot as validated (#703 Codex P1, round 5).
+    base_fit = stage_plant_fit_sha12(base_outcome)
+    current_fit = _fit_sha12_of_artifact(ladder_start_artifact)
+    # Tracked alongside the byte snapshot so no iteration re-parses raw bytes behind the
+    # shared validation gate.
+    validated_plant_fit = current_fit
+    selfplay["base_plant_fit_sha12"] = base_fit
+    # Fail CLOSED on a missing current provenance. If the artifact was deleted or corrupted after
+    # a successful base drive, `current_fit` is None while `base_fit` is populated; treating that
+    # as "compatible" let the refit fail, fall through to an envelope drive, and report the
+    # resulting plant-load failure as falsifying the SCALE RUNG while the bad artifact stayed in
+    # place (#703 Codex P2, round 6).
+    if base_fit is not None and base_fit != current_fit:
+        selfplay["requires_rebase"] = True
+        disk = current_fit if current_fit is not None else "no readable plant fit"
+        selfplay["stopped"] = (
+            f"plant changed since the base drive (base ran fit {base_fit}, disk now carries "
+            f"{disk}) — self-play stopped before iteration 1; the base evidence and the "
+            "on-disk plant are from different fits, so no step could be attributed"
+        )
+        print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
+        selfplay["best_lap_ms"] = best
+        return selfplay
+    if base_fit is None:
+        # Not a blocker (an older stage report or a failed base drive records no line), so the
+        # ladder still runs — envelope rungs are falsification-gated on their own. But its
+        # archives may NOT seed a refit: with no recorded provenance there is no proof the plant
+        # now on disk is the fit that produced them, so a peer replacement between that drive and
+        # this invocation would cross two fits inside the refinement evidence itself. Refuse the
+        # evidence rather than the run, until a provenance-carrying drive establishes a baseline
+        # (#703 Codex P2, round 8).
+        selfplay["base_plant_fit_unverified"] = True
+        if prev_archives:
+            selfplay["base"]["refit_evidence_withheld"] = (
+                "the base drive recorded no plant provenance, so the fit that produced these "
+                "archives cannot be proven — not used as refit evidence"
+            )
+            print(
+                "auto-alien: base drive recorded no plant provenance — its archives are usable "
+                "as pace evidence but NOT as a refit batch"
+            )
+            prev_archives = []
+    next_step_kind = "plant"
     for index in range(1, args.iterations + 1):
-        scale = iteration_scale(args.ggv_scale, args.scale_step, index, args.max_scale)
-        entry: dict = {"index": index, "ggv_scale": scale}
+        # 0) Pick this iteration's single knob (#703). When no envelope rung can exceed the
+        #    validated scale, the refit is the only remaining lever; if it is also a no-op the
+        #    fall-through below reaches the unchanged-envelope stop.
+        step_kind = next_step_kind
+        usable_rung = next_envelope_rung(
+            resolved_base_scale, args.scale_step, args.max_scale, prev_scale, rung
+        )
+        if usable_rung is not None:
+            rung = usable_rung
+        envelope_scale = (
+            iteration_scale(resolved_base_scale, args.scale_step, rung, args.max_scale)
+            if usable_rung is not None
+            else None
+        )
+        if step_kind == "envelope" and envelope_scale is None:
+            step_kind = "plant"
+        scale = prev_scale if step_kind == "plant" else envelope_scale
+        entry: dict = {"index": index, "step_kind": step_kind, "ggv_scale": scale}
         selfplay["iterations"].append(entry)
 
         # 1) Refine the plant from the previous drive's batch (keep-last-valid on any failure).
@@ -441,22 +742,55 @@ def run_selfplay(
         #    stopped reason in the composed report, never crash the pipeline before the report
         #    is written (#579 Qodo reliability).
         refined = False
+        peer_skipped: str | None = None
+        peer_changed_before_refit = False
         last_valid_bytes: bytes | None = None
         candidate_bytes: bytes | None = None
         try:
-            if not prev_archives:
+            if step_kind == "envelope":
+                # #703: an envelope step moves only ggv_scale. The plant is deliberately left
+                # alone, so a falsification here cannot implicate — or discard — a refit whose
+                # evidence was independently valid.
+                entry["refine_skipped"] = "envelope step (plant deliberately untouched)"
+            elif not prev_archives:
                 entry["refine"] = {
                     "ok": False,
                     "reason": "no lap archives from the previous drive",
                 }
+            elif (pre_refine_bytes := _read_plant_bytes(plant_path)) != validated_plant_bytes:
+                # A peer re-identified the combo since our last validated state. The
+                # `expected_current_bytes` guard below would accept these bytes happily — it only
+                # prevents clobbering a NEWER fit, it does not prove the fit is OURS — so archives
+                # produced by plant A would be merged into peer plant B, and the candidate would
+                # then become `validated_plant_bytes`, letting the post-drive check and the
+                # scientist baseline treat a two-plant transition as this ladder's single-knob
+                # refit (#703 Codex P1, round 6).
+                peer_changed_before_refit = True
+                entry["refine"] = {
+                    "ok": False,
+                    "reason": (
+                        "plant changed since the last validated state (peer re-identification?) "
+                        "— refusing to merge this batch's evidence across two different fits"
+                    ),
+                }
             else:
-                # Snapshot the artifact bytes BEFORE loading: the refine-save runs outside the
-                # drive stage's machine-global rig lock, so a peer worktree may refresh the same
-                # plant between our load and our save — persisting a refinement of stale bytes
-                # would silently clobber the peer's newer fit (#579 Codex P2).
-                pre_refine_bytes = plant_path.read_bytes() if plant_path.exists() else None
-                artifact = load_plant_artifact(
-                    user_dir, args.car, args.track, setup_key, setup_ini, layout=args.track_layout
+                # ONE content-bound snapshot serves the equality check above, the refinement, and
+                # the persistence guard below. Re-reading the file here would reopen the window it
+                # just closed: a peer landing between the two reads would become
+                # `pre_refine_bytes`, so `expected_current_bytes` would match the peer's own bytes
+                # and the cross-plant candidate would persist as validated (#703 Qodo, round 7).
+                # The refine-save still runs outside the drive stage's machine-global rig lock, so
+                # a peer that lands after this snapshot makes the save skip rather than clobber a
+                # newer fit (#579 Codex P2) — which the peer-skip stop then turns into a rebase.
+                #
+                # PARSE the snapshot rather than re-reading the file: `load_plant_artifact` would
+                # open it again, so plant B could be parsed while `pre_refine_bytes` still held A.
+                # If the peer then rolled B back to A while we waited on the rig lock, the write
+                # guard would see its expected A bytes and persist a candidate that merged A's
+                # archives into B — corrupting the plant while reporting it validated (#703 Codex
+                # P1, round 8). Same validation gate; one snapshot for compare, parse, and write.
+                artifact = plant_artifact_from_bytes(
+                    pre_refine_bytes, args.car, args.track, setup_key, layout=args.track_layout
                 )
                 if artifact is None:
                     entry["refine"] = {
@@ -515,6 +849,7 @@ def run_selfplay(
                         )
                         if save_skipped:
                             entry["refine"]["save_skipped"] = save_skipped
+                            peer_skipped = save_skipped
                             print(
                                 f"auto-alien: iteration {index} refine save SKIPPED — "
                                 f"{entry['refine']['save_skipped']}"
@@ -523,6 +858,18 @@ def run_selfplay(
                             last_valid_bytes = pre_refine_bytes
                             candidate_bytes = persisted_bytes
                             refined = True
+                            # This plant step's own change becomes the state a later envelope
+                            # step must find untouched (#703).
+                            validated_plant_bytes = persisted_bytes
+                            validated_plant_fit = _fit_sha12_of_artifact(
+                                plant_artifact_from_bytes(
+                                    persisted_bytes,
+                                    args.car,
+                                    args.track,
+                                    setup_key,
+                                    layout=args.track_layout,
+                                )
+                            )
                             print(
                                 f"auto-alien: iteration {index} plant refined "
                                 f"(lateral bins adopted="
@@ -547,24 +894,94 @@ def run_selfplay(
             print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
             break
 
-        # 2) Refuse to re-drive an identical envelope: no refit AND no scale movement means the
-        #    step could only repeat the previous iteration verbatim (#577 AC: never silently
-        #    retry the same envelope).
-        if not refined and scale == prev_scale:
+        # 2) A peer re-identified the combo between our snapshot and our save, so the plant on
+        #    disk is no longer the one the previous drive validated AND is not ours to attribute.
+        #    Falling through to the rung would change BOTH knobs (peer plant + new scale) and the
+        #    report would blame the envelope for a drive the peer's plant may have caused — the
+        #    exact attribution this decoupling exists to guarantee. Stop instead; a fresh run
+        #    rebases on the peer's plant honestly (#703, Codex P1).
+        if peer_changed_before_refit:
             selfplay["stopped"] = (
-                f"envelope unchanged at iteration {index} (scale capped at {scale} and the "
-                "refit did not change the plant) — refusing to retry the same envelope"
+                f"plant changed before iteration {index}'s refit (peer re-identification?) — "
+                "self-play stopped; merging this batch's evidence into a fit the ladder never "
+                "validated would corrupt both the attribution and the persisted plant "
+                "(re-run to rebase on the peer's plant)"
             )
             entry["skipped"] = True
+            selfplay["requires_rebase"] = True
             print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
             break
 
-        # 3) Drive the (possibly rebuilt) line at this iteration's envelope.
+        if peer_skipped:
+            selfplay["stopped"] = (
+                f"plant changed by a peer at iteration {index} ({peer_skipped}) — self-play "
+                "stopped rather than driving an unattributable step (re-run to rebase on the "
+                "peer's plant)"
+            )
+            entry["skipped"] = True
+            selfplay["requires_rebase"] = True
+            print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
+            break
+
+        # 3) A plant step whose refit did not land has nothing of its own to test: spend the
+        #    drive on the envelope rung instead of re-driving the identical line (#703).
+        if step_kind == "plant" and not refined:
+            step_kind = "envelope"
+            scale = envelope_scale
+            entry["step_kind"] = step_kind
+            entry["ggv_scale"] = scale
+            entry["fell_back_to_envelope"] = "refit did not change the plant"
+
+        # 3b) An envelope step must drive the plant the previous step validated. `auto_drive`
+        #     loads the latest on-disk plant after it takes the rig lock, so a peer that
+        #     re-identified the combo meanwhile would silently change the second knob and the
+        #     verdict would not be the envelope's. Stop rather than attribute it (#703 Codex P1).
+        if step_kind == "envelope":
+            try:
+                current_plant_bytes = _read_plant_bytes(plant_path)
+            except OSError as exc:
+                # An unreadable artifact is an I/O fault, NOT evidence of a peer change: it must
+                # fail the pipeline loudly, not be laundered into a rebase (self-hosted HIGH).
+                selfplay["ok"] = False
+                selfplay["stopped"] = (
+                    f"cannot read the plant artifact before iteration {index}'s envelope step "
+                    f"({exc}) — self-play stopped; unreadable is not the same as changed"
+                )
+                entry["skipped"] = True
+                print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
+                break
+            if current_plant_bytes != validated_plant_bytes:
+                selfplay["stopped"] = (
+                    f"plant changed on disk before iteration {index}'s envelope step (peer "
+                    "re-identification?) — self-play stopped rather than attributing a verdict "
+                    "to the envelope while the plant also moved"
+                )
+                entry["skipped"] = True
+                entry["plant_changed_before_step"] = True
+                selfplay["requires_rebase"] = True
+                print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
+                break
+
+        # 4) Refuse to re-drive an identical envelope: no refit AND no scale movement means the
+        #    step could only repeat the previous iteration verbatim (#577 AC: never silently
+        #    retry the same envelope).
+        if not refined and scale is None:
+            selfplay["stopped"] = (
+                f"envelope unchanged at iteration {index} (no ladder rung above the validated "
+                f"scale {prev_scale} under --max-scale {args.max_scale}, and the refit did not "
+                "change the plant) — refusing to retry the same envelope"
+            )
+            entry["skipped"] = True
+            entry["ggv_scale"] = prev_scale
+            print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
+            break
+
+        # 5) Drive the (possibly rebuilt) line at this iteration's envelope.
         settled = wait_sidecar_port_settled(args.sidecar_url or DEFAULT_SIDECAR_URL)
         entry["sidecar_port_before"] = settled
         stage_dir = Path(evidence_root) / f"iter{index:02d}"
         print(
-            f"auto-alien: iteration {index}/{args.iterations} drive "
+            f"auto-alien: iteration {index}/{args.iterations} {step_kind} step drive "
             f"(ggv_scale={scale}, laps={args.laps or 1})"
         )
         code = run_stage(drive_argv(args, stage_dir, ggv_scale=scale))
@@ -589,13 +1006,141 @@ def run_selfplay(
         valid, reason = evaluate_selfplay_iteration(code, outcome, archive_payloads)
         entry["valid"] = valid
         entry["reason"] = reason
+        # The pre-drive check above narrows the window but cannot close it: `auto_drive` loads the
+        # plant after taking the rig lock, which we do not hold. So confirm afterwards that the
+        # step really did run the plant we expected, and refuse to attribute the verdict when it
+        # did not (#703 Codex P1 — honest about the residual race rather than silent).
+        #
+        # This covers BOTH step kinds. `validated_plant_bytes` is the candidate a plant step just
+        # persisted, or the untouched fit an envelope step must find — so a peer that rewrote the
+        # artifact after `persist_selfplay_refinement` released the rig lock is caught here too.
+        # Restricting it to envelope steps let a plant step record a peer's plant as "this refit,
+        # validated" (#703 Codex P1, round 3).
+        #
+        # Bytes-after-the-drive are necessary but not sufficient: a peer could replace the plant
+        # before `auto_drive` loads it and restore the expected bytes right after the rig lock
+        # releases, and this comparison would pass while the iteration actually ran a different
+        # fit. The drive REPORTS the provenance of the plant its line was built from, so trust
+        # that over inference whenever it is present (#703 Codex P2, round 7).
+        driven_fit = stage_plant_fit_sha12(outcome)
+        expected_fit = validated_plant_fit
+        entry["driven_plant_fit_sha12"] = driven_fit
+        fit_mismatch = (
+            driven_fit is not None and expected_fit is not None and driven_fit != expected_fit
+        )
+        # Fail CLOSED on missing proof, not just on contradicted proof. Byte equality cannot show
+        # WHICH plant was driven — a peer swap restored before the post-drive read looks identical
+        # — so an oracle-valid batch with no recorded provenance is unusable as evidence even
+        # though nothing contradicts it (#703 Qodo, round 8). Scoped to VALID iterations on
+        # purpose: an invalid drive that died before building a line legitimately records no
+        # provenance, and that is an ordinary stage failure, not a peer plant change.
+        # Gate on "did this drive actually run", not on the oracle verdict. Scoping it to VALID
+        # let an AC-invalid TIMED lap with no provenance keep its knob attribution, so an envelope
+        # failure could retain earlier refits with no proof the expected plant produced the
+        # falsifying lap (#703 Qodo, round 14). A stage that died before building a line records
+        # no laps and no archives — that is an ordinary failure and still attributable.
+        drove_something = bool(lap_times) or bool(archives)
+        missing_driven_fit = drove_something and expected_fit is not None and driven_fit is None
+        try:
+            post_drive_bytes = _read_plant_bytes(plant_path)
+        except OSError as exc:
+            # Never let a read blip revert a provenance-VALIDATED refit (self-hosted HIGH). But a
+            # FALSIFIED refit is a different case: breaking here would skip the keep-last-valid
+            # rollback below and leave the rejected monotone grip increase as the combo's loadable
+            # plant. Roll that one back before failing closed — only an oracle-VALID step is
+            # protected from the blip (Codex P1 + Qodo + self-hosted HIGH, round 12).
+            selfplay["ok"] = False
+            selfplay["stopped"] = (
+                f"cannot read the plant artifact after iteration {index}'s {step_kind} step "
+                f"({exc}) — self-play stopped without judging the plant; an unreadable artifact "
+                "is not evidence that it changed"
+            )
+            if fit_mismatch or missing_driven_fit:
+                # The fit evidence already proves this iteration did not run our candidate; the
+                # read failure does not erase that, so carry the same taint the normal path sets.
+                entry["plant_changed_during_step"] = True
+                entry["usable_as_evidence"] = False
+                selfplay["requires_rebase"] = True
+            # Revert whenever the candidate demonstrably never drove on its own plant — falsified,
+            # OR valid-but-on-a-foreign/unprovable fit. Round 12 covered only the falsified case,
+            # so a valid drive on a peer plant followed by a read failure left the undriven grip
+            # raise loadable for later runs (self-hosted HIGH, round 14). A CONFIRMED attributable
+            # valid refit is still protected from the blip.
+            if (
+                refined
+                and last_valid_bytes is not None
+                and (not valid or fit_mismatch or missing_driven_fit)
+            ):
+                try:
+                    if revert_plant_artifact(
+                        plant_path,
+                        last_valid_bytes,
+                        expected_current_bytes=candidate_bytes,
+                        car_id=args.car,
+                        track_id=args.track,
+                        lock_timeout=lock_timeout,
+                    ):
+                        entry["reverted"] = True
+                        print(
+                            f"auto-alien: iteration {index} candidate never drove on its own "
+                            "plant and the artifact is unreadable — reverted to the last-valid fit"
+                        )
+                    else:
+                        entry["reverted"] = False
+                        entry["revert_skipped"] = (
+                            "plant artifact is no longer this iteration's candidate — revert "
+                            "skipped"
+                        )
+                except (OSError, RigSessionBusy) as revert_exc:
+                    entry["reverted"] = False
+                    entry["revert_error"] = (
+                        f"artifact rollback failed: {type(revert_exc).__name__}: {revert_exc}"
+                    )
+                    print(
+                        f"auto-alien: iteration {index} REVERT FAILED — {entry['revert_error']} "
+                        "(the falsified fit may still be persisted; re-run --force-identify)"
+                    )
+            print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
+            break
+        plant_moved_during_step = (
+            post_drive_bytes != validated_plant_bytes or fit_mismatch or missing_driven_fit
+        )
+        if fit_mismatch:
+            entry["driven_plant_fit_mismatch"] = {
+                "expected": expected_fit,
+                "driven": driven_fit,
+            }
+        if missing_driven_fit:
+            entry["driven_plant_fit_missing"] = (
+                "the drive recorded no plant provenance, so which plant produced this batch "
+                "cannot be proven — refusing to use it as ladder or scientist evidence"
+            )
+        if plant_moved_during_step:
+            # Set BOTH consequences here, at the single point that knows the fact — a peer change
+            # taints the batch and requires a rebase whether the drive passed or failed. Setting
+            # them only on the pass path left a failed unattributable step running the scientist
+            # across two plants (#703 Codex P1, round 4).
+            entry["plant_changed_during_step"] = True
+            entry["usable_as_evidence"] = False
+            selfplay["requires_rebase"] = True
 
         if not valid:
-            # 4) Keep-last-valid: revert the refined plant so the falsified envelope never
+            # 6) Keep-last-valid: revert the refined plant so the falsified envelope never
             #    becomes the combo's persisted fit (#244 pattern). Only touch the artifact when
             #    it is still byte-identical to what THIS iteration persisted — a peer worktree
             #    may have re-identified the combo meanwhile.
+            #
+            #    Because the step moved exactly one knob, the verdict is attributable (#703): a
+            #    plant step falsifies the REFIT (revert it — the monotone merge has no other way
+            #    down), an envelope step falsifies the SCALE RUNG and leaves every earlier,
+            #    independently validated refit persisted.
             entry["falsified"] = reason
+            if plant_moved_during_step:
+                # Two knobs moved (ours + a peer's), so neither can be blamed honestly.
+                entry["falsified_component"] = "unattributable"
+            else:
+                entry["falsified_component"] = "plant" if step_kind == "plant" else "envelope"
+            retained_refits = list(selfplay["refit_iterations"])
             if refined and last_valid_bytes is not None:
                 try:
                     if revert_plant_artifact(
@@ -617,6 +1162,13 @@ def run_selfplay(
                             "plant artifact changed since this iteration persisted it "
                             "(peer re-identification?) — revert skipped"
                         )
+                        # A skipped rollback PROVES the on-disk plant is no longer this ladder's,
+                        # so the same rebase state every other detected peer change sets applies
+                        # here too — otherwise `--scientist` would run a baseline from an older
+                        # self-play outcome against experiments loading the peer's plant,
+                        # conflating plant and setup in one verdict (#703 Codex P1, round 8).
+                        entry["usable_as_evidence"] = False
+                        selfplay["requires_rebase"] = True
                         print(
                             f"auto-alien: iteration {index} FALSIFIED ({reason}); "
                             f"{entry['revert_skipped']}"
@@ -637,8 +1189,43 @@ def run_selfplay(
                     f"auto-alien: iteration {index} FALSIFIED ({reason}) — plant unchanged "
                     "this iteration (nothing to revert)"
                 )
+            if entry["falsified_component"] == "envelope":
+                # The whole point of #703: this rung is disproven, the plant is not.
+                inherited = selfplay["inherited_selfplay_merges"]
+                entry["plant_refit_retained"] = retained_refits
+                entry["inherited_selfplay_merges"] = inherited
+                if retained_refits:
+                    retained = (
+                        f"this run's plant refit from iteration(s) {retained_refits} is RETAINED"
+                    )
+                elif inherited:
+                    # No refit landed THIS run, but the plant still carries earlier self-play
+                    # evidence that this rung's failure did not disturb — saying "nothing was
+                    # retained" here would be false (#703, Codex P2).
+                    retained = (
+                        f"this run landed no refit of its own; the inherited plant "
+                        f"({inherited} prior self-play merge(s)) is RETAINED"
+                    )
+                else:
+                    retained = "the plant carries no self-play refit, so there was none to retain"
+                print(
+                    f"auto-alien: the falsified knob was the ENVELOPE (ggv_scale {scale}); "
+                    f"{retained}"
+                )
+            if entry["falsified_component"] == "envelope":
+                component = f"envelope step, ggv_scale {scale}"
+            elif entry["falsified_component"] == "plant":
+                component = f"plant step (ggv_scale held at {scale})"
+            else:
+                # Name the kind that actually ran: claiming "envelope" on a falsified PLANT step
+                # would make the headline diagnostic contradict `entry["step_kind"]` exactly where
+                # the decoupled ladder is supposed to identify the knob (#703 Codex P2, round 5).
+                component = (
+                    f"UNATTRIBUTABLE — the plant changed on disk during this {step_kind} step at "
+                    f"ggv_scale {scale}, so the verdict belongs to neither knob alone"
+                )
             if selfplay["ok"]:
-                selfplay["stopped"] = f"falsified at iteration {index}: {reason}"
+                selfplay["stopped"] = f"falsified at iteration {index} ({component}): {reason}"
             else:
                 selfplay["stopped"] = (
                     f"rollback failed at iteration {index}: {entry['revert_error']} "
@@ -647,12 +1234,72 @@ def run_selfplay(
             break
 
         print(
-            f"auto-alien: iteration {index} VALID — laps "
+            f"auto-alien: iteration {index} VALID ({step_kind} step) — laps "
             + ", ".join(f"{ms / 1000.0:.3f}s" for ms in lap_times)
         )
+        if plant_moved_during_step:
+            # A PASS is no safer to build on than a failure here: the ladder would carry forward
+            # archives and a scale earned under a plant it did not choose (#703 Codex P1). The
+            # batch is barred from seeding the scientist baseline — `run_scientist` would
+            # otherwise pick this newest "valid" evidence dir and run setup experiments on the
+            # exact batch this message says cannot be attributed (#703 Codex P1, round 3) — and
+            # its laps must not reach `best_lap_ms` either, or a fast lap set under the peer's
+            # unknown plant would be reported as THIS ladder's best result (#703 Codex P2,
+            # round 4). Both are handled by rejecting the batch BEFORE the summary is updated,
+            # exactly as an oracle-invalid base is rejected.
+            selfplay["stopped"] = (
+                f"plant changed on disk during iteration {index}'s {step_kind} step (peer "
+                "re-identification?) — self-play stopped; the step passed but its evidence "
+                "cannot be attributed to this ladder's plant"
+            )
+            # A refit that was never driven ON ITS OWN PLANT has not survived anything, so it must
+            # not stay persisted: the monotone merge only ever RAISES grip and the keep-last-valid
+            # revert is its one way down, so leaving it would hand an unvalidated grip increase to
+            # every later alien-line consumer (#703 Codex P1, round 8). Guarded exactly like the
+            # falsified-plant rollback: if a peer now owns the artifact the revert is skipped and
+            # the rebase state stands rather than overwriting their fit.
+            if refined and last_valid_bytes is not None:
+                try:
+                    if revert_plant_artifact(
+                        plant_path,
+                        last_valid_bytes,
+                        expected_current_bytes=candidate_bytes,
+                        car_id=args.car,
+                        track_id=args.track,
+                        lock_timeout=lock_timeout,
+                    ):
+                        entry["reverted"] = True
+                        print(
+                            f"auto-alien: iteration {index} candidate never drove on its own "
+                            "plant — reverted to the last-valid fit"
+                        )
+                    else:
+                        entry["reverted"] = False
+                        entry["revert_skipped"] = (
+                            "plant artifact is no longer this iteration's candidate (peer owns "
+                            "it) — revert skipped; the rebase state stands"
+                        )
+                        print(f"auto-alien: iteration {index} {entry['revert_skipped']}")
+                except (OSError, RigSessionBusy) as exc:
+                    entry["reverted"] = False
+                    entry["revert_error"] = f"artifact rollback failed: {type(exc).__name__}: {exc}"
+                    selfplay["ok"] = False
+                    print(
+                        f"auto-alien: iteration {index} REVERT FAILED — {entry['revert_error']} "
+                        "(an undriven candidate may still be persisted; re-run --force-identify)"
+                    )
+            print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
+            break
         if lap_times:
             it_best = min(lap_times)
             best = it_best if best is None else min(best, it_best)
+        if refined:
+            # This refit has now been driven and survived the oracle on its own, with the
+            # envelope held — it is validated evidence, not an untested candidate (#703).
+            selfplay["refit_iterations"].append(index)
+        if step_kind == "envelope":
+            rung += 1
+        next_step_kind = "envelope" if step_kind == "plant" else "plant"
         prev_archives = archives
         prev_scale = scale
 
@@ -661,12 +1308,26 @@ def run_selfplay(
 
 
 def _scientist_baseline_outcome(selfplay: dict, base_outcome: dict | None) -> dict | None:
-    """Newest oracle-valid self-play outcome, falling back to the valid base batch."""
+    """Newest oracle-valid self-play outcome, falling back to the valid base batch.
+
+    A batch whose plant moved under it mid-drive is oracle-valid but **not attributable to this
+    ladder's plant**, so it is barred from seeding a setup experiment — otherwise the scientist
+    would compare setups across two different plants and could persist a corrupted verdict
+    (#703 Codex P1).
+    """
     for entry in reversed(selfplay.get("iterations", [])):
+        if entry.get("usable_as_evidence") is False:
+            continue
         if entry.get("valid") is True and entry.get("evidence_dir"):
             outcome = load_stage_outcome(Path(entry["evidence_dir"]))
             if outcome is not None:
                 return outcome
+    if selfplay.get("base_plant_fit_unverified"):
+        # The base batch is withheld from refinement for want of provenance; the same reasoning
+        # bars it from a setup experiment. Falling back to it here would compare an unproven
+        # baseline against candidates driven on the current plant, conflating plant and setup in
+        # one verdict — the exact confusion the withholding exists to prevent (#703 Qodo).
+        return None
     base = selfplay.get("base") if isinstance(selfplay.get("base"), dict) else {}
     return base_outcome if base.get("valid") is True else None
 
@@ -1009,14 +1670,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--iterations",
         type=int,
         default=0,
-        help="#577 progressive-envelope self-play: after the base drive, run K refine->rebuild->"
-        "drive iterations with keep-last-valid falsification (0 = off)",
+        help="#577 progressive-envelope self-play: after the base drive, run K drive iterations "
+        "with keep-last-valid falsification (0 = off). #703: iterations ALTERNATE between a "
+        "plant step (refit from the last valid batch, ggv-scale held) and an envelope step "
+        "(next ggv-scale rung, plant untouched), so a falsification names which knob it "
+        "falsified and a falsified rung no longer discards a validated refit. Budget ~2 "
+        "iterations per envelope rung",
     )
     p.add_argument(
         "--scale-step",
         type=float,
         default=0.05,
-        help="per-iteration ggv-scale increment for the self-play envelope ladder (#244 pattern)",
+        help="per-rung ggv-scale increment for the self-play envelope ladder (#244 pattern)",
     )
     p.add_argument(
         "--max-scale",
@@ -1295,6 +1960,9 @@ def run_pipeline(
             setup_key=setup_key,
             setup_ini=setup_ini,
             base_outcome=base_outcome,
+            # The scale the base drive ACTUALLY ran — `--stint` may have overridden
+            # `--ggv-scale` above, and a plant step holds the last validated scale (#703).
+            base_scale=args.ggv_scale if drive_scale is None else drive_scale,
         )
         if not report["selfplay"].get("ok", True):
             report["error"] = report["selfplay"]["stopped"]
@@ -1305,7 +1973,25 @@ def run_pipeline(
             f"auto-alien: selfplay done — {report['selfplay']['stopped']}"
             + (f"; best lap {best / 1000.0:.3f}s" if isinstance(best, int) else "")
         )
-        if args.scientist:
+        if args.scientist and report["selfplay"].get("requires_rebase"):
+            # A peer replaced the plant mid-ladder. The scientist would pick a baseline captured
+            # under the OLD plant while its experiment drives load the peer's current one — the
+            # comparison would change both the setup and the plant and could persist a corrupted
+            # verdict. Skip it honestly until a fresh run rebases (#703 Codex P1).
+            report["scientist"] = {
+                # `ok` stays true because skipping is the correct outcome, not a stage failure —
+                # but a distinct `status` so telemetry reading `scientist.ok` as "ran and
+                # succeeded" can tell a skip from a real run (self-hosted reviewer, grok).
+                "ok": True,
+                "status": "skipped_requires_rebase",
+                "skipped": (
+                    "self-play stopped for a peer plant change; a setup experiment would compare "
+                    "across two different plants — re-run to rebase before running the scientist"
+                ),
+                "selfplay_stopped": report["selfplay"]["stopped"],
+            }
+            print(f"auto-alien: scientist SKIPPED — {report['scientist']['skipped']}")
+        elif args.scientist:
             report["scientist"] = run_scientist(
                 args,
                 run_stage=run_stage,
