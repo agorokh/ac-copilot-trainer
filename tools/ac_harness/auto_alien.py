@@ -53,6 +53,7 @@ from tools.ac_harness.auto_drive import (
     validate_ac_id,
 )
 from tools.ac_harness.plant_id import (
+    artifact_selfplay_merge_count,
     load_plant_artifact,
     plant_artifact_from_bytes,
     plant_artifact_path,
@@ -382,27 +383,6 @@ def stage_plant_fit_sha12(outcome: dict | None) -> str | None:
     return sha12 if isinstance(sha12, str) and sha12 else None
 
 
-def _current_plant_fit_sha12(
-    user_dir: Path,
-    args: argparse.Namespace,
-    setup_key: str | None,
-    setup_ini: str | Path | None,
-) -> str | None:
-    """The plant-fit hash of the combo's artifact as it stands on disk right now (best-effort)."""
-    from tools.ac_harness.alien_line import plant_provenance
-
-    try:
-        artifact = load_plant_artifact(
-            user_dir, args.car, args.track, setup_key, setup_ini, layout=args.track_layout
-        )
-    except OSError:
-        return None
-    if not isinstance(artifact, dict):
-        return None
-    sha12 = plant_provenance(artifact).get("sha12")
-    return sha12 if isinstance(sha12, str) and sha12 else None
-
-
 def _fit_sha12_of_bytes(raw: bytes | None) -> str | None:
     """The plant-fit hash of a persisted artifact's raw bytes, or ``None`` when unusable.
 
@@ -495,32 +475,6 @@ def next_envelope_rung(
     return None
 
 
-def _inherited_selfplay_merges(
-    user_dir: Path,
-    args: argparse.Namespace,
-    setup_key: str | None,
-    setup_ini: str | Path | None,
-) -> int:
-    """How many self-play merges the combo's plant already carried before this ladder ran.
-
-    Read-only and best-effort: an unreadable/absent artifact yields 0 rather than failing the
-    ladder, because this figure is reporting fidelity (#703), never a gate.
-    """
-    try:
-        artifact = load_plant_artifact(
-            user_dir, args.car, args.track, setup_key, setup_ini, layout=args.track_layout
-        )
-    except OSError:
-        return 0
-    if not isinstance(artifact, dict):
-        return 0
-    ggv = artifact.get("ggv") if isinstance(artifact.get("ggv"), dict) else {}
-    model = ggv.get("model") if isinstance(ggv.get("model"), dict) else {}
-    provenance = model.get("provenance") if isinstance(model.get("provenance"), dict) else {}
-    merges = provenance.get("selfplay_merges")
-    return len(merges) if isinstance(merges, list) else 0
-
-
 def run_selfplay(
     args: argparse.Namespace,
     *,
@@ -585,6 +539,15 @@ def run_selfplay(
     # the operator asked for (#703 Codex P2, round 7). With no stint override the two are equal
     # and the ladder is unchanged.
     resolved_base_scale = args.ggv_scale if base_scale is None else float(base_scale)
+    # ONE read of the artifact serves every ladder-start fact: the byte snapshot the guards
+    # compare against, the provenance the base drive must agree with, and the inherited merge
+    # count. Reading it three times let a peer land between them, so the ladder could validate the
+    # provenance of one fit while snapshotting another — defeating the very guards these facts
+    # feed (self-hosted reviewer HIGH, antigravity).
+    validated_plant_bytes = _read_plant_bytes(plant_path)
+    ladder_start_artifact = plant_artifact_from_bytes(
+        validated_plant_bytes, args.car, args.track, setup_key, layout=args.track_layout
+    )
     selfplay: dict = {
         "iterations_requested": args.iterations,
         "laps_per_iteration": args.laps,
@@ -606,9 +569,7 @@ def run_selfplay(
         # compounds ACROSS runs, so a run whose own plant step is a no-op can still be protecting
         # an inherited fit — reporting "nothing was retained" from `refit_iterations` alone would
         # be false in exactly the cross-invocation case this change exists to expose (#703).
-        "inherited_selfplay_merges": _inherited_selfplay_merges(
-            user_dir, args, setup_key, setup_ini
-        ),
+        "inherited_selfplay_merges": artifact_selfplay_merge_count(ladder_start_artifact),
     }
     base_laps = stage_lap_times_ms(base_outcome)
     selfplay["lap_trajectory_ms"].append(base_laps)
@@ -653,9 +614,8 @@ def run_selfplay(
     # driving a different plant AND a higher scale, or merge the base's evidence into an
     # unvalidated peer fit. `auto_drive` records the fit its line was built from, so require the
     # two to agree before treating the snapshot as validated (#703 Codex P1, round 5).
-    validated_plant_bytes = _read_plant_bytes(plant_path)
     base_fit = stage_plant_fit_sha12(base_outcome)
-    current_fit = _current_plant_fit_sha12(user_dir, args, setup_key, setup_ini)
+    current_fit = _fit_sha12_of_bytes(validated_plant_bytes)
     selfplay["base_plant_fit_sha12"] = base_fit
     # Fail CLOSED on a missing current provenance. If the artifact was deleted or corrupted after
     # a successful base drive, `current_fit` is None while `base_fit` is populated; treating that
@@ -674,9 +634,24 @@ def run_selfplay(
         selfplay["best_lap_ms"] = best
         return selfplay
     if base_fit is None:
-        # Not a blocker (an older stage report or a failed base drive records no line), but the
-        # ladder's first step then rests on an unverified snapshot — say so rather than imply proof.
+        # Not a blocker (an older stage report or a failed base drive records no line), so the
+        # ladder still runs — envelope rungs are falsification-gated on their own. But its
+        # archives may NOT seed a refit: with no recorded provenance there is no proof the plant
+        # now on disk is the fit that produced them, so a peer replacement between that drive and
+        # this invocation would cross two fits inside the refinement evidence itself. Refuse the
+        # evidence rather than the run, until a provenance-carrying drive establishes a baseline
+        # (#703 Codex P2, round 8).
         selfplay["base_plant_fit_unverified"] = True
+        if prev_archives:
+            selfplay["base"]["refit_evidence_withheld"] = (
+                "the base drive recorded no plant provenance, so the fit that produced these "
+                "archives cannot be proven — not used as refit evidence"
+            )
+            print(
+                "auto-alien: base drive recorded no plant provenance — its archives are usable "
+                "as pace evidence but NOT as a refit batch"
+            )
+            prev_archives = []
     next_step_kind = "plant"
     for index in range(1, args.iterations + 1):
         # 0) Pick this iteration's single knob (#703). When no envelope rung can exceed the
@@ -1849,7 +1824,11 @@ def run_pipeline(
             # comparison would change both the setup and the plant and could persist a corrupted
             # verdict. Skip it honestly until a fresh run rebases (#703 Codex P1).
             report["scientist"] = {
+                # `ok` stays true because skipping is the correct outcome, not a stage failure —
+                # but a distinct `status` so telemetry reading `scientist.ok` as "ran and
+                # succeeded" can tell a skip from a real run (self-hosted reviewer, grok).
                 "ok": True,
+                "status": "skipped_requires_rebase",
                 "skipped": (
                     "self-play stopped for a peer plant change; a setup experiment would compare "
                     "across two different plants — re-run to rebase before running the scientist"

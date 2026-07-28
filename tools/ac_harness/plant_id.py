@@ -1896,6 +1896,22 @@ def load_plant_artifact(
     return plant_artifact_from_bytes(raw, car_id, track_id, setup, layout=layout)
 
 
+def artifact_selfplay_merge_count(artifact: dict | None) -> int:
+    """How many self-play merges an artifact's fit already carries (0 when absent/unreadable).
+
+    Lives here because the ``ggv -> model -> provenance -> selfplay_merges`` layout is this
+    module's storage schema; orchestration callers ask the question rather than walking the JSON
+    (self-hosted reviewer, antigravity — module boundary).
+    """
+    if not isinstance(artifact, dict):
+        return 0
+    ggv = artifact.get("ggv") if isinstance(artifact.get("ggv"), dict) else {}
+    model = ggv.get("model") if isinstance(ggv.get("model"), dict) else {}
+    provenance = model.get("provenance") if isinstance(model.get("provenance"), dict) else {}
+    merges = provenance.get("selfplay_merges")
+    return len(merges) if isinstance(merges, list) else 0
+
+
 def plant_artifact_from_bytes(
     raw: bytes | None,
     car_id: str,

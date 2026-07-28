@@ -497,11 +497,6 @@ class _SelfplayHarness:
         # The refit path now parses the snapshot it compares and writes against, so the fake
         # loader must cover that entry point too (mirrors `_usable_plant`).
         monkeypatch.setattr(auto_alien, "plant_artifact_from_bytes", lambda *a, **kw: {"fit": 0})
-        monkeypatch.setattr(
-            auto_alien,
-            "_current_plant_fit_sha12",
-            lambda *a, **kw: auto_alien._fit_sha12_of_bytes(self._plant_bytes_direct()),
-        )
 
         def fake_refine(artifact, payloads, prior, **kw):
             self.refine_calls.append(list(payloads))
@@ -1399,7 +1394,7 @@ def test_selfplay_stops_when_the_plant_changed_since_the_base_drive(monkeypatch,
     # line was built from, so the two must agree before the snapshot counts as validated.
     harness = _SelfplayHarness(monkeypatch, tmp_path, stage_specs=[(0, [95000], [True])])
     monkeypatch.setattr(auto_alien, "stage_plant_fit_sha12", lambda outcome: "basefit000000")
-    monkeypatch.setattr(auto_alien, "_current_plant_fit_sha12", lambda *a, **kw: "peerfit000000")
+    monkeypatch.setattr(auto_alien, "_fit_sha12_of_bytes", lambda raw: "peerfit000000")
     args = _args(
         tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
     )
@@ -1483,7 +1478,7 @@ def test_selfplay_fails_closed_when_the_current_plant_is_unreadable(monkeypatch,
     # plant-load failure as falsifying the SCALE RUNG while the bad artifact stayed in place.
     harness = _SelfplayHarness(monkeypatch, tmp_path, stage_specs=[(0, [95000], [True])])
     monkeypatch.setattr(auto_alien, "stage_plant_fit_sha12", lambda outcome: "basefit000000")
-    monkeypatch.setattr(auto_alien, "_current_plant_fit_sha12", lambda *a, **kw: None)
+    monkeypatch.setattr(auto_alien, "_fit_sha12_of_bytes", lambda raw: None)
     args = _args(
         tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
     )
@@ -1518,7 +1513,7 @@ def test_selfplay_trusts_the_drive_recorded_fit_over_the_bytes_on_disk(monkeypat
     # The bytes on disk are never disturbed, so only the recorded provenance can catch this.
     # The BASE must agree (that is round 5's gate); only iteration 1's drive reports a foreign fit.
     monkeypatch.setattr(auto_alien, "_fit_sha12_of_bytes", lambda raw: "expectedfit0")
-    monkeypatch.setattr(auto_alien, "_current_plant_fit_sha12", lambda *a, **kw: "expectedfit0")
+
     reads = {"n": 0}
 
     def fake_stage_fit(outcome):
@@ -1745,6 +1740,37 @@ def test_selfplay_ladder_rungs_step_from_the_validated_base_not_the_flag(monkeyp
     assert selfplay["ladder_base_scale"] == 0.85
 
 
+def test_selfplay_unproven_base_archives_do_not_seed_a_refit(monkeypatch, tmp_path):
+    # #703 (Codex P2, round 8): an oracle-valid base whose report carries no plant provenance is
+    # the explicitly supported older-report case, so the ladder still RUNS — envelope rungs are
+    # falsification-gated on their own. But its archives may not seed a refit: with no recorded
+    # provenance there is no proof the plant now on disk is the fit that produced them, so a peer
+    # replacement between that drive and this invocation would cross two fits inside the
+    # refinement evidence itself.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive: oracle-valid, no provenance
+            (0, [94000], [True]),  # iteration 1: must be an envelope step, not a refit
+        ],
+    )
+    monkeypatch.setattr(auto_alien, "stage_plant_fit_sha12", lambda outcome: None)
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "1"
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0
+    selfplay = report["selfplay"]
+    assert selfplay["base"]["valid"] is True  # still good pace evidence...
+    assert selfplay["base_plant_fit_unverified"] is True
+    assert "refit_evidence_withheld" in selfplay["base"]  # ...but not refit evidence
+    assert harness.refine_calls == []  # nothing was merged from an unprovable batch
+    entry = selfplay["iterations"][0]
+    assert entry["step_kind"] == "envelope"  # the ladder still ran
+    assert entry["refine"]["reason"] == "no lap archives from the previous drive"
+
+
 def test_stage_plant_fit_sha12_reads_the_recorded_line_provenance():
     # The ladder's proof of WHICH plant produced a batch. Shape matches auto_drive's report.
     outcome = {"run": {"alien_line": {"plant_provenance": {"sha12": "51fcee4af59a"}}}}
@@ -1785,7 +1811,7 @@ def test_selfplay_reports_an_inherited_refit_as_retained(monkeypatch, tmp_path):
     # The plant already carries two self-play merges from earlier invocations.
     monkeypatch.setattr(
         auto_alien,
-        "load_plant_artifact",
+        "plant_artifact_from_bytes",
         lambda *a, **kw: {
             "fit": 1,
             "ggv": {"model": {"provenance": {"selfplay_merges": [{"n": 1}, {"n": 2}]}}},
@@ -1827,10 +1853,16 @@ def test_selfplay_filesystem_error_stops_with_named_reason(monkeypatch, tmp_path
         ],
     )
 
-    def exploding_read(*a, **kw):
+    # Since #703 the refit no longer takes its own read — one snapshot serves the compare, the
+    # parse and the write — so patching `Path.read_bytes` would now fail the ladder-start
+    # provenance gate instead of the refine persist. Raise from the persist itself, which is the
+    # artifact I/O this guard actually exists to survive.
+    import tools.ac_harness.plant_id as plant_id_mod
+
+    def exploding_persist(*a, **kw):
         raise OSError("disk on fire")
 
-    monkeypatch.setattr(type(harness.plant_path), "read_bytes", exploding_read)
+    monkeypatch.setattr(plant_id_mod, "persist_selfplay_refinement", exploding_persist)
     args = _args(
         tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
     )
