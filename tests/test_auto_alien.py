@@ -1276,6 +1276,10 @@ def test_scientist_is_skipped_when_the_ladder_needs_a_peer_rebase(monkeypatch, t
     assert report["selfplay"]["requires_rebase"] is True
     assert called["scientist"] is False  # never ran across two different plants
     assert "re-run to rebase" in report["scientist"]["skipped"]
+    # Qodo: the skip status is observable report behaviour, so pin it — otherwise the field could
+    # be renamed or dropped and telemetry would silently read the skip as a successful run.
+    assert report["scientist"]["status"] == "skipped_requires_rebase"
+    assert report["scientist"]["ok"] is True  # skipping is the right outcome, not a stage failure
 
 
 def test_next_envelope_rung_survives_a_scale_step_that_overflows_the_division():
@@ -1769,6 +1773,82 @@ def test_selfplay_unproven_base_archives_do_not_seed_a_refit(monkeypatch, tmp_pa
     entry = selfplay["iterations"][0]
     assert entry["step_kind"] == "envelope"  # the ladder still ran
     assert entry["refine"]["reason"] == "no lap archives from the previous drive"
+
+
+def test_unreadable_plant_is_not_treated_as_a_peer_change(monkeypatch, tmp_path):
+    # Self-hosted reviewer HIGH: `_read_plant_bytes` swallowed every OSError into None, so a
+    # transient read failure was indistinguishable from "the bytes changed" at each comparison.
+    # A blip after a successful plant step then tripped keep-last-valid and DROPPED a
+    # provenance-validated refit, while reporting an I/O fault as peer re-identification with
+    # selfplay.ok still true. Absent and unreadable are different facts.
+    from tools.ac_harness.auto_alien import _read_plant_bytes
+
+    missing = tmp_path / "gone.json"
+    assert _read_plant_bytes(missing) is None  # absent -> None, as before
+
+    unreadable = tmp_path / "unreadable.json"
+    unreadable.write_text("{}", encoding="utf-8")
+
+    def boom(*a, **kw):
+        raise OSError("disk on fire")
+
+    monkeypatch.setattr(type(unreadable), "read_bytes", boom)
+    with pytest.raises(OSError, match="disk on fire"):
+        _read_plant_bytes(unreadable)  # unreadable -> raises, never a silent "changed"
+
+
+def test_selfplay_stops_loudly_when_the_plant_becomes_unreadable(monkeypatch, tmp_path):
+    # The same defect end-to-end: a post-drive read failure must fail the pipeline (ok False),
+    # NOT revert the refit and report a peer rebase.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (0, [93000], [True]),  # iteration 1: plant step, read fails right after the drive
+        ],
+    )
+    real_read = auto_alien._read_plant_bytes
+    drives = {"n": 0}
+    real_runner = harness.runner()
+
+    def runner(argv):
+        drives["n"] += 1
+        return real_runner(argv)
+
+    def read_or_explode(path):
+        if drives["n"] == 2:  # after iteration 1's drive
+            raise OSError("disk on fire")
+        return real_read(path)
+
+    monkeypatch.setattr(auto_alien, "_read_plant_bytes", read_or_explode)
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
+    )
+    code, report = run_pipeline(args, run_stage=runner)
+    selfplay = report["selfplay"]
+    assert selfplay["ok"] is False and code == 1  # fails closed, like the #579 filesystem path
+    assert "cannot read the plant artifact" in selfplay["stopped"]
+    assert "not evidence that it changed" in selfplay["stopped"]
+    entry = selfplay["iterations"][0]
+    assert "reverted" not in entry  # the validated refit was NOT dropped on an I/O blip
+    assert selfplay.get("requires_rebase") is not True  # nor laundered into a peer rebase
+
+
+def test_unproven_base_is_not_offered_as_a_scientist_baseline(tmp_path):
+    # Qodo: withholding the unprovable base from REFITTING is not enough — the scientist falls
+    # back to the base outcome when no attributable iteration exists, which would compare an
+    # unproven baseline against candidates driven on the current plant.
+    base_outcome = {"report": {"lap_times_ms": [95000]}, "lap_archives": []}
+    unproven = {
+        "iterations": [],
+        "base": {"valid": True},  # oracle-valid, so it WOULD be the fallback...
+        "base_plant_fit_unverified": True,  # ...but its plant is unprovable
+    }
+    assert auto_alien._scientist_baseline_outcome(unproven, base_outcome) is None
+    # The same oracle-valid base WITH recorded provenance is still a legitimate fallback.
+    proven = {"iterations": [], "base": {"valid": True}}
+    assert auto_alien._scientist_baseline_outcome(proven, base_outcome) is base_outcome
 
 
 def test_stage_plant_fit_sha12_reads_the_recorded_line_provenance():

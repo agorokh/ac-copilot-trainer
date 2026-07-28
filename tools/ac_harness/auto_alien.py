@@ -405,10 +405,18 @@ def _fit_sha12_of_bytes(raw: bytes | None) -> str | None:
 
 
 def _read_plant_bytes(plant_path: Path) -> bytes | None:
-    """The plant artifact's current bytes, or ``None`` when absent/unreadable (best-effort)."""
+    """The plant artifact's current bytes, or ``None`` when the file does not exist.
+
+    An **unreadable** artifact raises. Swallowing every ``OSError`` into ``None`` made a transient
+    read failure indistinguishable from "the bytes changed" at each comparison site, so a blip
+    after a successful plant step read as a peer change: it tripped keep-last-valid and dropped a
+    provenance-validated refit, and reported an I/O fault as peer re-identification with
+    ``selfplay.ok`` still true — regressing the #579 fail-closed filesystem path
+    (self-hosted reviewer HIGH). Absent and unreadable are different facts; only absence is None.
+    """
     try:
-        return plant_path.read_bytes() if plant_path.exists() else None
-    except OSError:
+        return plant_path.read_bytes()
+    except FileNotFoundError:
         return None
 
 
@@ -544,7 +552,22 @@ def run_selfplay(
     # count. Reading it three times let a peer land between them, so the ladder could validate the
     # provenance of one fit while snapshotting another — defeating the very guards these facts
     # feed (self-hosted reviewer HIGH, antigravity).
-    validated_plant_bytes = _read_plant_bytes(plant_path)
+    try:
+        validated_plant_bytes = _read_plant_bytes(plant_path)
+    except OSError as exc:
+        # Fail closed rather than start a ladder whose every guard compares against bytes we
+        # could not read (self-hosted reviewer HIGH).
+        return {
+            "ok": False,
+            "ladder_mode": "decoupled",
+            "iterations": [],
+            "stopped": (
+                f"cannot read the plant artifact ({exc}) — self-play not started; every "
+                "attribution guard compares against these bytes"
+            ),
+            "lap_trajectory_ms": [],
+            "best_lap_ms": None,
+        }
     ladder_start_artifact = plant_artifact_from_bytes(
         validated_plant_bytes, args.car, args.track, setup_key, layout=args.track_layout
     )
@@ -865,7 +888,19 @@ def run_selfplay(
         #     re-identified the combo meanwhile would silently change the second knob and the
         #     verdict would not be the envelope's. Stop rather than attribute it (#703 Codex P1).
         if step_kind == "envelope":
-            current_plant_bytes = _read_plant_bytes(plant_path)
+            try:
+                current_plant_bytes = _read_plant_bytes(plant_path)
+            except OSError as exc:
+                # An unreadable artifact is an I/O fault, NOT evidence of a peer change: it must
+                # fail the pipeline loudly, not be laundered into a rebase (self-hosted HIGH).
+                selfplay["ok"] = False
+                selfplay["stopped"] = (
+                    f"cannot read the plant artifact before iteration {index}'s envelope step "
+                    f"({exc}) — self-play stopped; unreadable is not the same as changed"
+                )
+                entry["skipped"] = True
+                print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
+                break
             if current_plant_bytes != validated_plant_bytes:
                 selfplay["stopped"] = (
                     f"plant changed on disk before iteration {index}'s envelope step (peer "
@@ -951,10 +986,20 @@ def run_selfplay(
         # purpose: an invalid drive that died before building a line legitimately records no
         # provenance, and that is an ordinary stage failure, not a peer plant change.
         missing_driven_fit = valid and expected_fit is not None and driven_fit is None
+        try:
+            post_drive_bytes = _read_plant_bytes(plant_path)
+        except OSError as exc:
+            # Never let a read blip revert a provenance-validated refit (self-hosted HIGH).
+            selfplay["ok"] = False
+            selfplay["stopped"] = (
+                f"cannot read the plant artifact after iteration {index}'s {step_kind} step "
+                f"({exc}) — self-play stopped without judging the plant; an unreadable artifact "
+                "is not evidence that it changed"
+            )
+            print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
+            break
         plant_moved_during_step = (
-            _read_plant_bytes(plant_path) != validated_plant_bytes
-            or fit_mismatch
-            or missing_driven_fit
+            post_drive_bytes != validated_plant_bytes or fit_mismatch or missing_driven_fit
         )
         if fit_mismatch:
             entry["driven_plant_fit_mismatch"] = {
@@ -1173,6 +1218,12 @@ def _scientist_baseline_outcome(selfplay: dict, base_outcome: dict | None) -> di
             outcome = load_stage_outcome(Path(entry["evidence_dir"]))
             if outcome is not None:
                 return outcome
+    if selfplay.get("base_plant_fit_unverified"):
+        # The base batch is withheld from refinement for want of provenance; the same reasoning
+        # bars it from a setup experiment. Falling back to it here would compare an unproven
+        # baseline against candidates driven on the current plant, conflating plant and setup in
+        # one verdict — the exact confusion the withholding exists to prevent (#703 Qodo).
+        return None
     base = selfplay.get("base") if isinstance(selfplay.get("base"), dict) else {}
     return base_outcome if base.get("valid") is True else None
 
