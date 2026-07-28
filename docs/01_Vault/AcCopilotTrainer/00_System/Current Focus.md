@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-28T11:40:00Z
+last_updated: 2026-07-28T16:30:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-703-decoupled-ladder-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-672-voice-endpoint-hygiene-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-529-pace-ladder-115-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-695-qss-apex-envelope-2026-07-26.md
