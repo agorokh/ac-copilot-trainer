@@ -136,9 +136,15 @@ cyan-panel deletion + conformance lock). Issue #673 CLOSED. Detail:
 
 **Delivered (2026-07-23):** PR [#657](https://github.com/agorokh/ac-copilot-trainer/pull/657)
 MERGED [`ce70add1e`](https://github.com/agorokh/ac-copilot-trainer/commit/ce70add1edaa700fefaabb27914fbb47a2edeaa2) — #625
-**driver** (honest init-perturber / overlay A/B experiment planner+analyzer). Issue #625 stays
-OPEN for the physical A/B on `pc` (operator-gated Steam/NVIDIA toggles + attached stats). Detail:
-[[issue-625-init-perturber-ab-prepared-2026-07-22]].
+**driver** (init-perturber / overlay A/B experiment planner+analyzer). Issue #625 stays
+OPEN for the physical A/B on `pc` (operator-gated Steam/NVIDIA toggles + attached stats).
+
+> **The v1 driver merged by #657 encoded a design that was withdrawn 2026-07-24** — interleaved
+> launches in ONE boot, pooled per-launch rate — which the #627/#668 accumulator refutes. PR
+> [#708](https://github.com/agorokh/ac-copilot-trainer/pull/708) re-points it to boot-scoped
+> randomized blocks (**one reboot per planned boot**). Live runbook:
+> [[issue-625-boot-scoped-redesign-2026-07-28]]. The old detail node
+> [[issue-625-init-perturber-ab-prepared-2026-07-22]] is **superseded — do not run its protocol**.
 
 **In flight (2026-07-25):** issue [#625](https://github.com/agorokh/ac-copilot-trainer/issues/625)
 physical overlay A/B — code on `main`. #529 live gates still blocked on #627. Next ICE after

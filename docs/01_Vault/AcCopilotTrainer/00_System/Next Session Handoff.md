@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-07-28T11:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-625-boot-scoped-redesign-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-672-voice-endpoint-hygiene-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-529-pace-ladder-115-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-695-qss-apex-envelope-2026-07-26.md
@@ -122,6 +123,52 @@ relates_to:
 
 # Next session handoff
 
+## In flight (2026-07-28) — #625 init-perturber A/B re-pointed to the boot-scoped design (PR #708)
+
+The merged v1 driver (PR #657) still encoded the design the 2026-07-24 reconciliation withdrew:
+interleaved single launches inside ONE boot, scored as a pooled per-launch freeze rate. Under the
+#627/#668 accumulator that returns a near-certain **false negative** — the first ~8-14 launches of
+any boot are clean in both arms — so the tool was a live trap, not merely stale. Demonstrated on
+simulated data with a large real effect (onset ~8 vs ~14): boot-scoped `p=0.03125`
+(`overlays_off_delays_onset`) vs pooled-rate `p=0.687` (`no_measurable_effect`).
+
+PR [#708](https://github.com/agorokh/ac-copilot-trainer/pull/708) rewrites
+`tools/ac_harness/init_perturber_ab.py` to a **randomized-block, boot-scoped** design:
+
+- one boot per unit, one `resilient_launch --trials N` invocation per boot, **one reboot per boot**;
+- primary endpoint = onset launch-index via an exact **block permutation** test over the
+  `2**blocks` arm orders the randomization can emit (design-based; assumes nothing about the boots);
+- **power floor re-derived and the cost went up**: `MIN_BOOTS_PER_ARM` 4 -> **6**, because
+  `2/2**informative_blocks` is the smallest attainable two-sided p and `2/2**6 = 0.03125`.
+  Balanced counterbalancing was dropped — it shrank the reference set to 6 schedules at 4 blocks
+  (min p 0.33) and could never have reached alpha;
+- **ties cost blocks, so the default is 8/arm = 16 boots**: only a block whose two arms *differ*
+  carries information (flipping a tied block leaves the statistic unchanged). Onsets are small
+  integers so ties are expected, and a run scheduled at exactly the floor reports
+  `insufficient_sample` the moment one block ties. This is the single most likely way to waste
+  the run; the plan output and runbook both say so up front, and a short run now names how many
+  informative blocks it would need;
+- secondary = post-onset burst over a fixed 6-launch window, one rate per boot;
+- boot boundaries verified by the implied boot epoch (`started_at_utc - uptime_h`), which accepts a
+  real reboot even after a long wait and rejects two arms sharing one boot;
+- refuses to load a v1 plan, so a stale plan file cannot be analyzed by mistake.
+
+**Runbook moved.** [[issue-625-boot-scoped-redesign-2026-07-28]] is the live protocol.
+[[issue-625-init-perturber-ab-prepared-2026-07-22]] is **superseded/archived** — it told the
+operator to "reboot once, run the interleaved schedule", which would have pooled both arms onto one
+boot. That was caught by review, not by us.
+
+Review: 6 rounds, 24 findings (Codex gating, Qodo + the self-hosted daemon advisory), all fixed
+or factually rebutted with the code reference. Most
+were substantive statistical corrections (direction taken from the wrong statistic; censored onsets
+treated as exact; unequal post-onset exposure; pooled Wilson on correlated launches; report
+filenames colliding across same-seed plans). Also fixed a Windows-only red on `origin/main`
+(`test_trailing_backslash_is_rejected`) that blocked a clean local `make ci-fast`.
+
+**The physical A/B has still never run** — operator sign-off on the Steam/NVIDIA toggles plus 16
+reboots (8 boots per arm; the 6/arm floor is fragile once a block ties). Follow-up [#710](https://github.com/agorokh/ac-copilot-trainer/issues/710): teach
+`resilient_launch` to record whether an attempt actually delivered an AC cycle, so
+ambiguous-onset boots stop being discarded.
 ## Delivered (2026-07-28) — #672 CLOSED: launcher voice-endpoint hygiene MERGED
 
 **PR [#707](https://github.com/agorokh/ac-copilot-trainer/pull/707) MERGED** as squash
@@ -476,8 +523,11 @@ Post-merge classify: **no** migrations/env/deps/workflow flags.
   G3) — L4/L0/META code is now on main via #674; gates still rig-blocked on #627.
 - Issue [#625](https://github.com/agorokh/ac-copilot-trainer/issues/625) stays **OPEN** — code is not
   the experiment. Operator steps: power on `pc`, authorize Steam/NVIDIA overlay toggles, run the
-  planned A/B schedule, attach stats/evidence to #625, then close. Detail:
-  [[issue-625-init-perturber-ab-prepared-2026-07-22]] / [[pr-657-resolve-blocked-2026-07-22]].
+  planned A/B schedule, attach stats/evidence to #625, then close. **Live runbook:**
+  [[issue-625-boot-scoped-redesign-2026-07-28]] — **one reboot per planned boot** (16 boots at the
+  default 8/arm; the floor is 6/arm but ties eat blocks, so do not plan at the minimum). [[issue-625-init-perturber-ab-prepared-2026-07-22]] is **SUPERSEDED**: its
+  "reboot once, run the interleaved schedule" steps are the withdrawn v1 protocol and would pool
+  both arms onto one boot. See also [[pr-657-resolve-blocked-2026-07-22]].
 - Next ICE backlog candidates after the 2026-07-24 steward: #675 Coach V2 (incl. calibration
   bypass Part 0), #531 Part G latency, #627 investigation continuation.
 
