@@ -383,24 +383,23 @@ def stage_plant_fit_sha12(outcome: dict | None) -> str | None:
     return sha12 if isinstance(sha12, str) and sha12 else None
 
 
-def _fit_sha12_of_bytes(raw: bytes | None) -> str | None:
-    """The plant-fit hash of a persisted artifact's raw bytes, or ``None`` when unusable.
+def _fit_sha12_of_artifact(artifact: dict | None) -> str | None:
+    """The plant-fit hash of an ALREADY-VALIDATED artifact, or ``None``.
 
-    ``load_plant_artifact`` is a plain ``json.loads`` of the file, so hashing the parsed bytes
-    yields exactly the provenance ``auto_drive`` records for the plant it loaded — which is what
-    makes a byte snapshot comparable to a drive report's ``plant_provenance.sha12``.
+    Takes the parsed dict rather than raw bytes on purpose: decoding and ``json.loads``-ing the
+    bytes here duplicated `plant_id.plant_artifact_from_bytes` and bypassed its schema/identity
+    validation, contradicting that function's own "exactly one definition of a usable plant
+    artifact" contract (self-hosted reviewer, antigravity). Callers parse once through the shared
+    gate and pass the result.
+
+    The hash matches what ``auto_drive`` records for the plant it loaded, which is what makes a
+    ladder snapshot comparable to a drive report's ``plant_provenance.sha12``.
     """
-    if raw is None:
+    if not isinstance(artifact, dict):
         return None
     from tools.ac_harness.alien_line import plant_provenance
 
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    sha12 = plant_provenance(payload).get("sha12")
+    sha12 = plant_provenance(artifact).get("sha12")
     return sha12 if isinstance(sha12, str) and sha12 else None
 
 
@@ -676,7 +675,10 @@ def run_selfplay(
     # unvalidated peer fit. `auto_drive` records the fit its line was built from, so require the
     # two to agree before treating the snapshot as validated (#703 Codex P1, round 5).
     base_fit = stage_plant_fit_sha12(base_outcome)
-    current_fit = _fit_sha12_of_bytes(validated_plant_bytes)
+    current_fit = _fit_sha12_of_artifact(ladder_start_artifact)
+    # Tracked alongside the byte snapshot so no iteration re-parses raw bytes behind the
+    # shared validation gate.
+    validated_plant_fit = current_fit
     selfplay["base_plant_fit_sha12"] = base_fit
     # Fail CLOSED on a missing current provenance. If the artifact was deleted or corrupted after
     # a successful base drive, `current_fit` is None while `base_fit` is populated; treating that
@@ -859,6 +861,15 @@ def run_selfplay(
                             # This plant step's own change becomes the state a later envelope
                             # step must find untouched (#703).
                             validated_plant_bytes = persisted_bytes
+                            validated_plant_fit = _fit_sha12_of_artifact(
+                                plant_artifact_from_bytes(
+                                    persisted_bytes,
+                                    args.car,
+                                    args.track,
+                                    setup_key,
+                                    layout=args.track_layout,
+                                )
+                            )
                             print(
                                 f"auto-alien: iteration {index} plant refined "
                                 f"(lateral bins adopted="
@@ -1012,7 +1023,7 @@ def run_selfplay(
         # fit. The drive REPORTS the provenance of the plant its line was built from, so trust
         # that over inference whenever it is present (#703 Codex P2, round 7).
         driven_fit = stage_plant_fit_sha12(outcome)
-        expected_fit = _fit_sha12_of_bytes(validated_plant_bytes)
+        expected_fit = validated_plant_fit
         entry["driven_plant_fit_sha12"] = driven_fit
         fit_mismatch = (
             driven_fit is not None and expected_fit is not None and driven_fit != expected_fit

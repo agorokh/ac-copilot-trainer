@@ -453,6 +453,18 @@ def test_pipeline_rejects_bad_selfplay_flags(monkeypatch, tmp_path):
         run_pipeline(_args(tmp_path, "--scientist-batch-size", "4"), run_stage=_Runner([0]))
 
 
+def _fake_artifact_from_bytes(raw, *_a, **_kw):
+    """Stand-in for `plant_id.plant_artifact_from_bytes` that stays content-sensitive.
+
+    Derived from the real fixture bytes so a peer rewrite changes the artifact — and therefore
+    its provenance hash — exactly as it would in the product. A constant dict would make every
+    fit look identical and silently disable the peer-change tests.
+    """
+    if raw is None:
+        return None
+    return {"fit": 0, "_raw": raw.decode("utf-8", "replace")}
+
+
 class _SelfplayHarness:
     """Fakes the drive stages + plant persistence for the iterate-loop orchestration tests."""
 
@@ -496,7 +508,7 @@ class _SelfplayHarness:
         # base-provenance gate on a disagreement that only exists in the harness.
         # The refit path now parses the snapshot it compares and writes against, so the fake
         # loader must cover that entry point too (mirrors `_usable_plant`).
-        monkeypatch.setattr(auto_alien, "plant_artifact_from_bytes", lambda *a, **kw: {"fit": 0})
+        monkeypatch.setattr(auto_alien, "plant_artifact_from_bytes", _fake_artifact_from_bytes)
 
         def fake_refine(artifact, payloads, prior, **kw):
             self.refine_calls.append(list(payloads))
@@ -563,6 +575,13 @@ class _SelfplayHarness:
             # fixture's own bookkeeping must not turn that into a harness crash.
             return None
 
+    def _plant_fit_direct(self):
+        """Provenance of the artifact on disk, via the same gate the product parses through."""
+        from tools.ac_harness.alien_line import plant_provenance
+
+        artifact = _fake_artifact_from_bytes(self._plant_bytes_direct())
+        return plant_provenance(artifact).get("sha12") if artifact is not None else None
+
     def runner(self):
         state = {"i": 0}
 
@@ -588,13 +607,7 @@ class _SelfplayHarness:
                 # (auto_drive -> run.alien_line.plant_provenance). The ladder now treats that as
                 # the only proof of WHICH plant produced a batch, so the fake must emit it too —
                 # computed from the artifact as it stands at drive time, exactly like the product.
-                "run": {
-                    "alien_line": {
-                        "plant_provenance": {
-                            "sha12": auto_alien._fit_sha12_of_bytes(self._plant_bytes_direct())
-                        }
-                    }
-                },
+                "run": {"alien_line": {"plant_provenance": {"sha12": self._plant_fit_direct()}}},
             }
             (stage_dir / "report.json").write_text(_json.dumps(payload), encoding="utf-8")
             return exit_code
@@ -1398,7 +1411,7 @@ def test_selfplay_stops_when_the_plant_changed_since_the_base_drive(monkeypatch,
     # line was built from, so the two must agree before the snapshot counts as validated.
     harness = _SelfplayHarness(monkeypatch, tmp_path, stage_specs=[(0, [95000], [True])])
     monkeypatch.setattr(auto_alien, "stage_plant_fit_sha12", lambda outcome: "basefit000000")
-    monkeypatch.setattr(auto_alien, "_fit_sha12_of_bytes", lambda raw: "peerfit000000")
+    monkeypatch.setattr(auto_alien, "_fit_sha12_of_artifact", lambda art: "peerfit000000")
     args = _args(
         tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
     )
@@ -1482,7 +1495,7 @@ def test_selfplay_fails_closed_when_the_current_plant_is_unreadable(monkeypatch,
     # plant-load failure as falsifying the SCALE RUNG while the bad artifact stayed in place.
     harness = _SelfplayHarness(monkeypatch, tmp_path, stage_specs=[(0, [95000], [True])])
     monkeypatch.setattr(auto_alien, "stage_plant_fit_sha12", lambda outcome: "basefit000000")
-    monkeypatch.setattr(auto_alien, "_fit_sha12_of_bytes", lambda raw: None)
+    monkeypatch.setattr(auto_alien, "_fit_sha12_of_artifact", lambda art: None)
     args = _args(
         tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
     )
@@ -1516,7 +1529,7 @@ def test_selfplay_trusts_the_drive_recorded_fit_over_the_bytes_on_disk(monkeypat
     )
     # The bytes on disk are never disturbed, so only the recorded provenance can catch this.
     # The BASE must agree (that is round 5's gate); only iteration 1's drive reports a foreign fit.
-    monkeypatch.setattr(auto_alien, "_fit_sha12_of_bytes", lambda raw: "expectedfit0")
+    monkeypatch.setattr(auto_alien, "_fit_sha12_of_artifact", lambda art: "expectedfit0")
 
     reads = {"n": 0}
 
@@ -2051,14 +2064,10 @@ def test_selfplay_reports_an_inherited_refit_as_retained(monkeypatch, tmp_path):
         },
     )
     # The plant already carries two self-play merges from earlier invocations.
-    monkeypatch.setattr(
-        auto_alien,
-        "plant_artifact_from_bytes",
-        lambda *a, **kw: {
-            "fit": 1,
-            "ggv": {"model": {"provenance": {"selfplay_merges": [{"n": 1}, {"n": 2}]}}},
-        },
-    )
+    # Patch the COUNT rather than the artifact: overriding the parse gate here would also
+    # change the artifact's provenance hash and trip the base-fit gate, which is not what this
+    # test is about.
+    monkeypatch.setattr(auto_alien, "artifact_selfplay_merge_count", lambda artifact: 2)
     args = _args(
         tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
     )
