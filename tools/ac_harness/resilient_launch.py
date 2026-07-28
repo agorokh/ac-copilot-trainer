@@ -1611,6 +1611,7 @@ def _watch_live(  # pragma: no cover - rig-only
     stability_window: float,
     poll_interval: float = 1.0,
     pause_budget: float = DEFAULT_PAUSE_BUDGET,
+    delivery_baseline: Sample | None = None,
 ) -> AttemptOutcome:
     """Sample until the attempt resolves, then classify. Streams samples into :func:`classify`.
 
@@ -1618,6 +1619,18 @@ def _watch_live(  # pragma: no cover - rig-only
     :func:`cycle_delivered`. The budget-exhaustion ``FROZE`` below is post-go-live by
     construction — ``classify`` resolves the go-live timeout, which is strictly shorter than this
     budget, before it can be reached — so it is always a delivered cycle.
+
+    ``delivery_baseline`` is a PRE-LAUNCH packet reading. Without it, delivery evidence begins at
+    the first post-launch sample, so a session that started and exited before that sample
+    completed would leave every later sample pinned at its final value with no movement to
+    detect — publishing ``cycle_delivered=False`` for a cycle that ran (#710 Codex P2). The
+    baseline makes that unreachable by construction instead of by a timing argument about how
+    fast AC can boot.
+
+    It feeds **only** :func:`cycle_delivered`, never :func:`classify`. Seeding the classifier's
+    comparison baseline from a pre-launch reading is the #628 corpse trap: the dead session's
+    section is still mapped at a high id, and the next ``acs.exe`` rendering its own stream from
+    ~0 would read as a regression and throw away a perfectly healthy launch.
 
     The wall-clock budget is ``go_live_timeout + stability_window + 30`` **plus the pause hold**
     ``classify`` reports (capped at ``pause_budget``): a long alt-tab must stay PENDING, never
@@ -1630,6 +1643,11 @@ def _watch_live(  # pragma: no cover - rig-only
     started_at = time.monotonic()
     budget = go_live_timeout + stability_window + 30.0
     paused = 0.0
+
+    def delivery_trace(observed: list[Sample]) -> list[Sample]:
+        """The trace used for DELIVERY only — never for classification (see the docstring)."""
+        return observed if delivery_baseline is None else [delivery_baseline, *observed]
+
     while time.monotonic() < started_at + budget + min(paused, pause_budget):
         samples.append(_sample_now(read_state, acs_alive))
         sink: list[float] = []
@@ -1642,11 +1660,11 @@ def _watch_live(  # pragma: no cover - rig-only
             pause_sink=sink,
         )
         if verdict is not LaunchVerdict.PENDING:
-            return AttemptOutcome(verdict, cycle_delivered(samples))
+            return AttemptOutcome(verdict, cycle_delivered(delivery_trace(samples)))
         if sink:
             paused = sink[-1]
         time.sleep(poll_interval)
-    return AttemptOutcome(LaunchVerdict.FROZE, cycle_delivered(samples))
+    return AttemptOutcome(LaunchVerdict.FROZE, cycle_delivered(delivery_trace(samples)))
 
 
 def _positive_float(value: str) -> float:
@@ -1880,6 +1898,17 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             minimize_foreground_window()
             if release_requested():
                 raise _OperatorRelease
+            # Pre-launch packet baseline for the #710 delivery check ONLY. acs.exe is confirmed
+            # gone above, so whatever these sections hold now is a corpse (or nothing) — any
+            # later movement therefore proves a new writer, even if the session dies before the
+            # first post-launch sample completes. Deliberately NOT fed to classify (#628).
+            baseline_gfx, _baseline_ready, baseline_phys = read_state()
+            delivery_baseline = Sample(
+                t=time.monotonic(),
+                gfx_packet=baseline_gfx,
+                acs_alive=False,
+                phys_packet=baseline_phys,
+            )
             try:
                 # Cleanup already normalized acs.exe above. Calling relaunch() here would add a
                 # second uninterruptible taskkill window between the final release check and launch.
@@ -1920,6 +1949,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     acs_alive,
                     go_live_timeout=args.go_live_timeout,
                     stability_window=args.stability_window,
+                    delivery_baseline=delivery_baseline,
                 )
             except _Car0NotDrivable:
                 # CM did start a LIVE session; only the Car0 handoff failed. Treat this as a bad

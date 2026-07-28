@@ -1229,6 +1229,15 @@ def analyze(
         for block in blocks
         if block.usable and block.onset_difference == 0 and not block.onset_sign_established
     )
+    # Blocks that actually carry an OBSERVATION — a nonzero difference, or a zero that is a real
+    # observed tie. A block whose zero came from censoring is not one of these. The endpoint floor
+    # is checked against THIS count, not against `usable_blocks`, so that a run cannot satisfy the
+    # floor on blocks that learned nothing: 2 observed ties plus 5 censoring-uninformative blocks
+    # is not 7 blocks' worth of evidence. Conversely — and this is the bug it replaces — the old
+    # `censoring_uninformative_blocks and informative_blocks == 0` veto downgraded an otherwise
+    # eligible `no_measurable_effect` the moment a single uninformative block was appended to six
+    # fully observed ties, which is exactly backwards (#710 Qodo, round 3).
+    observing_blocks = sum(1 for block in blocks if block.usable and block.onset_sign_established)
     # Smallest informative-block count that could reach alpha, so a short run says what it needs
     # instead of just refusing. 2/2**k <= alpha  <=>  k >= log2(2/alpha).
     informative_required = math.ceil(math.log2(2.0 / alpha))
@@ -1306,10 +1315,16 @@ def analyze(
     )
     missing_blocks = max(0, (expected_blocks or 0) - len(blocks))
     exclusions_present = sum(excluded.values()) > 0 or incomplete_blocks > 0 or missing_blocks > 0
-    if usable_blocks < endpoint_floor or onset_p is None or blocked_effect is None or short_boots:
-        conclusion = "insufficient_sample"
-    elif censoring_uninformative_blocks and informative_blocks == 0:
-        # Nothing was learned: every block's zero came from censoring, not from an observation.
+    if (
+        usable_blocks < endpoint_floor
+        # Blocks that learned nothing cannot fill the floor. This subsumes the old
+        # "all zeros came from censoring" veto — an all-uninformative run has zero observing
+        # blocks — without vetoing a run whose ties were genuinely observed.
+        or observing_blocks < endpoint_floor
+        or onset_p is None
+        or blocked_effect is None
+        or short_boots
+    ):
         conclusion = "insufficient_sample"
     elif smallest_attainable is not None and smallest_attainable > alpha:
         # Enough usable blocks, but too few of them carry a nonzero difference for any result
@@ -1384,6 +1399,7 @@ def analyze(
         "incomplete_blocks": incomplete_blocks,
         "missing_blocks": missing_blocks,
         "censoring_uninformative_blocks": censoring_uninformative_blocks,
+        "observing_blocks": observing_blocks,
         "burst_blocks": len(burst_differences),
         "short_boots_below_launch_floor": len(short_boots),
         "minimum_launches_per_boot": MIN_LAUNCHES_PER_BOOT,

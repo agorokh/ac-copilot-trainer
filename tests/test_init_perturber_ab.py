@@ -860,6 +860,43 @@ def test_doubly_censored_blocks_with_unequal_delivery_are_not_informative() -> N
     assert result["conclusion"] == "insufficient_sample"
 
 
+def test_one_uninformative_block_does_not_veto_observed_ties() -> None:
+    """#710 Qodo round 3 — censoring must not downgrade a result the observations support.
+
+    Six fully observed equal onsets ARE evidence of no effect. Appending one sign-ambiguous
+    censored block used to flip the conclusion to `insufficient_sample`, which is backwards: the
+    veto exists for a run that learned nothing, not for one that learned something and then saw
+    an extra uninformative block.
+    """
+    boots: list[BootObservation] = []
+    for _ in range(6):
+        boots.append(_boot(len(boots) + 1, "overlays_on", _stable_then_freeze(8)))
+        boots.append(_boot(len(boots) + 1, "overlays_off", _stable_then_freeze(8)))
+    # ...plus one block whose censoring leaves the sign open.
+    boots.append(_boot(len(boots) + 1, "overlays_on", ["stable"] * 23 + ["froze"]))
+    boots.append(_boot(len(boots) + 1, "overlays_off", ["never_live"] * 4 + ["stable"] * 20))
+    result = analyze(boots)
+    assert result["informative_blocks"] == 0
+    assert result["censoring_uninformative_blocks"] == 1
+    assert result["observing_blocks"] == 6  # the six observed ties still count
+    assert result["conclusion"] == "no_measurable_effect"
+
+
+def test_uninformative_blocks_cannot_fill_the_endpoint_floor() -> None:
+    """The other half: 2 observed ties + 5 uninformative blocks is not 7 blocks of evidence."""
+    boots: list[BootObservation] = []
+    for _ in range(2):
+        boots.append(_boot(len(boots) + 1, "overlays_on", _stable_then_freeze(8)))
+        boots.append(_boot(len(boots) + 1, "overlays_off", _stable_then_freeze(8)))
+    for _ in range(5):
+        boots.append(_boot(len(boots) + 1, "overlays_on", ["stable"] * 23 + ["froze"]))
+        boots.append(_boot(len(boots) + 1, "overlays_off", ["never_live"] * 4 + ["stable"] * 20))
+    result = analyze(boots)
+    assert result["usable_blocks"] == 7  # enough blocks by the old count...
+    assert result["observing_blocks"] == 2  # ...but only two learned anything
+    assert result["conclusion"] == "insufficient_sample"
+
+
 def test_singly_censored_pair_without_a_known_ordering_is_not_informative() -> None:
     """#710 Codex P1 round 2 — a one-sided bound that fails to exclude zero fixes no sign.
 

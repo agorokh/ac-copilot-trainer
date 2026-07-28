@@ -738,6 +738,60 @@ class TestCycleDelivered:
         assert cycle_delivered(samples) is True
 
 
+def test_watch_live_seeds_delivery_from_the_pre_launch_baseline(monkeypatch):
+    """#710 Codex P2 — a session that dies before the first sample completes still delivered.
+
+    Without a pre-launch baseline the evidence window opens at the first post-launch sample, so
+    every sample reads the dead session's final packet, nothing moves, and the attempt is
+    published as `cycle_delivered=False` — silently shifting every later accumulator position.
+    """
+    now = 0.0
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+    # Corpse sat at 16983 before launch; every sampled reading is the dead new session's 240.
+    baseline = Sample(t=0.0, gfx_packet=16983, acs_alive=False)
+    outcome = _watch_live(
+        lambda: (240, None),
+        lambda: False,
+        go_live_timeout=2.0,
+        stability_window=5.0,
+        poll_interval=1.0,
+        delivery_baseline=baseline,
+    )
+    assert outcome == AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=True)
+
+
+def test_watch_live_without_a_baseline_cannot_see_that_movement(monkeypatch):
+    """The same trace, unseeded — pins the value the baseline adds rather than assuming it."""
+    now = 0.0
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+    outcome = _watch_live(
+        lambda: (240, None),
+        lambda: False,
+        go_live_timeout=2.0,
+        stability_window=5.0,
+        poll_interval=1.0,
+    )
+    assert outcome == AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=False)
+
+
 def test_watch_live_reports_delivery_alongside_the_verdict(monkeypatch):
     """#710 — the rig path derives delivery from the trace it already collected."""
     now = 0.0
