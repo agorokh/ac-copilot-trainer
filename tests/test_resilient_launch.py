@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from tools.ac_harness.resilient_launch import (
+    AttemptOutcome,
     AttemptReadiness,
     LaunchVerdict,
     Sample,
@@ -43,6 +44,7 @@ from tools.ac_harness.resilient_launch import (
     _wait_process_exit,
     _watch_live,
     classify,
+    cycle_delivered,
     run_retry_loop,
 )
 from tools.ac_harness.shared_memory import SharedMemoryUnavailable
@@ -342,7 +344,7 @@ def test_streaming_watch_extends_deadline_through_pause(monkeypatch):
             go_live_timeout=2.0,
             stability_window=5.0,
             poll_interval=1.0,
-        )
+        ).verdict
         is LaunchVerdict.STABLE
     )
 
@@ -377,7 +379,7 @@ def test_streaming_watch_freezes_dual_stream_hang_past_pause_budget(monkeypatch)
             stability_window=5.0,
             poll_interval=1.0,
             pause_budget=8.0,
-        )
+        ).verdict
         is LaunchVerdict.FROZE
     )
 
@@ -682,6 +684,52 @@ def test_stability_window_is_measured_from_go_live_not_from_launch():
     assert classify(late, go_live_timeout=40.0, stability_window=60.0) is not LaunchVerdict.STABLE
 
 
+class TestCycleDelivered:
+    """#710 — delivery is 'acs.exe was seen alive', never inferred from the verdict."""
+
+    def test_empty_trace_delivered_nothing(self):
+        assert cycle_delivered([]) is False
+
+    def test_a_trace_that_never_saw_acs_delivered_no_cycle(self):
+        samples = trace([(0.0, None, False), (1.0, None, False), (2.0, None, False)])
+        assert classify(samples, go_live_timeout=1.0) is LaunchVerdict.NEVER_LIVE
+        assert cycle_delivered(samples) is False
+
+    def test_a_process_that_appeared_and_exited_delivered_a_cycle(self):
+        """Same NEVER_LIVE verdict as above, opposite physical outcome — that is the bug."""
+        samples = trace([(0.0, None, False), (1.0, 10, True), (2.0, None, False)])
+        assert classify(samples, go_live_timeout=30.0) is LaunchVerdict.NEVER_LIVE
+        assert cycle_delivered(samples) is True
+
+    def test_a_wedged_init_delivered_a_cycle(self):
+        samples = trace([(0.0, 10, True), (1.0, 10, True), (2.0, 10, True)])
+        assert classify(samples, go_live_timeout=2.0) is LaunchVerdict.WEDGED_INIT
+        assert cycle_delivered(samples) is True
+
+
+def test_watch_live_reports_delivery_alongside_the_verdict(monkeypatch):
+    """#710 — the rig path derives delivery from the trace it already collected."""
+    now = 0.0
+
+    def monotonic() -> float:
+        return now
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", monotonic)
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+    outcome = _watch_live(
+        lambda: (None, None),
+        lambda: False,  # acs.exe never appears
+        go_live_timeout=2.0,
+        stability_window=5.0,
+        poll_interval=1.0,
+    )
+    assert outcome == AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=False)
+
+
 class TestRetryLoop:
     def test_stops_on_first_stable_and_counts_attempts(self):
         verdicts = [LaunchVerdict.FROZE, LaunchVerdict.FROZE, LaunchVerdict.STABLE]
@@ -782,7 +830,7 @@ class TestRetryLoop:
             lambda i: LaunchVerdict.STABLE, max_attempts=1, uptime_hours=lambda: None
         )
         payload = json_module.loads(json_module.dumps(report.as_dict()))
-        assert payload["schema"] == "resilient-launch-report/v1"
+        assert payload["schema"] == "resilient-launch-report/v2"
         assert payload["verdict"] == "stable"
         assert payload["counts"] == {
             "stable": 1,
@@ -790,8 +838,10 @@ class TestRetryLoop:
             "wedged_init": 0,
             "never_live": 0,
         }
+        assert payload["cycles"] == {"delivered": 1, "undelivered": 0, "undetermined": 0}
         assert payload["attempts_log"][0]["attempt"] == 1
         assert payload["attempts_log"][0]["uptime_h"] is None
+        assert payload["attempts_log"][0]["cycle_delivered"] is True
 
     def test_report_as_dict_includes_launch_provenance(self):
         """#657 Qodo — observable ``launch`` field must stay covered by tests."""
@@ -825,6 +875,69 @@ class TestRetryLoop:
                 stable=1,
             ).as_dict()
         )
+
+    def test_bare_verdict_leaves_never_live_delivery_undetermined(self):
+        """#710 — a caller returning a bare verdict supplies no delivery evidence.
+
+        Every other verdict implies a live acs.exe and is derivable; ``never_live`` is exactly
+        the ambiguous one, so it must stay UNKNOWN rather than be guessed either way.
+        """
+        seq = [LaunchVerdict.NEVER_LIVE, LaunchVerdict.WEDGED_INIT, LaunchVerdict.STABLE]
+        report = run_retry_loop(lambda i: seq[i - 1], max_attempts=3)
+        assert [record.cycle_delivered for record in report.attempts_log] == [None, True, True]
+        assert (report.cycles_delivered, report.cycles_undelivered) == (2, 0)
+        assert report.cycles_undetermined == 1
+
+    def test_never_live_records_which_of_its_two_shapes_it_was(self):
+        """#710 — the whole point: 'never spawned' and 'appeared then exited' stop sharing a row."""
+        outcomes = [
+            AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=False),
+            AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=True),
+            AttemptOutcome(LaunchVerdict.STABLE, cycle_delivered=True),
+        ]
+        report = run_retry_loop(lambda i: outcomes[i - 1], max_attempts=3)
+        assert [record.cycle_delivered for record in report.attempts_log] == [False, True, True]
+        assert report.never_live == 2
+        # Two never_live rows, but only ONE of them failed to reach AC.
+        assert (report.cycles_delivered, report.cycles_undelivered) == (2, 1)
+        payload = report.as_dict()
+        assert payload["cycles"] == {"delivered": 2, "undelivered": 1, "undetermined": 0}
+        assert [row["cycle_delivered"] for row in payload["attempts_log"]] == [False, True, True]
+
+    def test_delivered_never_live_does_not_advance_the_cm_restart_streak(self):
+        """A never_live that DID spawn acs.exe is not a stale-CM symptom (#537/#558 + #710)."""
+        outcomes = [
+            AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=True),
+            AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=True),
+            AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=True),
+        ]
+        calls: list[int] = []
+        run_retry_loop(
+            lambda i: outcomes[i - 1],
+            max_attempts=3,
+            on_never_live_streak=lambda: calls.append(1),
+            never_live_before_restart=2,
+        )
+        assert calls == []
+
+    def test_undelivered_never_live_still_cold_restarts_cm(self):
+        outcomes = [AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=False)] * 2
+        calls: list[int] = []
+        run_retry_loop(
+            lambda i: outcomes[i - 1],
+            max_attempts=2,
+            on_never_live_streak=lambda: calls.append(1),
+            never_live_before_restart=2,
+        )
+        assert calls == [1]
+
+    def test_rejects_a_live_verdict_claimed_as_undelivered(self):
+        """A FROZE/STABLE/WEDGED_INIT verdict is only reachable through a live acs.exe."""
+        with pytest.raises(ValueError, match="undelivered"):
+            run_retry_loop(
+                lambda _: AttemptOutcome(LaunchVerdict.FROZE, cycle_delivered=False),
+                max_attempts=1,
+            )
 
     def test_uptime_reader_failure_does_not_fail_the_attempt(self):
         def boom() -> float:
@@ -871,7 +984,7 @@ def test_streaming_watch_survives_go_live_timeout_until_stability(monkeypatch):
             go_live_timeout=2.0,
             stability_window=5.0,
             poll_interval=1.0,
-        )
+        ).verdict
         is LaunchVerdict.STABLE
     )
 
@@ -1004,7 +1117,7 @@ def test_streaming_watch_waits_through_short_hitch(monkeypatch):
             go_live_timeout=2.0,
             stability_window=5.0,
             poll_interval=1.0,
-        )
+        ).verdict
         is LaunchVerdict.STABLE
     )
 

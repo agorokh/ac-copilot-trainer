@@ -12,7 +12,7 @@ from tools.ac_harness.init_perturber_ab import (
     BASELINE_ONSET_INDEX_GRACEFUL,
     DEFAULT_LAUNCHES_PER_BOOT,
     MAX_BOOTS_PER_ARM,
-    MAX_NEVER_LIVE_FRACTION,
+    MAX_UNDELIVERED_FRACTION,
     MIN_BOOTS_PER_ARM,
     MIN_LAUNCHES_PER_BOOT,
     POST_ONSET_WINDOW,
@@ -46,6 +46,16 @@ def _launch_config(launches: int = _LAUNCHES) -> dict[str, object]:
     }
 
 
+def _default_delivery(verdicts: list[str]) -> list[bool | None]:
+    """#710 delivery flags for a verdict list, defaulting never_live to 'never reached AC'.
+
+    Every other verdict is only reachable through a live ``acs.exe``, so it delivered a cycle.
+    The delivered-``never_live`` shape (acs.exe appeared then exited) is exercised by passing
+    ``delivered`` explicitly.
+    """
+    return [verdict != "never_live" for verdict in verdicts]
+
+
 def _write_boot_report(
     path: Path,
     *,
@@ -54,17 +64,20 @@ def _write_boot_report(
     uptime_start: float,
     launch: dict[str, object] | None = None,
     attempts: int | None = None,
+    delivered: list[bool | None] | None = None,
 ) -> None:
     """Emit one ``resilient_launch --trials N`` style report for a whole boot."""
     counts = {"stable": 0, "froze": 0, "wedged_init": 0, "never_live": 0}
+    flags = _default_delivery(verdicts) if delivered is None else delivered
     log = []
-    for index, verdict in enumerate(verdicts, start=1):
+    for index, (verdict, delivery) in enumerate(zip(verdicts, flags, strict=True), start=1):
         counts[verdict] += 1
         minute = start_minute + index
         log.append(
             {
                 "attempt": index,
                 "verdict": verdict,
+                "cycle_delivered": delivery,
                 "started_at_utc": f"2026-07-28T{minute // 60:02d}:{minute % 60:02d}:00Z",
                 "elapsed_s": 12.5,
                 "uptime_h": round(uptime_start + index * 0.05, 4),
@@ -75,6 +88,11 @@ def _write_boot_report(
         "verdict": verdicts[-1],
         "attempts": len(verdicts) if attempts is None else attempts,
         "counts": counts,
+        "cycles": {
+            "delivered": sum(flag is True for flag in flags),
+            "undelivered": sum(flag is False for flag in flags),
+            "undetermined": sum(flag is None for flag in flags),
+        },
         "launch": launch or _launch_config(len(verdicts)),
         "attempts_log": log,
     }
@@ -90,8 +108,14 @@ def _stable_then_freeze(onset: int, total: int = _LAUNCHES) -> list[str]:
 
 
 def _boot(
-    number: int, condition: str, verdicts: list[str], *, uptime_start: float = 0.5
+    number: int,
+    condition: str,
+    verdicts: list[str],
+    *,
+    uptime_start: float = 0.5,
+    delivered: list[bool | None] | None = None,
 ) -> BootObservation:
+    flags = _default_delivery(verdicts) if delivered is None else delivered
     return BootObservation(
         boot=number,
         condition=condition,
@@ -102,10 +126,24 @@ def _boot(
                 started_at_utc=f"2026-07-28T10:{index:02d}:00Z",
                 elapsed_s=12.5,
                 uptime_h=uptime_start + index * 0.05,
+                cycle_delivered=delivery,
             )
-            for index, verdict in enumerate(verdicts, start=1)
+            for index, (verdict, delivery) in enumerate(zip(verdicts, flags, strict=True), start=1)
         ),
     )
+
+
+def _ambiguous_boot(number: int, condition: str) -> BootObservation:
+    """A boot whose onset position is genuinely unknown (#710).
+
+    Since #710 an undelivered attempt merely SHIFTS the onset's cycle position, so the only
+    remaining ambiguity is a report that does not know whether an attempt reached AC —
+    ``cycle_delivered: null``, which a rig run never emits but the schema still admits.
+    """
+    verdicts = ["stable"] * 5 + ["never_live"] + ["froze"] + ["stable"] * 13
+    delivered = _default_delivery(verdicts)
+    delivered[5] = None
+    return _boot(number, condition, verdicts, delivered=delivered)
 
 
 # _LAUNCHES == MIN_LAUNCHES_PER_BOOT, so the default fixtures are endpoint-eligible.
@@ -301,6 +339,75 @@ def test_report_counts_must_match_the_attempts_log(tmp_path: Path) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="counts"):
         load_observations(plan, tmp_path, require_complete=False)
+
+
+def _mutate_first_report(tmp_path: Path, plan: dict[str, object], mutate) -> None:
+    path = tmp_path / plan["boots"][0]["report"]
+    _write_boot_report(path, verdicts=["stable"] * _LAUNCHES, start_minute=0, uptime_start=0.5)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    mutate(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_v1_reports_are_rejected_with_a_reason(tmp_path: Path) -> None:
+    """#710 — a v1 report has no delivery flag, so its never_live rows cannot be mapped."""
+    plan = _two_boot_plan()
+
+    def drop_delivery(payload: dict) -> None:
+        payload["schema"] = "resilient-launch-report/v1"
+        payload.pop("cycles")
+        for row in payload["attempts_log"]:
+            row.pop("cycle_delivered")
+
+    _mutate_first_report(tmp_path, plan, drop_delivery)
+    with pytest.raises(ValueError, match="withdrawn"):
+        load_observations(plan, tmp_path, require_complete=False)
+
+
+def test_missing_cycle_delivered_is_rejected(tmp_path: Path) -> None:
+    plan = _two_boot_plan()
+    _mutate_first_report(tmp_path, plan, lambda p: p["attempts_log"][3].pop("cycle_delivered"))
+    with pytest.raises(ValueError, match="missing cycle_delivered"):
+        load_observations(plan, tmp_path, require_complete=False)
+
+
+def test_a_live_verdict_claimed_as_undelivered_is_rejected(tmp_path: Path) -> None:
+    """Only never_live may lack a delivered cycle; anything else needs a live acs.exe."""
+    plan = _two_boot_plan()
+
+    def lie(payload: dict) -> None:
+        payload["attempts_log"][3]["cycle_delivered"] = False
+        payload["cycles"] = {"delivered": _LAUNCHES - 1, "undelivered": 1, "undetermined": 0}
+
+    _mutate_first_report(tmp_path, plan, lie)
+    with pytest.raises(ValueError, match="only never_live"):
+        load_observations(plan, tmp_path, require_complete=False)
+
+
+def test_cycles_block_must_match_the_attempts_log(tmp_path: Path) -> None:
+    plan = _two_boot_plan()
+    _mutate_first_report(tmp_path, plan, lambda p: p["cycles"].__setitem__("delivered", 0))
+    with pytest.raises(ValueError, match="cycles block"):
+        load_observations(plan, tmp_path, require_complete=False)
+
+
+def test_delivery_flags_survive_the_report_round_trip(tmp_path: Path) -> None:
+    """End-to-end: what the launcher writes is what ``summarize_boot`` scores (#710)."""
+    plan = _two_boot_plan()
+    verdicts = ["stable"] * 9 + ["never_live"] + ["froze"] + ["stable"] * 9
+    _write_boot_report(
+        tmp_path / plan["boots"][0]["report"],
+        verdicts=verdicts,
+        start_minute=0,
+        uptime_start=0.5,
+    )
+    observations = load_observations(plan, tmp_path, require_complete=False)
+    summary = summarize_boot(observations[0])
+    assert [item.cycle_delivered for item in observations[0].launches] == _default_delivery(
+        verdicts
+    )
+    assert (summary.onset_index, summary.onset_cycle) == (11, 10)
+    assert summary.onset_ambiguous is False
 
 
 def test_incomplete_experiment_is_refused(tmp_path: Path) -> None:
@@ -507,56 +614,105 @@ def test_censored_boot_gets_a_surrogate_beyond_every_observable_onset() -> None:
     assert summary.usable is True
 
 
-def test_censored_boot_containing_never_live_is_also_ambiguous() -> None:
-    """Codex + Qodo #708: censoring is only known in DELIVERED cycles.
+def test_censored_boot_is_bounded_by_its_delivered_cycles() -> None:
+    """#710: censoring is known in DELIVERED cycles, and now those are recorded.
 
-    "No freeze in N launches" bounds the onset above the number of cycles actually delivered,
-    which is unknown when any never_live is present — so N+1 would overstate how long that arm
-    stayed clean, and would bias the comparison if never_live rates differ by arm.
+    "No freeze in N launches" bounds the onset above the number of cycles actually delivered.
+    Before #710 an undelivered attempt made that number unknown and the boot was discarded; now
+    the surrogate is simply ``delivered + 1`` instead of ``launches + 1``, which is the whole
+    point — an arm with more delivery failures no longer looks like it stayed clean for longer.
     """
     verdicts = ["stable"] * (_LAUNCHES - 1) + ["never_live"]
     summary = summarize_boot(_boot(1, "overlays_off", verdicts))
     assert summary.onset_index is None
     assert summary.onset_censored is True
-    assert summary.never_live_before_onset == 1
-    assert summary.onset_ambiguous is True
+    assert summary.delivered_cycles == _LAUNCHES - 1
+    assert summary.undelivered_launches == 1
+    assert summary.onset_ambiguous is False
+    # ``launches + 1`` would have been 21 — one cycle of credit the accumulator never saw.
+    assert summary.onset_value == _LAUNCHES
 
 
-def test_never_live_before_onset_makes_the_onset_ambiguous() -> None:
-    """Codex #708: a never_live record does not prove a launch cycle reached AC.
+def test_undelivered_launch_before_onset_shifts_the_onset_cycle() -> None:
+    """#710 — the recovered statistical power: this boot used to be discarded entirely.
 
-    ``resilient_launch`` returns NEVER_LIVE both when acs.exe appeared then exited (a cycle
-    happened) and when Content Manager was absent or ``launch()`` raised (nothing spawned),
-    and the report schema cannot tell them apart. So the onset's position in the accumulator's
-    own count is unknown and the boot must not score the primary endpoint.
+    The freeze is the 11th report row but only the 10th launch cycle the accumulator saw,
+    because one attempt never reached AC. Scoring it at 11 would overstate how long the arm
+    stayed clean; discarding the boot (the pre-#710 fallback) cost a physical reboot.
     """
     verdicts = ["stable"] * 9 + ["never_live"] + ["froze"] + ["stable"] * 9
     summary = summarize_boot(_boot(1, "overlays_on", verdicts))
     assert summary.onset_index == 11
-    assert summary.never_live_before_onset == 1
+    assert summary.onset_cycle == 10
+    assert summary.onset_value == 10
+    assert summary.undetermined_before_onset == 0
+    assert summary.onset_ambiguous is False
+    assert summary.usable is True
+
+
+def test_a_delivered_never_live_still_consumes_a_cycle() -> None:
+    """The other never_live shape: acs.exe appeared then exited, so the accumulator advanced."""
+    verdicts = ["stable"] * 9 + ["never_live"] + ["froze"] + ["stable"] * 9
+    delivered = _default_delivery(verdicts)
+    delivered[9] = True  # the never_live DID spawn acs.exe
+    summary = summarize_boot(_boot(1, "overlays_on", verdicts, delivered=delivered))
+    assert summary.onset_index == 11
+    assert summary.onset_cycle == 11
+    assert summary.delivered_cycles == _LAUNCHES
+    assert summary.onset_ambiguous is False
+
+
+def test_unknown_delivery_before_onset_is_the_only_remaining_ambiguity() -> None:
+    """#710 narrows ``onset_ambiguous`` to reports that genuinely do not know."""
+    verdicts = ["stable"] * 9 + ["never_live"] + ["froze"] + ["stable"] * 9
+    delivered = _default_delivery(verdicts)
+    delivered[9] = None
+    summary = summarize_boot(_boot(1, "overlays_on", verdicts, delivered=delivered))
+    assert summary.undetermined_before_onset == 1
     assert summary.onset_ambiguous is True
     # Still a usable boot for reporting; it just cannot contribute an onset observation.
     assert summary.usable is True
 
 
-def test_never_live_after_onset_leaves_the_onset_unambiguous() -> None:
+def test_undelivered_launch_after_onset_extends_the_burst_window() -> None:
     verdicts = ["stable"] * 5 + ["froze"] + ["never_live"] + ["stable"] * 13
     summary = summarize_boot(_boot(1, "overlays_on", verdicts))
     assert summary.onset_index == 6
+    assert summary.onset_cycle == 6
     assert summary.onset_ambiguous is False
-    # Codex #708: dropping the never_live from the denominator would give 5 launches of
-    # exposure instead of the pre-registered 6, so arm-specific delivery failures could
-    # manufacture a burst difference. The window is voided instead.
-    assert summary.burst_window_complete is False
-    assert summary.post_onset_burst_rate is None
+    # #710: the window is counted in delivered CYCLES, so the undelivered attempt is skipped and
+    # the full pre-registered exposure is still collected — where the pre-#710 code voided the
+    # window rather than shrink the denominator.
+    assert summary.burst_window_complete is True
+    assert summary.post_onset_launches == POST_ONSET_WINDOW
+    assert summary.post_onset_freezes == 1
+    assert summary.post_onset_burst_rate == pytest.approx(1 / POST_ONSET_WINDOW)
 
 
-def test_never_live_heavy_boot_is_unusable_not_scored() -> None:
-    never_live = int(MAX_NEVER_LIVE_FRACTION * _LAUNCHES) + 1
-    verdicts = ["never_live"] * never_live + ["stable"] * (_LAUNCHES - never_live)
+def test_undelivered_heavy_boot_is_unusable_not_scored() -> None:
+    undelivered = int(MAX_UNDELIVERED_FRACTION * _LAUNCHES) + 1
+    verdicts = ["never_live"] * undelivered + ["stable"] * (_LAUNCHES - undelivered)
     summary = summarize_boot(_boot(1, "overlays_on", verdicts))
     assert summary.usable is False
-    assert summary.unusable_reason == "never_live_fraction_exceeded"
+    assert summary.unusable_reason == "undelivered_fraction_exceeded"
+
+
+def test_never_live_heavy_boot_stays_usable_when_the_cycles_were_delivered() -> None:
+    """#710 — the exclusion is about DELIVERY failures, not about the never_live verdict."""
+    count = int(MAX_UNDELIVERED_FRACTION * _LAUNCHES) + 1
+    verdicts = ["never_live"] * count + ["stable"] * (_LAUNCHES - count)
+    summary = summarize_boot(_boot(1, "overlays_on", verdicts, delivered=[True] * _LAUNCHES))
+    assert summary.never_live == count
+    assert summary.undelivered_launches == 0
+    assert summary.usable is True
+
+
+def test_boot_that_never_reached_ac_at_all_is_unusable() -> None:
+    verdicts = ["never_live"] * _LAUNCHES
+    summary = summarize_boot(_boot(1, "overlays_on", verdicts))
+    assert summary.delivered_cycles == 0
+    assert summary.usable is False
+    assert summary.unusable_reason == "no_classified_launches"
 
 
 def test_wedged_init_counts_as_onset() -> None:
@@ -715,10 +871,9 @@ def test_differential_exclusion_refuses_to_carry_a_treatment_claim() -> None:
     the signature of treatment-dependent exclusion, and the test holds the survivor set fixed
     while enumerating assignments under which a different set would have survived.
     """
-    ambiguous = ["stable"] * 5 + ["never_live"] + ["froze"] + ["stable"] * 13
     boots = _blocks([6, 7, 8, 6, 7, 8, 6], [15, 16, 17, 15, 16, 17, 15])
     # Knock out ONE overlays_on boot only -> exclusions are 1 vs 0 across the arms.
-    boots[0] = _boot(1, "overlays_on", ambiguous)
+    boots[0] = _ambiguous_boot(1, "overlays_on")
     result = analyze(boots)
     assert result["excluded_boots_by_arm"] == {"overlays_on": 1, "overlays_off": 0}
     assert result["exclusions_present"] is True
@@ -734,12 +889,11 @@ def test_balanced_exclusions_are_still_withheld() -> None:
     blocks, and every exclusion here is decided from a post-treatment outcome. The mechanism
     cannot be modelled from the reports, so any exclusion withholds the causal conclusion.
     """
-    ambiguous = ["stable"] * 5 + ["never_live"] + ["froze"] + ["stable"] * 13
     # 8 blocks so that knocking out one from each arm still leaves 6 usable — at 7 blocks the
     # run would (correctly) fall under the floor and report insufficient_sample instead.
     boots = _blocks([6, 7, 8, 6, 7, 8, 6, 7], [15, 16, 17, 15, 16, 17, 15, 16])
-    boots[0] = _boot(1, "overlays_on", ambiguous)  # block 1 loses its on boot...
-    boots[3] = _boot(4, "overlays_off", ambiguous)  # ...block 2 loses its off boot
+    boots[0] = _ambiguous_boot(1, "overlays_on")  # block 1 loses its on boot...
+    boots[3] = _ambiguous_boot(4, "overlays_off")  # ...block 2 loses its off boot
     result = analyze(boots)
     assert result["excluded_boots_by_arm"] == {"overlays_on": 1, "overlays_off": 1}
     assert result["exclusions_present"] is True
@@ -787,9 +941,8 @@ def test_missing_reports_count_as_post_treatment_exclusions() -> None:
 
 def test_censoring_outside_the_test_does_not_mark_the_p_value_bound() -> None:
     """Codex #708: a censored boot whose partner was excluded never reached the test."""
-    ambiguous = ["stable"] * 5 + ["never_live"] + ["froze"] + ["stable"] * 13
     boots = _blocks([6, 7, 8, 6, 7, 8], [15, 16, 17, 15, 16, 17])
-    boots[0] = _boot(1, "overlays_on", ambiguous)  # drops block 1 from the test...
+    boots[0] = _ambiguous_boot(1, "overlays_on")  # drops block 1 from the test...
     boots[1] = _boot(2, "overlays_off", ["stable"] * _LAUNCHES)  # ...and its censored partner
     result = analyze(boots)
     assert result["censored_boots"] == 1  # the arm-level count still sees it
@@ -863,12 +1016,11 @@ def test_undersized_run_cannot_claim_the_endpoint() -> None:
 
 
 def test_ambiguous_and_unusable_boots_drop_their_whole_block() -> None:
-    never_live = int(MAX_NEVER_LIVE_FRACTION * _LAUNCHES) + 1
+    never_live = int(MAX_UNDELIVERED_FRACTION * _LAUNCHES) + 1
     broken = ["never_live"] * never_live + ["stable"] * (_LAUNCHES - never_live)
-    ambiguous = ["stable"] * 5 + ["never_live"] + ["froze"] + ["stable"] * 13
     boots = _blocks([6, 7, 8, 6, 7, 8], [16, 17, 18, 16, 17, 18])
     boots[0] = _boot(1, "overlays_on", broken)
-    boots[2] = _boot(3, "overlays_on", ambiguous)
+    boots[2] = _ambiguous_boot(3, "overlays_on")
     result = analyze(boots)
     assert result["usable_blocks"] == 4
     assert result["ambiguous_onset_boots"] == 1
