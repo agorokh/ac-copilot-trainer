@@ -22,8 +22,18 @@ from tools.rig_launcher.supervisor import (
 )
 
 #: The rig's real endpoint today: voice is pinned to the device AC also plays through.
+#: This is the spelling Windows shows the operator, i.e. what they will type into
+#: ``AC_COPILOT_AC_AUDIO_DEVICE``.
 RIG_SHARED_DEVICE = "5.1 Speakers (USB Sound Device)"
 OWN_HEADSET_DEVICE = "Headset Earphone (Rig Audio Interface)"
+
+#: The SAME physical endpoint as :data:`RIG_SHARED_DEVICE`, as PortAudio actually reported it
+#: on the rig (`sounddevice.query_devices()`, 2026-07-28) per host API. Pinned verbatim so the
+#: comparison is anchored to measured reality rather than to a tidied-up fixture: MME truncates
+#: to 31 characters and WASAPI/DirectSound carry internal padding before the closing paren.
+RIG_DEVICE_AS_MME = "5.1 Speakers (USB Sound Device "
+RIG_DEVICE_AS_WASAPI = "5.1 Speakers (USB Sound Device        )"
+RIG_DEVICE_AS_DIRECTSOUND = "5.1 Speakers (USB Sound Device        )"
 
 
 class _Response:
@@ -95,6 +105,24 @@ def _supervisor(
         ("5.1 SPEAKERS  (USB Sound Device)", "5.1 speakers (USB Sound Device)", True),
         # PortAudio's MME host API truncates names to 31 chars -> a strict prefix.
         ("Headset Earphone (Rig Audio In", OWN_HEADSET_DEVICE, True),
+        # --- measured on the rig: one physical endpoint, four host-API spellings. The
+        # operator declares the name Windows shows them; every spelling must still match,
+        # because a false all-clear here is worse than a false alarm.
+        (RIG_DEVICE_AS_WASAPI, RIG_SHARED_DEVICE, True),
+        (RIG_DEVICE_AS_DIRECTSOUND, RIG_SHARED_DEVICE, True),
+        (RIG_DEVICE_AS_MME, RIG_SHARED_DEVICE, True),
+        (RIG_DEVICE_AS_MME, RIG_DEVICE_AS_WASAPI, True),
+        # ...and the rig's other real endpoint — the haptic USB-DAC the own-headset
+        # invariant exists to keep voice off — must never collide with it.
+        ("Bass Shakers (USB PnP Sound Device)", RIG_DEVICE_AS_WASAPI, False),
+        ("Bass Shakers (USB PnP Sound Dev", RIG_SHARED_DEVICE, False),
+        # KNOWN LIMITATION, pinned deliberately: PortAudio's WDM-KS host API drops the
+        # "5.1 " prefix for this same physical endpoint, leaving no prefix relation to the
+        # declared name. Not papered over with a suffix rule — that would widen the
+        # false-positive surface for a host API the voice stack does not use (#602 resolves
+        # voice on WASAPI). The `distinct` verdict prints BOTH names, so a normalization
+        # miss is self-diagnosing from the status row.
+        ("Speakers (USB Sound Device)", RIG_SHARED_DEVICE, False),
         # Genuinely different endpoints must never warn (the #575 cry-wolf lesson).
         (OWN_HEADSET_DEVICE, RIG_SHARED_DEVICE, False),
         # A short shared token is not a prefix match.
@@ -285,6 +313,38 @@ def test_unset_voice_bank_adds_no_arm_source_noise(tmp_path: Path) -> None:
 
     assert cfg.voice_bank_source == supervisor_module.VOICE_BANK_SOURCE_UNSET
     assert "bank" not in sup.probe_voice().detail
+
+
+def test_config_from_args_preserves_every_config_field(tmp_path: Path, monkeypatch) -> None:
+    """`config_from_args` rebuilds the config field-by-field, so it silently drops new ones.
+
+    Caught live: with `AC_COPILOT_AC_AUDIO_DEVICE` exported, the real
+    `python -m tools.rig_launcher --once` still reported `voice_endpoint: undeclared`,
+    because neither #672 field was listed in the rebuild — the feature was inert in the
+    product's own entrypoint while every direct-construction unit test passed. Assert the
+    whole class generically rather than the two fields, so the next one added cannot repeat it.
+    """
+    import dataclasses
+
+    from tools.rig_launcher.app import build_arg_parser, config_from_args
+
+    monkeypatch.setenv("AC_COPILOT_GAME_POINT_DIR", str(tmp_path))
+    monkeypatch.setenv("AC_COPILOT_AC_AUDIO_DEVICE", RIG_SHARED_DEVICE)
+    monkeypatch.setenv("AC_COPILOT_VOICE_BANK", "env-bank")
+
+    args = build_arg_parser().parse_args([])
+    rebuilt = config_from_args(args)
+    direct = GamePointConfig.from_env(paths=rebuilt.paths)
+
+    dropped = [
+        field.name
+        for field in dataclasses.fields(GamePointConfig)
+        if getattr(rebuilt, field.name) != getattr(direct, field.name)
+    ]
+    assert dropped == []
+    # The two this issue adds, named explicitly so a failure reads unambiguously.
+    assert rebuilt.ac_audio_device == RIG_SHARED_DEVICE
+    assert rebuilt.voice_bank_source == supervisor_module.VOICE_BANK_SOURCE_ENV
 
 
 def test_status_json_carries_the_arm_source(tmp_path: Path) -> None:

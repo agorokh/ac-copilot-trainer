@@ -1528,10 +1528,23 @@ def _health_voice_device(health_payload: Mapping[str, object] | None) -> str:
 
 
 def _normalize_endpoint_name(name: str | None) -> str:
-    """Casefold + collapse whitespace so two spellings of one endpoint compare equal."""
+    """Casefold and drop **all** whitespace so two spellings of one endpoint compare equal.
+
+    Whitespace is removed outright rather than collapsed, because PortAudio reports the same
+    Windows endpoint differently per host API. Measured on the rig for one physical device:
+
+    * MME             ``'5.1 Speakers (USB Sound Device '``          (truncated to 31 chars)
+    * DirectSound     ``'5.1 Speakers (USB Sound Device        )'``  (internal padding)
+    * WASAPI          ``'5.1 Speakers (USB Sound Device        )'``
+
+    An operator naturally declares the name Windows shows them — ``5.1 Speakers (USB Sound
+    Device)`` — which under whitespace-collapsing would *not* match the padded WASAPI form,
+    producing a false all-clear. That is strictly worse than crying wolf, so the padding is
+    discarded rather than normalized to one space.
+    """
     if not name:
         return ""
-    return " ".join(str(name).split()).casefold()
+    return "".join(str(name).split()).casefold()
 
 
 def endpoints_collide(voice_device: str | None, ac_device: str | None) -> bool:
@@ -1546,6 +1559,7 @@ def endpoints_collide(voice_device: str | None, ac_device: str | None) -> bool:
     """
     left = _normalize_endpoint_name(voice_device)
     right = _normalize_endpoint_name(ac_device)
+    # Both sides are already casefolded and whitespace-free here.
     if not left or not right:
         return False
     if left == right:
