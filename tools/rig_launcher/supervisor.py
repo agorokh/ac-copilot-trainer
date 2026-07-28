@@ -37,7 +37,7 @@ VOICE_BANK_SOURCE_UNSET = "unset"
 
 #: Voice-row state emitted when the sidecar's resolved playback endpoint is the same one
 #: Assetto Corsa / FMOD plays through (issue #672 Part A). Warn-only by construction: the
-#: ``ProbeResult`` stays ``ok=True`` so it can never block :meth:`GamePointSupervisor.start_sidecar`.
+#: ``ProbeResult`` stays ``ok=True``, so it can never block ``start_sidecar``.
 VOICE_STATE_SHARED_ENDPOINT = "shared_endpoint"
 
 #: States of the discrete ``voice_endpoint`` check row persisted to ``status.json``. All four
