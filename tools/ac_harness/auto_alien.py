@@ -374,6 +374,28 @@ def _read_plant_bytes(plant_path: Path) -> bytes | None:
         return None
 
 
+def _rung_reaching(base: float, step: float, target: float) -> int | None:
+    """Smallest rung whose raw ladder value reaches ``target``; ``None`` when unrepresentable.
+
+    ``--scale-step`` is validated only as finite and > 0, so a legal but absurd value (``1e-320``)
+    makes ``(target - base) / step`` overflow to infinity and ``math.ceil`` raise ``OverflowError``
+    — crashing the pipeline before it can write its composed report. Returning ``None`` instead
+    lets the caller fall back to its other probes and, failing those, stop honestly with "no rung
+    above the validated scale": a rung at index ~1e320 is unreachable within any real
+    ``--iterations`` budget anyway (#703 Codex P2, round 4).
+    """
+    try:
+        quotient = (target - base) / step
+    except (OverflowError, ZeroDivisionError):
+        return None
+    if not math.isfinite(quotient):
+        return None
+    try:
+        return math.ceil(quotient)
+    except (OverflowError, ValueError):
+        return None
+
+
 def next_envelope_rung(
     base: float, step: float, cap: float, prev_scale: float, rung: int
 ) -> int | None:
@@ -399,12 +421,16 @@ def next_envelope_rung(
     # six-decimal rounding threshold: a small `--scale-step` (1e-7) leaves several consecutive
     # rungs on the same rounded plateau, and a closed form that ignores it lands *inside* the
     # plateau and wrongly concludes no rung remains (#703 Codex P2).
-    needed = math.ceil((prev_scale + 5e-7 - base) / step)
+    needed = _rung_reaching(base, step, prev_scale + 5e-7)
     # Saturation is a guaranteed hit because `capped > prev_scale` was established above, so this
     # search is bounded and always finds a rung when one exists — no unbounded scan.
-    saturating = math.ceil((cap - base) / step)
-    probes = sorted({max(rung, 1), max(rung, needed), max(rung, needed) + 1, max(rung, saturating)})
-    for probe in probes:
+    saturating = _rung_reaching(base, step, cap)
+    probes = {max(rung, 1)}
+    if needed is not None:
+        probes |= {max(rung, needed), max(rung, needed) + 1}
+    if saturating is not None:
+        probes.add(max(rung, saturating))
+    for probe in sorted(probes):
         if iteration_scale(base, step, probe, cap) > prev_scale:
             return probe
     return None
@@ -797,7 +823,13 @@ def run_selfplay(
         # validated" (#703 Codex P1, round 3).
         plant_moved_during_step = _read_plant_bytes(plant_path) != validated_plant_bytes
         if plant_moved_during_step:
+            # Set BOTH consequences here, at the single point that knows the fact — a peer change
+            # taints the batch and requires a rebase whether the drive passed or failed. Setting
+            # them only on the pass path left a failed unattributable step running the scientist
+            # across two plants (#703 Codex P1, round 4).
             entry["plant_changed_during_step"] = True
+            entry["usable_as_evidence"] = False
+            selfplay["requires_rebase"] = True
 
         if not valid:
             # 6) Keep-last-valid: revert the refined plant so the falsified envelope never
@@ -902,17 +934,16 @@ def run_selfplay(
             f"auto-alien: iteration {index} VALID ({step_kind} step) — laps "
             + ", ".join(f"{ms / 1000.0:.3f}s" for ms in lap_times)
         )
-        if lap_times:
-            it_best = min(lap_times)
-            best = it_best if best is None else min(best, it_best)
         if plant_moved_during_step:
             # A PASS is no safer to build on than a failure here: the ladder would carry forward
             # archives and a scale earned under a plant it did not choose (#703 Codex P1). The
-            # batch is also barred from seeding the scientist baseline — `run_scientist` would
+            # batch is barred from seeding the scientist baseline — `run_scientist` would
             # otherwise pick this newest "valid" evidence dir and run setup experiments on the
-            # exact batch this message says cannot be attributed (#703 Codex P1, round 3).
-            entry["usable_as_evidence"] = False
-            selfplay["requires_rebase"] = True
+            # exact batch this message says cannot be attributed (#703 Codex P1, round 3) — and
+            # its laps must not reach `best_lap_ms` either, or a fast lap set under the peer's
+            # unknown plant would be reported as THIS ladder's best result (#703 Codex P2,
+            # round 4). Both are handled by rejecting the batch BEFORE the summary is updated,
+            # exactly as an oracle-invalid base is rejected.
             selfplay["stopped"] = (
                 f"plant changed on disk during iteration {index}'s {step_kind} step (peer "
                 "re-identification?) — self-play stopped; the step passed but its evidence "
@@ -920,6 +951,9 @@ def run_selfplay(
             )
             print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
             break
+        if lap_times:
+            it_best = min(lap_times)
+            best = it_best if best is None else min(best, it_best)
         if refined:
             # This refit has now been driven and survived the oracle on its own, with the
             # envelope held — it is validated evidence, not an untested candidate (#703).

@@ -1231,6 +1231,96 @@ def test_scientist_is_skipped_when_the_ladder_needs_a_peer_rebase(monkeypatch, t
     assert "re-run to rebase" in report["scientist"]["skipped"]
 
 
+def test_next_envelope_rung_survives_a_scale_step_that_overflows_the_division():
+    # #703 (Codex P2, round 4): --scale-step is validated only as finite and > 0, so a legal but
+    # absurd 1e-320 makes (target - base) / step overflow and math.ceil raise OverflowError,
+    # crashing the pipeline BEFORE it can write its composed report. Must degrade, not crash.
+    from tools.ac_harness.auto_alien import next_envelope_rung
+
+    assert next_envelope_rung(0.9, 1e-320, 1.1, 0.9, 1) is None  # no reachable rung, no crash
+
+
+def test_selfplay_unattributable_lap_is_not_reported_as_the_best(monkeypatch, tmp_path):
+    # #703 (Codex P2, round 4): a fast lap set while a peer's plant was on disk must not become
+    # this ladder's best_lap_ms — the batch is explicitly marked unusable in the same breath.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (0, [40000], [True]),  # iteration 1: implausibly fast, under a swapped plant
+        ],
+    )
+    real_runner = harness.runner()
+    calls = {"n": 0}
+
+    def runner(argv):
+        code = real_runner(argv)
+        calls["n"] += 1
+        if calls["n"] == 2:
+            harness.plant_path.write_text('{"v": "peer"}', encoding="utf-8")
+        return code
+
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
+    )
+    code, report = run_pipeline(args, run_stage=runner)
+    assert code == 0
+    selfplay = report["selfplay"]
+    assert selfplay["iterations"][0]["plant_changed_during_step"] is True
+    # 95000 is the base drive's lap; the 40000 set under the peer's plant is rejected.
+    assert selfplay["best_lap_ms"] == 95000
+
+
+def test_selfplay_failed_unattributable_step_also_requires_a_rebase(monkeypatch, tmp_path):
+    # #703 (Codex P1, round 4): round 3 set requires_rebase only on the PASS path, so a peer
+    # change during an oracle-INVALID drive still let the scientist run across two plants.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000, 96000], [True, True]),  # base drive
+            (0, [94000], [False]),  # iteration 1: AC-invalid AND the plant is swapped under it
+        ],
+    )
+    real_runner = harness.runner()
+    calls = {"n": 0}
+
+    def runner(argv):
+        code = real_runner(argv)
+        calls["n"] += 1
+        if calls["n"] == 2:
+            harness.plant_path.write_text('{"v": "peer"}', encoding="utf-8")
+        return code
+
+    called = {"scientist": False}
+    monkeypatch.setattr(
+        auto_alien,
+        "run_scientist",
+        lambda *a, **kw: called.__setitem__("scientist", True) or {"ok": True},
+    )
+    args = _args(
+        tmp_path,
+        "--evidence-dir",
+        str(tmp_path / "ev"),
+        "--laps",
+        "2",
+        "--iterations",
+        "1",
+        "--setup",
+        "Copilot_Balanced_Fast",
+        "--scientist",
+    )
+    code, report = run_pipeline(args, run_stage=runner)
+    assert code == 0
+    entry = report["selfplay"]["iterations"][0]
+    assert entry["valid"] is False
+    assert entry["falsified_component"] == "unattributable"
+    assert entry["usable_as_evidence"] is False
+    assert report["selfplay"]["requires_rebase"] is True
+    assert called["scientist"] is False  # the failed path gates the scientist too
+
+
 def test_next_envelope_rung_crosses_a_rounding_plateau():
     # #703 (Codex P2, round 3): with a tiny --scale-step the six-decimal rounding leaves several
     # consecutive rungs on the same value. A closed form that ignores the rounding threshold
