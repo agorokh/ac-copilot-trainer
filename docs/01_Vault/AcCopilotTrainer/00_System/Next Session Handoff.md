@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-28T17:10:00Z
+last_updated: 2026-07-28T23:15:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-710-cycle-delivered-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-703-decoupled-ladder-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-625-boot-scoped-redesign-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-672-voice-endpoint-hygiene-2026-07-28.md
@@ -123,6 +124,67 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-28) — #710 CLOSED: a launch attempt says whether it delivered a cycle (PR #717 MERGED `d78c10b`)
+
+`NEVER_LIVE` covered two physically different outcomes and `resilient-launch-report/v1` stored only
+the verdict, so nothing downstream could tell **"acs.exe appeared and exited during load"** (a real
+launch cycle) from **"nothing was ever spawned"** (CM absent / `actuator.launch()` raised). The #625
+accumulator arms on launch **cycles**, so `summarize_boot` had to treat every `never_live` as
+possibly-undelivered and drop the whole boot — at **one physical reboot each**. That is the cost this
+recovers.
+
+PR [#717](https://github.com/agorokh/ac-copilot-trainer/pull/717) **MERGED** as squash
+[`d78c10b`](https://github.com/agorokh/ac-copilot-trainer/commit/d78c10b730da9968c4995957313ba340efcdcdde)
+(2026-07-28T23:10:14Z); issue #710 CLOSED. Post-merge classification: **no flags**. Full node:
+[issue-710-cycle-delivered-2026-07-28](../03_Investigations/issue-710-cycle-delivered-2026-07-28.md).
+
+- **Launcher** (`resilient-launch-report/v1` → **`/v2`**): per-attempt `cycle_delivered` plus a
+  top-level `cycles` block, kept **out** of `counts` so `counts` stays the verdict histogram
+  consumers compare for equality. Delivery is read off the trace, never inferred from the verdict.
+- **Analysis** (`init-perturber-ab-analysis/v2` → **`/v3`**, plan **`/v2` → `/v3`**): onset and the
+  burst window are counted in **delivered cycles**; `onset_ambiguous` narrows to genuinely unknown
+  delivery. Boots containing a merely undelivered attempt now score.
+
+### Three findings worth carrying forward (not changelog — they will recur)
+
+1. **A shared constant was silently load-bearing.** Pre-#710 every boot shared the surrogate
+   `launches + 1`, which was quietly guaranteeing *two* things: doubly-censored blocks cancelled to
+   zero, **and** singly-censored blocks had a provably correct ordering. Making it per-boot
+   (`delivered_cycles + 1`) deleted both — with no diff at the sites that relied on them and no test
+   failure. It took **two separate review rounds** to find both halves. Both are now one rule: a
+   censoring surrogate enters the permutation statistic only when the bounds establish its sign.
+   *Ask what a shared constant is guaranteeing before making it vary.*
+2. **A watched trace can prove delivery but never disprove it.** Returning `False` because the
+   sampler saw nothing is an over-claim once the URL has reached CM — an early load crash inside one
+   inter-poll gap is indistinguishable from a launch that never happened, and recording it as `False`
+   makes the analyzer skip a real cycle. `False` is now reserved for the pre-launch paths that
+   *establish* non-delivery; unproven stays unknown. Those pre-launch paths are exactly the shapes
+   #710 named, so the benefit is intact.
+3. **"It can't happen because of timing" is not an invariant.** The pre-launch packet baseline fixes a
+   race that is arguably unreachable (AC would have to boot and exit inside one gap) — accepted anyway,
+   because in a measurement instrument a wrong `cycle_delivered` corrupts the endpoint *silently*, and
+   one extra shared-memory read buys construction-level safety.
+
+### Verification limit — stated, not papered over
+
+**Not rig-verified, and cannot be.** The flag only becomes observable in a real report when the #625
+experiment runs, which is blocked at the CSP hijack per #703/#716. Evidence is the pure-function test
+suite — the standard `classify` has been held to since #624 by design — plus two deliberately
+non-vacuous regression tests (without their fixes, the doubly-censored blocks yield alternating ±1
+differences and the cycle-short boot reports a passing 20 raw launches). `make ci-fast` green on all
+five rounds.
+
+**Review:** 5 rounds, 17 findings — 16 accepted, **1 rebutted with file/line evidence**: the
+self-hosted daemon's HIGH claimed `read_state()` returns a 4-tuple and would crash; it returns three
+(`resilient_launch.py:1772`), and all three call sites unpack three. It had confused
+`read_attempt_state`, which *returns* four after consuming `read_state()` as three.
+
+**Tier-3 was down for this entire session** — five `query_knowledge_graph` timeouts at the 55 s bridge
+budget for `ac_copilot_trainer` (SessionStart prefetch also timed out at 30 s). Not unreachable,
+*slow past the budget*, which reads identically to "no memory" from the agent side. The gate degraded
+to warn-only and all grounding came from Tier-2. **If this persists, it is worth an infra look** —
+every session silently loses its substrate.
 
 ## Delivered (2026-07-28) — #703 CLOSED: decoupled self-play ladder (PR #709 MERGED `f9a1408`)
 

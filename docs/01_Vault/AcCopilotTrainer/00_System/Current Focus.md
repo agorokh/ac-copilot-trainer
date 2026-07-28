@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-28T17:05:00Z
+last_updated: 2026-07-28T23:15:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-710-cycle-delivered-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-703-decoupled-ladder-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-672-voice-endpoint-hygiene-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-529-pace-ladder-115-2026-07-26.md
@@ -54,6 +55,17 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-28):** PR [#717](https://github.com/agorokh/ac-copilot-trainer/pull/717)
+MERGED [`d78c10b`](https://github.com/agorokh/ac-copilot-trainer/commit/d78c10b730da9968c4995957313ba340efcdcdde)
+— **#710 launch-cycle delivery recorded, CLOSED**. `never_live` no longer conflates "acs.exe
+appeared and exited" with "nothing was spawned": every attempt records `cycle_delivered`
+(`resilient-launch-report/v2`), and the #625 analysis scores onset and the burst window in
+**delivered cycles** (`init-perturber-ab-analysis/v3`, plan `/v3`) instead of discarding any boot
+that contained an undelivered attempt — each of which costs a physical reboot. Off-rig only by
+construction; **not rig-verified** (the flag only becomes observable when the #625 experiment runs,
+still blocked at the CSP hijack per #703/#716). Node:
+[issue-710-cycle-delivered-2026-07-28](../03_Investigations/issue-710-cycle-delivered-2026-07-28.md).
 
 **Delivered (2026-07-28):** PR [#707](https://github.com/agorokh/ac-copilot-trainer/pull/707)
 MERGED [`1f5ce2b`](https://github.com/agorokh/ac-copilot-trainer/commit/1f5ce2b) — **#672
