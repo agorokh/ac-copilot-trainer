@@ -129,7 +129,14 @@ DEFAULT_LAUNCHES_PER_BOOT = 24
 #: Above this share of ``never_live`` launches the boot measured Content Manager's delivery
 #: failures, not the accumulator; it is reported and excluded rather than silently scored.
 MAX_NEVER_LIVE_FRACTION = 0.2
-_Z_95 = 1.959963984540054
+#: Slack when testing whether machine uptime tracked the wall clock across a boot boundary.
+#: Timestamps are second-resolution and ``uptime_h`` is rounded to 4 decimals (~0.36 s), so 36 s
+#: is generous for rounding while far below any real reboot's discontinuity.
+_UPTIME_CONTINUITY_TOLERANCE_H = 0.01
+
+
+def _parse_stamp(value: str) -> datetime:
+    return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
 
 
 @dataclass(frozen=True)
@@ -186,6 +193,11 @@ class BlockSummary:
     overlays_on_boot: int
     overlays_off_boot: int
     onset_difference: float | None
+    #: Range the TRUE ``off - on`` onset difference can occupy given right-censoring.
+    #: ``None`` means unbounded on that side (a censored boot's onset is only known to exceed
+    #: its launch budget). Both ``None`` = a doubly-censored block, which constrains nothing.
+    onset_difference_lower: float | None
+    onset_difference_upper: float | None
     burst_difference: float | None
     usable: bool
     unusable_reason: str | None
@@ -202,8 +214,8 @@ class ArmSummary:
     median_onset_value: float | None
     boot_burst_rates: tuple[float, ...]
     median_burst_rate: float | None
-    burst_ci95_low: float
-    burst_ci95_high: float
+    burst_rate_min: float | None
+    burst_rate_max: float | None
 
 
 def randomized_block_sequence(
@@ -567,33 +579,28 @@ def load_observations(
                 f"boot {later.boot} started before boot {earlier.boot} finished; "
                 "boots must run in planned order"
             )
-        # The inverse of the v1 check, and the sharpest guard in the boot-scoped design: a boot
-        # boundary REQUIRES a reboot, so machine uptime must drop. Nondecreasing uptime means
-        # the operator kept running launches on the same boot, which pools two arms onto one
-        # accumulator and destroys the onset endpoint.
-        if later.launches[0].uptime_h >= earlier.launches[-1].uptime_h:
+        # A boot boundary REQUIRES a reboot: two arms sharing one boot pool the accumulator and
+        # destroy the onset endpoint. Detect it by CONTINUITY, not by magnitude. An earlier cut
+        # demanded the later boot's uptime be numerically smaller, which false-rejects a real
+        # reboot whenever the operator waits longer before the next boot than the previous boot
+        # ran (leave it overnight, come back, uptime is legitimately higher) — and that would
+        # make an already-completed, 12-reboot experiment un-analyzable.
+        #
+        # If the machine did NOT reboot, uptime advances exactly with the wall clock between the
+        # two launches. If it DID reboot, uptime restarted, so it advances by strictly less.
+        uptime_delta = later.launches[0].uptime_h - earlier.launches[-1].uptime_h
+        wall_delta = (
+            _parse_stamp(later.launches[0].started_at_utc)
+            - _parse_stamp(earlier.launches[-1].started_at_utc)
+        ).total_seconds() / 3600.0
+        if uptime_delta >= wall_delta - _UPTIME_CONTINUITY_TOLERANCE_H:
             raise ValueError(
-                f"uptime_h did not reset between boot {earlier.boot} "
-                f"({earlier.launches[-1].uptime_h:.4f}h) and boot {later.boot} "
-                f"({later.launches[0].uptime_h:.4f}h) — each arm requires its own boot"
+                f"uptime tracked the wall clock across the boot {earlier.boot} -> "
+                f"{later.boot} boundary (uptime +{uptime_delta:.4f}h vs elapsed "
+                f"{wall_delta:.4f}h), so the machine did not reboot — each arm requires "
+                "its own boot"
             )
     return tuple(observations)
-
-
-def wilson_interval(successes: int, total: int, *, z: float = _Z_95) -> tuple[float, float]:
-    """Wilson score interval for one binomial rate."""
-    if total <= 0 or successes < 0 or successes > total:
-        raise ValueError("successes and total must satisfy 0 <= successes <= total and total > 0")
-    proportion = successes / total
-    z2 = z * z
-    denominator = 1.0 + z2 / total
-    center = (proportion + z2 / (2.0 * total)) / denominator
-    spread = (
-        z
-        * math.sqrt(proportion * (1.0 - proportion) / total + z2 / (4.0 * total * total))
-        / denominator
-    )
-    return max(0.0, center - spread), min(1.0, center + spread)
 
 
 def paired_exact_two_sided(helped: int, harmed: int) -> float:
@@ -715,11 +722,17 @@ def summarize_boot(observation: BootObservation) -> BootSummary:
     # A never_live record does NOT prove a launch cycle reached AC (see the module docstring),
     # and the report schema cannot tell the two apart. If any precedes the onset, the onset's
     # position in the accumulator's own count is unknown by up to that many launches.
-    never_live_before_onset = sum(
-        item.verdict == "never_live"
-        for item in launches
-        if onset_index is not None and item.launch < onset_index
-    )
+    #
+    # A CENSORED boot is the same problem one step further out: "no freeze in N launches" only
+    # bounds the onset above the number of cycles actually DELIVERED, which is unknown when any
+    # never_live is present. Scoring it at N+1 would overstate how long that arm stayed clean,
+    # and would bias the comparison whenever never_live rates differ by arm.
+    if onset_index is None:
+        never_live_before_onset = never_live
+    else:
+        never_live_before_onset = sum(
+            item.verdict == "never_live" for item in launches if item.launch < onset_index
+        )
     ambiguous = never_live_before_onset > 0
     # A censored boot is "onset later than the budget"; the surrogate must exceed every
     # observable onset so the tests order it correctly, and the report flags the bound.
@@ -777,13 +790,6 @@ def _summarize_arm(condition: str, boots: Sequence[BootSummary]) -> ArmSummary:
         for boot in arm
         if boot.usable and boot.post_onset_burst_rate is not None
     )
-    freezes = sum(
-        boot.post_onset_freezes for boot in arm if boot.usable and boot.burst_window_complete
-    )
-    exposure = sum(
-        boot.post_onset_launches for boot in arm if boot.usable and boot.burst_window_complete
-    )
-    low, high = wilson_interval(freezes, exposure) if exposure > 0 else (0.0, 1.0)
     return ArmSummary(
         condition=condition,
         boots=len(arm),
@@ -796,8 +802,12 @@ def _summarize_arm(condition: str, boots: Sequence[BootSummary]) -> ArmSummary:
         ),
         boot_burst_rates=rates,
         median_burst_rate=statistics.median(rates) if rates else None,
-        burst_ci95_low=low,
-        burst_ci95_high=high,
+        # Spread ACROSS BOOTS, not a pooled binomial interval. Pooling post-onset launches and
+        # applying Wilson would assume independent Bernoulli draws, which the accumulator model
+        # explicitly contradicts, and would overstate precision next to a per-boot median.
+        # Inference on this endpoint comes from the block permutation test, not from a CI.
+        burst_rate_min=min(rates) if rates else None,
+        burst_rate_max=max(rates) if rates else None,
     )
 
 
@@ -820,6 +830,7 @@ def _summarize_blocks(boots: Sequence[BootSummary]) -> list[BlockSummary]:
         elif not (_scores_onset(on) and _scores_onset(off)):
             reason = "ambiguous_onset"
         onset_difference = None if reason else float(off.onset_value - on.onset_value)
+        lower, upper = (None, None) if reason else _onset_difference_bounds(on, off)
         burst_difference = (
             off.post_onset_burst_rate - on.post_onset_burst_rate
             if on.usable
@@ -834,12 +845,39 @@ def _summarize_blocks(boots: Sequence[BootSummary]) -> list[BlockSummary]:
                 overlays_on_boot=on.boot,
                 overlays_off_boot=off.boot,
                 onset_difference=onset_difference,
+                onset_difference_lower=lower,
+                onset_difference_upper=upper,
                 burst_difference=burst_difference,
                 usable=reason is None,
                 unusable_reason=reason,
             )
         )
     return blocks
+
+
+def _onset_difference_bounds(
+    on: BootSummary, off: BootSummary
+) -> tuple[float | None, float | None]:
+    """Range the TRUE ``off - on`` onset difference can occupy, given right-censoring.
+
+    A censored boot only tells us its onset **exceeds** its launch budget, so substituting
+    ``N+1`` is a lower bound on that arm's onset, not an observation. Where exactly one boot in
+    the block is censored the substitution still gets the *sign* right (the censored arm is
+    provably the later one), so the direction is safe. Where **both** are censored the true
+    difference is unconstrained in either direction, and a summed statistic built from those
+    substitutions can point the wrong way.
+    """
+    on_censored, off_censored = on.onset_censored, off.onset_censored
+    if not on_censored and not off_censored:
+        difference = float(off.onset_value - on.onset_value)
+        return difference, difference
+    if off_censored and not on_censored:
+        # off_onset > off.launches and on_onset is known, so the difference is at least this
+        # much and unbounded above.
+        return float(off.launches + 1 - on.onset_value), None
+    if on_censored and not off_censored:
+        return None, float(off.onset_value - (on.launches + 1))
+    return None, None
 
 
 def _sign_test(differences: Sequence[float]) -> dict[str, object]:
@@ -897,29 +935,61 @@ def analyze(
             # figure is explicitly non-gating, so a large-but-valid experiment degrades to
             # "not computed" instead of failing an analysis the operator paid many reboots for.
             rank_sum_p = None
-    onset_difference = (
+    # Descriptive only: the marginal (unpaired) arm medians. NEVER the direction source — with
+    # block-slot baselines they can carry the opposite sign to the blocked statistic the test
+    # actually evaluates, which would let the tool report the reverse of its own p-value.
+    median_onset_difference = (
         off.median_onset_value - on.median_onset_value
         if on.median_onset_value is not None and off.median_onset_value is not None
         else None
     )
+    # The direction MUST come from the same within-block effect the permutation test evaluates.
+    blocked_effect = math.fsum(onset_differences) if onset_differences else None
     usable_blocks = len(onset_differences)
     smallest_attainable = 2 / 2**usable_blocks if usable_blocks else None
+    scoring_boots = [boot for boot in boots if _scores_onset(boot)]
+    # A hand-edited or allow_undersized plan can hold enough blocks while each boot ends before
+    # the pre-registered graceful onset plus burst window. Blocks alone are not eligibility.
+    short_boots = [boot for boot in scoring_boots if boot.launches < MIN_LAUNCHES_PER_BOOT]
+    # Censoring bounds: substituting N+1 for a censored onset is a BOUND, not an observation.
+    # Where exactly one boot per block is censored the sign still holds; where both are, the
+    # true difference is unconstrained, so the summed statistic can point either way. Only claim
+    # a direction when the achievable range of the true effect excludes zero.
+    usable_blocks_list = [block for block in blocks if block.usable]
+    lower_sum = (
+        None
+        if any(block.onset_difference_lower is None for block in usable_blocks_list)
+        else math.fsum(block.onset_difference_lower or 0.0 for block in usable_blocks_list)
+    )
+    upper_sum = (
+        None
+        if any(block.onset_difference_upper is None for block in usable_blocks_list)
+        else math.fsum(block.onset_difference_upper or 0.0 for block in usable_blocks_list)
+    )
+    direction_determined = (lower_sum is not None and lower_sum > 0) or (
+        upper_sum is not None and upper_sum < 0
+    )
     if (
         usable_blocks < endpoint_floor
         or onset_p is None
-        or onset_difference is None
+        or blocked_effect is None
         or smallest_attainable is None
         or smallest_attainable > alpha
+        or short_boots
     ):
         conclusion = "insufficient_sample"
     elif onset_p >= alpha:
         conclusion = "no_measurable_effect"
-    elif onset_difference > 0:
-        conclusion = "overlays_off_delays_onset"
-    elif onset_difference < 0:
-        conclusion = "overlays_off_accelerates_onset"
-    else:
+    elif blocked_effect == 0:
         conclusion = "no_measurable_effect"
+    elif not direction_determined:
+        # The p-value stays valid (the statistic is a function of the observed data, so the
+        # randomization null is exact), but censoring leaves the sign of the true effect open.
+        conclusion = "effect_direction_indeterminate_under_censoring"
+    elif blocked_effect > 0:
+        conclusion = "overlays_off_delays_onset"
+    else:
+        conclusion = "overlays_off_accelerates_onset"
     censored_total = on.censored_boots + off.censored_boots
     return {
         "schema": ANALYSIS_SCHEMA,
@@ -937,11 +1007,18 @@ def analyze(
         "smallest_attainable_two_sided_p": smallest_attainable,
         "arms": {condition: asdict(summary) for condition, summary in arms.items()},
         "blocks": [asdict(block) for block in blocks],
-        "median_onset_difference_off_minus_on": onset_difference,
+        # Descriptive marginal figure. The CONCLUSION direction comes from blocked_effect.
+        "median_onset_difference_off_minus_on": median_onset_difference,
+        "blocked_onset_effect_off_minus_on": blocked_effect,
         "onset_block_permutation_two_sided_p": onset_p,
         "onset_p_is_bound": censored_total > 0,
         "censored_boots": censored_total,
+        "effect_direction_determined": direction_determined,
+        "blocked_onset_effect_lower_bound": lower_sum,
+        "blocked_onset_effect_upper_bound": upper_sum,
         "ambiguous_onset_boots": on.ambiguous_boots + off.ambiguous_boots,
+        "short_boots_below_launch_floor": len(short_boots),
+        "minimum_launches_per_boot": MIN_LAUNCHES_PER_BOOT,
         "burst_block_permutation_two_sided_p": burst_p,
         "sensitivity": {
             "sign_test": _sign_test(onset_differences),
@@ -969,18 +1046,22 @@ def render_markdown(analysis: dict[str, Any]) -> str:
     arms = analysis["arms"]
     lines = [
         "| condition | boots | scoring | observed onsets | censored | ambiguous | "
-        "median onset | median boot burst (pooled 95% Wilson CI) |",
+        "median onset | median boot burst (across-boot range) |",
         "|---|---:|---:|---|---:|---:|---:|---:|",
     ]
     for condition in CONDITIONS:
         arm = arms[condition]
         onsets = ", ".join(str(value) for value in arm["observed_onsets"]) or "—"
+        spread = (
+            f"({arm['burst_rate_min']:.1%}-{arm['burst_rate_max']:.1%})"
+            if arm["burst_rate_min"] is not None and arm["burst_rate_max"] is not None
+            else "(—)"
+        )
         lines.append(
             f"| {condition} | {arm['boots']} | {arm['usable_boots']} | {onsets} | "
             f"{arm['censored_boots']} | {arm['ambiguous_boots']} | "
             f"{_format_optional(arm['median_onset_value'], '.1f')} | "
-            f"{_format_optional(arm['median_burst_rate'], '.1%')} "
-            f"({arm['burst_ci95_low']:.1%}-{arm['burst_ci95_high']:.1%}) |"
+            f"{_format_optional(arm['median_burst_rate'], '.1%')} {spread} |"
         )
     sensitivity = analysis["sensitivity"]
     lines.extend(
@@ -1003,7 +1084,14 @@ def render_markdown(analysis: dict[str, Any]) -> str:
             f"p={sensitivity['sign_test']['exact_two_sided_p']:.6g}; "
             "rank-sum (assumption-dependent, non-gating): "
             f"p={_format_optional(sensitivity['onset_rank_sum_two_sided_p'], '.6g')}",
-            "Median onset difference (off - on): "
+            "Blocked onset effect (off - on, the tested statistic): "
+            f"{_format_optional(analysis['blocked_onset_effect_off_minus_on'], '+.1f')} launches"
+            + (
+                ""
+                if analysis["effect_direction_determined"]
+                else "  [DIRECTION INDETERMINATE — censoring leaves the true sign open]"
+            ),
+            "Marginal median onset difference (descriptive, not the direction source): "
             f"{_format_optional(analysis['median_onset_difference_off_minus_on'], '+.1f')}"
             " launches",
             "Pre-registered baseline onset (graceful): "

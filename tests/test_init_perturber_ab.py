@@ -29,7 +29,6 @@ from tools.ac_harness.init_perturber_ab import (
     randomized_block_sequence,
     render_markdown,
     summarize_boot,
-    wilson_interval,
 )
 from tools.ac_harness.resilient_launch import DEFAULT_GO_LIVE_TIMEOUT, REPORT_SCHEMA
 
@@ -107,6 +106,10 @@ def _boot(
             for index, verdict in enumerate(verdicts, start=1)
         ),
     )
+
+
+# _LAUNCHES == MIN_LAUNCHES_PER_BOOT, so the default fixtures are endpoint-eligible.
+assert _LAUNCHES == MIN_LAUNCHES_PER_BOOT
 
 
 def _blocks(onsets_on: list[int], onsets_off: list[int]) -> list[BootObservation]:
@@ -287,24 +290,58 @@ def test_incomplete_experiment_is_refused(tmp_path: Path) -> None:
         load_observations(plan, tmp_path)
 
 
-def test_uptime_must_reset_between_boots(tmp_path: Path) -> None:
-    """The sharpest boot-scoped guard: two arms on one boot pools the accumulator."""
+def test_continuous_uptime_across_a_boundary_is_refused(tmp_path: Path) -> None:
+    """The sharpest boot-scoped guard: two arms on one boot pools the accumulator.
+
+    Detected by CONTINUITY — uptime advancing in lockstep with the wall clock means the machine
+    never rebooted.
+    """
     plan = _two_boot_plan()
+    # Boot 1 launches at minutes 1..20 -> last uptime 0.5 + 20*0.05 = 1.5h at minute 20.
     _write_boot_report(
         tmp_path / plan["boots"][0]["report"],
         verdicts=["stable"] * _LAUNCHES,
         start_minute=0,
         uptime_start=0.5,
     )
+    # Boot 2's first launch is 41 min later; uptime advanced by exactly the same 41 min
+    # (1.5h + 0.6833h = 2.1833h, minus the +0.05 the writer adds for launch 1) -> no reboot.
     _write_boot_report(
         tmp_path / plan["boots"][1]["report"],
         verdicts=["stable"] * _LAUNCHES,
         start_minute=60,
-        # Uptime kept climbing — no reboot happened between the arms.
-        uptime_start=2.0,
+        uptime_start=1.5 + (41 / 60) - 0.05,
     )
-    with pytest.raises(ValueError, match="did not reset"):
+    with pytest.raises(ValueError, match="tracked the wall clock"):
         load_observations(plan, tmp_path)
+
+
+def test_reboot_is_accepted_even_when_the_operator_waits_a_long_time(tmp_path: Path) -> None:
+    """Qodo #708: a real reboot after a long wait can leave uptime numerically HIGHER.
+
+    The earlier magnitude check (`later.first_uptime < earlier.last_uptime`) false-rejected
+    this, which would make an already-completed 12-reboot experiment un-analyzable.
+    """
+    plan = _two_boot_plan()
+    # Boot 1 ends at uptime 1.5h.
+    _write_boot_report(
+        tmp_path / plan["boots"][0]["report"],
+        verdicts=["stable"] * _LAUNCHES,
+        start_minute=0,
+        uptime_start=0.5,
+    )
+    # Reboot, then the operator leaves the rig up overnight before starting boot 2, so its
+    # first launch sits at uptime 9.0h — HIGHER than boot 1's last (1.5h) — yet uptime clearly
+    # did not track the ~16h of wall clock since boot 1's final launch.
+    _write_boot_report(
+        tmp_path / plan["boots"][1]["report"],
+        verdicts=_stable_then_freeze(14),
+        start_minute=1000,
+        uptime_start=9.0,
+    )
+    observations = load_observations(plan, tmp_path)
+    assert observations[1].launches[0].uptime_h > observations[0].launches[-1].uptime_h
+    assert summarize_boot(observations[1]).onset_index == 14
 
 
 def test_boot_boundary_accepts_a_real_reboot(tmp_path: Path) -> None:
@@ -395,9 +432,25 @@ def test_censored_boot_gets_a_surrogate_beyond_every_observable_onset() -> None:
     assert summary.onset_index is None
     assert summary.onset_censored is True
     assert summary.onset_value == _LAUNCHES + 1
+    assert summary.onset_ambiguous is False
     assert summary.post_onset_launches == 0
     assert summary.post_onset_burst_rate is None
     assert summary.usable is True
+
+
+def test_censored_boot_containing_never_live_is_also_ambiguous() -> None:
+    """Codex + Qodo #708: censoring is only known in DELIVERED cycles.
+
+    "No freeze in N launches" bounds the onset above the number of cycles actually delivered,
+    which is unknown when any never_live is present — so N+1 would overstate how long that arm
+    stayed clean, and would bias the comparison if never_live rates differ by arm.
+    """
+    verdicts = ["stable"] * (_LAUNCHES - 1) + ["never_live"]
+    summary = summarize_boot(_boot(1, "overlays_off", verdicts))
+    assert summary.onset_index is None
+    assert summary.onset_censored is True
+    assert summary.never_live_before_onset == 1
+    assert summary.onset_ambiguous is True
 
 
 def test_never_live_before_onset_makes_the_onset_ambiguous() -> None:
@@ -440,17 +493,6 @@ def test_wedged_init_counts_as_onset() -> None:
 
 
 # -------------------------------------------------------------------- statistics
-
-
-@pytest.mark.parametrize(
-    ("successes", "total", "expected"),
-    [(0, 20, (0.0, 0.161125)), (10, 20, (0.299298, 0.700702)), (20, 20, (0.838875, 1.0))],
-)
-def test_wilson_interval_known_values(
-    successes: int, total: int, expected: tuple[float, float]
-) -> None:
-    actual = wilson_interval(successes, total)
-    assert actual == pytest.approx(expected, abs=1e-6)
 
 
 def test_paired_exact_uses_only_discordant_pairs() -> None:
@@ -532,6 +574,65 @@ def test_censoring_marks_the_p_value_as_a_bound() -> None:
     assert result["arms"]["overlays_off"]["observed_onsets"] == ()
     assert result["arms"]["overlays_off"]["median_burst_rate"] is None
     assert result["conclusion"] == "overlays_off_delays_onset"
+
+
+def test_doubly_censored_blocks_refuse_a_directional_conclusion() -> None:
+    """Codex #708: substituting N+1 is a BOUND, not an observation.
+
+    With exactly one censored boot per block the substitution still gets the sign right, so a
+    direction is claimable. With BOTH boots censored the true difference is unconstrained in
+    either direction, so the summed statistic cannot support a direction — the p-value stays
+    valid, but the conclusion must say so rather than pick a side.
+    """
+    boots: list[BootObservation] = []
+    # Six singly-censored blocks (off never freezes) carry a clear positive effect...
+    for on_onset in (6, 7, 8, 6, 7, 8):
+        boots.append(_boot(len(boots) + 1, "overlays_on", _stable_then_freeze(on_onset)))
+        boots.append(_boot(len(boots) + 1, "overlays_off", ["stable"] * _LAUNCHES))
+    # ...and a seventh block with BOTH arms censored, whose true difference is unconstrained.
+    # Seven blocks keep p (4/128 = 0.03125) under alpha so the direction check is what fires.
+    boots.append(_boot(len(boots) + 1, "overlays_on", ["stable"] * _LAUNCHES))
+    boots.append(_boot(len(boots) + 1, "overlays_off", ["stable"] * _LAUNCHES))
+    result = analyze(boots)
+    assert result["usable_blocks"] == 7
+    assert result["onset_block_permutation_two_sided_p"] < 0.05
+    assert result["onset_block_permutation_two_sided_p"] is not None
+    assert result["effect_direction_determined"] is False
+    assert result["blocked_onset_effect_lower_bound"] is None
+    assert result["conclusion"] == "effect_direction_indeterminate_under_censoring"
+    assert "DIRECTION INDETERMINATE" in render_markdown(result)
+
+
+def test_conclusion_direction_comes_from_the_blocked_statistic() -> None:
+    """Codex #708: the marginal arm medians can disagree in sign with the tested statistic."""
+    boots = _blocks([6, 7, 8, 6, 7, 8], [15, 16, 17, 15, 16, 17])
+    result = analyze(boots)
+    # The tested statistic is the SUM of within-block differences, and it drives the direction.
+    assert result["blocked_onset_effect_off_minus_on"] == pytest.approx(
+        sum(b["onset_difference"] for b in result["blocks"])
+    )
+    assert result["blocked_onset_effect_off_minus_on"] > 0
+    assert result["conclusion"] == "overlays_off_delays_onset"
+    # The marginal median difference is still reported, but only as a descriptive figure.
+    assert result["median_onset_difference_off_minus_on"] is not None
+    assert "not the direction source" in render_markdown(result)
+
+
+def test_short_boots_cannot_claim_the_endpoint_even_with_enough_blocks() -> None:
+    """Codex #708: a block floor alone is not eligibility — each boot must be long enough."""
+    short = MIN_LAUNCHES_PER_BOOT - 4
+    boots: list[BootObservation] = []
+    for on_onset, off_onset in zip((3, 4, 5, 3, 4, 5), (9, 10, 11, 9, 10, 11), strict=True):
+        boots.append(
+            _boot(len(boots) + 1, "overlays_on", _stable_then_freeze(on_onset, total=short))
+        )
+        boots.append(
+            _boot(len(boots) + 1, "overlays_off", _stable_then_freeze(off_onset, total=short))
+        )
+    result = analyze(boots)
+    assert result["usable_blocks"] == 6  # enough blocks...
+    assert result["short_boots_below_launch_floor"] == 12  # ...but every boot is too short
+    assert result["conclusion"] == "insufficient_sample"
 
 
 def test_undersized_run_cannot_claim_the_endpoint() -> None:
