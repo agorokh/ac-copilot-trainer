@@ -27,6 +27,32 @@ DEFAULT_PORT = 8765
 DEFAULT_EXTERNAL_BIND = "0.0.0.0"
 APP_FOLDER_NAME = "AC Copilot Trainer"
 GAME_POINT_FOLDER_NAME = "GamePoint"
+
+#: Arm sources for the voice phrase bank (issue #672 Part B). ``env`` wins over ``settings``
+#: in :meth:`GamePointConfig.from_env`, including the set-but-blank case that *clears* a
+#: settings-configured bank — the state an operator most needs to be able to see.
+VOICE_BANK_SOURCE_ENV = "env"
+VOICE_BANK_SOURCE_SETTINGS = "settings"
+VOICE_BANK_SOURCE_UNSET = "unset"
+
+#: Voice-row state emitted when the sidecar's resolved playback endpoint is the same one
+#: Assetto Corsa / FMOD plays through (issue #672 Part A). Warn-only by construction: the
+#: ``ProbeResult`` stays ``ok=True`` so it can never block :meth:`GamePointSupervisor.start_sidecar`.
+VOICE_STATE_SHARED_ENDPOINT = "shared_endpoint"
+
+#: States of the discrete ``voice_endpoint`` check row persisted to ``status.json``. All four
+#: are ``ok=True``; they exist so an inert check ("we never declared AC's endpoint") is never
+#: mistaken for a clean bill of health ("we checked and they differ").
+_ENDPOINT_STATE_SHARED = "shared"
+_ENDPOINT_STATE_DISTINCT = "distinct"
+_ENDPOINT_STATE_UNDECLARED = "undeclared"
+_ENDPOINT_STATE_UNKNOWN = "unknown"
+
+#: The shortest name length for which a prefix relation is accepted as "same endpoint".
+#: PortAudio's MME host API truncates device names to 31 characters, so the sidecar can
+#: report a strict prefix of the full Windows endpoint name; requiring a reasonably long
+#: shared prefix keeps that from degenerating into "Speakers" matching everything.
+_ENDPOINT_PREFIX_MIN_LEN = 8
 _WINDOWS_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 
@@ -152,6 +178,16 @@ class GamePointConfig:
     alien_line: str | None = None
     voice_bank: str | None = None
     voice_tts: bool = False
+    #: Where the resolved ``voice_bank`` came from — ``"env"`` (``AC_COPILOT_VOICE_BANK``
+    #: was present, including set-but-blank, which *clears* the settings value), ``"settings"``
+    #: (settings.json supplied it), or ``"unset"`` (neither). Issue #672 Part B: the effective
+    #: value was already visible but its *source* was not, so a bank parked or force-armed via
+    #: the environment could not be diagnosed from the Voice row or status.json.
+    voice_bank_source: str = VOICE_BANK_SOURCE_UNSET
+    #: Name of the output endpoint Assetto Corsa / FMOD plays through (issue #672 Part A).
+    #: Declared by the operator because the launcher cannot read AC's device; the voice
+    #: endpoint probe warns (never blocks) when the sidecar resolves voice onto the same one.
+    ac_audio_device: str | None = None
     setup_store: str | None = None
     simhub_exe: str | None = None
     start_simhub: bool = False
@@ -220,7 +256,15 @@ class GamePointConfig:
                 settings.alien_line,
             ),
             voice_bank=_configured_text(env_map.get("AC_COPILOT_VOICE_BANK"), settings.voice_bank),
+            voice_bank_source=_configured_source(
+                env_map.get("AC_COPILOT_VOICE_BANK"),
+                settings.voice_bank,
+            ),
             voice_tts=voice_tts,
+            ac_audio_device=_configured_text(
+                env_map.get("AC_COPILOT_AC_AUDIO_DEVICE"),
+                settings.ac_audio_device,
+            ),
             setup_store=_configured_text(
                 env_map.get("AC_COPILOT_SETUP_STORE"),
                 settings.setup_store,
@@ -430,7 +474,16 @@ class GamePointSupervisor:
         _put_if_present(env, "AC_COPILOT_SIDECAR_TOKEN", self.config.token)
         return env
 
-    def preflight(self) -> tuple[ProbeResult, ...]:
+    def preflight(
+        self,
+        health_payload: Mapping[str, object] | None = None,
+    ) -> tuple[ProbeResult, ...]:
+        """Return the preflight check rows persisted to ``status.json``.
+
+        ``health_payload`` is optional so the pre-start call in :meth:`start_sidecar` (where
+        no sidecar is up yet) keeps working; it only sharpens the ``voice_endpoint`` row,
+        which needs the sidecar's live device name.
+        """
         checks: list[ProbeResult] = []
         if self.config.external_bind and not _is_loopback(self.config.external_bind):
             if not self.config.token:
@@ -461,6 +514,10 @@ class GamePointSupervisor:
             checks.append(ProbeResult("voice_reference", True, "configured"))
         else:
             checks.append(ProbeResult("voice_reference", True, "skipped"))
+
+        # Issue #672 Part A. Always ok=True, so `start_sidecar`'s blocking scan
+        # (`[c for c in self.preflight() if not c.ok]`) can never trip on it.
+        checks.append(self._voice_endpoint_verdict(health_payload))
         return tuple(checks)
 
     def _close_log_handles(self) -> None:
@@ -813,9 +870,11 @@ class GamePointSupervisor:
         closed/crashed SimHub is not relaunched on every 5 s interval (#568 review).
         """
         start_sim = self.config.start_simhub if start_simhub is None else start_simhub
-        checks = self.preflight()
         sidecar = self._sidecar_process_status()
         health, health_payload = self._read_health_payload()
+        # Health first: the `voice_endpoint` check (#672 Part A) needs the sidecar's live
+        # device name, which only the health payload carries.
+        checks = self.preflight(health_payload)
         if health.ok:
             sidecar = health
         screen = _screen_from_health(health)
@@ -968,6 +1027,11 @@ class GamePointSupervisor:
         )
 
     def probe_voice(self, health_payload: Mapping[str, object] | None = None) -> ProbeResult:
+        return self._with_voice_bank_source(
+            self._flag_shared_endpoint(self._probe_voice_base(health_payload), health_payload)
+        )
+
+    def _probe_voice_base(self, health_payload: Mapping[str, object] | None) -> ProbeResult:
         if health_payload is not None:
             voice = health_payload.get("voice")
             if isinstance(voice, Mapping):
@@ -992,6 +1056,87 @@ class GamePointSupervisor:
         if self.config.reference_archive:
             return ProbeResult("voice", True, "observer_only", "reference archive configured")
         return ProbeResult("voice", True, "skipped", "no voice env configured")
+
+    def _with_voice_bank_source(self, result: ProbeResult) -> ProbeResult:
+        """Append the phrase-bank arm source to the Voice row detail (issue #672 Part B).
+
+        The *effective* bank was already folded into the config, but its **source** was not
+        visible anywhere — so a bank force-armed from the environment, or parked by a
+        set-but-blank ``AC_COPILOT_VOICE_BANK`` that cleared a settings value, could not be
+        diagnosed from the Voice row or ``status.json``. ``unset`` adds no noise.
+        """
+        source = self.config.voice_bank_source
+        if source == VOICE_BANK_SOURCE_UNSET:
+            return result
+        armed = "armed" if self.config.voice_bank else "cleared"
+        note = f"bank {armed} via {source}"
+        detail = f"{result.detail}; {note}" if result.detail else note
+        return replace(result, detail=detail)
+
+    def _flag_shared_endpoint(
+        self,
+        result: ProbeResult,
+        health_payload: Mapping[str, object] | None,
+    ) -> ProbeResult:
+        """Warn on the Voice row when voice landed on Assetto Corsa's own endpoint (#672 Part A).
+
+        Warn-only by construction: ``ok`` is preserved (never demoted), so this can neither
+        block ``start_sidecar`` nor flip the aggregate ``GamePointStatus.ok``. The row is still
+        *visible* because :data:`VOICE_STATE_SHARED_ENDPOINT` is a themed warn state — the
+        launcher renders ``checks`` nowhere, so a discrete check row alone would be invisible.
+        """
+        if not result.ok:
+            # An already-failing Voice row carries a more urgent message; do not overwrite it.
+            return result
+        verdict = self._voice_endpoint_verdict(health_payload)
+        if verdict.state != _ENDPOINT_STATE_SHARED:
+            return result
+        detail = f"{result.detail}; {verdict.detail}" if result.detail else verdict.detail
+        return replace(result, state=VOICE_STATE_SHARED_ENDPOINT, detail=detail)
+
+    def _voice_endpoint_verdict(
+        self,
+        health_payload: Mapping[str, object] | None,
+    ) -> ProbeResult:
+        """Compare the sidecar's resolved voice endpoint against AC's declared endpoint.
+
+        Always ``ok=True`` — every outcome, including a detected collision, is advisory
+        (issue #672: the check must never block ``start_sidecar``, because today's rig runs
+        deliberately pinned to the shared endpoint). The four states separate "no collision"
+        from the two distinct flavours of "cannot tell", so an inert check never reads as a
+        clean bill of health.
+        """
+        ac_device = self.config.ac_audio_device
+        if not ac_device:
+            return ProbeResult(
+                "voice_endpoint",
+                True,
+                _ENDPOINT_STATE_UNDECLARED,
+                "set AC_COPILOT_AC_AUDIO_DEVICE (or settings ac_audio_device) to AC's output "
+                "endpoint to check the own-headset invariant",
+            )
+        voice_device = _health_voice_device(health_payload)
+        if not voice_device:
+            return ProbeResult(
+                "voice_endpoint",
+                True,
+                _ENDPOINT_STATE_UNKNOWN,
+                f"AC endpoint declared ({ac_device}) but the sidecar reports no active voice "
+                "output device",
+            )
+        if endpoints_collide(voice_device, ac_device):
+            return ProbeResult(
+                "voice_endpoint",
+                True,
+                _ENDPOINT_STATE_SHARED,
+                _shared_endpoint_remediation(voice_device),
+            )
+        return ProbeResult(
+            "voice_endpoint",
+            True,
+            _ENDPOINT_STATE_DISTINCT,
+            f"voice on {voice_device}; AC on {ac_device}",
+        )
 
     def _voice_requested(self) -> bool:
         return bool(
@@ -1349,6 +1494,73 @@ def _configured_text(env_value: str | None, settings_value: str | None) -> str |
     if env_value is not None:
         return _none_if_blank(env_value)
     return _none_if_blank(settings_value)
+
+
+def _configured_source(env_value: str | None, settings_value: str | None) -> str:
+    """Report which layer decided a :func:`_configured_text` value (issue #672 Part B).
+
+    Mirrors ``_configured_text``'s precedence exactly, including the case that motivated
+    the issue: an env var that is **present but blank** wins and clears a settings-supplied
+    value, so the source is ``env`` even though the resolved value is ``None``.
+    """
+    if env_value is not None:
+        return VOICE_BANK_SOURCE_ENV
+    if _none_if_blank(settings_value) is not None:
+        return VOICE_BANK_SOURCE_SETTINGS
+    return VOICE_BANK_SOURCE_UNSET
+
+
+def _health_voice_device(health_payload: Mapping[str, object] | None) -> str:
+    """Read the sidecar's *live* voice output device from ``/health``.
+
+    Reuses the health-reported device (``tools/ai_sidecar/voice/playback.OutputLayout``)
+    rather than re-enumerating PortAudio in the launcher: the launcher process must not
+    open the audio subsystem it exists to keep uncontended. Returns ``""`` unless voice is
+    actually ``enabled`` — a device name from a non-running stream is not evidence that
+    anything is holding the endpoint.
+    """
+    if health_payload is None:
+        return ""
+    voice = health_payload.get("voice")
+    if not isinstance(voice, Mapping) or not voice.get("enabled"):
+        return ""
+    return str(voice.get("device_name") or "").strip()
+
+
+def _normalize_endpoint_name(name: str | None) -> str:
+    """Casefold + collapse whitespace so two spellings of one endpoint compare equal."""
+    if not name:
+        return ""
+    return " ".join(str(name).split()).casefold()
+
+
+def endpoints_collide(voice_device: str | None, ac_device: str | None) -> bool:
+    """Return True when two device names denote the same Windows output endpoint.
+
+    Equality after :func:`_normalize_endpoint_name`, or a prefix relation when the shorter
+    name is at least :data:`_ENDPOINT_PREFIX_MIN_LEN` characters — PortAudio's MME host API
+    truncates device names to 31 characters, so the sidecar legitimately reports a strict
+    prefix of the full endpoint name. Deliberately **not** a bare substring test: "Speakers"
+    appearing inside an unrelated name must not manufacture a collision, because a check that
+    cries wolf trains the operator to ignore it (the #575 lesson).
+    """
+    left = _normalize_endpoint_name(voice_device)
+    right = _normalize_endpoint_name(ac_device)
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
+    return len(shorter) >= _ENDPOINT_PREFIX_MIN_LEN and longer.startswith(shorter)
+
+
+def _shared_endpoint_remediation(device: str) -> str:
+    """Operator-facing fix text, mirroring ``playback.OutputLayoutError``'s phrasing."""
+    return (
+        f"voice shares Assetto Corsa's audio endpoint ({device}) — FMOD/WASAPI contention "
+        "risk; point AC_COPILOT_VOICE_DEVICE (and AC_COPILOT_VOICE_HOST_API) at the "
+        "dedicated headset endpoint"
+    )
 
 
 def _configured_external_bind(

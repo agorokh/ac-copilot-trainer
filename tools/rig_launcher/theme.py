@@ -112,7 +112,16 @@ _IDLE_STATES = {"absent", "skipped", "loopback", "available", "stopped"}
 # States that are in-progress / attention-but-not-failure. "waiting" is NOT in
 # this set: a missing screen peer is a failure the driver must fix (the render
 # shows SCREEN WAITING in brake red), not progress.
-_WARN_STATES = {"initializing", "starting", "unavailable", "unknown"}
+# "shared_endpoint" (#672) is voice running correctly *on Assetto Corsa's own audio
+# endpoint* — amber, because it is a live FMOD/WASAPI contention risk the driver should
+# fix, but never red: the rig deliberately ships pinned there and START must still work.
+_WARN_STATES = {
+    "initializing",
+    "starting",
+    "unavailable",
+    "unknown",
+    "shared_endpoint",
+}
 
 
 def tone_for(ok: bool, state: str) -> str:
