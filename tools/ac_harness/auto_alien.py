@@ -1023,7 +1023,13 @@ def run_selfplay(
         # though nothing contradicts it (#703 Qodo, round 8). Scoped to VALID iterations on
         # purpose: an invalid drive that died before building a line legitimately records no
         # provenance, and that is an ordinary stage failure, not a peer plant change.
-        missing_driven_fit = valid and expected_fit is not None and driven_fit is None
+        # Gate on "did this drive actually run", not on the oracle verdict. Scoping it to VALID
+        # let an AC-invalid TIMED lap with no provenance keep its knob attribution, so an envelope
+        # failure could retain earlier refits with no proof the expected plant produced the
+        # falsifying lap (#703 Qodo, round 14). A stage that died before building a line records
+        # no laps and no archives — that is an ordinary failure and still attributable.
+        drove_something = bool(lap_times) or bool(archives)
+        missing_driven_fit = drove_something and expected_fit is not None and driven_fit is None
         try:
             post_drive_bytes = _read_plant_bytes(plant_path)
         except OSError as exc:
@@ -1038,7 +1044,22 @@ def run_selfplay(
                 f"({exc}) — self-play stopped without judging the plant; an unreadable artifact "
                 "is not evidence that it changed"
             )
-            if not valid and refined and last_valid_bytes is not None:
+            if fit_mismatch or missing_driven_fit:
+                # The fit evidence already proves this iteration did not run our candidate; the
+                # read failure does not erase that, so carry the same taint the normal path sets.
+                entry["plant_changed_during_step"] = True
+                entry["usable_as_evidence"] = False
+                selfplay["requires_rebase"] = True
+            # Revert whenever the candidate demonstrably never drove on its own plant — falsified,
+            # OR valid-but-on-a-foreign/unprovable fit. Round 12 covered only the falsified case,
+            # so a valid drive on a peer plant followed by a read failure left the undriven grip
+            # raise loadable for later runs (self-hosted HIGH, round 14). A CONFIRMED attributable
+            # valid refit is still protected from the blip.
+            if (
+                refined
+                and last_valid_bytes is not None
+                and (not valid or fit_mismatch or missing_driven_fit)
+            ):
                 try:
                     if revert_plant_artifact(
                         plant_path,
@@ -1050,8 +1071,8 @@ def run_selfplay(
                     ):
                         entry["reverted"] = True
                         print(
-                            f"auto-alien: iteration {index} FALSIFIED and unreadable afterwards "
-                            "— plant reverted to the last-valid fit"
+                            f"auto-alien: iteration {index} candidate never drove on its own "
+                            "plant and the artifact is unreadable — reverted to the last-valid fit"
                         )
                     else:
                         entry["reverted"] = False

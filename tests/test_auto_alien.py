@@ -1929,6 +1929,90 @@ def test_selfplay_refuses_to_start_without_a_valid_plant(monkeypatch, tmp_path):
     assert "no valid plant artifact" in selfplay["stopped"]
 
 
+def test_invalid_timed_lap_without_provenance_is_unattributable(monkeypatch, tmp_path):
+    # #703 (Qodo, round 14): scoping the missing-provenance rule to VALID iterations let an
+    # AC-invalid TIMED lap with no provenance keep its knob attribution, so an envelope failure
+    # could retain earlier refits with no proof the expected plant produced the falsifying lap.
+    # A drive that produced laps DID run; only one that died before building a line is exempt.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (0, [94000], [False]),  # iteration 1: drove, AC-invalid lap, no provenance recorded
+        ],
+    )
+    calls = {"n": 0}
+    real_stage_fit = auto_alien.stage_plant_fit_sha12
+
+    def fit_missing_after_base(outcome):
+        calls["n"] += 1
+        return real_stage_fit(outcome) if calls["n"] == 1 else None
+
+    monkeypatch.setattr(auto_alien, "stage_plant_fit_sha12", fit_missing_after_base)
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0
+    entry = report["selfplay"]["iterations"][0]
+    assert entry["valid"] is False
+    assert entry["driven_plant_fit_missing"]
+    assert entry["falsified_component"] == "unattributable"  # not blamed on the selected knob
+    assert report["selfplay"]["requires_rebase"] is True
+
+
+def test_undriven_candidate_is_reverted_even_when_the_post_drive_read_fails(monkeypatch, tmp_path):
+    # #703 (self-hosted HIGH, round 14): round 12 extended the OSError path only to oracle-INVALID
+    # batches. A VALID drive on a foreign fit followed by a read failure therefore failed the
+    # pipeline without reverting, leaving the undriven monotone grip raise loadable for later runs.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (0, [93000], [True]),  # iteration 1: passes the oracle, but on a foreign fit
+        ],
+    )
+    calls = {"n": 0}
+    real_stage_fit = auto_alien.stage_plant_fit_sha12
+
+    def foreign_fit_after_base(outcome):
+        calls["n"] += 1
+        return real_stage_fit(outcome) if calls["n"] == 1 else "someoneelsefit"
+
+    monkeypatch.setattr(auto_alien, "stage_plant_fit_sha12", foreign_fit_after_base)
+
+    real_read = auto_alien._read_plant_bytes
+    drives = {"n": 0}
+    real_runner = harness.runner()
+
+    def runner(argv):
+        drives["n"] += 1
+        return real_runner(argv)
+
+    def read_or_explode(path):
+        if drives["n"] == 2:  # the post-drive read for iteration 1
+            raise OSError("disk on fire")
+        return real_read(path)
+
+    monkeypatch.setattr(auto_alien, "_read_plant_bytes", read_or_explode)
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
+    )
+    code, report = run_pipeline(args, run_stage=runner)
+    selfplay = report["selfplay"]
+    assert selfplay["ok"] is False and code == 1  # still fails closed on the I/O fault
+    entry = selfplay["iterations"][0]
+    assert entry["valid"] is True  # the oracle passed it...
+    assert entry["plant_changed_during_step"] is True  # ...on a plant we did not choose
+    assert entry["usable_as_evidence"] is False
+    assert selfplay["requires_rebase"] is True
+    assert entry["reverted"] is True
+    # THE POINT: the undriven grip raise is gone, not left loadable behind an I/O error.
+    assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "original"}'
+
+
 def test_stage_plant_fit_sha12_reads_the_recorded_line_provenance():
     # The ladder's proof of WHICH plant produced a batch. Shape matches auto_drive's report.
     outcome = {"run": {"alien_line": {"plant_provenance": {"sha12": "51fcee4af59a"}}}}
