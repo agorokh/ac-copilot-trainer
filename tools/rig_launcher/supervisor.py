@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -1602,23 +1603,39 @@ def _health_voice_backend(health_payload: Mapping[str, object] | None) -> str:
 
 
 def _normalize_endpoint_name(name: str | None) -> str:
-    """Casefold and drop **all** whitespace so two spellings of one endpoint compare equal.
+    """Casefold and normalize whitespace so two spellings of one endpoint compare equal.
 
-    Whitespace is removed outright rather than collapsed, because PortAudio reports the same
-    Windows endpoint differently per host API. Measured on the rig for one physical device:
+    PortAudio reports the same Windows endpoint differently per host API. Measured on the rig
+    for one physical device:
 
     * MME             ``'5.1 Speakers (USB Sound Device '``          (truncated to 31 chars)
     * DirectSound     ``'5.1 Speakers (USB Sound Device        )'``  (internal padding)
     * WASAPI          ``'5.1 Speakers (USB Sound Device        )'``
 
     An operator naturally declares the name Windows shows them — ``5.1 Speakers (USB Sound
-    Device)`` — which under whitespace-collapsing would *not* match the padded WASAPI form,
-    producing a false all-clear. That is strictly worse than crying wolf, so the padding is
-    discarded rather than normalized to one space.
+    Device)``. Matching that against the padded WASAPI form requires absorbing the run of
+    spaces before the closing paren, so plain run-collapsing is not enough.
+
+    But deleting whitespace outright is too much: it also erases *meaningful* separators, so
+    ``Speakers (USB Audio Device)`` and ``Speakers (USBAudio Device)`` — two distinct devices —
+    would collapse to the same string and warn (PR #707 review round 4). Both failure
+    directions matter: a false all-clear hides a real contention risk, a false alarm trains
+    the operator to ignore the row.
+
+    So: collapse whitespace runs to a single space, then drop only the whitespace that sits
+    **against punctuation** (the padding form actually observed). Separators between
+    alphanumeric tokens survive.
     """
     if not name:
         return ""
-    return "".join(str(name).split()).casefold()
+    collapsed = " ".join(str(name).split()).casefold()
+    return _PADDING_AROUND_PUNCTUATION.sub("", collapsed)
+
+
+#: Whitespace immediately before or after a non-alphanumeric character. This is the only
+#: whitespace safe to delete: it is the padding PortAudio's WASAPI/DirectSound names carry
+#: before the closing paren, and it never distinguishes two real device names.
+_PADDING_AROUND_PUNCTUATION = re.compile(r"\s+(?=[^\w\s])|(?<=[^\w\s])\s+")
 
 
 def endpoints_collide(

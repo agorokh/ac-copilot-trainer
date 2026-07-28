@@ -132,6 +132,13 @@ def _supervisor(
         # invariant exists to keep voice off — must never collide with it.
         ("Bass Shakers (USB PnP Sound Device)", RIG_DEVICE_AS_WASAPI, False),
         ("Bass Shakers (USB PnP Sound Dev", RIG_SHARED_DEVICE, False),
+        # Whitespace INSIDE a token is meaningful: these are two different devices and
+        # must not collapse onto each other (PR #707 review round 4).
+        ("Speakers (USB Audio Device)", "Speakers (USBAudio Device)", False),
+        ("Speakers (USBAudio Device)", "Speakers (USB Audio Device)", False),
+        # ...while padding against punctuation is noise and is still absorbed, which is what
+        # makes the measured WASAPI/DirectSound spellings match the operator's declaration.
+        ("5.1 Speakers (USB Sound Device        )", "5.1 Speakers (USB Sound Device)", True),
         # KNOWN LIMITATION, pinned deliberately: PortAudio's WDM-KS host API drops the
         # "5.1 " prefix for this same physical endpoint, leaving no prefix relation to the
         # declared name. Not papered over with a suffix rule — that would widen the
