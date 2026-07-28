@@ -54,6 +54,7 @@ from tools.ac_harness.auto_drive import (
 )
 from tools.ac_harness.plant_id import (
     load_plant_artifact,
+    plant_artifact_from_bytes,
     plant_artifact_path,
     plant_ready_for_full_consumption,
 )
@@ -743,8 +744,15 @@ def run_selfplay(
                 # The refine-save still runs outside the drive stage's machine-global rig lock, so
                 # a peer that lands after this snapshot makes the save skip rather than clobber a
                 # newer fit (#579 Codex P2) — which the peer-skip stop then turns into a rebase.
-                artifact = load_plant_artifact(
-                    user_dir, args.car, args.track, setup_key, setup_ini, layout=args.track_layout
+                #
+                # PARSE the snapshot rather than re-reading the file: `load_plant_artifact` would
+                # open it again, so plant B could be parsed while `pre_refine_bytes` still held A.
+                # If the peer then rolled B back to A while we waited on the rig lock, the write
+                # guard would see its expected A bytes and persist a candidate that merged A's
+                # archives into B — corrupting the plant while reporting it validated (#703 Codex
+                # P1, round 8). Same validation gate; one snapshot for compare, parse, and write.
+                artifact = plant_artifact_from_bytes(
+                    pre_refine_bytes, args.car, args.track, setup_key, layout=args.track_layout
                 )
                 if artifact is None:
                     entry["refine"] = {
@@ -1030,6 +1038,13 @@ def run_selfplay(
                             "plant artifact changed since this iteration persisted it "
                             "(peer re-identification?) — revert skipped"
                         )
+                        # A skipped rollback PROVES the on-disk plant is no longer this ladder's,
+                        # so the same rebase state every other detected peer change sets applies
+                        # here too — otherwise `--scientist` would run a baseline from an older
+                        # self-play outcome against experiments loading the peer's plant,
+                        # conflating plant and setup in one verdict (#703 Codex P1, round 8).
+                        entry["usable_as_evidence"] = False
+                        selfplay["requires_rebase"] = True
                         print(
                             f"auto-alien: iteration {index} FALSIFIED ({reason}); "
                             f"{entry['revert_skipped']}"
@@ -1113,6 +1128,42 @@ def run_selfplay(
                 "re-identification?) — self-play stopped; the step passed but its evidence "
                 "cannot be attributed to this ladder's plant"
             )
+            # A refit that was never driven ON ITS OWN PLANT has not survived anything, so it must
+            # not stay persisted: the monotone merge only ever RAISES grip and the keep-last-valid
+            # revert is its one way down, so leaving it would hand an unvalidated grip increase to
+            # every later alien-line consumer (#703 Codex P1, round 8). Guarded exactly like the
+            # falsified-plant rollback: if a peer now owns the artifact the revert is skipped and
+            # the rebase state stands rather than overwriting their fit.
+            if refined and last_valid_bytes is not None:
+                try:
+                    if revert_plant_artifact(
+                        plant_path,
+                        last_valid_bytes,
+                        expected_current_bytes=candidate_bytes,
+                        car_id=args.car,
+                        track_id=args.track,
+                        lock_timeout=lock_timeout,
+                    ):
+                        entry["reverted"] = True
+                        print(
+                            f"auto-alien: iteration {index} candidate never drove on its own "
+                            "plant — reverted to the last-valid fit"
+                        )
+                    else:
+                        entry["reverted"] = False
+                        entry["revert_skipped"] = (
+                            "plant artifact is no longer this iteration's candidate (peer owns "
+                            "it) — revert skipped; the rebase state stands"
+                        )
+                        print(f"auto-alien: iteration {index} {entry['revert_skipped']}")
+                except (OSError, RigSessionBusy) as exc:
+                    entry["reverted"] = False
+                    entry["revert_error"] = f"artifact rollback failed: {type(exc).__name__}: {exc}"
+                    selfplay["ok"] = False
+                    print(
+                        f"auto-alien: iteration {index} REVERT FAILED — {entry['revert_error']} "
+                        "(an undriven candidate may still be persisted; re-run --force-identify)"
+                    )
             print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
             break
         if lap_times:

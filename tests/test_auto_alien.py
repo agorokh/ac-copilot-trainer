@@ -494,6 +494,9 @@ class _SelfplayHarness:
         # from. Bind both to the artifact ON DISK so "the plant on disk is the plant" holds in the
         # fake exactly as it does in the product — otherwise every ladder trips the round-5
         # base-provenance gate on a disagreement that only exists in the harness.
+        # The refit path now parses the snapshot it compares and writes against, so the fake
+        # loader must cover that entry point too (mirrors `_usable_plant`).
+        monkeypatch.setattr(auto_alien, "plant_artifact_from_bytes", lambda *a, **kw: {"fit": 0})
         monkeypatch.setattr(
             auto_alien,
             "_current_plant_fit_sha12",
@@ -1608,6 +1611,94 @@ def test_selfplay_invalid_drive_without_provenance_is_still_attributed(monkeypat
     assert "driven_plant_fit_missing" not in entry
     assert entry["falsified_component"] == "plant"  # attributed, not laundered to unattributable
     assert selfplay.get("requires_rebase") is not True
+
+
+def test_selfplay_reverts_a_candidate_that_never_drove_on_its_own_plant(monkeypatch, tmp_path):
+    # #703 (Codex P1, round 8): when a plant step's drive reports a different fit than the
+    # candidate we persisted, that candidate has survived nothing. Stopping and excluding the
+    # batch is not enough — the monotone merge only ever RAISES grip and this revert is its one
+    # way down, so leaving it persisted hands an unvalidated grip increase to every later
+    # alien-line consumer.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (0, [93000], [True]),  # iteration 1: plant step, drive reports a foreign fit
+        ],
+    )
+    calls = {"n": 0}
+    real_stage_fit = auto_alien.stage_plant_fit_sha12
+
+    def foreign_fit_after_base(outcome):
+        calls["n"] += 1
+        return real_stage_fit(outcome) if calls["n"] == 1 else "someoneelsefit"
+
+    monkeypatch.setattr(auto_alien, "stage_plant_fit_sha12", foreign_fit_after_base)
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0
+    entry = report["selfplay"]["iterations"][0]
+    assert entry["driven_plant_fit_mismatch"]["driven"] == "someoneelsefit"
+    assert entry["reverted"] is True
+    assert report["selfplay"]["requires_rebase"] is True
+    # THE POINT: the undriven candidate is gone from disk, not left for later consumers.
+    assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "original"}'
+
+
+def test_selfplay_skipped_rollback_requires_a_rebase(monkeypatch, tmp_path):
+    # #703 (Codex P1, round 8 — review BODY, not an inline thread): a skipped rollback PROVES the
+    # on-disk plant is no longer this ladder's, so it must set the same rebase state every other
+    # detected peer change does, or --scientist runs a baseline from an older self-play outcome
+    # against experiments loading the peer's plant.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000, 96000], [True, True]),  # base drive
+            (0, [94000], [False]),  # iteration 1: falsified, and a peer owns the artifact by then
+        ],
+    )
+    real_runner = harness.runner()
+    drives = {"n": 0}
+
+    def runner(argv):
+        drives["n"] += 1
+        code = real_runner(argv)
+        if drives["n"] == 2:  # peer replaces the candidate before the revert can run
+            harness.plant_path.write_text('{"v": "peer-owns-it"}', encoding="utf-8")
+        return code
+
+    called = {"scientist": False}
+    monkeypatch.setattr(
+        auto_alien,
+        "run_scientist",
+        lambda *a, **kw: called.__setitem__("scientist", True) or {"ok": True},
+    )
+    args = _args(
+        tmp_path,
+        "--evidence-dir",
+        str(tmp_path / "ev"),
+        "--laps",
+        "2",
+        "--iterations",
+        "1",
+        "--setup",
+        "Copilot_Balanced_Fast",
+        "--scientist",
+    )
+    code, report = run_pipeline(args, run_stage=runner)
+    assert code == 0
+    entry = report["selfplay"]["iterations"][0]
+    assert entry["reverted"] is False
+    assert "revert skipped" in entry["revert_skipped"]
+    assert entry["usable_as_evidence"] is False
+    assert report["selfplay"]["requires_rebase"] is True
+    assert called["scientist"] is False
+    # The peer's artifact was never overwritten by our rollback.
+    assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "peer-owns-it"}'
 
 
 def test_selfplay_ladder_rungs_step_from_the_validated_base_not_the_flag(monkeypatch, tmp_path):

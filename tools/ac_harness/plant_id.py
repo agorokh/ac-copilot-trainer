@@ -1888,8 +1888,35 @@ def load_plant_artifact(
     """
     try:
         path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini, layout=layout)
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, ValueError):
+        raw = path.read_bytes()
+    except (OSError, ValueError):
+        # ValueError: `plant_artifact_path` rejects an unsafe layout for WRITERS; the tolerant
+        # loader degrades that lookup to a cache miss instead of raising.
+        return None
+    return plant_artifact_from_bytes(raw, car_id, track_id, setup, layout=layout)
+
+
+def plant_artifact_from_bytes(
+    raw: bytes | None,
+    car_id: str,
+    track_id: str,
+    setup: str | None = None,
+    *,
+    layout: str | None = None,
+) -> dict | None:
+    """Parse + validate an artifact from BYTES already read, or ``None`` when invalid.
+
+    Same gate as :func:`load_plant_artifact` — which delegates here — so there is exactly one
+    definition of a usable plant artifact. Callers that must bind a refinement to the *same*
+    snapshot they compared and will write against (the #703 self-play ladder) parse those bytes
+    here instead of re-reading the file, which would let a peer's artifact be parsed while an
+    older snapshot still guards the write.
+    """
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return None
     if (
         not isinstance(payload, dict)
