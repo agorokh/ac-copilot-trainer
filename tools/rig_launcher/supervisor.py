@@ -455,7 +455,13 @@ class GamePointSupervisor:
             # An alien frontier is a Coach v2 feature; make the launcher setting operational rather
             # than silently leaving the legacy observer active behind an undocumented prerequisite.
             env["AC_COPILOT_COACH_V2"] = "1"
-        _put_if_present(
+        # The launcher's RESOLVED config must win over whatever it inherited. `env` starts as a
+        # copy of the parent environment, and `_put_if_present` only ever *sets* — so a
+        # set-but-blank AC_COPILOT_VOICE_BANK (which `_configured_text` resolves to None, i.e.
+        # "voice parked") would survive into the child, where server.py reads the raw env var,
+        # sees a truthy whitespace string, and fails to load it — reporting voice DISABLED
+        # instead of parked, contradicting what this launcher advertises (PR #707 review).
+        _put_or_clear(
             env,
             "AC_COPILOT_VOICE_BANK",
             _resolve_launcher_path(self.config.voice_bank, base=base),
@@ -1521,13 +1527,20 @@ def _health_voice_device(health_payload: Mapping[str, object] | None) -> str:
     open the audio subsystem it exists to keep uncontended. Returns ``""`` unless voice is
     actually ``enabled`` — a device name from a non-running stream is not evidence that
     anything is holding the endpoint.
+
+    The name is returned **verbatim, un-stripped**. ``endpoints_collide`` keys its MME
+    truncation rule on the raw length, and the rig's real MME spelling
+    ``'5.1 Speakers (USB Sound Device '`` is exactly 31 characters *including* a trailing
+    space — stripping it here drops it to 30 and silently defeats that rule, turning a live
+    collision into ``distinct`` (PR #707 review). Whitespace is used only to decide emptiness.
     """
     if health_payload is None:
         return ""
     voice = health_payload.get("voice")
     if not isinstance(voice, Mapping) or not voice.get("enabled"):
         return ""
-    return str(voice.get("device_name") or "").strip()
+    device = str(voice.get("device_name") or "")
+    return device if device.strip() else ""
 
 
 def _normalize_endpoint_name(name: str | None) -> str:
@@ -1555,32 +1568,39 @@ def endpoints_collide(voice_device: str | None, ac_device: str | None) -> bool:
 
     Two ways to match, and only two:
 
-    1. **Equality** after :func:`_normalize_endpoint_name` — always valid evidence.
-    2. **Prefix**, but only when the shorter side is plausibly an *MME truncation artifact*:
-       its **raw** length must reach :data:`_MME_NAME_MAX_LEN`. Measured raw and un-stripped,
-       because truncation is a property of the original string — the rig's MME name
-       ``'5.1 Speakers (USB Sound Device '`` is exactly 31 characters *including* the trailing
-       space that stripping would remove.
+    1. **Equality** after :func:`_normalize_endpoint_name` — symmetric, always valid evidence.
+    2. **Prefix**, and only in one direction: ``voice_device`` is the name PortAudio reported
+       via ``/health``, so it is the *only* side that can be an MME truncation artifact. The
+       operator's ``ac_device`` declaration is hand-written and is never one. The prefix branch
+       therefore fires only when ``voice_device``'s **raw** length is exactly
+       :data:`_MME_NAME_MAX_LEN` — the precise truncation signature. A name shorter than that
+       was not truncated; a name longer than that cannot have come from MME.
 
-    Deliberately **not** a bare substring test, and deliberately not a short prefix floor:
-    a generic ``Speakers`` must not manufacture a collision with ``Speakers (USB Sound
-    Device)``, because a check that cries wolf trains the operator to ignore it (the #575
-    lesson, and PR #707 review).
+    That exactness matters twice over (PR #707 review). A loose floor let a generic
+    ``Speakers`` collide with ``Speakers (USB Sound Device)``; a ``>=`` floor let two genuinely
+    distinct long endpoints — ``Headset Earphone (Rig Audio Interface)`` and
+    ``… Interface) 2`` — collide on their shared prefix. Both would tell the operator to
+    reroute already-isolated voice audio, and a check that cries wolf trains them to ignore it
+    (the #575 lesson).
+
+    The cost is a narrow false negative: an operator who declares a *truncated* MME spelling
+    while voice runs on the full WASAPI name gets ``distinct``. That is accepted because the
+    reverse direction would be a guess rather than a provable artifact, and because the
+    ``distinct`` detail prints **both** names, so the mismatch is self-diagnosing from the row.
+
+    ``voice_device`` and ``ac_device`` are therefore **not** interchangeable — pass them in
+    that order.
     """
-    left_raw = voice_device or ""
-    right_raw = ac_device or ""
-    left = _normalize_endpoint_name(left_raw)
-    right = _normalize_endpoint_name(right_raw)
+    voice_raw = voice_device or ""
+    ac_raw = ac_device or ""
+    voice_name = _normalize_endpoint_name(voice_raw)
+    ac_name = _normalize_endpoint_name(ac_raw)
     # Both sides are already casefolded and whitespace-free here.
-    if not left or not right:
+    if not voice_name or not ac_name:
         return False
-    if left == right:
+    if voice_name == ac_name:
         return True
-    if len(left) <= len(right):
-        shorter, longer, shorter_raw = left, right, left_raw
-    else:
-        shorter, longer, shorter_raw = right, left, right_raw
-    return len(str(shorter_raw)) >= _MME_NAME_MAX_LEN and longer.startswith(shorter)
+    return len(str(voice_raw)) == _MME_NAME_MAX_LEN and ac_name.startswith(voice_name)
 
 
 def _shared_endpoint_remediation(device: str) -> str:
@@ -1627,6 +1647,20 @@ def _none_if_blank(value: str | None) -> str | None:
 def _put_if_present(env: MutableMapping[str, str], key: str, value: str | None) -> None:
     if value:
         env[key] = value
+
+
+def _put_or_clear(env: MutableMapping[str, str], key: str, value: str | None) -> None:
+    """Set ``key`` to ``value``, or **remove** it when the launcher resolved no value.
+
+    Unlike :func:`_put_if_present`, this makes the launcher's resolved config authoritative
+    over the inherited parent environment. Use it wherever "the launcher resolved nothing"
+    is a meaningful state the child must observe — otherwise a stale or blank inherited
+    value silently overrides the resolution (PR #707 review).
+    """
+    if value:
+        env[key] = value
+    else:
+        env.pop(key, None)
 
 
 def _is_loopback(host: str) -> bool:

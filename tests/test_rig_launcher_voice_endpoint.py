@@ -111,6 +111,14 @@ def _supervisor(
         ("Headset Earphone (Rig Audio In", OWN_HEADSET_DEVICE, False),
         ("Output ()", "Output (Rig Audio Interface)", False),
         ("Primary Sound Driver", "Primary Sound Driver (USB Sound Device)", False),
+        # Two genuinely DISTINCT long endpoints that share a prefix are not a truncation
+        # artifact either — neither raw name is exactly 31 chars (PR #707 Codex P2 round 2).
+        (OWN_HEADSET_DEVICE, OWN_HEADSET_DEVICE + " 2", False),
+        (OWN_HEADSET_DEVICE + " 2", OWN_HEADSET_DEVICE, False),
+        # Asymmetric by design: only the health-reported VOICE name can be an MME truncation.
+        # An operator's hand-written AC declaration never is, so the reverse does not match.
+        ("Headset Earphone (Rig Audio Int", OWN_HEADSET_DEVICE, True),
+        (OWN_HEADSET_DEVICE, "Headset Earphone (Rig Audio Int", False),
         # --- measured on the rig: one physical endpoint, four host-API spellings. The
         # operator declares the name Windows shows them; every spelling must still match,
         # because a false all-clear here is worse than a false alarm.
@@ -245,6 +253,67 @@ def test_a_failing_voice_row_outranks_the_advisory_warning(tmp_path: Path) -> No
 
     assert status.voice.ok is False
     assert status.voice.state == "DISABLED"
+
+
+def test_mme_truncated_device_from_health_still_collides(tmp_path: Path) -> None:
+    """The MME spelling must survive the /health -> collide path, trailing space intact.
+
+    Round-2 Codex P2: `_health_voice_device` used to `.strip()` the reported name, which cut
+    the rig's real MME spelling `'5.1 Speakers (USB Sound Device '` from 31 chars to 30 and
+    silently defeated the truncation gate — the direct matcher test passed on an unstripped
+    fixture while the live poll reported `distinct`. Assert through `poll_status`, not the
+    matcher, so the two layers cannot disagree again.
+    """
+    sup = _supervisor(
+        tmp_path,
+        ac_audio_device=RIG_SHARED_DEVICE,
+        payload=_health_payload(RIG_DEVICE_AS_MME),
+    )
+
+    status = sup.poll_status()
+
+    rows = {row.name: row for row in status.checks}
+    assert rows["voice_endpoint"].state == "shared"
+    assert status.voice.state == supervisor_module.VOICE_STATE_SHARED_ENDPOINT
+    assert status.ok is True
+
+
+def test_whitespace_only_health_device_is_not_a_device(tmp_path: Path) -> None:
+    sup = _supervisor(
+        tmp_path,
+        ac_audio_device=RIG_SHARED_DEVICE,
+        payload=_health_payload("   "),
+    )
+
+    rows = {row.name: row for row in sup.poll_status().checks}
+    assert rows["voice_endpoint"].state == "unknown"
+
+
+def test_blank_env_bank_is_removed_from_the_sidecar_environment(tmp_path: Path) -> None:
+    """A parked bank must actually reach the child as parked.
+
+    Round-2 Codex P2: `sidecar_environment()` copies the parent env and `_put_if_present`
+    only ever sets, so a set-but-blank `AC_COPILOT_VOICE_BANK` survived into the sidecar,
+    which reads the raw env var, sees a truthy whitespace string, and reports voice DISABLED
+    instead of parked — contradicting what Part B advertises.
+    """
+    _write_settings(tmp_path, voice_bank="settings-bank", reference_archive="ref.json")
+    environ = {"AC_COPILOT_VOICE_BANK": "  "}
+
+    cfg = GamePointConfig.from_env(environ, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ=environ)
+
+    assert cfg.voice_bank is None
+    assert "AC_COPILOT_VOICE_BANK" not in sup.sidecar_environment()
+
+
+def test_resolved_bank_still_reaches_the_sidecar_environment(tmp_path: Path) -> None:
+    environ = {"AC_COPILOT_VOICE_BANK": "env-bank"}
+
+    cfg = GamePointConfig.from_env(environ, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ=environ)
+
+    assert sup.sidecar_environment()["AC_COPILOT_VOICE_BANK"].endswith("env-bank")
 
 
 def test_shared_endpoint_renders_amber_not_red() -> None:
