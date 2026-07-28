@@ -1049,19 +1049,19 @@ def test_next_envelope_rung_terminates_on_a_cap_with_more_than_six_decimals():
     assert next_envelope_rung(0.9, 0.05, 0.9500004, 0.9, 1) == 1
 
 
-def test_selfplay_stops_when_a_peer_changes_the_plant_before_an_envelope_step(
-    monkeypatch, tmp_path
-):
-    # #703 (Codex P1): auto_drive loads the latest on-disk plant after taking the rig lock, so a
-    # peer re-identification between the validated drive and this envelope step would move the
-    # second knob silently. The verdict would not be the envelope's — stop instead.
+def test_selfplay_plant_step_rejects_a_peer_replaced_candidate(monkeypatch, tmp_path):
+    # #703 (Codex P1, round 3): a peer can rewrite the artifact after
+    # persist_selfplay_refinement releases the rig lock but before/during the plant-step drive,
+    # so auto_drive loads the PEER's plant rather than our candidate. Restricting the post-drive
+    # identity check to envelope steps let the run record that refit as "validated" on a pass,
+    # even though it was never the plant driven.
     harness = _SelfplayHarness(
         monkeypatch,
         tmp_path,
         stage_specs=[
             (0, [95000], [True]),  # base drive
-            (0, [93000], [True]),  # iteration 1: plant step
-            (0, [92000], [True]),  # iteration 2 would be the envelope step (never reached)
+            (0, [93000], [True]),  # iteration 1: plant step, peer swaps the artifact under it
+            (0, [92000], [True]),  # never reached
         ],
     )
     real_runner = harness.runner()
@@ -1070,7 +1070,7 @@ def test_selfplay_stops_when_a_peer_changes_the_plant_before_an_envelope_step(
     def runner(argv):
         code = real_runner(argv)
         calls["n"] += 1
-        if calls["n"] == 2:  # after iteration 1's plant step: a peer rewrites the artifact
+        if calls["n"] == 2:  # the plant step's own drive
             harness.plant_path.write_text('{"v": "peer-mid-ladder"}', encoding="utf-8")
         return code
 
@@ -1080,11 +1080,59 @@ def test_selfplay_stops_when_a_peer_changes_the_plant_before_an_envelope_step(
     code, report = run_pipeline(args, run_stage=runner)
     assert code == 0
     selfplay = report["selfplay"]
-    assert "plant changed on disk" in selfplay["stopped"]
+    assert len(selfplay["iterations"]) == 1
+    entry = selfplay["iterations"][0]
+    assert entry["step_kind"] == "plant"
+    assert entry["valid"] is True  # the drive passed the oracle...
+    assert entry["plant_changed_during_step"] is True  # ...under a plant we did not persist
+    assert entry["usable_as_evidence"] is False
+    # The refit is NOT recorded as validated: it was never the plant that drove.
+    assert selfplay["refit_iterations"] == []
+    assert selfplay["requires_rebase"] is True
+    assert "plant changed on disk during" in selfplay["stopped"]
+
+
+def test_selfplay_stops_when_a_peer_changes_the_plant_before_an_envelope_step(
+    monkeypatch, tmp_path
+):
+    # #703 (Codex P1): auto_drive loads the latest on-disk plant after taking the rig lock, so a
+    # peer re-identification between the validated drive and this envelope step would move the
+    # second knob silently. The verdict would not be the envelope's — stop before driving.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (0, [93000], [True]),  # iteration 1: plant step (clean)
+            (0, [92000], [True]),  # iteration 2: envelope step — must never drive
+        ],
+    )
+    # Mutate between iteration 1's post-drive check and iteration 2's pre-drive check, which is
+    # the only window this guard owns. Call 1 is the ladder-start snapshot, call 2 is iteration
+    # 1's post-drive verification (must still see our candidate), call 3 is the pre-drive check.
+    real_read = auto_alien._read_plant_bytes
+    reads = {"n": 0}
+
+    def counting_read(path):
+        reads["n"] += 1
+        value = real_read(path)
+        if reads["n"] == 2:  # iteration 1 verified clean; now a peer lands its own fit
+            harness.plant_path.write_text('{"v": "peer-between-steps"}', encoding="utf-8")
+        return value
+
+    monkeypatch.setattr(auto_alien, "_read_plant_bytes", counting_read)
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "3"
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0
+    selfplay = report["selfplay"]
+    assert "plant changed on disk before" in selfplay["stopped"]
     envelope_entry = selfplay["iterations"][1]
     assert envelope_entry["step_kind"] == "envelope"
     assert envelope_entry["plant_changed_before_step"] is True
     assert "exit_code" not in envelope_entry  # refused to drive an unattributable step
+    assert selfplay["requires_rebase"] is True
 
 
 def test_selfplay_refuses_to_attribute_when_the_plant_moves_during_an_envelope_step(
@@ -1128,6 +1176,70 @@ def test_selfplay_refuses_to_attribute_when_the_plant_moves_during_an_envelope_s
     assert "plant changed on disk during" in selfplay["stopped"]
     # The pass is NOT carried forward as ladder evidence.
     assert len(selfplay["iterations"]) == 2
+    # ...and it is barred from seeding a setup experiment (#703 Codex P1, round 3): the scientist
+    # would otherwise pick this newest "valid" batch as its baseline. Selection falls back to the
+    # earlier attributable iteration instead of the tainted one.
+    assert envelope_entry["usable_as_evidence"] is False
+    assert selfplay["requires_rebase"] is True
+    baseline = auto_alien._scientist_baseline_outcome(selfplay, None)
+    assert baseline is not None
+    archives = baseline["lap_archives"]
+    tainted = envelope_entry["evidence_dir"]
+    attributable = selfplay["iterations"][0]["evidence_dir"]
+    assert not any(tainted in p for p in archives)
+    assert any(attributable in p for p in archives)
+    # Belt and braces: `requires_rebase` also stops the scientist stage running at all, because
+    # even an attributable baseline would be compared against drives on the PEER's plant.
+
+
+def test_scientist_is_skipped_when_the_ladder_needs_a_peer_rebase(monkeypatch, tmp_path):
+    # #703 (Codex P1, round 3): a peer-change stop leaves selfplay.ok true, so run_pipeline would
+    # still run the scientist — comparing a baseline captured under the OLD plant against
+    # experiment drives that load the PEER's plant. That changes setup AND plant at once and can
+    # persist a corrupted verdict. The stage must be skipped until a fresh run rebases.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000, 96000], [True, True]),  # base drive
+            (0, [93000, 94000], [True, True]),  # iteration 1: peer swaps between load and save
+        ],
+        mutate_plant_during_refine=True,  # forces the peer save_skipped path
+    )
+    called = {"scientist": False}
+    monkeypatch.setattr(
+        auto_alien,
+        "run_scientist",
+        lambda *a, **kw: called.__setitem__("scientist", True) or {"ok": True},
+    )
+    args = _args(
+        tmp_path,
+        "--evidence-dir",
+        str(tmp_path / "ev"),
+        "--laps",
+        "2",
+        "--iterations",
+        "1",
+        "--setup",
+        "Copilot_Balanced_Fast",
+        "--scientist",
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0
+    assert report["selfplay"]["requires_rebase"] is True
+    assert called["scientist"] is False  # never ran across two different plants
+    assert "re-run to rebase" in report["scientist"]["skipped"]
+
+
+def test_next_envelope_rung_crosses_a_rounding_plateau():
+    # #703 (Codex P2, round 3): with a tiny --scale-step the six-decimal rounding leaves several
+    # consecutive rungs on the same value. A closed form that ignores the rounding threshold
+    # lands inside the plateau and wrongly reports the ladder exhausted while many rungs remain.
+    from tools.ac_harness.auto_alien import next_envelope_rung
+
+    rung = next_envelope_rung(0.9, 1e-7, 0.91, 0.9, 1)
+    assert rung is not None, "rungs exist past the plateau; must not report the ladder exhausted"
+    assert iteration_scale(0.9, 1e-7, rung, 0.91) > 0.9
 
 
 def test_selfplay_reports_an_inherited_refit_as_retained(monkeypatch, tmp_path):

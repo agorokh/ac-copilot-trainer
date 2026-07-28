@@ -395,11 +395,16 @@ def next_envelope_rung(
         return None
     if iteration_scale(base, step, rung, cap) > prev_scale:
         return rung
-    needed = int(math.floor((prev_scale - base) / step)) + 1
-    candidate = max(rung, needed, 1)
-    # `capped > prev_scale` guarantees a hit once the ladder saturates; the tiny window absorbs
-    # floating-point error in the closed form without reintroducing an unbounded search.
-    for probe in (candidate, candidate + 1, candidate + 2):
+    # The smallest rung whose UNSATURATED value rounds strictly above prev_scale. The +5e-7 is the
+    # six-decimal rounding threshold: a small `--scale-step` (1e-7) leaves several consecutive
+    # rungs on the same rounded plateau, and a closed form that ignores it lands *inside* the
+    # plateau and wrongly concludes no rung remains (#703 Codex P2).
+    needed = math.ceil((prev_scale + 5e-7 - base) / step)
+    # Saturation is a guaranteed hit because `capped > prev_scale` was established above, so this
+    # search is bounded and always finds a rung when one exists — no unbounded scan.
+    saturating = math.ceil((cap - base) / step)
+    probes = sorted({max(rung, 1), max(rung, needed), max(rung, needed) + 1, max(rung, saturating)})
+    for probe in probes:
         if iteration_scale(base, step, probe, cap) > prev_scale:
             return probe
     return None
@@ -705,6 +710,7 @@ def run_selfplay(
                 "peer's plant)"
             )
             entry["skipped"] = True
+            selfplay["requires_rebase"] = True
             print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
             break
 
@@ -731,6 +737,7 @@ def run_selfplay(
                 )
                 entry["skipped"] = True
                 entry["plant_changed_before_step"] = True
+                selfplay["requires_rebase"] = True
                 print(f"auto-alien: selfplay stop — {selfplay['stopped']}")
                 break
 
@@ -779,12 +786,16 @@ def run_selfplay(
         entry["valid"] = valid
         entry["reason"] = reason
         # The pre-drive check above narrows the window but cannot close it: `auto_drive` loads the
-        # plant after taking the rig lock, which we do not hold. So confirm afterwards that an
-        # envelope step really did run the plant we validated, and refuse to attribute the verdict
-        # when it did not (#703 Codex P1 — honest about the residual race rather than silent).
-        plant_moved_during_step = (
-            step_kind == "envelope" and _read_plant_bytes(plant_path) != validated_plant_bytes
-        )
+        # plant after taking the rig lock, which we do not hold. So confirm afterwards that the
+        # step really did run the plant we expected, and refuse to attribute the verdict when it
+        # did not (#703 Codex P1 — honest about the residual race rather than silent).
+        #
+        # This covers BOTH step kinds. `validated_plant_bytes` is the candidate a plant step just
+        # persisted, or the untouched fit an envelope step must find — so a peer that rewrote the
+        # artifact after `persist_selfplay_refinement` released the rig lock is caught here too.
+        # Restricting it to envelope steps let a plant step record a peer's plant as "this refit,
+        # validated" (#703 Codex P1, round 3).
+        plant_moved_during_step = _read_plant_bytes(plant_path) != validated_plant_bytes
         if plant_moved_during_step:
             entry["plant_changed_during_step"] = True
 
@@ -896,9 +907,14 @@ def run_selfplay(
             best = it_best if best is None else min(best, it_best)
         if plant_moved_during_step:
             # A PASS is no safer to build on than a failure here: the ladder would carry forward
-            # archives and a scale earned under a plant it did not choose (#703 Codex P1).
+            # archives and a scale earned under a plant it did not choose (#703 Codex P1). The
+            # batch is also barred from seeding the scientist baseline — `run_scientist` would
+            # otherwise pick this newest "valid" evidence dir and run setup experiments on the
+            # exact batch this message says cannot be attributed (#703 Codex P1, round 3).
+            entry["usable_as_evidence"] = False
+            selfplay["requires_rebase"] = True
             selfplay["stopped"] = (
-                f"plant changed on disk during iteration {index}'s envelope step (peer "
+                f"plant changed on disk during iteration {index}'s {step_kind} step (peer "
                 "re-identification?) — self-play stopped; the step passed but its evidence "
                 "cannot be attributed to this ladder's plant"
             )
@@ -919,8 +935,16 @@ def run_selfplay(
 
 
 def _scientist_baseline_outcome(selfplay: dict, base_outcome: dict | None) -> dict | None:
-    """Newest oracle-valid self-play outcome, falling back to the valid base batch."""
+    """Newest oracle-valid self-play outcome, falling back to the valid base batch.
+
+    A batch whose plant moved under it mid-drive is oracle-valid but **not attributable to this
+    ladder's plant**, so it is barred from seeding a setup experiment — otherwise the scientist
+    would compare setups across two different plants and could persist a corrupted verdict
+    (#703 Codex P1).
+    """
     for entry in reversed(selfplay.get("iterations", [])):
+        if entry.get("usable_as_evidence") is False:
+            continue
         if entry.get("valid") is True and entry.get("evidence_dir"):
             outcome = load_stage_outcome(Path(entry["evidence_dir"]))
             if outcome is not None:
@@ -1570,7 +1594,21 @@ def run_pipeline(
             f"auto-alien: selfplay done — {report['selfplay']['stopped']}"
             + (f"; best lap {best / 1000.0:.3f}s" if isinstance(best, int) else "")
         )
-        if args.scientist:
+        if args.scientist and report["selfplay"].get("requires_rebase"):
+            # A peer replaced the plant mid-ladder. The scientist would pick a baseline captured
+            # under the OLD plant while its experiment drives load the peer's current one — the
+            # comparison would change both the setup and the plant and could persist a corrupted
+            # verdict. Skip it honestly until a fresh run rebases (#703 Codex P1).
+            report["scientist"] = {
+                "ok": True,
+                "skipped": (
+                    "self-play stopped for a peer plant change; a setup experiment would compare "
+                    "across two different plants — re-run to rebase before running the scientist"
+                ),
+                "selfplay_stopped": report["selfplay"]["stopped"],
+            }
+            print(f"auto-alien: scientist SKIPPED — {report['scientist']['skipped']}")
+        elif args.scientist:
             report["scientist"] = run_scientist(
                 args,
                 run_stage=run_stage,
