@@ -165,8 +165,8 @@ treated as exact; unequal post-onset exposure; pooled Wilson on correlated launc
 filenames colliding across same-seed plans). Also fixed a Windows-only red on `origin/main`
 (`test_trailing_backslash_is_rejected`) that blocked a clean local `make ci-fast`.
 
-**The physical A/B has still never run** — operator sign-off on the Steam/NVIDIA toggles plus 12
-reboots. Follow-up [#710](https://github.com/agorokh/ac-copilot-trainer/issues/710): teach
+**The physical A/B has still never run** — operator sign-off on the Steam/NVIDIA toggles plus 16
+reboots (8 boots per arm; the 6/arm floor is fragile once a block ties). Follow-up [#710](https://github.com/agorokh/ac-copilot-trainer/issues/710): teach
 `resilient_launch` to record whether an attempt actually delivered an AC cycle, so
 ambiguous-onset boots stop being discarded.
 ## Delivered (2026-07-28) — #672 CLOSED: launcher voice-endpoint hygiene MERGED
