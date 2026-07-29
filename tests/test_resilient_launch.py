@@ -2633,12 +2633,12 @@ class TestPerturberTreatmentReceipt:
             "nvidia_capture": str(PerturberEvidence.NOT_OBSERVED),
         }
         assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.STABLE) is True
-        assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.WEDGED_INIT) is True
+        assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.WEDGED_INIT) is False
         assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.FROZE) is False
 
         def watch(_attempt: int) -> AttemptOutcome:
             return AttemptOutcome(
-                LaunchVerdict.WEDGED_INIT,
+                LaunchVerdict.STABLE,
                 cycle_delivered=True,
                 perturbers=evidence,
             )
@@ -2652,7 +2652,7 @@ class TestPerturberTreatmentReceipt:
         )
         assert report.attempts == 1
         assert report.arm_contradicted is True
-        assert report.wedged_init == 1
+        assert report.stable == 1
 
     def test_pid_replacement_latches_injection_without_on_arm_union(self):
         """Codex P1: latch off-arm injection; reset so on-arm cannot inherit corpse full set."""

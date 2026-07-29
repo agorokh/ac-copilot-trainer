@@ -1710,10 +1710,10 @@ class TestTreatmentReceipt:
             assert summary.treatment == TREATMENT_UNVERIFIED
             assert summary.usable is True
 
-    def test_wedged_init_miss_is_contradicted_when_timeout_cleared_race(self):
-        """With go_live_timeout floor ≥5s, wedged_init lived past the injection race."""
+    def test_wedged_init_miss_is_unverified_not_contradicted(self):
+        """WEDGED_INIT never finished init — absence is non-dispositive (Codex P1)."""
         from tools.ac_harness.init_perturber_ab import (
-            TREATMENT_CONTRADICTED,
+            TREATMENT_UNVERIFIED,
             BootObservation,
             LaunchObservation,
             treatment_receipt,
@@ -1732,7 +1732,31 @@ class TestTreatmentReceipt:
         verdict, _detail = treatment_receipt(
             "overlays_on", dict(_ABSENT_PERTURBERS), launches=boot.launches
         )
-        assert verdict == TREATMENT_CONTRADICTED
+        assert verdict == TREATMENT_UNVERIFIED
+
+    def test_froze_with_full_injection_confirms_on_arm(self):
+        """Codex P1: positive injection is dispositive on any delivered verdict."""
+        from tools.ac_harness.init_perturber_ab import (
+            TREATMENT_CONFIRMED,
+            BootObservation,
+            LaunchObservation,
+            treatment_receipt,
+        )
+
+        froze = LaunchObservation(
+            launch=1,
+            verdict="froze",
+            started_at_utc="2026-07-28T10:01:00Z",
+            elapsed_s=12.5,
+            uptime_h=0.5,
+            cycle_delivered=True,
+            perturbers=tuple(sorted(_INJECTED_PERTURBERS.items())),
+        )
+        boot = BootObservation(boot=1, condition="overlays_on", launches=(froze,))
+        verdict, _detail = treatment_receipt(
+            "overlays_on", dict(_INJECTED_PERTURBERS), launches=boot.launches
+        )
+        assert verdict == TREATMENT_CONFIRMED
 
     def test_go_live_timeout_below_injection_floor_is_rejected(self) -> None:
         """Codex P2: plans must not allow WEDGED_INIT inside the measured race."""

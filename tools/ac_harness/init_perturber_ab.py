@@ -103,13 +103,11 @@ WITHDRAWN_PLAN_SCHEMA = "init-perturber-ab-plan/v1"
 SUPERSEDED_PLAN_SCHEMA = "init-perturber-ab-plan/v2"
 #: delivered-cycle endpoints without treatment-receipt pre-registration (#719); regenerate.
 PRE_TREATMENT_PLAN_SCHEMA = "init-perturber-ab-plan/v3"
-#: Verdicts past the injection race for *absence* evidence (Codex P1 on #721):
-#: * ``stable`` — full stability window after go-live.
-#: * ``wedged_init`` — acs.exe stayed alive for the entire ``go_live_timeout`` (≥ floor below),
-#:   so the measured ~3 s race has elapsed even without readiness.
-#: ``froze`` is excluded: it can fire on the first post-go-live death / packet regression
-#: (and ``_Car0NotDrivable`` maps to ``FROZE``) while injection is still racing.
-_LIVE_SESSION_VERDICTS = frozenset({"stable", "wedged_init"})
+#: Only ``stable`` is dispositive for *absence* evidence (Codex P1 on #721). ``wedged_init``
+#: means the render stream never initialized — elapsed go-live budget does not prove injection
+#: completed. ``froze`` can fire on the first post-go-live death while injection is still racing.
+#: Positive ``injected`` is evaluated on every delivered launch regardless of verdict.
+_LIVE_SESSION_VERDICTS = frozenset({"stable"})
 #: Measured injection race on the rig (~3 s). Plans must not set timeouts below this plus margin.
 INJECTION_RACE_S = 3.0
 #: Plan floor for ``--go-live-timeout`` / ``--stability-window`` so post-race absence claims
@@ -373,27 +371,32 @@ def treatment_receipt(
         return TREATMENT_CONFIRMED, None
 
     if condition == "overlays_on":
-        # Confirmation / contradiction of absence uses STABLE delivered cycles only. Injected
-        # presence on any launch remains dispositive via boot roll-up; a stable miss contradicts.
-        stables = [item for item in rows if item.cycle_delivered is True and _is_live_session(item)]
-        if not stables:
+        # Positive injection is evaluated on every delivered launch (any verdict). Misses are
+        # only dispositive on STABLE — freze/wedged race-window misses stay unverified
+        # (Codex P1 on #721). Every delivered launch must fully inject for confirmation.
+        delivered = [item for item in rows if item.cycle_delivered is True]
+        if not delivered:
             return (
                 TREATMENT_UNVERIFIED,
-                "no stable delivered cycles with perturber evidence for overlays_on",
+                "no delivered cycles with perturber evidence for overlays_on",
             )
         incomplete: list[int] = []
         short_live: list[str] = []
-        for item in stables:
+        for item in delivered:
             evidence = _launch_evidence(item)
             if set(evidence) != required:
                 incomplete.append(item.launch)
+                continue
+            if all(evidence[name] == "injected" for name in required):
                 continue
             if any(evidence[name] == "unavailable" for name in required):
                 incomplete.append(item.launch)
                 continue
             miss = sorted(name for name in required if evidence[name] != "injected")
-            if miss:
+            if _is_live_session(item):
                 short_live.append(f"launch {item.launch}: {', '.join(miss)}")
+            else:
+                incomplete.append(item.launch)
         if short_live:
             return (
                 TREATMENT_CONTRADICTED,
@@ -403,7 +406,8 @@ def treatment_receipt(
         if incomplete:
             return (
                 TREATMENT_UNVERIFIED,
-                "partial or unavailable perturber evidence on stable cycles for overlays_on",
+                "partial, early, or unavailable perturber evidence on delivered cycles "
+                "for overlays_on",
             )
         return TREATMENT_CONFIRMED, None
 
@@ -940,7 +944,7 @@ def _parse_report(
                     break
                 if (
                     reported_expect == "on"
-                    and raw.get("verdict") in ("stable", "wedged_init")
+                    and raw.get("verdict") == "stable"
                     and any(value == "not_observed" for value in block.values())
                     and all(value != "unavailable" for value in block.values())
                 ):

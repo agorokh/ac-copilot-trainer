@@ -984,14 +984,12 @@ def contradicts_expectation(
 
     if expectation == "off":
         return any(value == str(PerturberEvidence.INJECTED) for value in evidence.values())
-    # Match analyzer _is_live_session: STABLE and WEDGED_INIT are post-race for absence
-    # (go_live_timeout / stability floors exceed the injection race).
-    if expectation == "on" and verdict in (LaunchVerdict.STABLE, LaunchVerdict.WEDGED_INIT):
+    # Match analyzer: only STABLE is dispositive for on-arm absence (Codex P1 on #721).
+    if expectation == "on" and verdict is LaunchVerdict.STABLE:
         if not evidence:
             return False
         if any(value == str(PerturberEvidence.UNAVAILABLE) for value in evidence.values()):
             return False
-        # Full successful look that still misses a required perturber.
         return any(value == str(PerturberEvidence.NOT_OBSERVED) for value in evidence.values())
     return False
 
