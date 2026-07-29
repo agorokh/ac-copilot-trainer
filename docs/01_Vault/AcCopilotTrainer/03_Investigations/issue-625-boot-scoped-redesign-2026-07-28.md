@@ -79,17 +79,27 @@ spawned"~~ — **RESOLVED 2026-07-28 by [#710](https://github.com/agorokh/ac-cop
 delivered cycles, so a boot containing a merely undelivered attempt scores instead of being dropped.
 `onset_ambiguous` narrows to genuinely unknown delivery.
 
-## Open limitation — treatment receipt is NOT verified (#719)
+## Treatment receipt is verified (#719) — plan/report/analysis **v4**
 
-**Read this before spending the 16 reboots.** Each boot's arm label comes only from this plan file —
-the operator's assertion that they toggled the two settings before *that* reboot. Nothing observes
-whether the perturbers were actually injected into `acs.exe`. One boot that does not receive its
-assigned condition corrupts the exact block permutation test with **no detectable signature** in any
-current artifact.
+**Read this before spending the 16 reboots.** PR #721 lands treatment-**receipt** verification:
 
-Tracked as [#719](https://github.com/agorokh/ac-copilot-trainer/issues/719), with the full design in
-[[issue-719-treatment-receipt-2026-07-28]]. Until it lands, the run's arm labels rest on manual
-discipline across 16 reboots in randomized order.
+- **Report schema** `resilient-launch-report/v3` records per-attempt + boot roll-up `perturbers`
+  (`injected` / `not_observed` / `unavailable`). v2 reports are refused.
+- **Plan/analysis schema** `init-perturber-ab-plan/v4` + `…-analysis/v4` pre-register the receipt
+  policy. v3 plans are refused — regenerate with `python -m tools.ac_harness.init_perturber_ab plan`.
+- Plan commands emit `--expect-perturbers on|off`. Off-arm positive sighting (or on-arm STABLE miss)
+  stops the trial loop early with a **unique** salvage path
+  `{stem}.arm_contradicted.{UTC}Z{suffix}` so the planned exclusive JSON stays free for re-run after
+  settings fix + reboot. Exit is nonzero — scripted boot chains must treat that as stop-and-fix.
+- Analyzer **excludes** contradicted boots (and drops their block); never re-labels. Unverified
+  receipt withholds causal conclusions (`treatment_receipt_unverified`) without inventing exclusions.
+- `go_live_timeout` must be ≥ 5 s (injection race ~3 s). Absence is dispositive only on delivered
+  **`stable`** (full stability window past the race). `froze` misses stay non-dispositive.
+  Module sampling requires **64-bit Python** on the rig; mid-attempt PID replacement freezes
+  presence and invalidates absence if injection was seen. Analyzer resolves
+  `{stem}.arm_contradicted.*` salvage when the planned report is absent.
+
+Design detail: [[issue-719-treatment-receipt-2026-07-28]].
 
 ## Verified rig facts (AG_PC, 2026-07-28) — do not re-derive
 

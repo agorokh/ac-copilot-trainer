@@ -111,9 +111,52 @@ class AttemptOutcome:
 
     verdict: LaunchVerdict
     cycle_delivered: bool | None
+    #: Per-perturber evidence gathered while this attempt's ``acs.exe`` was alive (#719). Defaults
+    #: to "we could not look", which is the only honest value for a producer that never sampled.
+    perturbers: dict[str, str] | None = None
 
 
-REPORT_SCHEMA = "resilient-launch-report/v2"
+REPORT_SCHEMA = "resilient-launch-report/v3"
+WITHDRAWN_REPORT_SCHEMAS = ("resilient-launch-report/v1", "resilient-launch-report/v2")
+
+
+class PerturberEvidence(StrEnum):
+    """What this attempt observed about one init perturber inside ``acs.exe`` (#719).
+
+    Deliberately asymmetric, and the asymmetry is the whole point. ``INJECTED`` is the ONLY value
+    that establishes anything: seeing ``gameoverlayrenderer64.dll`` mapped into ``acs.exe`` proves
+    the Steam overlay was active for that launch. Not seeing it proves nothing on its own, because
+    the injection **races process startup** — measured on the rig 2026-07-28 against one live
+    ``acs.exe``: at 45 modules loaded neither perturber was present; ~3 s later at 115 modules both
+    were.
+
+    This is the mirror of the ``cycle_delivered`` rule (#710): a watched trace can prove a thing
+    happened but never that it did not. So ``NOT_OBSERVED`` means "we looked successfully and it
+    was not there yet", and ``UNAVAILABLE`` means "we could not look" — never merged, because
+    collapsing them would let a failed snapshot masquerade as a disabled perturber and silently
+    invert the treatment check.
+    """
+
+    INJECTED = "injected"
+    NOT_OBSERVED = "not_observed"
+    UNAVAILABLE = "unavailable"
+
+
+#: The dump-confirmed init perturbers #625 tests, keyed by the report's stable field name.
+PERTURBER_MODULES: dict[str, str] = {
+    "steam_overlay": "gameoverlayrenderer64.dll",
+    "nvidia_capture": "nvspcap64.dll",
+}
+#: Arm names #625 assigns; ``--expect-perturbers`` takes one of these.
+PERTURBER_EXPECTATIONS = ("on", "off")
+
+
+def _unavailable_perturbers() -> dict[str, str]:
+    """Evidence for an attempt that never got to look — the honest default."""
+
+    return {field: str(PerturberEvidence.UNAVAILABLE) for field in PERTURBER_MODULES}
+
+
 TERMINAL_VERDICTS = frozenset(
     {
         LaunchVerdict.STABLE.value,
@@ -644,12 +687,18 @@ class AttemptRecord:
     elapsed_s: float
     uptime_h: float | None
     cycle_delivered: bool | None = None
+    #: Per-perturber evidence for this attempt (#719). Always present and always complete — every
+    #: key in ``PERTURBER_MODULES`` carries a :class:`PerturberEvidence` value, defaulting to
+    #: ``unavailable`` so a producer that never looked cannot be mistaken for one that looked and
+    #: found nothing.
+    perturbers: dict[str, str] = field(default_factory=lambda: _unavailable_perturbers())
 
     def as_dict(self) -> dict[str, object]:
         return {
             "attempt": self.attempt,
             "verdict": str(self.verdict),
             "cycle_delivered": self.cycle_delivered,
+            "perturbers": dict(self.perturbers),
             "started_at_utc": self.started_at_utc,
             "elapsed_s": round(self.elapsed_s, 3),
             "uptime_h": None if self.uptime_h is None else round(self.uptime_h, 4),
@@ -673,6 +722,12 @@ class LaunchReport:
     cycles_undetermined: int = 0
     attempts_log: tuple[AttemptRecord, ...] = field(default=())
     launch: dict[str, object] | None = None
+    #: The arm this boot was launched under (``on``/``off``), when the operator declared one via
+    #: ``--expect-perturbers``. ``None`` for ordinary launches outside the #625 experiment.
+    expect_perturbers: str | None = None
+    #: Set when an attempt DISPOSITIVELY refuted that arm, which ends the trial loop early so a
+    #: mislabelled boot costs ~1 launch cycle instead of the full 24 (#719 Part C).
+    arm_contradicted: bool = False
 
     @property
     def succeeded(self) -> bool:
@@ -715,15 +770,228 @@ class LaunchReport:
                 "undelivered": self.cycles_undelivered,
                 "undetermined": self.cycles_undetermined,
             },
+            # Also kept OUT of ``counts`` (#719), same rule as ``cycles``. Boot-level roll-up of the
+            # per-attempt evidence: ``injected`` if ANY attempt saw it (dispositive, and a union
+            # because a perturber cannot un-inject), ``not_observed`` only when at least one
+            # snapshot succeeded and none saw it, else ``unavailable``.
+            "perturbers": self.perturber_summary(),
             "attempts_log": [record.as_dict() for record in self.attempts_log],
         }
+        if self.expect_perturbers is not None:
+            payload["expect_perturbers"] = self.expect_perturbers
+            payload["arm_contradicted"] = self.arm_contradicted
         if self.launch is not None:
             payload["launch"] = self.launch
         return payload
 
+    def perturber_summary(self) -> dict[str, str]:
+        """Fold every attempt's evidence into one verdict per perturber for this boot."""
+
+        summary: dict[str, str] = {}
+        for field_name in PERTURBER_MODULES:
+            values = [record.perturbers.get(field_name) for record in self.attempts_log]
+            if any(value == str(PerturberEvidence.INJECTED) for value in values):
+                summary[field_name] = str(PerturberEvidence.INJECTED)
+            elif any(value == str(PerturberEvidence.NOT_OBSERVED) for value in values):
+                summary[field_name] = str(PerturberEvidence.NOT_OBSERVED)
+            else:
+                summary[field_name] = str(PerturberEvidence.UNAVAILABLE)
+        return summary
+
 
 def _utc_stamp(epoch_seconds: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch_seconds))
+
+
+def _arm_contradicted_salvage_path(path: Path, when: float | None = None) -> Path:
+    """Side path for a contradicted boot so the planned exclusive name stays free.
+
+    Must be unique across retries: ``_write_report_json`` refuses overwrite, and a second
+    contradicted re-run (settings still wrong) would otherwise fail as a generic report-write
+    error and drop the new receipt (cursor MEDIUM on #721). Filename uses a Windows-safe UTC
+    stamp with microseconds so same-second retries still diverge.
+    """
+
+    epoch = time.time() if when is None else when
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime(epoch))
+    micros = int((epoch % 1.0) * 1_000_000)
+    return path.with_name(f"{path.stem}.arm_contradicted.{stamp}{micros:06d}Z{path.suffix}")
+
+
+class PerturberWatch:
+    """Fold repeated module snapshots of one ``acs.exe`` into per-perturber evidence (#719).
+
+    Presence is taken as the **union across samples**: one sighting is dispositive and can never be
+    undone by a later snapshot that misses it, because the perturber cannot un-inject. Absence is
+    only ever the weak claim "every successful look so far missed it", which is why a single early
+    sample must never be the sole basis for it — see :class:`PerturberEvidence`.
+
+    Pure by construction: the caller performs the snapshot and hands in module names, so every
+    branch is unit-tested off-rig while collection stays Windows-only.
+    """
+
+    def __init__(self, modules: dict[str, str] | None = None) -> None:
+        self._modules = dict(modules if modules is not None else PERTURBER_MODULES)
+        self._injected: set[str] = set()
+        self._successful_looks = 0
+        # Absence is only claimable when the most recent full snapshot succeeded. An early miss
+        # followed by failed later looks must not stick as not_observed (Codex P1 on #721).
+        self._last_full_look_ok = False
+
+    def reset(self) -> None:
+        """Clear all evidence. Used when the pinned acs.exe PID is replaced mid-attempt."""
+
+        self._injected.clear()
+        self._successful_looks = 0
+        self._last_full_look_ok = False
+
+    def freeze_presence_only(self) -> None:
+        """Keep dispositive injection; invalidate absence after a process identity change.
+
+        Off-arm needs the positive sighting. On-arm must not treat leftover ``not_observed``
+        from a vanished PID as a live-session miss on the replacement (Codex P1 on #721).
+        """
+
+        self._successful_looks = 0
+        self._last_full_look_ok = False
+
+    def observe(self, module_names: frozenset[str] | None) -> None:
+        """Record one snapshot. ``None`` means the snapshot FAILED — not "no modules".
+
+        Conflating those is the failure this class exists to prevent: an empty set from a denied
+        ``OpenProcess`` would read as *perturber absent* and silently flip a boot's treatment.
+        """
+
+        if module_names is None:
+            self._last_full_look_ok = False
+            return
+        self._successful_looks += 1
+        self._last_full_look_ok = True
+        self.note_injected(module_names)
+
+    def note_injected(self, module_names: frozenset[str]) -> None:
+        """Union dispositive presence without counting a successful *absence* look.
+
+        Used when a multi-PID sample only partially succeeded: we can still learn that a
+        perturber was injected into some process, but we must not promote a miss on the
+        accessible PID into ``not_observed`` while another PID was unreachable (Codex P1 on #721).
+        """
+
+        for name, dll in self._modules.items():
+            if dll.casefold() in module_names:
+                self._injected.add(name)
+
+    @property
+    def successful_looks(self) -> int:
+        return self._successful_looks
+
+    def injected(self, name: str) -> bool:
+        """Whether this attempt DISPOSITIVELY observed ``name`` injected."""
+
+        return name in self._injected
+
+    def evidence(self) -> dict[str, str]:
+        """Per-perturber evidence for the report, as plain strings."""
+
+        out: dict[str, str] = {}
+        for name in self._modules:
+            if name in self._injected:
+                out[name] = str(PerturberEvidence.INJECTED)
+            elif self._successful_looks > 0 and self._last_full_look_ok:
+                out[name] = str(PerturberEvidence.NOT_OBSERVED)
+            else:
+                out[name] = str(PerturberEvidence.UNAVAILABLE)
+        return out
+
+
+def fold_perturber_snapshots(
+    watch: PerturberWatch,
+    *,
+    enum_failed: bool = False,
+    pids_empty: bool = False,
+    successes: list[frozenset[str]] | None = None,
+    any_pid_failed: bool = False,
+    primary_only: bool = True,
+) -> None:
+    """Apply one multi-PID sample poll to ``watch`` (pure; unit-tested off-rig).
+
+    Encoding rules (#721 reviews):
+    - ``enum_failed``: Toolhelp enumeration raised — treat as failed look.
+    - ``pids_empty``: acs.exe is gone — leave prior evidence intact (not a failed live look).
+    - all PID snapshots failed: failed look.
+    - partial success: union presence via ``note_injected``, then invalidate absence.
+    - full success: observe a **single** primary session (caller passes only that snapshot when
+      ``primary_only``), never invent full treatment by unioning unrelated PIDs (Codex P2 on #721).
+    """
+
+    if enum_failed:
+        watch.observe(None)
+        return
+    if pids_empty:
+        return
+    snaps = list(successes or ())
+    if not snaps:
+        watch.observe(None)
+        return
+    if any_pid_failed:
+        for names in snaps:
+            watch.note_injected(names)
+        watch.observe(None)
+        return
+    if primary_only or len(snaps) == 1:
+        watch.observe(snaps[0])
+        return
+    # Legacy multi-observe path kept for tests that deliberately disable primary_only.
+    for names in snaps:
+        watch.observe(names)
+
+
+def _normalize_perturber_evidence(raw: dict[str, str] | None) -> dict[str, str]:
+    """Fill canonical keys and reject unknown fields before emitting a v3 report (#721)."""
+
+    if raw is None:
+        return _unavailable_perturbers()
+    unknown = set(raw) - set(PERTURBER_MODULES)
+    if unknown:
+        raise ValueError(f"unknown perturber field(s): {sorted(unknown)}")
+    allowed = {
+        str(PerturberEvidence.INJECTED),
+        str(PerturberEvidence.NOT_OBSERVED),
+        str(PerturberEvidence.UNAVAILABLE),
+    }
+    out = _unavailable_perturbers()
+    for name, value in raw.items():
+        if value not in allowed:
+            raise ValueError(f"invalid perturber evidence {name!r}={value!r}")
+        out[name] = value
+    return out
+
+
+def contradicts_expectation(
+    evidence: dict[str, str],
+    expectation: str | None,
+    *,
+    verdict: LaunchVerdict | None = None,
+) -> bool:
+    """Whether this attempt's evidence DISPOSITIVELY refutes the arm it was launched under.
+
+    * ``off`` — any ``INJECTED`` sighting is proof the treatment was not applied.
+    * ``on`` — a ``STABLE`` attempt that successfully looked and still missed a perturber is
+      dispositive non-receipt (stability window >> the measured injection race). A bare
+      ``NOT_OBSERVED`` without a stable verdict remains non-dispositive and is left to the
+      analyzer, which aggregates the whole boot (#719 Part C; Codex P1 on #721).
+    """
+
+    if expectation == "off":
+        return any(value == str(PerturberEvidence.INJECTED) for value in evidence.values())
+    # Match analyzer: only STABLE is dispositive for on-arm absence (Codex P1 on #721).
+    if expectation == "on" and verdict is LaunchVerdict.STABLE:
+        if not evidence:
+            return False
+        if any(value == str(PerturberEvidence.UNAVAILABLE) for value in evidence.values()):
+            return False
+        return any(value == str(PerturberEvidence.NOT_OBSERVED) for value in evidence.values())
+    return False
 
 
 def _watched_delivery(samples: Sequence[Sample]) -> bool | None:
@@ -798,6 +1066,7 @@ def run_retry_loop(
     clock: Callable[[], float] = time.monotonic,
     wall_clock: Callable[[], float] = time.time,
     uptime_hours: Callable[[], float | None] | None = None,
+    expect_perturbers: str | None = None,
 ) -> LaunchReport:
     """Drive attempts until one is ``STABLE`` or the budget is spent. Pure control flow.
 
@@ -821,6 +1090,11 @@ def run_retry_loop(
         raise ValueError("max_attempts must be > 0")
     if never_live_before_restart <= 0:
         raise ValueError("never_live_before_restart must be > 0")
+    if expect_perturbers is not None and expect_perturbers not in PERTURBER_EXPECTATIONS:
+        raise ValueError(
+            f"expect_perturbers must be one of {PERTURBER_EXPECTATIONS!r}, got "
+            f"{expect_perturbers!r}"
+        )
 
     def read_uptime() -> float | None:
         if uptime_hours is None:
@@ -836,6 +1110,7 @@ def run_retry_loop(
     never_live_run = 0
     last_verdict = LaunchVerdict.NEVER_LIVE
     attempts_run = 0
+    arm_contradicted = False
     for attempt in range(1, max_attempts + 1):
         started_wall = wall_clock()
         started = clock()
@@ -844,6 +1119,9 @@ def run_retry_loop(
         verdict = outcome.verdict
         if verdict is LaunchVerdict.PENDING:
             raise ValueError("watch_attempt returned a non-terminal PENDING verdict")
+        evidence = _normalize_perturber_evidence(
+            dict(outcome.perturbers) if outcome.perturbers else None
+        )
         records.append(
             AttemptRecord(
                 attempt=attempt,
@@ -852,6 +1130,7 @@ def run_retry_loop(
                 elapsed_s=clock() - started,
                 uptime_h=uptime,
                 cycle_delivered=outcome.cycle_delivered,
+                perturbers=evidence,
             )
         )
         if outcome.cycle_delivered is True:
@@ -862,11 +1141,14 @@ def run_retry_loop(
             undetermined += 1
         last_verdict = verdict
         attempts_run = attempt
+        # Verdict histogram BEFORE any early-stop: an arm-contradiction break used to leave this
+        # attempt in ``attempts_log`` while omitting it from ``counts``, and the analyzer rejects
+        # exactly that shape (`counts do not match its attempts_log`). Same placement rule as the
+        # delivery counters above — the deliberate stop must not desync any integrity check
+        # (cursor HIGH / Codex P1 on #721).
         if verdict is LaunchVerdict.STABLE:
             stable += 1
             never_live_run = 0
-            if stop_on_stable:
-                break
         elif verdict is LaunchVerdict.NEVER_LIVE:
             never_live += 1
             # Delivery deliberately does NOT gate this streak. A delivered NEVER_LIVE also covers
@@ -886,6 +1168,14 @@ def run_retry_loop(
             else:
                 wedged_init += 1
             never_live_run = 0
+        if contradicts_expectation(evidence, expect_perturbers, verdict=verdict):
+            # Arm label is already a lie under the analyzer's own rules, so further trials only
+            # burn rig time before a post-treatment exclusion / withheld conclusion (Codex P1
+            # on #721). Off-arm: any injected sighting. On-arm: STABLE + successful miss.
+            arm_contradicted = True
+            break
+        if verdict is LaunchVerdict.STABLE and stop_on_stable:
+            break
     return LaunchReport(
         last_verdict,
         attempts_run,
@@ -897,6 +1187,8 @@ def run_retry_loop(
         cycles_undelivered=undelivered,
         cycles_undetermined=undetermined,
         attempts_log=tuple(records),
+        expect_perturbers=expect_perturbers,
+        arm_contradicted=arm_contradicted,
     )
 
 
@@ -1761,6 +2053,20 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         ),
     )
     parser.add_argument(
+        "--expect-perturbers",
+        choices=PERTURBER_EXPECTATIONS,
+        default=None,
+        help=(
+            "#625/#719 arm declaration: the init-perturber state this boot is SUPPOSED to be in. "
+            "Every attempt records which perturbers were actually injected into acs.exe. "
+            "'off' + any injected sighting ends the trial loop immediately (arm_contradicted). "
+            "'on' + STABLE with a successful full miss also ends the loop immediately "
+            "(dispositive non-receipt past the stability window); other on-arm cases stay with "
+            "whole-boot analysis. Contradicted runs write a timestamped salvage JSON and exit "
+            "nonzero so the reboot chain stops."
+        ),
+    )
+    parser.add_argument(
         "--no-hold",
         action="store_true",
         help=(
@@ -1883,6 +2189,40 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             _log(f"launch aborted: Content Manager executable not found: {actuator.cm_exe}")
             return 1
 
+        if args.expect_perturbers is not None:
+            # Match plan floors so a direct --expect-perturbers invocation cannot STABLE-miss
+            # fail-fast inside the injection race (Codex P2 on #721).
+            from tools.ac_harness.init_perturber_ab import (
+                MIN_GO_LIVE_TIMEOUT_S,
+                MIN_STABILITY_WINDOW_S,
+            )
+
+            if args.stability_window < MIN_STABILITY_WINDOW_S:
+                _log(
+                    f"launch aborted: --expect-perturbers requires --stability-window >= "
+                    f"{MIN_STABILITY_WINDOW_S:g}s (got {args.stability_window:g})"
+                )
+                return 1
+            if args.go_live_timeout < MIN_GO_LIVE_TIMEOUT_S:
+                _log(
+                    f"launch aborted: --expect-perturbers requires --go-live-timeout >= "
+                    f"{MIN_GO_LIVE_TIMEOUT_S:g}s (got {args.go_live_timeout:g})"
+                )
+                return 1
+        if args.expect_perturbers is not None and sys.platform == "win32":
+            # 32-bit Python cannot enumerate 64-bit acs.exe modules (ERROR_PARTIAL_COPY). Without
+            # this preflight every poll becomes unavailable and a 16-reboot run ends as
+            # treatment_receipt_unverified (Codex P1 on #721).
+            import struct
+
+            bits = struct.calcsize("P") * 8
+            if bits < 64:
+                _log(
+                    f"launch aborted: --expect-perturbers requires 64-bit Python to inspect "
+                    f"64-bit acs.exe (this interpreter is {bits}-bit)"
+                )
+                return 1
+
         # The previous attempt's verdict gates the #668 graceful-teardown grace: only a session
         # that PROVED it could pump messages (STABLE) is asked to honor WM_CLOSE. One-element
         # list so the closure can rebind it.
@@ -1947,6 +2287,79 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     retain_telemetry_controller=telemetry_cleanup_holds.append,
                 )
             )
+            perturbers = PerturberWatch()
+            # Pin the process identity for this attempt so successive polls cannot union
+            # complementary modules from different acs.exe instances into one "full" receipt
+            # (qodo / Codex P2 on #721).
+            pinned_acs_pid: list[int | None] = [None]
+            # Injected names latched from a replaced PID for off-arm contradiction only — never
+            # mixed into on-arm full-injection confirmation for the replacement (Codex P1).
+            latched_injected: set[str] = set()
+            # Toolhelp saw acs.exe this attempt — promote undetermined delivery (Codex P2 on #721).
+            acs_pid_observed: list[bool] = [False]
+
+            def sample_perturbers(*, soft_fail: bool = False) -> None:
+                """Fold one module snapshot of the live acs.exe into this attempt's evidence.
+
+                Runs on the existing poll cadence rather than once, because the injection races
+                startup (#719): a single early look reports both perturbers absent for a process
+                that is about to have them. Presence unions across samples, so repeated cheap looks
+                only ever strengthen the dispositive direction.
+
+                Never raises. A failed snapshot is recorded as "we could not look" by the simple
+                fact that ``observe(None)`` does not count as a successful look — it must NOT be
+                allowed to read as "perturber absent", and it must never fail an attempt: this is
+                measurement riding along on a launch, not a gate. ``soft_fail`` leaves prior
+                evidence untouched on Toolhelp/PID errors (used for the optional final look).
+                """
+
+                from tools.ac_harness.entry_launcher import (
+                    process_module_names,
+                    running_process_ids,
+                )
+
+                try:
+                    # strict=True: a partial Toolhelp enumeration must not look exhaustive — an
+                    # omitted live acs.exe with overlays would otherwise yield false not_observed
+                    # on the visible PID alone (Codex P2 on #721).
+                    pids = sorted(running_process_ids("acs.exe", strict=True))
+                except OSError:
+                    if soft_fail:
+                        return
+                    fold_perturber_snapshots(perturbers, enum_failed=True)
+                    return
+                if not pids:
+                    # Empty PID list means acs.exe is gone, not that a live process failed to
+                    # open. fold_perturber_snapshots leaves prior evidence intact so a successful
+                    # post-race miss (overlays_off confirmation) survives the dying-process /
+                    # final sample classify commonly hits after FROZE (cursor MEDIUM on #721).
+                    fold_perturber_snapshots(perturbers, pids_empty=True)
+                    return
+                acs_pid_observed[0] = True
+                # One process identity per attempt: once pinned, keep sampling that PID until it
+                # disappears — even if other acs.exe PIDs appear alongside it. Re-picking among
+                # concurrent PIDs oscillates and resets evidence every poll (Codex P1 on #721).
+                if pinned_acs_pid[0] is not None and pinned_acs_pid[0] in pids:
+                    primary_pid = pinned_acs_pid[0]
+                else:
+                    if pinned_acs_pid[0] is not None:
+                        # Pinned process is gone — latch off-arm injection, reset, re-pin.
+                        for name in PERTURBER_MODULES:
+                            if perturbers.injected(name):
+                                latched_injected.add(name)
+                        perturbers.reset()
+                    primary_pid = max(pids)
+                    pinned_acs_pid[0] = primary_pid
+                try:
+                    # retries=1: do not sleep inside the go-live poll path; BAD_LENGTH during
+                    # module load is retried by the next poll tick instead (cursor HIGH #721).
+                    names = process_module_names(primary_pid, retries=1)
+                except OSError:
+                    if soft_fail:
+                        return
+                    fold_perturber_snapshots(perturbers, enum_failed=True)
+                    return
+                fold_perturber_snapshots(perturbers, successes=[names])
 
             def read_attempt_state() -> tuple[int | None, bool | None, bool | None, int | None]:
                 """Report shared memory; trust readiness only once the packet proves a live owner.
@@ -1963,6 +2376,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 if release_requested():
                     raise _OperatorRelease
 
+                # Only the #625 experiment path needs Toolhelp every poll (Codex P2 on #721).
+                if args.expect_perturbers is not None:
+                    sample_perturbers()
                 packet, entry_ready, phys_packet = read_state()
                 ready, drivable = readiness.observe(packet=packet, entry_ready=entry_ready)
                 return packet, ready, drivable, phys_packet
@@ -1980,8 +2396,35 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 # rendered attempt so it cannot advance the stale-CM/never-live restart streak.
                 # The session was rendering, so the launch cycle WAS delivered (#710).
                 outcome = AttemptOutcome(LaunchVerdict.FROZE, cycle_delivered=True)
+            # One last look before the process is torn down: the perturbers inject late, so the
+            # final sample is the most informative one in the attempt (#719). soft_fail: a
+            # transient Toolhelp error must not erase a successful post-race miss already on
+            # the watch (Codex P2 on #721).
+            if args.expect_perturbers is not None:
+                sample_perturbers(soft_fail=True)
+            evidence = dict(perturbers.evidence())
+            # Off-arm only: restore dispositive injection from a replaced PID. Never overlay
+            # latched keys for on-arm — that would invent full treatment for the replacement
+            # (Codex P1 / qodo on #721).
+            if args.expect_perturbers == "off":
+                for name in latched_injected:
+                    evidence[name] = str(PerturberEvidence.INJECTED)
+            # Toolhelp saw acs.exe → the launch cycle was delivered even if later reads miss it
+            # (Codex P2 on #721).
+            delivered = outcome.cycle_delivered
+            if delivered is None and acs_pid_observed[0]:
+                delivered = True
+            outcome = replace(outcome, perturbers=evidence, cycle_delivered=delivered)
             delivery = _delivery_label(outcome.cycle_delivered)
-            _log(f"attempt {attempt}: {outcome.verdict} ({delivery})")
+            injected = sorted(
+                name
+                for name, value in outcome.perturbers.items()
+                if value == str(PerturberEvidence.INJECTED)
+            )
+            _log(
+                f"attempt {attempt}: {outcome.verdict} ({delivery}); "
+                f"perturbers injected: {', '.join(injected) if injected else 'none observed'}"
+            )
             last_attempt_verdict[0] = outcome.verdict
             return outcome
 
@@ -2007,6 +2450,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     on_never_live_streak=cold_restart_cm,
                     stop_on_stable=not trials_mode,
                     uptime_hours=_machine_uptime_hours,
+                    expect_perturbers=args.expect_perturbers,
                 ),
                 acs_present,
                 release_requested=release_requested,
@@ -2047,7 +2491,28 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         )
         report_written = True
         if args.json_path is not None:
-            report_written = _write_report_json(report, args.json_path)
+            # Arm-contradiction salvage goes to a SIDE path so the planned exclusive report
+            # destination stays free for a corrected re-run after reboot (Codex P1 on #721).
+            # Analyze will treat the planned name as missing until the re-run succeeds; the
+            # salvage file keeps the positive injection evidence for the operator.
+            if report.arm_contradicted:
+                # Unique name: exclusive publish refuses overwrite, so a second contradicted
+                # re-run must not collide with a prior salvage (cursor MEDIUM on #721).
+                salvage = _arm_contradicted_salvage_path(args.json_path)
+                report_written = _write_report_json(report, salvage)
+                if not report_written:
+                    # Same-second collision is rare; one microsecond-nudged retry is enough.
+                    salvage = _arm_contradicted_salvage_path(
+                        args.json_path, when=time.time() + 0.001
+                    )
+                    report_written = _write_report_json(report, salvage)
+                if report_written:
+                    _log(
+                        f"arm contradicted — salvage report at {salvage}; planned path "
+                        f"{args.json_path} left free for re-run after settings fix + reboot"
+                    )
+            else:
+                report_written = _write_report_json(report, args.json_path)
             if not report_written and not trials_mode:
                 # Do not tear down a STABLE session over a missing artifact — that contradicts
                 # --no-hold (leave AC LIVE for a peer) and kills the operator's earned session
@@ -2092,7 +2557,26 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 # produced (#646 review P1) — the per-trial log lines above remain as salvage.
                 _log("TRIALS FAILED: the requested report JSON could not be written")
                 return 1
+            if report.arm_contradicted:
+                # Short contradicted report is a deliberate measurement of a bad arm, but it is
+                # NOT a successful completion of the planned trial budget. Exit nonzero so a
+                # manual/scripted reboot chain stops instead of burning the remaining boots under
+                # a post-treatment exclusion that withholds the causal conclusion (Codex P1).
+                _log(
+                    "TRIALS FAILED: arm contradicted by injected perturber evidence "
+                    f"(expect={report.expect_perturbers!r}) — fix settings, reboot, re-run this "
+                    "boot before continuing the plan"
+                )
+                return 1
             return 0
+        if report.arm_contradicted:
+            # Same fail-closed exit outside --trials (Codex P2 on #721).
+            _make_rig_safe(acs_present, release_requested=release_requested)
+            _log(
+                "FAILED: arm contradicted by injected perturber evidence "
+                f"(expect={report.expect_perturbers!r}) — fix settings and re-run"
+            )
+            return 1
         _log(report.summary())
         if not report.succeeded:
             # A FROZE terminal verdict deliberately leaves acs.exe alive so the watcher can

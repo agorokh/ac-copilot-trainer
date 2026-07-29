@@ -56,15 +56,20 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
+**In flight (2026-07-29):** PR [#721](https://github.com/agorokh/ac-copilot-trainer/pull/721) —
+**#719 treatment-receipt verification** for the #625 A/B. Report `resilient-launch-report/v3`,
+plan/analysis **v4**, `--expect-perturbers`, contradicted-boot exclusion + unique salvage paths,
+64-bit Python preflight for module snapshots. Physical 16-reboot A/B still operator-gated (#625).
+Live protocol: [issue-625-boot-scoped-redesign-2026-07-28](../03_Investigations/issue-625-boot-scoped-redesign-2026-07-28.md).
+
 **Delivered (2026-07-28):** PR [#717](https://github.com/agorokh/ac-copilot-trainer/pull/717)
 MERGED [`d78c10b`](https://github.com/agorokh/ac-copilot-trainer/commit/d78c10b730da9968c4995957313ba340efcdcdde)
 — **#710 launch-cycle delivery recorded, CLOSED**. `never_live` no longer conflates "acs.exe
 appeared and exited" with "nothing was spawned": every attempt records `cycle_delivered`
-(`resilient-launch-report/v2`), and the #625 analysis scores onset and the burst window in
-**delivered cycles** (`init-perturber-ab-analysis/v3`, plan `/v3`) instead of discarding any boot
-that contained an undelivered attempt — each of which costs a physical reboot. Off-rig only by
-construction; **not rig-verified** (the flag only becomes observable when the #625 experiment runs,
-still blocked at the CSP hijack per #703/#716). Node:
+(`resilient-launch-report/v2` then **v3** with perturbers under #719), and the #625 analysis scores
+onset and the burst window in **delivered cycles** (`init-perturber-ab-analysis/v3` → **v4** with
+treatment receipt). Off-rig only by construction; **not rig-verified** until the #625 experiment
+runs. Node:
 [issue-710-cycle-delivered-2026-07-28](../03_Investigations/issue-710-cycle-delivered-2026-07-28.md).
 
 **Delivered (2026-07-28):** PR [#707](https://github.com/agorokh/ac-copilot-trainer/pull/707)

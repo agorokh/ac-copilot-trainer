@@ -464,6 +464,138 @@ def _toolhelp_process_ids(process_name: str) -> frozenset[int]:
     return frozenset(found)
 
 
+_MODULE_SNAPSHOT_STATE: dict[str, object] | None = None
+
+
+def _module_snapshot_bindings() -> dict[str, object]:
+    """Lazily bind Toolhelp32 module APIs once (hot path in the go-live poll)."""
+
+    global _MODULE_SNAPSHOT_STATE
+    if _MODULE_SNAPSHOT_STATE is not None:
+        return _MODULE_SNAPSHOT_STATE
+
+    import ctypes
+    from ctypes import wintypes
+
+    max_module_name32 = 255
+
+    class ModuleEntry32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("th32ModuleID", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("GlblcntUsage", wintypes.DWORD),
+            ("ProccntUsage", wintypes.DWORD),
+            ("modBaseAddr", ctypes.POINTER(ctypes.c_byte)),
+            ("modBaseSize", wintypes.DWORD),
+            ("hModule", wintypes.HMODULE),
+            ("szModule", wintypes.WCHAR * (max_module_name32 + 1)),
+            ("szExePath", wintypes.WCHAR * 260),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Module32FirstW.argtypes = (wintypes.HANDLE, ctypes.POINTER(ModuleEntry32W))
+    kernel32.Module32FirstW.restype = wintypes.BOOL
+    kernel32.Module32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(ModuleEntry32W))
+    kernel32.Module32NextW.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    _MODULE_SNAPSHOT_STATE = {
+        "ctypes": ctypes,
+        "ModuleEntry32W": ModuleEntry32W,
+        "kernel32": kernel32,
+        "invalid_handle": wintypes.HANDLE(-1).value,
+        "snapshot_flags": 0x00000008 | 0x00000010,  # TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32
+        "error_bad_length": 24,
+    }
+    return _MODULE_SNAPSHOT_STATE
+
+
+def process_module_names(
+    process_id: int,
+    *,
+    retries: int = 4,
+    sleep: Callable[[float], None] = time.sleep,
+) -> frozenset[str]:
+    """Casefolded basenames of every module loaded in ``process_id``.
+
+    Used by the #625 A/B to observe which init perturbers were actually injected into a live
+    ``acs.exe`` (#719). The treatment is otherwise asserted by the operator and never measured.
+
+    **Raises** ``OSError`` when the snapshot cannot be taken. That failure MUST NOT be folded into
+    an empty set: "the process loaded no modules" and "we could not look" are different claims, and
+    only the caller can encode the difference (an empty set would read as *perturber absent*, which
+    would silently invert the treatment check this exists to provide).
+
+    ``CreateToolhelp32Snapshot`` fails with ``ERROR_BAD_LENGTH`` while the target is still loading
+    its module list — documented as retryable, and the common case here because the launcher probes
+    a process that AC is actively starting.
+
+    Requires **64-bit Python** on Windows: a 32-bit interpreter cannot enumerate modules of the
+    64-bit ``acs.exe`` (``ERROR_PARTIAL_COPY``), which would otherwise burn the whole multi-reboot
+    experiment as ``treatment_receipt_unverified`` (Codex P2 on #721).
+    """
+
+    if sys.platform != "win32":
+        # Fail closed: an empty frozenset would read as a successful "no modules" look and
+        # invent not_observed / absence on non-Windows hosts (cursor HIGH on #721).
+        raise OSError(f"process_module_names is only supported on win32 (got {sys.platform})")
+
+    import struct
+
+    if struct.calcsize("P") * 8 < 64:
+        raise OSError(
+            "process_module_names requires 64-bit Python to inspect 64-bit acs.exe "
+            f"(this interpreter is {struct.calcsize('P') * 8}-bit)"
+        )
+
+    bindings = _module_snapshot_bindings()
+    ctypes = bindings["ctypes"]
+    ModuleEntry32W = bindings["ModuleEntry32W"]
+    kernel32 = bindings["kernel32"]
+    invalid_handle = bindings["invalid_handle"]
+    snapshot_flags = bindings["snapshot_flags"]
+    error_bad_length = bindings["error_bad_length"]
+
+    snapshot = invalid_handle
+    last_error = 0
+    for attempt in range(max(1, retries)):
+        ctypes.set_last_error(0)
+        snapshot = kernel32.CreateToolhelp32Snapshot(snapshot_flags, process_id)
+        if snapshot != invalid_handle:
+            break
+        last_error = ctypes.get_last_error()
+        if last_error != error_bad_length:
+            break
+        if attempt + 1 < max(1, retries):
+            sleep(0.15)
+    if snapshot == invalid_handle:
+        raise OSError(last_error, f"CreateToolhelp32Snapshot(module) failed for pid {process_id}")
+
+    names: set[str] = set()
+    try:
+        entry = ModuleEntry32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        ctypes.set_last_error(0)
+        if not kernel32.Module32FirstW(snapshot, ctypes.byref(entry)):
+            error = ctypes.get_last_error()
+            raise OSError(error, f"Module32FirstW failed for pid {process_id}")
+        while True:
+            names.add(entry.szModule.casefold())
+            ctypes.set_last_error(0)
+            if not kernel32.Module32NextW(snapshot, ctypes.byref(entry)):
+                error = ctypes.get_last_error()
+                if error not in (0, 18):  # ERROR_NO_MORE_FILES ends enumeration normally.
+                    raise OSError(error, f"Module32NextW failed for pid {process_id}")
+                break
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return frozenset(names)
+
+
 class ColdRestartActuator:
     """Default no-new-dependency actuator: normalize state, kill, relaunch AC."""
 

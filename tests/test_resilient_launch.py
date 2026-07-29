@@ -937,7 +937,7 @@ class TestRetryLoop:
             lambda i: LaunchVerdict.STABLE, max_attempts=1, uptime_hours=lambda: None
         )
         payload = json_module.loads(json_module.dumps(report.as_dict()))
-        assert payload["schema"] == "resilient-launch-report/v2"
+        assert payload["schema"] == "resilient-launch-report/v3"
         assert payload["verdict"] == "stable"
         assert payload["counts"] == {
             "stable": 1,
@@ -2287,3 +2287,390 @@ class TestWriteReportJson:
         assert closed, "raw mkstemp fd must be closed after fdopen failure"
         # Restore builtins for any leftover handles in this process.
         monkeypatch.setattr("tools.ac_harness.resilient_launch.os.fdopen", real_fdopen)
+
+
+class TestPerturberTreatmentReceipt:
+    """#719 — the #625 A/B must MEASURE the treatment, not take the operator at their word.
+
+    The asymmetry under test is empirical, not stylistic: on the rig 2026-07-28 one live
+    ``acs.exe`` showed neither perturber at 45 modules loaded and BOTH at 115 modules ~3 s later.
+    A single early snapshot therefore cannot establish absence.
+    """
+
+    def test_presence_is_dispositive_and_unions_across_samples(self):
+        from tools.ac_harness.resilient_launch import PerturberEvidence, PerturberWatch
+
+        watch = PerturberWatch()
+        # The early snapshot that misses everything — exactly the measured race.
+        watch.observe(frozenset({"ntdll.dll", "kernel32.dll"}))
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
+        # A later snapshot sees it; a still-later one misses it again.
+        watch.observe(frozenset({"gameoverlayrenderer64.dll"}))
+        watch.observe(frozenset({"ntdll.dll"}))
+        # Presence must survive: a perturber cannot un-inject, so the union is the truth.
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
+        assert watch.injected("steam_overlay")
+
+    def test_failed_snapshot_is_unavailable_not_absent(self):
+        """The inversion this whole feature exists to prevent."""
+        from tools.ac_harness.resilient_launch import PerturberEvidence, PerturberWatch
+
+        watch = PerturberWatch()
+        watch.observe(None)
+        watch.observe(None)
+        assert watch.successful_looks == 0
+        for value in watch.evidence().values():
+            # Were this NOT_OBSERVED, a denied OpenProcess would read as "overlay disabled" and
+            # silently flip a boot's arm.
+            assert value == str(PerturberEvidence.UNAVAILABLE)
+
+    def test_empty_module_set_is_absent_not_unavailable(self):
+        """A SUCCESSFUL look that found nothing is a real (weak) observation."""
+        from tools.ac_harness.resilient_launch import PerturberEvidence, PerturberWatch
+
+        watch = PerturberWatch()
+        watch.observe(frozenset())
+        assert watch.successful_looks == 1
+        assert watch.evidence()["nvidia_capture"] == str(PerturberEvidence.NOT_OBSERVED)
+
+    def test_module_matching_is_case_insensitive(self):
+        from tools.ac_harness.resilient_launch import PerturberEvidence, PerturberWatch
+
+        watch = PerturberWatch()
+        watch.observe(frozenset({"GameOverlayRenderer64.dll".casefold()}))
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
+
+    def test_only_the_off_arm_can_be_refuted_by_one_attempt(self):
+        from tools.ac_harness.resilient_launch import (
+            PerturberEvidence,
+            contradicts_expectation,
+        )
+
+        injected = {"steam_overlay": str(PerturberEvidence.INJECTED)}
+        absent = {"steam_overlay": str(PerturberEvidence.NOT_OBSERVED)}
+        unavailable = {"steam_overlay": str(PerturberEvidence.UNAVAILABLE)}
+
+        # Dispositive: planned off, demonstrably injected.
+        assert contradicts_expectation(injected, "off") is True
+        # NOT dispositive: the injection race makes a single miss uninformative, so the `on` arm
+        # is judged by the analyzer over the whole boot, never aborted here.
+        assert contradicts_expectation(absent, "on") is False
+        assert contradicts_expectation(unavailable, "off") is False
+        assert contradicts_expectation(absent, "off") is False
+        # No declared arm: an ordinary launch outside the experiment is never interrupted.
+        assert contradicts_expectation(injected, None) is False
+
+    def test_contradicted_off_arm_stops_the_loop_without_desyncing_cycles(self):
+        """The early stop must leave ``cycles`` consistent with ``attempts_log`` (#710 contract)."""
+        from tools.ac_harness.resilient_launch import (
+            AttemptOutcome,
+            LaunchVerdict,
+            PerturberEvidence,
+            run_retry_loop,
+        )
+
+        def watch(attempt: int) -> AttemptOutcome:
+            return AttemptOutcome(
+                LaunchVerdict.FROZE,
+                cycle_delivered=True,
+                perturbers={"steam_overlay": str(PerturberEvidence.INJECTED)},
+            )
+
+        report = run_retry_loop(
+            watch,
+            max_attempts=24,
+            stop_on_stable=False,
+            uptime_hours=lambda: None,
+            expect_perturbers="off",
+        )
+        # Stopped on the FIRST attempt rather than burning all 24 launch cycles.
+        assert report.attempts == 1
+        assert report.arm_contradicted is True
+        assert report.expect_perturbers == "off"
+        # Without the counters running before the break, this attempt would appear in the log but
+        # not in `cycles`/`counts`, and the analyzer would reject the report as corrupt
+        # (cursor HIGH / Codex P1 on #721).
+        assert report.cycles_delivered == 1
+        assert report.froze == 1
+        assert report.stable == 0
+        assert report.never_live == 0
+        assert report.wedged_init == 0
+        assert len(report.attempts_log) == 1
+        payload = report.as_dict()
+        assert payload["cycles"]["delivered"] == len(payload["attempts_log"])
+        assert payload["counts"] == {
+            "stable": 0,
+            "froze": 1,
+            "wedged_init": 0,
+            "never_live": 0,
+        }
+        assert payload["arm_contradicted"] is True
+
+    def test_matching_off_arm_runs_the_whole_budget(self):
+        from tools.ac_harness.resilient_launch import (
+            AttemptOutcome,
+            LaunchVerdict,
+            PerturberEvidence,
+            run_retry_loop,
+        )
+
+        def watch(attempt: int) -> AttemptOutcome:
+            return AttemptOutcome(
+                LaunchVerdict.FROZE,
+                cycle_delivered=True,
+                perturbers={"steam_overlay": str(PerturberEvidence.NOT_OBSERVED)},
+            )
+
+        report = run_retry_loop(
+            watch,
+            max_attempts=5,
+            stop_on_stable=False,
+            uptime_hours=lambda: None,
+            expect_perturbers="off",
+        )
+        assert report.attempts == 5
+        assert report.arm_contradicted is False
+
+    def test_report_defaults_every_attempt_to_unavailable(self):
+        """A producer that never looked must not read as one that looked and found nothing."""
+        from tools.ac_harness.resilient_launch import (
+            LaunchVerdict,
+            PerturberEvidence,
+            run_retry_loop,
+        )
+
+        report = run_retry_loop(
+            lambda i: LaunchVerdict.STABLE, max_attempts=1, uptime_hours=lambda: None
+        )
+        payload = report.as_dict()
+        assert payload["attempts_log"][0]["perturbers"] == {
+            "steam_overlay": str(PerturberEvidence.UNAVAILABLE),
+            "nvidia_capture": str(PerturberEvidence.UNAVAILABLE),
+        }
+        assert payload["perturbers"]["steam_overlay"] == str(PerturberEvidence.UNAVAILABLE)
+        # Perturbers ride OUTSIDE `counts`, which stays the verdict histogram consumers compare.
+        assert set(payload["counts"]) == {"stable", "froze", "wedged_init", "never_live"}
+        # No declared arm -> the experiment-only fields stay absent entirely.
+        assert "expect_perturbers" not in payload
+        assert "arm_contradicted" not in payload
+
+    def test_boot_summary_unions_evidence_across_attempts(self):
+        from tools.ac_harness.resilient_launch import (
+            AttemptOutcome,
+            LaunchVerdict,
+            PerturberEvidence,
+            run_retry_loop,
+        )
+
+        seen = {
+            1: str(PerturberEvidence.UNAVAILABLE),
+            2: str(PerturberEvidence.NOT_OBSERVED),
+            3: str(PerturberEvidence.INJECTED),
+        }
+
+        def watch(attempt: int) -> AttemptOutcome:
+            return AttemptOutcome(
+                LaunchVerdict.FROZE,
+                cycle_delivered=True,
+                perturbers={"steam_overlay": seen[attempt], "nvidia_capture": seen[1]},
+            )
+
+        report = run_retry_loop(
+            watch, max_attempts=3, stop_on_stable=False, uptime_hours=lambda: None
+        )
+        summary = report.perturber_summary()
+        # One sighting anywhere in the boot is dispositive for the boot.
+        assert summary["steam_overlay"] == str(PerturberEvidence.INJECTED)
+        # Never successfully looked for this one across any attempt.
+        assert summary["nvidia_capture"] == str(PerturberEvidence.UNAVAILABLE)
+
+    def test_invalid_expectation_is_rejected(self):
+        from tools.ac_harness.resilient_launch import LaunchVerdict, run_retry_loop
+
+        with pytest.raises(ValueError, match="expect_perturbers"):
+            run_retry_loop(
+                lambda i: LaunchVerdict.STABLE,
+                max_attempts=1,
+                uptime_hours=lambda: None,
+                expect_perturbers="overlays_off",
+            )
+
+    def test_partial_multi_pid_sample_does_not_invent_absence(self):
+        """Codex P1: a failed PID snapshot must not turn a miss on another PID into not_observed."""
+        from tools.ac_harness.resilient_launch import PerturberEvidence, PerturberWatch
+
+        watch = PerturberWatch()
+        # One PID opened cleanly with no overlay; the other failed — presence unknown for absence.
+        watch.note_injected(frozenset({"ntdll.dll"}))
+        assert watch.successful_looks == 0
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.UNAVAILABLE)
+        # Dispositive presence still records through the partial path.
+        watch.note_injected(frozenset({"gameoverlayrenderer64.dll"}))
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
+
+    def test_early_miss_then_failed_looks_is_unavailable_not_absent(self):
+        """Codex P1: a race-window miss must not stick after later snapshots fail."""
+        from tools.ac_harness.resilient_launch import PerturberEvidence, PerturberWatch
+
+        watch = PerturberWatch()
+        watch.observe(frozenset({"ntdll.dll"}))  # early miss
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
+        watch.observe(None)  # later failure
+        watch.observe(None)
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.UNAVAILABLE)
+        # A final successful miss restores not_observed (post-race look).
+        watch.observe(frozenset({"ntdll.dll"}))
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
+
+    def test_partial_pid_sample_invalidates_prior_absence(self):
+        """Cursor HIGH: note_injected alone must not leave a sticky not_observed."""
+        from tools.ac_harness.resilient_launch import PerturberEvidence, PerturberWatch
+
+        watch = PerturberWatch()
+        watch.observe(frozenset({"ntdll.dll"}))
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
+        # Partial multi-PID path: union injection then invalidate absence.
+        watch.note_injected(frozenset({"ntdll.dll"}))
+        watch.observe(None)
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.UNAVAILABLE)
+
+    def test_empty_pid_poll_must_not_clear_prior_absence(self):
+        """Cursor MEDIUM: gone acs.exe is not a failed look — leave post-race miss intact."""
+        from tools.ac_harness.resilient_launch import (
+            PerturberEvidence,
+            PerturberWatch,
+            fold_perturber_snapshots,
+        )
+
+        watch = PerturberWatch()
+        watch.observe(frozenset({"ntdll.dll"}))  # post-race miss
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
+        fold_perturber_snapshots(watch, pids_empty=True)
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
+        # Contrast: a real failed look at a live process does invalidate.
+        fold_perturber_snapshots(watch, enum_failed=True)
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.UNAVAILABLE)
+
+    def test_fold_partial_and_full_pid_samples(self):
+        """fold_perturber_snapshots covers partial invalidation and full multi-PID observe."""
+        from tools.ac_harness.resilient_launch import (
+            PerturberEvidence,
+            PerturberWatch,
+            fold_perturber_snapshots,
+        )
+
+        watch = PerturberWatch()
+        watch.observe(frozenset({"ntdll.dll"}))
+        fold_perturber_snapshots(
+            watch,
+            successes=[frozenset({"ntdll.dll"})],
+            any_pid_failed=True,
+        )
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.UNAVAILABLE)
+
+        watch2 = PerturberWatch()
+        # primary_only (default): only the first snapshot is classified — unioning two
+        # PIDs would invent full treatment when Steam and NVIDIA sit on different processes.
+        fold_perturber_snapshots(
+            watch2,
+            successes=[
+                frozenset({"ntdll.dll"}),
+                frozenset({"gameoverlayrenderer64.dll"}),
+            ],
+            any_pid_failed=False,
+        )
+        assert watch2.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
+        watch3 = PerturberWatch()
+        fold_perturber_snapshots(
+            watch3,
+            successes=[frozenset({"gameoverlayrenderer64.dll", "nvspcap64.dll"})],
+        )
+        assert watch3.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
+        assert watch3.evidence()["nvidia_capture"] == str(PerturberEvidence.INJECTED)
+
+    def test_arm_contradicted_salvage_path_is_unique_per_timestamp(self, tmp_path):
+        """Cursor MEDIUM: salvage names must not collide under exclusive publish."""
+        from tools.ac_harness.resilient_launch import (
+            LaunchReport,
+            LaunchVerdict,
+            _arm_contradicted_salvage_path,
+            _write_report_json,
+        )
+
+        base = tmp_path / "boot3.json"
+        first = _arm_contradicted_salvage_path(base, when=1_753_766_510.100000)
+        second = _arm_contradicted_salvage_path(base, when=1_753_766_510.200000)
+        assert first != second
+        assert first.name.startswith("boot3.arm_contradicted.")
+        assert first.suffix == ".json"
+        # No colons — Windows path safety.
+        assert ":" not in first.name
+        report = LaunchReport(
+            verdict=LaunchVerdict.FROZE,
+            attempts=1,
+            froze=1,
+            never_live=0,
+            stable=0,
+            arm_contradicted=True,
+        )
+        assert _write_report_json(report, first) is True
+        assert _write_report_json(report, second) is True
+        # Same timestamp would refuse overwrite — uniqueness is what makes retry work.
+        assert _write_report_json(report, first) is False
+
+    def test_stable_on_arm_miss_stops_the_loop(self):
+        """Codex P1: STABLE + successful miss makes on-arm confirmation impossible."""
+        from tools.ac_harness.resilient_launch import (
+            AttemptOutcome,
+            LaunchVerdict,
+            PerturberEvidence,
+            contradicts_expectation,
+            run_retry_loop,
+        )
+
+        evidence = {
+            "steam_overlay": str(PerturberEvidence.NOT_OBSERVED),
+            "nvidia_capture": str(PerturberEvidence.NOT_OBSERVED),
+        }
+        assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.STABLE) is True
+        assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.WEDGED_INIT) is False
+        assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.FROZE) is False
+
+        def watch(_attempt: int) -> AttemptOutcome:
+            return AttemptOutcome(
+                LaunchVerdict.STABLE,
+                cycle_delivered=True,
+                perturbers=evidence,
+            )
+
+        report = run_retry_loop(
+            watch,
+            max_attempts=24,
+            stop_on_stable=False,
+            uptime_hours=lambda: None,
+            expect_perturbers="on",
+        )
+        assert report.attempts == 1
+        assert report.arm_contradicted is True
+        assert report.stable == 1
+
+    def test_pid_replacement_latches_injection_without_on_arm_union(self):
+        """Codex P1: latch off-arm injection; reset so on-arm cannot inherit corpse full set."""
+        from tools.ac_harness.resilient_launch import PerturberEvidence, PerturberWatch
+
+        watch = PerturberWatch()
+        watch.observe(frozenset({"gameoverlayrenderer64.dll", "nvspcap64.dll", "ntdll.dll"}))
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
+        latched = {name for name in ("steam_overlay", "nvidia_capture") if watch.injected(name)}
+        watch.reset()
+        # Replacement only has Steam — on-arm must not see full injection from the latch alone.
+        watch.observe(frozenset({"gameoverlayrenderer64.dll"}))
+        evidence = dict(watch.evidence())
+        for name in latched:
+            evidence[name] = str(PerturberEvidence.INJECTED)
+        assert evidence["steam_overlay"] == str(PerturberEvidence.INJECTED)
+        # After reset, nvidia is only latched if it was on the corpse; if we latched both,
+        # the emission overlays both — for off-arm. On-arm confirmation requires stable
+        # per-launch full set from the live watch before latch overlay; analyzer uses
+        # per-launch rows. Unit-level: latch is a plain dict overlay of injected keys.
+        assert "nvidia_capture" in latched

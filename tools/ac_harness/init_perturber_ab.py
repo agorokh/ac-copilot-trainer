@@ -82,24 +82,55 @@ from tools.ac_harness.remote_launcher import RemoteLaunchError, validate_wrapper
 from tools.ac_harness.resilient_launch import (
     DEFAULT_GO_LIVE_TIMEOUT,
     FREEZE_VERDICTS,
+    PERTURBER_MODULES,
     REPORT_SCHEMA,
     TERMINAL_VERDICTS,
     repo_checkout_root,
     resolve_report_path,
 )
 
-#: v3 registers the endpoints in DELIVERED CYCLES (#710). The plan file IS the pre-registration,
-#: so this had to move with the analysis: a v2 plan's stored ``endpoints`` still say raw
-#: launch-index and a launch-counted burst window, and silently analyzing it under cycle-counted
-#: rules would score it against an endpoint it never registered.
-PLAN_SCHEMA = "init-perturber-ab-plan/v3"
-#: v3 scores onset on delivered cycles and reports the delivery split per boot (#710).
-ANALYSIS_SCHEMA = "init-perturber-ab-analysis/v3"
+#: v4 pre-registers treatment-receipt verification (#719): analyzer excludes contradicted boots,
+#: plan commands emit ``--expect-perturbers``, and every attempt must carry the full
+#: ``PERTURBER_MODULES`` key set. The plan file IS the pre-registration, so a v3 plan that never
+#: recorded this policy must not be analyzed under it (Codex P2 on #721).
+PLAN_SCHEMA = "init-perturber-ab-plan/v4"
+#: v4 keeps the delivered-cycle endpoints from v3 and adds treatment-receipt policy.
+ANALYSIS_SCHEMA = "init-perturber-ab-analysis/v4"
 #: the interleaved single-boot design this module used to emit; refuted 2026-07-24 and
 #: rejected by :func:`load_plan` so a stale plan file cannot be analyzed as if it were valid.
 WITHDRAWN_PLAN_SCHEMA = "init-perturber-ab-plan/v1"
 #: the raw-launch-index pre-registration superseded by #710; rejected for the same reason.
 SUPERSEDED_PLAN_SCHEMA = "init-perturber-ab-plan/v2"
+#: delivered-cycle endpoints without treatment-receipt pre-registration (#719); regenerate.
+PRE_TREATMENT_PLAN_SCHEMA = "init-perturber-ab-plan/v3"
+#: Post-go-live verdicts for *absence* confirmation (off-arm) and live-session checks.
+#: ``stable`` / ``froze`` require packet advance + ready (past the measured ~3 s race by
+#: construction; plans also floor go_live/stability at 5 s). ``wedged_init`` is excluded.
+#: On-arm *miss* contradiction uses only ``stable`` (see :func:`treatment_receipt`).
+#: Positive ``injected`` is evaluated on every delivered launch regardless of verdict.
+#:
+#: Codex has repeatedly re-litigated freze-as-absence; the contract is: freze is post-go-live
+#: absence-OK for off-arm confirmation of every delivered launch; on-arm miss stays STABLE-only.
+_LIVE_SESSION_VERDICTS = frozenset({"stable", "froze"})
+#: Measured injection race on the rig (~3 s). Plans must not set timeouts below this plus margin.
+INJECTION_RACE_S = 3.0
+#: Plan floor for ``--go-live-timeout`` / ``--stability-window`` so post-race absence claims
+#: cannot fire inside the measured injection race (Codex P1/P2 on #721).
+MIN_GO_LIVE_TIMEOUT_S = 5.0
+MIN_STABILITY_WINDOW_S = 5.0
+#: Canonical perturber field set every report row must carry exactly.
+_PERTURBER_KEYS = frozenset(PERTURBER_MODULES)
+#: Exact treatment-receipt policy a v4 plan must pre-register (Codex P2 on #721).
+#: Uses the string form of :data:`TREATMENT_CONTRADICTED` so this can live with the schema
+#: constants (the named constants are defined next to the receipt helpers below).
+CANONICAL_TREATMENT_RECEIPT: dict[str, object] = {
+    "enabled": True,
+    "exclude_on": ["contradicted"],
+    "expect_perturbers_in_commands": True,
+    "perturbers": sorted(PERTURBER_MODULES),
+    "on_arm_requires_live_session_looks": True,
+    "per_live_launch_full_injection": True,
+}
 CONDITIONS = ("overlays_on", "overlays_off")
 DEFAULT_ALPHA = 0.05
 #: Seed used only when a caller explicitly asks to reproduce a plan. A REAL plan draws a fresh
@@ -206,6 +237,9 @@ class LaunchObservation:
     elapsed_s: float
     uptime_h: float
     cycle_delivered: bool | None = None
+    #: #719 per-perturber evidence for this launch, keyed as in ``PERTURBER_MODULES``. Values are
+    #: :class:`PerturberEvidence` strings; only ``injected`` establishes anything.
+    perturbers: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -213,6 +247,178 @@ class BootObservation:
     boot: int
     condition: str
     launches: tuple[LaunchObservation, ...]
+
+
+#: Accepted per-launch perturber evidence values (mirrors ``PerturberEvidence``).
+_PERTURBER_EVIDENCE_VALUES = frozenset({"injected", "not_observed", "unavailable"})
+
+#: Treatment-receipt verdicts for a boot (#719).
+TREATMENT_CONFIRMED = "confirmed"
+TREATMENT_CONTRADICTED = "contradicted"
+TREATMENT_UNVERIFIED = "unverified"
+
+
+def boot_perturber_state(observation: BootObservation) -> dict[str, str]:
+    """Roll one boot's per-launch evidence up to one value per perturber.
+
+    Union on presence: a perturber cannot un-inject, so one sighting anywhere in the boot is
+    dispositive for the boot. ``not_observed`` requires at least one launch that looked
+    successfully and missed it; otherwise ``unavailable``.
+    """
+
+    fields: list[str] = []
+    for launch in observation.launches:
+        for name, _ in launch.perturbers:
+            if name not in fields:
+                fields.append(name)
+    state: dict[str, str] = {}
+    for name in fields:
+        values = [dict(launch.perturbers).get(name) for launch in observation.launches]
+        if "injected" in values:
+            state[name] = "injected"
+        elif "not_observed" in values:
+            state[name] = "not_observed"
+        else:
+            state[name] = "unavailable"
+    return state
+
+
+def _launch_evidence(launch: LaunchObservation) -> dict[str, str]:
+    return dict(launch.perturbers)
+
+
+def _is_live_session(launch: LaunchObservation) -> bool:
+    """Whether this attempt's absence evidence is informative (post injection race).
+
+    Only a delivered ``stable`` attempt is dispositive for *absence*: the stability window is
+    known to exceed the measured ~3 s injection race. ``froze`` is not — it can fire on the
+    first post-go-live sample (process exit / packet regression), and ``_Car0NotDrivable`` is
+    also mapped to ``FROZE`` without a proven late sample (Codex P1 on #721). Presence
+    (``injected``) remains dispositive on any attempt via the off-arm path.
+    """
+
+    return launch.cycle_delivered is True and launch.verdict in _LIVE_SESSION_VERDICTS
+
+
+def treatment_receipt(
+    condition: str,
+    state: dict[str, str],
+    *,
+    launches: Sequence[LaunchObservation] | None = None,
+) -> tuple[str, str | None]:
+    """Did this boot actually RECEIVE the condition its arm label claims? (#719)
+
+    Returns ``(verdict, detail)``.
+
+    This is **treatment-receipt verification, not operator-error detection** — and that framing is
+    what makes the ``overlays_on`` case tractable. Whether the operator forgot the toggle or Steam
+    simply failed to inject while enabled, a boot that did not receive its assigned condition
+    cannot inform the contrast. The cause is irrelevant; receipt is what the design needs.
+
+    Rules (Codex P1 round-2 on #721):
+
+    * planned ``overlays_off`` + any ``injected`` anywhere in the boot -> contradicted
+      (presence is dispositive; a perturber cannot un-inject)
+    * planned ``overlays_off`` + every field ``not_observed`` on the boot roll-up -> confirmed
+    * planned ``overlays_on`` is judged **per live-session launch**, not via a boot-wide union:
+      each long-lived ``acs.exe`` is its own injection event, so confirming the arm requires
+      every live launch to show every tracked perturber ``injected``. A boot-wide union would
+      let Steam on attempt 1 and NVIDIA on attempt 5 "confirm" a mixed-treatment boot.
+    * planned ``overlays_on`` + a live launch whose successful looks miss a perturber ->
+      contradicted for that launch (lived past the injection race)
+    * planned ``overlays_on`` with only early/never_live looks, or any ``unavailable`` gap ->
+      unverified (absence during the race is non-dispositive; no information falls back to the
+      planned label rather than manufacturing an exclusion)
+    """
+
+    required = _PERTURBER_KEYS
+    if not state:
+        return TREATMENT_UNVERIFIED, "report carries no perturber evidence"
+    if set(state) != required:
+        missing = sorted(required - set(state))
+        extra = sorted(set(state) - required)
+        detail = []
+        if missing:
+            detail.append(f"missing {', '.join(missing)}")
+        if extra:
+            detail.append(f"unknown {', '.join(extra)}")
+        return TREATMENT_UNVERIFIED, "perturber key set incomplete: " + "; ".join(detail)
+
+    rows = list(launches or ())
+    if condition == "overlays_off":
+        injected = sorted(name for name, value in state.items() if value == "injected")
+        if injected:
+            return (
+                TREATMENT_CONTRADICTED,
+                f"planned overlays_off but {', '.join(injected)} was injected into acs.exe",
+            )
+        # Every delivered post-go-live launch (stable/froze) must show full not_observed.
+        delivered = [item for item in rows if item.cycle_delivered is True]
+        if not delivered:
+            return (
+                TREATMENT_UNVERIFIED,
+                "no delivered cycles with perturber evidence for overlays_off",
+            )
+        incomplete: list[int] = []
+        for item in delivered:
+            evidence = _launch_evidence(item)
+            if not _is_live_session(item):
+                incomplete.append(item.launch)
+                continue
+            if set(evidence) != required or any(
+                evidence.get(name) != "not_observed" for name in required
+            ):
+                incomplete.append(item.launch)
+        if incomplete:
+            return (
+                TREATMENT_UNVERIFIED,
+                "partial, early, or unavailable perturber evidence on delivered cycles "
+                "for overlays_off",
+            )
+        return TREATMENT_CONFIRMED, None
+
+    if condition == "overlays_on":
+        # Positive injection is evaluated on every delivered launch (any verdict). Misses are
+        # only dispositive on STABLE — freze/wedged misses stay unverified (Codex P1 on #721).
+        # Every delivered launch must fully inject for confirmation.
+        delivered = [item for item in rows if item.cycle_delivered is True]
+        if not delivered:
+            return (
+                TREATMENT_UNVERIFIED,
+                "no delivered cycles with perturber evidence for overlays_on",
+            )
+        incomplete: list[int] = []
+        short_live: list[str] = []
+        for item in delivered:
+            evidence = _launch_evidence(item)
+            if set(evidence) != required:
+                incomplete.append(item.launch)
+                continue
+            if all(evidence[name] == "injected" for name in required):
+                continue
+            if any(evidence[name] == "unavailable" for name in required):
+                incomplete.append(item.launch)
+                continue
+            miss = sorted(name for name in required if evidence[name] != "injected")
+            if item.verdict == "stable":
+                short_live.append(f"launch {item.launch}: {', '.join(miss)}")
+            else:
+                incomplete.append(item.launch)
+        if short_live:
+            return (
+                TREATMENT_CONTRADICTED,
+                "planned overlays_on but stable session(s) never observed full injection "
+                f"({'; '.join(short_live)})",
+            )
+        if incomplete:
+            return (
+                TREATMENT_UNVERIFIED,
+                "partial, early, or unavailable perturber evidence on delivered cycles "
+                "for overlays_on",
+            )
+        return TREATMENT_CONFIRMED, None
+
+    return TREATMENT_UNVERIFIED, f"unknown condition {condition!r}"
 
 
 @dataclass(frozen=True)
@@ -241,6 +447,11 @@ class BootSummary:
     post_onset_launches: int
     post_onset_freezes: int
     post_onset_burst_rate: float | None
+    #: #719 treatment receipt: did this boot actually get the condition its arm label claims?
+    #: ``contradicted`` excludes the boot (and therefore its block) from the primary endpoint.
+    treatment: str
+    treatment_detail: str | None
+    perturber_state: tuple[tuple[str, str], ...]
     usable: bool
     unusable_reason: str | None
     first_uptime_h: float
@@ -351,8 +562,20 @@ def build_plan(
             ) from exc
     if not math.isfinite(stability_window) or stability_window <= 0:
         raise ValueError("stability_window must be finite and > 0")
+    if stability_window < MIN_STABILITY_WINDOW_S:
+        raise ValueError(
+            f"stability_window must be >= {MIN_STABILITY_WINDOW_S:g}s so a STABLE "
+            f"verdict cannot fire inside the measured ~{INJECTION_RACE_S:g}s injection race "
+            f"(got {stability_window:g})"
+        )
     if not math.isfinite(go_live_timeout) or go_live_timeout <= 0:
         raise ValueError("go_live_timeout must be finite and > 0")
+    if go_live_timeout < MIN_GO_LIVE_TIMEOUT_S:
+        raise ValueError(
+            f"go_live_timeout must be >= {MIN_GO_LIVE_TIMEOUT_S:g}s so a WEDGED_INIT "
+            f"cannot fire inside the measured ~{INJECTION_RACE_S:g}s injection race "
+            f"(got {go_live_timeout:g})"
+        )
     if boots_per_arm <= 0 or launches_per_boot <= 0:
         raise ValueError("boots_per_arm and launches_per_boot must be > 0")
     if boots_per_arm < MIN_BOOTS_PER_ARM and not allow_undersized:
@@ -419,9 +642,13 @@ def build_plan(
     ]
     return {
         "schema": PLAN_SCHEMA,
-        # Every schema this plan supersedes, oldest first — both are rejected by `load_plan`, so
-        # the migration path is recorded rather than implied (#710 self-hosted reviewer MEDIUM).
-        "supersedes": [WITHDRAWN_PLAN_SCHEMA, SUPERSEDED_PLAN_SCHEMA],
+        # Every schema this plan supersedes, oldest first — rejected by `load_plan`, so the
+        # migration path is recorded rather than implied (#710 self-hosted reviewer MEDIUM).
+        "supersedes": [
+            WITHDRAWN_PLAN_SCHEMA,
+            SUPERSEDED_PLAN_SCHEMA,
+            PRE_TREATMENT_PLAN_SCHEMA,
+        ],
         "issue": 625,
         "generated_at_utc": stamp,
         "design": "randomized block; one boot per unit, two boots (one per arm) per block",
@@ -433,6 +660,10 @@ def build_plan(
         "run_id": run_id,
         "randomization_reference_set": 2**boots_per_arm,
         "smallest_attainable_two_sided_p": 2 / 2**boots_per_arm,
+        # Pre-registered with the plan so analyze cannot invent a receipt rule the operator never
+        # signed up for (Codex P2 on #721). ``exclude_on`` is only ``contradicted``: ``unverified``
+        # falls back to the planned label because no information must not manufacture missingness.
+        "treatment_receipt": dict(CANONICAL_TREATMENT_RECEIPT),
         "launch": {
             "car": car,
             "track": track,
@@ -543,8 +774,57 @@ def load_plan(path: Path) -> dict[str, Any]:
             "No data is lost: pre-#710 boot reports use the withdrawn "
             "'resilient-launch-report/v1' schema and are rejected regardless"
         )
+    if schema == PRE_TREATMENT_PLAN_SCHEMA:
+        raise ValueError(
+            f"plan schema {PRE_TREATMENT_PLAN_SCHEMA!r} pre-dates treatment-receipt verification "
+            "(#719): it does not record the exclusion policy, the required perturber key set, or "
+            "that each boot command carries --expect-perturbers. Regenerate the plan under "
+            f"{PLAN_SCHEMA!r} before analyze; reusing a v3 plan would apply a receipt rule the "
+            "operator never pre-registered"
+        )
     if schema != PLAN_SCHEMA:
         raise ValueError(f"plan schema must be {PLAN_SCHEMA!r}")
+    receipt = plan.get("treatment_receipt")
+    if not isinstance(receipt, dict) or receipt.get("enabled") is not True:
+        raise ValueError(
+            f"plan {PLAN_SCHEMA!r} must record treatment_receipt.enabled=true "
+            "(the pre-registered receipt policy from #719)"
+        )
+    # Full policy match — a hand-edited v4 that changes exclude_on / perturbers / flags would
+    # otherwise be analyzed under today's hard-coded rules while claiming a different prereg
+    # (Codex P2 on #721).
+    if set(receipt) != set(CANONICAL_TREATMENT_RECEIPT):
+        extra = sorted(set(receipt) - set(CANONICAL_TREATMENT_RECEIPT))
+        missing = sorted(set(CANONICAL_TREATMENT_RECEIPT) - set(receipt))
+        detail = []
+        if extra:
+            detail.append(f"unknown {extra}")
+        if missing:
+            detail.append(f"missing {missing}")
+        raise ValueError(
+            "plan treatment_receipt key set must exactly match the canonical v4 policy "
+            f"({'; '.join(detail)}); regenerate the plan"
+        )
+    for key, expected in CANONICAL_TREATMENT_RECEIPT.items():
+        if receipt.get(key) != expected:
+            raise ValueError(
+                f"plan treatment_receipt.{key}={receipt.get(key)!r} does not match the "
+                f"canonical v4 policy {expected!r}; regenerate the plan"
+            )
+    launch = plan.get("launch")
+    if isinstance(launch, dict):
+        go_live = launch.get("go_live_timeout")
+        if isinstance(go_live, (int, float)) and go_live < MIN_GO_LIVE_TIMEOUT_S:
+            raise ValueError(
+                f"plan launch.go_live_timeout={go_live!r} is below the "
+                f"{MIN_GO_LIVE_TIMEOUT_S:g}s injection-race floor; regenerate the plan"
+            )
+        stability = launch.get("stability_window")
+        if isinstance(stability, (int, float)) and stability < MIN_STABILITY_WINDOW_S:
+            raise ValueError(
+                f"plan launch.stability_window={stability!r} is below the "
+                f"{MIN_STABILITY_WINDOW_S:g}s injection-race floor; regenerate the plan"
+            )
     boots_per_arm = plan.get("boots_per_arm")
     if not isinstance(boots_per_arm, int) or boots_per_arm <= 0:
         raise ValueError("plan boots_per_arm must be a positive integer")
@@ -605,18 +885,103 @@ def _parse_report(
             "records no per-attempt cycle_delivered flag (#710) — its never_live rows cannot be "
             "mapped onto accumulator positions. Re-run the boot on the current launcher"
         )
+    if report.get("schema") == "resilient-launch-report/v2":
+        raise ValueError(
+            f"report {path} uses the withdrawn {'resilient-launch-report/v2'!r} schema, which "
+            "records no per-attempt perturber evidence (#719) — its arm label rests entirely on "
+            "the operator's assertion and cannot be cross-checked against what was actually "
+            "injected into acs.exe. Re-run the boot on the current launcher"
+        )
     if report.get("schema") != REPORT_SCHEMA:
         raise ValueError(f"report {path} schema must be {REPORT_SCHEMA!r}")
     attempts = report.get("attempts")
     attempts_log = report.get("attempts_log")
-    if attempts != launches_per_boot:
+    arm_contradicted = report.get("arm_contradicted") is True
+    # A full boot must run the planned launch budget. The one deliberate short form is an
+    # early arm-contradiction stop under ``--expect-perturbers off`` (#719 Part C): the report
+    # is still a usable treatment-receipt artifact (the boot is excluded), so accepting it
+    # here is what makes the fail-fast path loadable instead of looking like a corrupt run
+    # (Codex P1 on #721).
+    if arm_contradicted:
+        if not isinstance(attempts, int) or attempts < 1 or attempts > launches_per_boot:
+            raise ValueError(
+                f"report {path} recorded arm_contradicted with attempts={attempts!r}; "
+                f"expected 1..{launches_per_boot}"
+            )
+        if not isinstance(attempts_log, list) or len(attempts_log) != attempts:
+            log_len = (
+                len(attempts_log) if isinstance(attempts_log, list) else type(attempts_log).__name__
+            )
+            raise ValueError(
+                f"report {path} arm_contradicted log length {log_len} "
+                f"does not match attempts={attempts}"
+            )
+        reported_expect = report.get("expect_perturbers")
+        if reported_expect not in ("off", "on"):
+            raise ValueError(
+                f"report {path} arm_contradicted requires expect_perturbers 'on' or 'off' "
+                f"(got {reported_expect!r})"
+            )
+        # Short reports are fail-fast stops for either arm. Off-arm: injected sighting.
+        # On-arm: STABLE + successful miss (Codex P1 on #721). Condition must still match.
+        if reported_expect == "off" and boot.condition != "overlays_off":
+            raise ValueError(
+                f"report {path} arm_contradicted with expect_perturbers='off' but plan condition "
+                f"is {boot.condition!r}"
+            )
+        if reported_expect == "on" and boot.condition != "overlays_on":
+            raise ValueError(
+                f"report {path} arm_contradicted with expect_perturbers='on' but plan condition "
+                f"is {boot.condition!r}"
+            )
+        # The summary flag alone is not enough: require dispositive evidence in the log so a
+        # truncated clean report cannot enter via arm_contradicted (Codex P2 on #721).
+        has_dispositive = False
+        if isinstance(attempts_log, list):
+            for raw in attempts_log:
+                if not isinstance(raw, dict):
+                    continue
+                block = raw.get("perturbers")
+                if not isinstance(block, dict):
+                    continue
+                if reported_expect == "off" and any(
+                    value == "injected" for value in block.values()
+                ):
+                    has_dispositive = True
+                    break
+                if (
+                    reported_expect == "on"
+                    and raw.get("verdict") == "stable"
+                    and any(value == "not_observed" for value in block.values())
+                    and all(value != "unavailable" for value in block.values())
+                ):
+                    has_dispositive = True
+                    break
+        if not has_dispositive:
+            raise ValueError(
+                f"report {path} arm_contradicted but attempts_log has no dispositive "
+                f"receipt failure for expect_perturbers={reported_expect!r} — refusing the "
+                "short-report exception"
+            )
+    else:
+        if attempts != launches_per_boot:
+            raise ValueError(
+                f"report {path} recorded {attempts!r} attempts; the plan requires exactly "
+                f"{launches_per_boot} launches in this boot (run one --trials "
+                f"{launches_per_boot} invocation per boot)"
+            )
+        if not isinstance(attempts_log, list) or len(attempts_log) != launches_per_boot:
+            raise ValueError(f"report {path} must log all {launches_per_boot} launches")
+    # Receipt flag on the report must match the planned arm for every loaded boot, not only the
+    # short arm_contradicted path — otherwise a mis-pasted --expect-perturbers command is scored
+    # under the wrong treatment rules (antigravity HIGH / Codex P2 on #721).
+    expected_flag = "on" if boot.condition == "overlays_on" else "off"
+    reported_flag = report.get("expect_perturbers")
+    if reported_flag != expected_flag:
         raise ValueError(
-            f"report {path} recorded {attempts!r} attempts; the plan requires exactly "
-            f"{launches_per_boot} launches in this boot (run one --trials "
-            f"{launches_per_boot} invocation per boot)"
+            f"report {path} expect_perturbers={reported_flag!r} does not match planned "
+            f"condition {boot.condition!r} (expected {expected_flag!r})"
         )
-    if not isinstance(attempts_log, list) or len(attempts_log) != launches_per_boot:
-        raise ValueError(f"report {path} must log all {launches_per_boot} launches")
     launch = report.get("launch")
     if not isinstance(launch, dict):
         raise ValueError(f"report {path} must record launch configuration")
@@ -671,6 +1036,27 @@ def _parse_report(
                 f"report {path} launch {index} must record finite non-negative uptime_h "
                 "(the onset endpoint is meaningless without the boot's own clock)"
             )
+        perturbers = record.get("perturbers", _MISSING)
+        if perturbers is _MISSING:
+            raise ValueError(
+                f"report {path} launch {index} is missing perturbers; the {REPORT_SCHEMA!r} "
+                "schema records treatment evidence for every attempt (#719)"
+            )
+        if not isinstance(perturbers, dict) or not perturbers:
+            raise ValueError(
+                f"report {path} launch {index} has a non-mapping or empty perturbers block"
+            )
+        if set(perturbers) != _PERTURBER_KEYS:
+            raise ValueError(
+                f"report {path} launch {index} perturbers keys must be exactly "
+                f"{sorted(_PERTURBER_KEYS)}; got {sorted(perturbers)}"
+            )
+        for name, value in perturbers.items():
+            if not isinstance(name, str) or value not in _PERTURBER_EVIDENCE_VALUES:
+                raise ValueError(
+                    f"report {path} launch {index} has invalid perturber evidence "
+                    f"{name!r}={value!r}; expected one of {sorted(_PERTURBER_EVIDENCE_VALUES)}"
+                )
         observations.append(
             LaunchObservation(
                 launch=index,
@@ -679,6 +1065,7 @@ def _parse_report(
                 elapsed_s=float(elapsed_s),
                 uptime_h=float(uptime_h),
                 cycle_delivered=delivered,
+                perturbers=tuple(sorted(perturbers.items())),
             )
         )
     expected_counts = {
@@ -707,6 +1094,28 @@ def _parse_report(
     return BootObservation(boot=boot.boot, condition=boot.condition, launches=tuple(observations))
 
 
+def resolve_boot_report_path(reports_dir: Path, planned_name: str) -> Path | None:
+    """Locate the planned report, or its unique arm-contradicted salvage sibling (#721).
+
+    Fail-fast contradicted runs publish to ``{stem}.arm_contradicted.{UTC}Z{suffix}`` so the
+    exclusive planned path stays free for re-run. Analysis must still discover that salvage so
+    the exclusion is scored rather than reported as a missing planned file (Codex P2 on #721).
+    A successful re-run at the planned name wins over any salvage.
+    """
+
+    planned = reports_dir / planned_name
+    if planned.is_file():
+        return planned
+    stem = Path(planned_name).stem
+    suffix = Path(planned_name).suffix
+    matches = sorted(reports_dir.glob(f"{stem}.arm_contradicted.*{suffix}"))
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+    return max(matches, key=lambda path: path.stat().st_mtime)
+
+
 def load_observations(
     plan: dict[str, Any], reports_dir: Path, *, require_complete: bool = True
 ) -> tuple[BootObservation, ...]:
@@ -717,8 +1126,8 @@ def load_observations(
     missing: list[str] = []
     for raw in plan["boots"]:
         boot = PlannedBoot(boot=raw["boot"], condition=raw["condition"], report=raw["report"])
-        report_path = reports_dir / boot.report
-        if not report_path.is_file():
+        report_path = resolve_boot_report_path(reports_dir, boot.report)
+        if report_path is None:
             missing.append(boot.report)
             continue
         observations.append(_parse_report(report_path, boot, plan_launch, launches_per_boot))
@@ -938,10 +1347,24 @@ def summarize_boot(observation: BootObservation) -> BootSummary:
     # some other verdict happened to occur. The old ``classified == 0`` guard discarded a boot of
     # 20 delivered never_live cycles — a perfectly good censored observation — while scoring 19
     # of the same cycles plus one stable row (#710 Codex P2).
+    perturber_state = boot_perturber_state(observation)
+    treatment, treatment_detail = treatment_receipt(
+        observation.condition,
+        perturber_state,
+        launches=observation.launches,
+    )
     if delivered_cycles == 0:
         unusable_reason = "no_delivered_cycles"
     elif undelivered > MAX_UNDELIVERED_FRACTION * len(launches):
         unusable_reason = "undelivered_fraction_exceeded"
+    elif treatment == TREATMENT_CONTRADICTED:
+        # The boot did not receive the condition its label claims, so nothing it measured can
+        # inform the contrast. It is EXCLUDED, never re-labelled to its observed arm: the
+        # permutation null is over the arm orders the randomization could have emitted, so the
+        # labels ARE the randomization. Re-labelling conditions on data observed after
+        # randomization, which breaks the design-based justification the whole test rests on —
+        # and can leave a block whose two boots share an arm, carrying no contrast anyway (#719).
+        unusable_reason = "treatment_contradicted"
     return BootSummary(
         boot=observation.boot,
         condition=observation.condition,
@@ -964,6 +1387,9 @@ def summarize_boot(observation: BootObservation) -> BootSummary:
         post_onset_burst_rate=(
             None if post_onset_launches == 0 else post_onset_freezes / post_onset_launches
         ),
+        treatment=treatment,
+        treatment_detail=treatment_detail,
+        perturber_state=tuple(sorted(perturber_state.items())),
         usable=unusable_reason is None,
         unusable_reason=unusable_reason,
         first_uptime_h=launches[0].uptime_h,
@@ -1317,6 +1743,10 @@ def analyze(
     )
     missing_blocks = max(0, (expected_blocks or 0) - len(blocks))
     exclusions_present = sum(excluded.values()) > 0 or incomplete_blocks > 0 or missing_blocks > 0
+    # Unverified receipt is not a post-treatment exclusion (no information must not invent
+    # missingness), but it must still withhold causal claims — otherwise a run whose module
+    # snapshots all failed recreates the honor-system arm label (Codex P1 on #721).
+    unverified_present = any(boot.treatment == TREATMENT_UNVERIFIED for boot in boots)
     if (
         usable_blocks < endpoint_floor
         # Blocks that learned nothing cannot fill the floor. This subsumes the old
@@ -1335,6 +1765,8 @@ def analyze(
     elif exclusions_present:
         # Report the p-value, but do not let it carry a causal claim it cannot support.
         conclusion = "post_treatment_exclusions_present"
+    elif unverified_present:
+        conclusion = "treatment_receipt_unverified"
     elif onset_p >= alpha:
         conclusion = "no_measurable_effect"
     elif blocked_effect == 0:
@@ -1430,11 +1862,31 @@ def _format_optional(value: float | None, spec: str) -> str:
 
 def render_markdown(analysis: dict[str, Any]) -> str:
     arms = analysis["arms"]
+    boots = analysis.get("boots") or []
+    confirmed = sum(1 for boot in boots if boot.get("treatment") == TREATMENT_CONFIRMED)
+    contradicted = sum(1 for boot in boots if boot.get("treatment") == TREATMENT_CONTRADICTED)
+    unverified = sum(1 for boot in boots if boot.get("treatment") == TREATMENT_UNVERIFIED)
     lines = [
-        "| condition | boots | scoring | observed onsets | censored | ambiguous | "
-        "median onset | median boot burst (across-boot range) |",
-        "|---|---:|---:|---|---:|---:|---:|---:|",
+        # Receipt is the gate on every boot's usability for the contrast (#719 / Codex P2).
+        f"Treatment receipt: confirmed {confirmed}, contradicted {contradicted}, "
+        f"unverified {unverified}",
     ]
+    if contradicted or unverified:
+        for boot in boots:
+            treatment = boot.get("treatment")
+            if treatment in (TREATMENT_CONTRADICTED, TREATMENT_UNVERIFIED):
+                detail = boot.get("treatment_detail") or treatment
+                lines.append(
+                    f"  boot {boot.get('boot')} ({boot.get('condition')}): {treatment} — {detail}"
+                )
+    lines.extend(
+        [
+            "",
+            "| condition | boots | scoring | observed onsets | censored | ambiguous | "
+            "median onset | median boot burst (across-boot range) |",
+            "|---|---:|---:|---|---:|---:|---:|---:|",
+        ]
+    )
     for condition in CONDITIONS:
         arm = arms[condition]
         onsets = ", ".join(str(value) for value in arm["observed_onsets"]) or "—"
@@ -1615,8 +2067,20 @@ def _format_boot_command(
     go_live_timeout: float,
     launches_per_boot: int,
     report_path: str,
+    condition: str,
 ) -> str:
-    """Build a pasteable per-boot launch line rooted at the checkout (so ``tools`` imports)."""
+    """Build a pasteable per-boot launch line rooted at the checkout (so ``tools`` imports).
+
+    Emits ``--expect-perturbers on|off`` derived from the planned arm so the standard experiment
+    workflow activates the fail-fast off-arm check without a hand-edited command (Codex P2 on
+    #721).
+    """
+    if condition == "overlays_on":
+        expect = "on"
+    elif condition == "overlays_off":
+        expect = "off"
+    else:
+        raise ValueError(f"unknown planned condition {condition!r}")
     parts = [
         "python",
         "-m",
@@ -1636,6 +2100,8 @@ def _format_boot_command(
             f"{go_live_timeout:g}",
             "--trials",
             str(launches_per_boot),
+            "--expect-perturbers",
+            expect,
             "--json",
             report_path,
         ]
@@ -1710,6 +2176,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         go_live_timeout=args.go_live_timeout,
                         launches_per_boot=args.launches_per_boot,
                         report_path=_checkout_relative_report_path(destination, boot["report"]),
+                        condition=boot["condition"],
                     ),
                 )
                 for boot in plan["boots"]
