@@ -103,11 +103,11 @@ WITHDRAWN_PLAN_SCHEMA = "init-perturber-ab-plan/v1"
 SUPERSEDED_PLAN_SCHEMA = "init-perturber-ab-plan/v2"
 #: delivered-cycle endpoints without treatment-receipt pre-registration (#719); regenerate.
 PRE_TREATMENT_PLAN_SCHEMA = "init-perturber-ab-plan/v3"
-#: Only ``stable`` is dispositive for *absence* evidence (Codex P1 on #721). ``wedged_init``
-#: means the render stream never initialized — elapsed go-live budget does not prove injection
-#: completed. ``froze`` can fire on the first post-go-live death while injection is still racing.
-#: Positive ``injected`` is evaluated on every delivered launch regardless of verdict.
-_LIVE_SESSION_VERDICTS = frozenset({"stable"})
+#: Verdicts used when *absence* must be dispositive for the off-arm confirmation path.
+#: ``stable`` / ``froze`` are post-go-live (packet advanced + ready). ``wedged_init`` is not —
+#: the stream never initialized. On-arm *miss* contradiction uses only ``stable`` (see
+#: :func:`treatment_receipt`); positive ``injected`` is evaluated on every delivered launch.
+_LIVE_SESSION_VERDICTS = frozenset({"stable", "froze"})
 #: Measured injection race on the rig (~3 s). Plans must not set timeouts below this plus margin.
 INJECTION_RACE_S = 3.0
 #: Plan floor for ``--go-live-timeout`` / ``--stability-window`` so post-race absence claims
@@ -348,17 +348,21 @@ def treatment_receipt(
                 TREATMENT_CONTRADICTED,
                 f"planned overlays_off but {', '.join(injected)} was injected into acs.exe",
             )
-        # Confirmation uses STABLE delivered cycles only — the sole post-race absence signal
-        # (Codex P1 on #721). Non-stable delivered cycles do not confirm or deny absence.
-        stables = [item for item in rows if item.cycle_delivered is True and _is_live_session(item)]
-        if not stables:
+        # Every delivered launch must show full not_observed on a post-go-live verdict
+        # (stable/froze). Omitting freze/wedged would let mixed-treatment boots score
+        # (Codex P1 on #721).
+        delivered = [item for item in rows if item.cycle_delivered is True]
+        if not delivered:
             return (
                 TREATMENT_UNVERIFIED,
-                "no stable delivered cycles with perturber evidence for overlays_off",
+                "no delivered cycles with perturber evidence for overlays_off",
             )
         incomplete: list[int] = []
-        for item in stables:
+        for item in delivered:
             evidence = _launch_evidence(item)
+            if not _is_live_session(item):
+                incomplete.append(item.launch)
+                continue
             if set(evidence) != required or any(
                 evidence.get(name) != "not_observed" for name in required
             ):
@@ -366,14 +370,15 @@ def treatment_receipt(
         if incomplete:
             return (
                 TREATMENT_UNVERIFIED,
-                "partial or unavailable perturber evidence on stable cycles for overlays_off",
+                "partial, early, or unavailable perturber evidence on delivered cycles "
+                "for overlays_off",
             )
         return TREATMENT_CONFIRMED, None
 
     if condition == "overlays_on":
         # Positive injection is evaluated on every delivered launch (any verdict). Misses are
-        # only dispositive on STABLE — freze/wedged race-window misses stay unverified
-        # (Codex P1 on #721). Every delivered launch must fully inject for confirmation.
+        # only dispositive on STABLE — freze/wedged misses stay unverified (Codex P1 on #721).
+        # Every delivered launch must fully inject for confirmation.
         delivered = [item for item in rows if item.cycle_delivered is True]
         if not delivered:
             return (
@@ -393,7 +398,7 @@ def treatment_receipt(
                 incomplete.append(item.launch)
                 continue
             miss = sorted(name for name in required if evidence[name] != "injected")
-            if _is_live_session(item):
+            if item.verdict == "stable":
                 short_live.append(f"launch {item.launch}: {', '.join(miss)}")
             else:
                 incomplete.append(item.launch)

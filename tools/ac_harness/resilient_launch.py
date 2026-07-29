@@ -2189,6 +2189,26 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             _log(f"launch aborted: Content Manager executable not found: {actuator.cm_exe}")
             return 1
 
+        if args.expect_perturbers is not None:
+            # Match plan floors so a direct --expect-perturbers invocation cannot STABLE-miss
+            # fail-fast inside the injection race (Codex P2 on #721).
+            from tools.ac_harness.init_perturber_ab import (
+                MIN_GO_LIVE_TIMEOUT_S,
+                MIN_STABILITY_WINDOW_S,
+            )
+
+            if args.stability_window < MIN_STABILITY_WINDOW_S:
+                _log(
+                    f"launch aborted: --expect-perturbers requires --stability-window >= "
+                    f"{MIN_STABILITY_WINDOW_S:g}s (got {args.stability_window:g})"
+                )
+                return 1
+            if args.go_live_timeout < MIN_GO_LIVE_TIMEOUT_S:
+                _log(
+                    f"launch aborted: --expect-perturbers requires --go-live-timeout >= "
+                    f"{MIN_GO_LIVE_TIMEOUT_S:g}s (got {args.go_live_timeout:g})"
+                )
+                return 1
         if args.expect_perturbers is not None and sys.platform == "win32":
             # 32-bit Python cannot enumerate 64-bit acs.exe modules (ERROR_PARTIAL_COPY). Without
             # this preflight every poll becomes unavailable and a 16-reboot run ends as

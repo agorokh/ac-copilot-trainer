@@ -91,10 +91,10 @@ def _write_boot_report(
     for index, (verdict, delivery) in enumerate(zip(verdicts, flags, strict=True), start=1):
         counts[verdict] += 1
         minute = start_minute + index
-        # Only stable is post-race for absence; keep injected on any verdict, demote
-        # not_observed to unavailable on non-stable rows so analyze fixtures stay confirmed.
+        # Keep injected on any verdict. Demote not_observed only on never_live / wedged_init
+        # (not post-go-live); freze/stable keep not_observed for off-arm confirmation.
         row_evidence = dict(evidence)
-        if verdict != "stable":
+        if verdict in ("never_live", "wedged_init"):
             row_evidence = {
                 key: (
                     value
@@ -165,8 +165,8 @@ def _boot(
     base = dict(perturbers or _default_perturbers_for(condition))
 
     def _row_evidence(verdict: str) -> tuple[tuple[str, str], ...]:
-        # Only stable is post-race for absence; demote not_observed on other verdicts.
-        if verdict == "stable":
+        # freze/stable keep not_observed for off-arm confirmation; demote only pre-go-live.
+        if verdict not in ("never_live", "wedged_init"):
             return tuple(sorted(base.items()))
         demoted = {
             key: (
