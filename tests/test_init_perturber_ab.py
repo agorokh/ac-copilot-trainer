@@ -2054,3 +2054,143 @@ class TestScreeningStage:
         assert "0.5" in rendered
         # The operator must be told what a null screen does NOT establish.
         assert "MODEST effect is NOT ruled out" in rendered
+
+
+class TestScreenReviewFindings:
+    """#724 review round 1 — Codex P1 + three P2s, plus the self-hosted daemon's MEDIUMs."""
+
+    @staticmethod
+    def _screen_plan() -> dict:
+        from tools.ac_harness.init_perturber_ab import build_plan
+
+        return build_plan(2, screen=True, randomization_seed=625)
+
+    def test_unverified_receipt_withholds_any_causal_verdict(self):
+        """Codex P1 — `no_large_effect` says 'close #625'; it must not fire unmeasured."""
+        from tools.ac_harness.init_perturber_ab import SCREEN_RECEIPT_UNVERIFIED, screen
+
+        # Every boot usable, onsets that would otherwise read as `no_large_effect` — but no
+        # perturber evidence at all, so nothing shows the overlays were ever off.
+        boots = [
+            _boot(1, "overlays_off", _stable_then_freeze(12), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(2, "overlays_on", _stable_then_freeze(8), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(3, "overlays_off", _stable_then_freeze(13), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(4, "overlays_on", _stable_then_freeze(9), perturbers=_UNAVAILABLE_PERTURBERS),
+        ]
+        result = screen(self._screen_plan(), boots)
+        assert result["verdict"] == SCREEN_RECEIPT_UNVERIFIED
+        # Non-vacuous: with receipt measured, the identical onsets DO yield the closing verdict.
+        from tools.ac_harness.init_perturber_ab import SCREEN_NO_LARGE_EFFECT
+
+        measured = [
+            _boot(1, "overlays_off", _stable_then_freeze(12), perturbers=_ABSENT_PERTURBERS),
+            _boot(2, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS),
+            _boot(3, "overlays_off", _stable_then_freeze(13), perturbers=_ABSENT_PERTURBERS),
+            _boot(4, "overlays_on", _stable_then_freeze(9), perturbers=_INJECTED_PERTURBERS),
+        ]
+        assert screen(self._screen_plan(), measured)["verdict"] == SCREEN_NO_LARGE_EFFECT
+
+    def test_promotion_requires_the_off_budget_to_outrun_the_on_onset(self):
+        """Codex P2 — censoring at 20 cycles says nothing about an ON boot that froze at 24."""
+        from tools.ac_harness.init_perturber_ab import (
+            SCREEN_AMBIGUOUS,
+            SCREEN_LARGE_EFFECT_PLAUSIBLE,
+            screen,
+        )
+
+        # OFF arm: never freezes, but the last 4 attempts never reached AC, so the boot is
+        # censored after only 16 DELIVERED cycles — its onset is known only to exceed 16.
+        clean = ["stable"] * _LAUNCHES
+        short_delivery = [True] * (_LAUNCHES - 4) + [False] * 4
+        # ON arm: freezes LATER than that bound, at delivered cycle 18.
+        late_freeze = ["stable"] * 17 + ["froze"] * (_LAUNCHES - 17)
+
+        boots = [
+            _boot(
+                1,
+                "overlays_off",
+                clean,
+                perturbers=_ABSENT_PERTURBERS,
+                delivered=short_delivery,
+            ),
+            _boot(2, "overlays_on", late_freeze, perturbers=_INJECTED_PERTURBERS),
+            _boot(
+                3,
+                "overlays_off",
+                clean,
+                perturbers=_ABSENT_PERTURBERS,
+                delivered=short_delivery,
+            ),
+            _boot(4, "overlays_on", late_freeze, perturbers=_INJECTED_PERTURBERS),
+        ]
+        # off is known only to exceed 16; on froze at 18 -> NOT separated.
+        assert screen(self._screen_plan(), boots)["verdict"] == SCREEN_AMBIGUOUS
+
+        # Non-vacuous: give the OFF arm its full 24-cycle budget and the same data promotes.
+        full = [
+            _boot(1, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(2, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS),
+            _boot(3, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(4, "overlays_on", _stable_then_freeze(9), perturbers=_INJECTED_PERTURBERS),
+        ]
+        assert screen(self._screen_plan(), full)["verdict"] == SCREEN_LARGE_EFFECT_PLAUSIBLE
+
+    def test_hand_edited_screen_plan_cannot_grow_its_boot_count(self, tmp_path: Path):
+        """Codex P2 + cursor — canonical rule kept, plan size raised, previously accepted."""
+        from tools.ac_harness.init_perturber_ab import load_plan
+
+        plan = self._screen_plan()
+        plan["boots_per_arm"] = 3
+        plan["boots"].append(dict(plan["boots"][-1]))
+        plan["boots"].append(dict(plan["boots"][-1]))
+        path = tmp_path / "screen.json"
+        path.write_text(json.dumps(plan), encoding="utf-8")
+        with pytest.raises(ValueError, match="boots_per_arm"):
+            load_plan(path, expect_screen=True)
+
+    def test_screen_and_confirmatory_plans_never_share_report_names(self):
+        """cursor — the stage must enter the report namespace or the stages can collide."""
+        from tools.ac_harness.init_perturber_ab import build_plan
+
+        common = {
+            "launches_per_boot": 24,
+            "randomization_seed": 625,
+            "generated_at_utc": "2026-07-29T00:00:00Z",
+            "run_nonce": "",
+        }
+        screen_plan = build_plan(2, screen=True, **common)
+        confirm_plan = build_plan(2, allow_undersized=True, **common)
+        screen_reports = {boot["report"] for boot in screen_plan["boots"]}
+        confirm_reports = {boot["report"] for boot in confirm_plan["boots"]}
+        assert not (screen_reports & confirm_reports), (
+            "a screening and a confirmatory plan produced colliding report filenames; a shared "
+            "reports-dir would let one stage score the other's boots"
+        )
+
+    def test_screen_plan_supersedes_nothing(self):
+        """antigravity — the screen is a new first stage, not a successor lineage."""
+        assert self._screen_plan()["supersedes"] == []
+
+    def test_explicit_boots_per_arm_with_screen_is_rejected_not_overridden(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """antigravity — `plan --boots-per-arm 16 --screen` must fail, not silently emit 2."""
+        from tools.ac_harness.init_perturber_ab import main
+
+        monkeypatch.setattr(ab_mod, "repo_checkout_root", lambda: tmp_path)
+        out = tmp_path / ".scratch" / "screen.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        assert main(["plan", "--screen", "--boots-per-arm", "16", "--out", str(out)]) != 0, (
+            "an explicit size must reach build_plan and be refused, not be silently replaced"
+        )
+        assert not out.exists()
+
+    def test_screen_default_size_still_needs_no_flag(self, tmp_path: Path, monkeypatch):
+        """The passthrough must not make `plan --screen` require an explicit size."""
+        from tools.ac_harness.init_perturber_ab import main
+
+        monkeypatch.setattr(ab_mod, "repo_checkout_root", lambda: tmp_path)
+        out = tmp_path / ".scratch" / "screen.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        assert main(["plan", "--screen", "--out", str(out)]) == 0
+        assert json.loads(out.read_text(encoding="utf-8"))["boots_per_arm"] == 2
