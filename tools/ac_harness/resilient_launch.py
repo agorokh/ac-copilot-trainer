@@ -845,6 +845,16 @@ class PerturberWatch:
         self._successful_looks = 0
         self._last_full_look_ok = False
 
+    def freeze_presence_only(self) -> None:
+        """Keep dispositive injection; invalidate absence after a process identity change.
+
+        Off-arm needs the positive sighting. On-arm must not treat leftover ``not_observed``
+        from a vanished PID as a live-session miss on the replacement (Codex P1 on #721).
+        """
+
+        self._successful_looks = 0
+        self._last_full_look_ok = False
+
     def observe(self, module_names: frozenset[str] | None) -> None:
         """Record one snapshot. ``None`` means the snapshot FAILED — not "no modules".
 
@@ -2263,7 +2273,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # (qodo / Codex P2 on #721).
             pinned_acs_pid: list[int | None] = [None]
 
-            def sample_perturbers() -> None:
+            def sample_perturbers(*, soft_fail: bool = False) -> None:
                 """Fold one module snapshot of the live acs.exe into this attempt's evidence.
 
                 Runs on the existing poll cadence rather than once, because the injection races
@@ -2274,7 +2284,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 Never raises. A failed snapshot is recorded as "we could not look" by the simple
                 fact that ``observe(None)`` does not count as a successful look — it must NOT be
                 allowed to read as "perturber absent", and it must never fail an attempt: this is
-                measurement riding along on a launch, not a gate.
+                measurement riding along on a launch, not a gate. ``soft_fail`` leaves prior
+                evidence untouched on Toolhelp/PID errors (used for the optional final look).
                 """
 
                 from tools.ac_harness.entry_launcher import (
@@ -2288,6 +2299,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     # on the visible PID alone (Codex P2 on #721).
                     pids = sorted(running_process_ids("acs.exe", strict=True))
                 except OSError:
+                    if soft_fail:
+                        return
                     fold_perturber_snapshots(perturbers, enum_failed=True)
                     return
                 if not pids:
@@ -2309,10 +2322,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                         # (1) do not invent full treatment by unioning Steam on corpse A with
                         #     NVIDIA on replacement B;
                         # (2) do not erase a positive injection already seen (off-arm needs it).
-                        # If any injection was observed, freeze this attempt's evidence and stop
-                        # sampling — further PIDs would only pollute confirmation. Otherwise
-                        # start clean on the newest process.
+                        # If any injection was observed, freeze presence and invalidate absence
+                        # so a partial old-PID miss cannot contradict on-arm. Otherwise start
+                        # clean on the newest process.
                         if any(perturbers.injected(name) for name in PERTURBER_MODULES):
+                            perturbers.freeze_presence_only()
                             return
                         perturbers.reset()
                     primary_pid = max(pids)
@@ -2322,6 +2336,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     # module load is retried by the next poll tick instead (cursor HIGH #721).
                     names = process_module_names(primary_pid, retries=1)
                 except OSError:
+                    if soft_fail:
+                        return
                     fold_perturber_snapshots(perturbers, enum_failed=True)
                     return
                 fold_perturber_snapshots(perturbers, successes=[names])
@@ -2341,7 +2357,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 if release_requested():
                     raise _OperatorRelease
 
-                sample_perturbers()
+                # Only the #625 experiment path needs Toolhelp every poll (Codex P2 on #721).
+                if args.expect_perturbers is not None:
+                    sample_perturbers()
                 packet, entry_ready, phys_packet = read_state()
                 ready, drivable = readiness.observe(packet=packet, entry_ready=entry_ready)
                 return packet, ready, drivable, phys_packet
@@ -2360,8 +2378,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 # The session was rendering, so the launch cycle WAS delivered (#710).
                 outcome = AttemptOutcome(LaunchVerdict.FROZE, cycle_delivered=True)
             # One last look before the process is torn down: the perturbers inject late, so the
-            # final sample is the most informative one in the attempt (#719).
-            sample_perturbers()
+            # final sample is the most informative one in the attempt (#719). soft_fail: a
+            # transient Toolhelp error must not erase a successful post-race miss already on
+            # the watch (Codex P2 on #721).
+            if args.expect_perturbers is not None:
+                sample_perturbers(soft_fail=True)
             outcome = replace(outcome, perturbers=perturbers.evidence())
             delivery = _delivery_label(outcome.cycle_delivered)
             injected = sorted(

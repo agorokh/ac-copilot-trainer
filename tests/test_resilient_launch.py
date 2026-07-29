@@ -2654,16 +2654,17 @@ class TestPerturberTreatmentReceipt:
         assert report.arm_contradicted is True
         assert report.froze == 1
 
-    def test_pid_replacement_freezes_when_injection_already_seen(self):
-        """Codex P1: keep injected sightings; do not union new PIDs after presence is known."""
+    def test_pid_replacement_freezes_presence_and_invalidates_absence(self):
+        """Codex P1: keep injected; convert leftover not_observed to unavailable on replace."""
         from tools.ac_harness.resilient_launch import PerturberEvidence, PerturberWatch
 
         watch = PerturberWatch()
         watch.observe(frozenset({"gameoverlayrenderer64.dll"}))
         assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
-        # Freezing (no further observe) preserves the off-arm signal and avoids inventing
-        # full treatment by sampling a replacement process.
         assert watch.evidence()["nvidia_capture"] == str(PerturberEvidence.NOT_OBSERVED)
+        watch.freeze_presence_only()
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
+        assert watch.evidence()["nvidia_capture"] == str(PerturberEvidence.UNAVAILABLE)
         # Clean re-pin path still resets when no injection was seen.
         clean = PerturberWatch()
         clean.observe(frozenset({"ntdll.dll"}))
