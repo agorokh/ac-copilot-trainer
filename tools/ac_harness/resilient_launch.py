@@ -2336,34 +2336,19 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     fold_perturber_snapshots(perturbers, pids_empty=True)
                     return
                 acs_pid_observed[0] = True
-                # Classify one process identity per attempt. Re-picking max(pid) every poll can
-                # union Steam from a corpse with NVIDIA from a replacement live process and
-                # invent full treatment (qodo on #721). Prefer the pinned PID when still alone;
-                # if another PID appears alongside it, treat as replacement (Codex P2 on #721).
-                extra_pids = (
-                    pinned_acs_pid[0] is not None
-                    and pinned_acs_pid[0] in pids
-                    and any(pid != pinned_acs_pid[0] for pid in pids)
-                )
-                if pinned_acs_pid[0] in pids and not extra_pids:
+                # One process identity per attempt: once pinned, keep sampling that PID until it
+                # disappears — even if other acs.exe PIDs appear alongside it. Re-picking among
+                # concurrent PIDs oscillates and resets evidence every poll (Codex P1 on #721).
+                if pinned_acs_pid[0] is not None and pinned_acs_pid[0] in pids:
                     primary_pid = pinned_acs_pid[0]
                 else:
                     if pinned_acs_pid[0] is not None:
-                        # Process replacement mid-attempt (Codex P1 rounds):
-                        # - Latch any injected sightings for off-arm contradiction.
-                        # - Reset the watch so the replacement cannot inherit full on-arm
-                        #   confirmation from the corpse; re-pin and sample the new process.
+                        # Pinned process is gone — latch off-arm injection, reset, re-pin.
                         for name in PERTURBER_MODULES:
                             if perturbers.injected(name):
                                 latched_injected.add(name)
                         perturbers.reset()
-                    # Prefer a PID that is not the previous pin when concurrent PIDs exist —
-                    # Windows PIDs are not creation-ordered (Codex P2 on #721).
-                    if pinned_acs_pid[0] is not None and extra_pids:
-                        candidates = [pid for pid in pids if pid != pinned_acs_pid[0]]
-                        primary_pid = max(candidates) if candidates else max(pids)
-                    else:
-                        primary_pid = max(pids)
+                    primary_pid = max(pids)
                     pinned_acs_pid[0] = primary_pid
                 try:
                     # retries=1: do not sleep inside the go-live poll path; BAD_LENGTH during
