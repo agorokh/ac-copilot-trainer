@@ -819,6 +819,9 @@ class PerturberWatch:
         self._modules = dict(modules if modules is not None else PERTURBER_MODULES)
         self._injected: set[str] = set()
         self._successful_looks = 0
+        # Absence is only claimable when the most recent full snapshot succeeded. An early miss
+        # followed by failed later looks must not stick as not_observed (Codex P1 on #721).
+        self._last_full_look_ok = False
 
     def observe(self, module_names: frozenset[str] | None) -> None:
         """Record one snapshot. ``None`` means the snapshot FAILED — not "no modules".
@@ -828,8 +831,10 @@ class PerturberWatch:
         """
 
         if module_names is None:
+            self._last_full_look_ok = False
             return
         self._successful_looks += 1
+        self._last_full_look_ok = True
         self.note_injected(module_names)
 
     def note_injected(self, module_names: frozenset[str]) -> None:
@@ -860,7 +865,7 @@ class PerturberWatch:
         for name in self._modules:
             if name in self._injected:
                 out[name] = str(PerturberEvidence.INJECTED)
-            elif self._successful_looks > 0:
+            elif self._successful_looks > 0 and self._last_full_look_ok:
                 out[name] = str(PerturberEvidence.NOT_OBSERVED)
             else:
                 out[name] = str(PerturberEvidence.UNAVAILABLE)

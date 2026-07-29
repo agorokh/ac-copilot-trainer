@@ -2507,3 +2507,17 @@ class TestPerturberTreatmentReceipt:
         # Dispositive presence still records through the partial path.
         watch.note_injected(frozenset({"gameoverlayrenderer64.dll"}))
         assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
+
+    def test_early_miss_then_failed_looks_is_unavailable_not_absent(self):
+        """Codex P1: a race-window miss must not stick after later snapshots fail."""
+        from tools.ac_harness.resilient_launch import PerturberEvidence, PerturberWatch
+
+        watch = PerturberWatch()
+        watch.observe(frozenset({"ntdll.dll"}))  # early miss
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
+        watch.observe(None)  # later failure
+        watch.observe(None)
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.UNAVAILABLE)
+        # A final successful miss restores not_observed (post-race look).
+        watch.observe(frozenset({"ntdll.dll"}))
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
