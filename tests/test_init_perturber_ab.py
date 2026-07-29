@@ -1710,10 +1710,10 @@ class TestTreatmentReceipt:
             assert summary.treatment == TREATMENT_UNVERIFIED
             assert summary.usable is True
 
-    def test_wedged_init_miss_is_unverified_not_contradicted(self):
-        """Codex P1: wedged_init never reached readiness — absence is non-dispositive."""
+    def test_wedged_init_miss_is_contradicted_when_timeout_cleared_race(self):
+        """With go_live_timeout floor ≥5s, wedged_init lived past the injection race."""
         from tools.ac_harness.init_perturber_ab import (
-            TREATMENT_UNVERIFIED,
+            TREATMENT_CONTRADICTED,
             BootObservation,
             LaunchObservation,
             treatment_receipt,
@@ -1732,7 +1732,7 @@ class TestTreatmentReceipt:
         verdict, _detail = treatment_receipt(
             "overlays_on", dict(_ABSENT_PERTURBERS), launches=boot.launches
         )
-        assert verdict == TREATMENT_UNVERIFIED
+        assert verdict == TREATMENT_CONTRADICTED
 
     def test_go_live_timeout_below_injection_floor_is_rejected(self) -> None:
         """Codex P2: plans must not allow WEDGED_INIT inside the measured race."""

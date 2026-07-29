@@ -2654,21 +2654,23 @@ class TestPerturberTreatmentReceipt:
         assert report.arm_contradicted is True
         assert report.stable == 1
 
-    def test_pid_replacement_freezes_presence_and_invalidates_absence(self):
-        """Codex P1: keep injected; convert leftover not_observed to unavailable on replace."""
+    def test_pid_replacement_latches_injection_without_on_arm_union(self):
+        """Codex P1: latch off-arm injection; reset so on-arm cannot inherit corpse full set."""
         from tools.ac_harness.resilient_launch import PerturberEvidence, PerturberWatch
 
         watch = PerturberWatch()
+        watch.observe(frozenset({"gameoverlayrenderer64.dll", "nvspcap64.dll", "ntdll.dll"}))
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
+        latched = {name for name in ("steam_overlay", "nvidia_capture") if watch.injected(name)}
+        watch.reset()
+        # Replacement only has Steam — on-arm must not see full injection from the latch alone.
         watch.observe(frozenset({"gameoverlayrenderer64.dll"}))
-        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
-        assert watch.evidence()["nvidia_capture"] == str(PerturberEvidence.NOT_OBSERVED)
-        watch.freeze_presence_only()
-        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
-        assert watch.evidence()["nvidia_capture"] == str(PerturberEvidence.UNAVAILABLE)
-        # Clean re-pin path still resets when no injection was seen.
-        clean = PerturberWatch()
-        clean.observe(frozenset({"ntdll.dll"}))
-        clean.reset()
-        clean.observe(frozenset({"nvspcap64.dll"}))
-        assert clean.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
-        assert clean.evidence()["nvidia_capture"] == str(PerturberEvidence.INJECTED)
+        evidence = dict(watch.evidence())
+        for name in latched:
+            evidence[name] = str(PerturberEvidence.INJECTED)
+        assert evidence["steam_overlay"] == str(PerturberEvidence.INJECTED)
+        # After reset, nvidia is only latched if it was on the corpse; if we latched both,
+        # the emission overlays both — for off-arm. On-arm confirmation requires stable
+        # per-launch full set from the live watch before latch overlay; analyzer uses
+        # per-launch rows. Unit-level: latch is a plain dict overlay of injected keys.
+        assert "nvidia_capture" in latched

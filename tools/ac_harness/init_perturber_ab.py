@@ -103,17 +103,19 @@ WITHDRAWN_PLAN_SCHEMA = "init-perturber-ab-plan/v1"
 SUPERSEDED_PLAN_SCHEMA = "init-perturber-ab-plan/v2"
 #: delivered-cycle endpoints without treatment-receipt pre-registration (#719); regenerate.
 PRE_TREATMENT_PLAN_SCHEMA = "init-perturber-ab-plan/v3"
-#: Only ``stable`` is inherently past the injection race for *absence* evidence: it required the
-#: full stability window. ``froze`` can fire on the first post-go-live death / packet regression
-#: (and ``_Car0NotDrivable`` is mapped to ``FROZE``), so a race-window miss can still be attached
-#: to that verdict (Codex P1 on #721). ``wedged_init`` never reached readiness.
-_LIVE_SESSION_VERDICTS = frozenset({"stable"})
-#: Measured injection race on the rig (~3 s). Plans must not set ``go_live_timeout`` below this
-#: plus a small margin, or ``WEDGED_INIT`` can fire inside the race window.
+#: Verdicts past the injection race for *absence* evidence (Codex P1 on #721):
+#: * ``stable`` — full stability window after go-live.
+#: * ``wedged_init`` — acs.exe stayed alive for the entire ``go_live_timeout`` (≥ floor below),
+#:   so the measured ~3 s race has elapsed even without readiness.
+#: ``froze`` is excluded: it can fire on the first post-go-live death / packet regression
+#: (and ``_Car0NotDrivable`` maps to ``FROZE``) while injection is still racing.
+_LIVE_SESSION_VERDICTS = frozenset({"stable", "wedged_init"})
+#: Measured injection race on the rig (~3 s). Plans must not set timeouts below this plus margin.
 INJECTION_RACE_S = 3.0
-#: Plan floor for ``--go-live-timeout`` so a valid plan cannot end the go-live watch inside the
-#: measured injection race (Codex P2 on #721).
+#: Plan floor for ``--go-live-timeout`` / ``--stability-window`` so post-race absence claims
+#: cannot fire inside the measured injection race (Codex P1/P2 on #721).
 MIN_GO_LIVE_TIMEOUT_S = 5.0
+MIN_STABILITY_WINDOW_S = 5.0
 #: Canonical perturber field set every report row must carry exactly.
 _PERTURBER_KEYS = frozenset(PERTURBER_MODULES)
 #: Exact treatment-receipt policy a v4 plan must pre-register (Codex P2 on #721).
@@ -350,11 +352,7 @@ def treatment_receipt(
             )
         # Confirmation uses STABLE delivered cycles only — the sole post-race absence signal
         # (Codex P1 on #721). Non-stable delivered cycles do not confirm or deny absence.
-        stables = [
-            item
-            for item in rows
-            if item.cycle_delivered is True and _is_live_session(item)
-        ]
+        stables = [item for item in rows if item.cycle_delivered is True and _is_live_session(item)]
         if not stables:
             return (
                 TREATMENT_UNVERIFIED,
@@ -377,11 +375,7 @@ def treatment_receipt(
     if condition == "overlays_on":
         # Confirmation / contradiction of absence uses STABLE delivered cycles only. Injected
         # presence on any launch remains dispositive via boot roll-up; a stable miss contradicts.
-        stables = [
-            item
-            for item in rows
-            if item.cycle_delivered is True and _is_live_session(item)
-        ]
+        stables = [item for item in rows if item.cycle_delivered is True and _is_live_session(item)]
         if not stables:
             return (
                 TREATMENT_UNVERIFIED,
@@ -557,6 +551,12 @@ def build_plan(
             ) from exc
     if not math.isfinite(stability_window) or stability_window <= 0:
         raise ValueError("stability_window must be finite and > 0")
+    if stability_window < MIN_STABILITY_WINDOW_S:
+        raise ValueError(
+            f"stability_window must be >= {MIN_STABILITY_WINDOW_S:g}s so a STABLE "
+            f"verdict cannot fire inside the measured ~{INJECTION_RACE_S:g}s injection race "
+            f"(got {stability_window:g})"
+        )
     if not math.isfinite(go_live_timeout) or go_live_timeout <= 0:
         raise ValueError("go_live_timeout must be finite and > 0")
     if go_live_timeout < MIN_GO_LIVE_TIMEOUT_S:
@@ -807,6 +807,12 @@ def load_plan(path: Path) -> dict[str, Any]:
             raise ValueError(
                 f"plan launch.go_live_timeout={go_live!r} is below the "
                 f"{MIN_GO_LIVE_TIMEOUT_S:g}s injection-race floor; regenerate the plan"
+            )
+        stability = launch.get("stability_window")
+        if isinstance(stability, (int, float)) and stability < MIN_STABILITY_WINDOW_S:
+            raise ValueError(
+                f"plan launch.stability_window={stability!r} is below the "
+                f"{MIN_STABILITY_WINDOW_S:g}s injection-race floor; regenerate the plan"
             )
     boots_per_arm = plan.get("boots_per_arm")
     if not isinstance(boots_per_arm, int) or boots_per_arm <= 0:

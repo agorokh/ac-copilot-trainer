@@ -2059,11 +2059,12 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         default=None,
         help=(
             "#625/#719 arm declaration: the init-perturber state this boot is SUPPOSED to be in. "
-            "Every attempt records which perturbers were actually injected into acs.exe, and with "
-            "'off' a positive sighting ends the trial loop immediately (arm_contradicted) so a "
-            "mislabelled boot costs ~1 launch cycle instead of the whole run. 'on' cannot be "
-            "refuted from one attempt — the injection races startup — so it is left to the "
-            "analyzer, which aggregates the boot"
+            "Every attempt records which perturbers were actually injected into acs.exe. "
+            "'off' + any injected sighting ends the trial loop immediately (arm_contradicted). "
+            "'on' + STABLE with a successful full miss also ends the loop immediately "
+            "(dispositive non-receipt past the stability window); other on-arm cases stay with "
+            "whole-boot analysis. Contradicted runs write a timestamped salvage JSON and exit "
+            "nonzero so the reboot chain stops."
         ),
     )
     parser.add_argument(
@@ -2272,6 +2273,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # complementary modules from different acs.exe instances into one "full" receipt
             # (qodo / Codex P2 on #721).
             pinned_acs_pid: list[int | None] = [None]
+            # Injected names latched from a replaced PID for off-arm contradiction only — never
+            # mixed into on-arm full-injection confirmation for the replacement (Codex P1).
+            latched_injected: set[str] = set()
 
             def sample_perturbers(*, soft_fail: bool = False) -> None:
                 """Fold one module snapshot of the live acs.exe into this attempt's evidence.
@@ -2318,16 +2322,13 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     primary_pid = pinned_acs_pid[0]
                 else:
                     if pinned_acs_pid[0] is not None:
-                        # Process replacement mid-attempt. Two constraints (Codex P1 rounds):
-                        # (1) do not invent full treatment by unioning Steam on corpse A with
-                        #     NVIDIA on replacement B;
-                        # (2) do not erase a positive injection already seen (off-arm needs it).
-                        # If any injection was observed, freeze presence and invalidate absence
-                        # so a partial old-PID miss cannot contradict on-arm. Otherwise start
-                        # clean on the newest process.
-                        if any(perturbers.injected(name) for name in PERTURBER_MODULES):
-                            perturbers.freeze_presence_only()
-                            return
+                        # Process replacement mid-attempt (Codex P1 rounds):
+                        # - Latch any injected sightings for off-arm contradiction.
+                        # - Reset the watch so the replacement cannot inherit full on-arm
+                        #   confirmation from the corpse; re-pin and sample the new process.
+                        for name in PERTURBER_MODULES:
+                            if perturbers.injected(name):
+                                latched_injected.add(name)
                         perturbers.reset()
                     primary_pid = max(pids)
                     pinned_acs_pid[0] = primary_pid
@@ -2383,7 +2384,13 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # the watch (Codex P2 on #721).
             if args.expect_perturbers is not None:
                 sample_perturbers(soft_fail=True)
-            outcome = replace(outcome, perturbers=perturbers.evidence())
+            evidence = dict(perturbers.evidence())
+            # Off-arm latch: restore dispositive injection from a replaced PID without letting
+            # those sightings count as the replacement session's full on-arm confirmation
+            # (missing keys stay unavailable after reset).
+            for name in latched_injected:
+                evidence[name] = str(PerturberEvidence.INJECTED)
+            outcome = replace(outcome, perturbers=evidence)
             delivery = _delivery_label(outcome.cycle_delivered)
             injected = sorted(
                 name
