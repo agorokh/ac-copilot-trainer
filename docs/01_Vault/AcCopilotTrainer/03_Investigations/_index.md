@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-07-26
+updated: 2026-07-29
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -13,6 +13,7 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [issue-712-prefetch-worktree-markers-2026-07-29.md](issue-712-prefetch-worktree-markers-2026-07-29.md) | **#712 CLOSED** via governance-hub PR #341 (`3757ec3`): SessionStart dual-writes stamps to main+worktree; distinct unreachable/empty/no-endpoint phrases; `stale-endpoint-suspect` for missed consumer repoint. Operator config (overlay+SNI) was the original defect; code remainder is hub-only. Hermetic `VERIFIED_OK` post-merge. |
 | [issue-529-pace-ladder-115-2026-07-26.md](issue-529-pace-ladder-115-2026-07-26.md) | **#529 G2 MET — 81.505 s at Magione**, under the 82.7 s TT floor (2 consecutive flying laps, 0 recoveries, archives `is_valid: true`). Night: 88.425 -> 85.072 -> 84.587 -> 81.505 s. **The decisive factor was RETAINING the plant refit** — two ladders at the identical 1.15 scale differed only in the plant (QSS floor 91.26 vs 87.14 s) and by 3.5 s; ladder 1 lost its refit to a 1.20 falsification (-> **#703**: never let the ladder's top rung be one you expect to falsify). #696 proven on the rig (1.15 had never actually been driven). Assist-parity vs the "TC-off" reference left for the operator. #627: ~11 landed launch cycles on a ~4 h hold, no reboot needed. |
 | [issue-695-qss-apex-envelope-2026-07-26.md](issue-695-qss-apex-envelope-2026-07-26.md) | **#695 CLOSED** by PR #696 (`7702b42`): the binned `ay_max` is a STEP function of v, so the bare fixed-point apex solve settled on the high branch of a bin edge and fed its own verifier infeasible input (445/3960 samples, worst 1.40x on the live Magione plant → 0, 1.0000). Every *lowering* now re-checked too; provable floor for the exhausted-budget fallback. Cost the #529 ladder its 1.15 rung. |
 | [issue-693-off-rig-session0-2026-07-26.md](issue-693-off-rig-session0-2026-07-26.md) | **#693 CLOSED** by PR #694 (`49f90f1`): SSH lands in Windows **session 0** — cannot traverse the app junction (`WinError 448`) and has no desktop for AC. `schtasks /IT` recipe, live-verified. Measured Windows facts: `/sd` needs `MM/dd/yyyy` (culture pattern rejected), spaced paths need the 8.3 short path, duplicate create without `/f` HANGS on a prompt, `/sc ONDEMAND` unsupported. Script follow-up #697. |

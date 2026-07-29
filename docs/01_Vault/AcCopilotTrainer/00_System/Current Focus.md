@@ -2,12 +2,14 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-29T16:00:00Z
+last_updated: 2026-07-29T16:45:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-719-treatment-receipt-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-625-boot-scoped-redesign-2026-07-28.md
   - AcCopilotTrainer/00_System/handoffs/2026-07-29-grok-pr721.md
   - AcCopilotTrainer/03_Investigations/issue-710-cycle-delivered-2026-07-28.md
+
   - AcCopilotTrainer/03_Investigations/issue-703-decoupled-ladder-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-672-voice-endpoint-hygiene-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-529-pace-ladder-115-2026-07-26.md
@@ -59,6 +61,15 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
+**Delivered (2026-07-29 evening):** governance-hub PR
+[#341](https://github.com/agorokh/governance-hub/pull/341) MERGED
+[`3757ec3`](https://github.com/agorokh/governance-hub/commit/3757ec3d37b3b65d765a40906607d3b3b07d970b)
+— **#712 SessionStart prefetch worktree markers + failure taxonomy, CLOSED**. Spoke shims
+unchanged; hub dual-writes stamps to main+worktree, distinct unreachable/empty/no-endpoint
+phrases, `stale-endpoint-suspect` for missed consumer repoint. Observed hermetic verification
+`VERIFIED_OK` on hub main. Node:
+[issue-712-prefetch-worktree-markers-2026-07-29](../03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md).
+
 **Delivered (2026-07-29):** PR [#721](https://github.com/agorokh/ac-copilot-trainer/pull/721)
 MERGED [`de5bd6b`](https://github.com/agorokh/ac-copilot-trainer/commit/de5bd6bac405c08a7e3e0383456d81b8150d7acb)
 — **#719 treatment-receipt verification, CLOSED**. Report `resilient-launch-report/v3`,
@@ -69,7 +80,9 @@ but now measures treatment receipt rather than trusting the plan arm label alone
 Handoff: [2026-07-29-grok-pr721](handoffs/2026-07-29-grok-pr721.md).
 
 **Open now:** #625 physical A/B (operator settings + rig time). Regenerate plans as **v4** before
-any run. Pace ladder / #703 and voice re-arm remain as prior open streams.
+any run. Pace ladder / #703 and voice re-arm remain as prior open streams. Hosts should
+`git -C ~/.fleet-governance pull` to pick up #712 hooks.
+
 
 **Delivered (2026-07-28):** PR [#717](https://github.com/agorokh/ac-copilot-trainer/pull/717)
 MERGED [`d78c10b`](https://github.com/agorokh/ac-copilot-trainer/commit/d78c10b730da9968c4995957313ba340efcdcdde)
