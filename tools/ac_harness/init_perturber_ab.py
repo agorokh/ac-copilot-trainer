@@ -2040,9 +2040,13 @@ def screen(
         names = ", ".join(f"boot {item.boot} ({item.condition})" for item in unverified)
         rationale = (
             f"treatment receipt is unverified for {names}, so no causal statement about the "
-            "overlays is available from this screen. Re-run those boots with perturber "
-            "sampling working (64-bit Python on the rig; go_live_timeout above the injection "
-            "race) — a verdict here would rest on an unmeasured treatment"
+            "overlays is available from this screen — a verdict here would rest on an "
+            "unmeasured treatment. Recovery is the SAME as for insufficient boots, and for the "
+            "same two reasons: the affected boots' reports already occupy their planned paths, "
+            "and load_observations enforces planned order, so re-running one boot in place "
+            "would invert the timestamps and void the whole experiment. Fix perturber sampling "
+            "first (64-bit Python on the rig; go_live_timeout above the injection race), then "
+            "regenerate the screening plan and run all four boots again in order"
         )
     elif any(
         not item.onset_censored
@@ -2161,7 +2165,9 @@ def render_screen_markdown(result: dict[str, Any]) -> str:
         f"- `{SCREEN_LARGE_EFFECT_PLAUSIBLE}` → run the confirmatory 16-boot design "
         "(`plan` without `--screen`).",
         f"- `{SCREEN_RECEIPT_UNVERIFIED}` → the treatment was never measured on at least one "
-        "scored boot; re-run those boots rather than reading anything into the onsets.",
+        "scored boot. Read nothing into the onsets: fix perturber sampling, then **regenerate "
+        "the plan and re-run all four boots in order** — re-running a single boot in place "
+        "inverts the planned timestamps and voids the experiment.",
         f"- `{SCREEN_AMBIGUOUS}` / `{SCREEN_INSUFFICIENT}` → operator decides.",
     ]
     return "\n".join(lines) + "\n"

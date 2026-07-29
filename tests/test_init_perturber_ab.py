@@ -2267,3 +2267,58 @@ class TestScreenReviewRoundTwo:
         rationale = screen(self._screen_plan(), boots)["rationale"]
         assert "planned order" in rationale
         assert "Regenerate the screening plan" in rationale
+
+
+class TestScreenRecoveryAdviceIsConsistent:
+    """#724 review round 3 — every recovery path must respect the planned-order invariant.
+
+    `load_observations` rejects an experiment whose boots did not run in planned order, so any
+    instruction to "re-run that boot" is actively harmful: it costs a physical reboot and then
+    voids the run. Round 2 fixed this for `insufficient_usable_boots` but left the identical
+    wrong advice in the unverified-receipt path and in the renderer (Codex P2 + antigravity HIGH).
+    """
+
+    @staticmethod
+    def _screen_plan() -> dict:
+        from tools.ac_harness.init_perturber_ab import build_plan
+
+        return build_plan(2, screen=True, randomization_seed=625)
+
+    @staticmethod
+    def _unverified_boots() -> list:
+        return [
+            _boot(1, "overlays_off", _stable_then_freeze(12), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(2, "overlays_on", _stable_then_freeze(8), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(3, "overlays_off", _stable_then_freeze(13), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(4, "overlays_on", _stable_then_freeze(9), perturbers=_UNAVAILABLE_PERTURBERS),
+        ]
+
+    def test_unverified_rationale_sends_the_operator_to_a_full_regeneration(self):
+        from tools.ac_harness.init_perturber_ab import SCREEN_RECEIPT_UNVERIFIED, screen
+
+        result = screen(self._screen_plan(), self._unverified_boots())
+        assert result["verdict"] == SCREEN_RECEIPT_UNVERIFIED
+        rationale = result["rationale"]
+        assert "regenerate the screening plan" in rationale
+        assert "planned order" in rationale
+
+    def test_renderer_never_tells_the_operator_to_rerun_one_boot_in_place(self):
+        from tools.ac_harness.init_perturber_ab import render_screen_markdown, screen
+
+        rendered = render_screen_markdown(screen(self._screen_plan(), self._unverified_boots()))
+        assert "re-run all four boots in order" in rendered
+        # The exact advice that would cost a reboot and then void the run.
+        assert "re-run those boots rather than" not in rendered
+
+    def test_every_recovery_path_agrees_on_the_remedy(self):
+        """Both non-scoring verdicts must give the same, correct remedy — not two stories."""
+        from tools.ac_harness.init_perturber_ab import screen
+
+        unverified = screen(self._screen_plan(), self._unverified_boots())["rationale"]
+        insufficient = screen(
+            self._screen_plan(),
+            [_boot(1, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS)],
+        )["rationale"]
+        for text in (unverified, insufficient):
+            assert "planned order" in text
+            assert "regenerate the screening plan" in text.lower()
