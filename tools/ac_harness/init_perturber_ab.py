@@ -82,24 +82,31 @@ from tools.ac_harness.remote_launcher import RemoteLaunchError, validate_wrapper
 from tools.ac_harness.resilient_launch import (
     DEFAULT_GO_LIVE_TIMEOUT,
     FREEZE_VERDICTS,
+    PERTURBER_MODULES,
     REPORT_SCHEMA,
     TERMINAL_VERDICTS,
     repo_checkout_root,
     resolve_report_path,
 )
 
-#: v3 registers the endpoints in DELIVERED CYCLES (#710). The plan file IS the pre-registration,
-#: so this had to move with the analysis: a v2 plan's stored ``endpoints`` still say raw
-#: launch-index and a launch-counted burst window, and silently analyzing it under cycle-counted
-#: rules would score it against an endpoint it never registered.
-PLAN_SCHEMA = "init-perturber-ab-plan/v3"
-#: v3 scores onset on delivered cycles and reports the delivery split per boot (#710).
-ANALYSIS_SCHEMA = "init-perturber-ab-analysis/v3"
+#: v4 pre-registers treatment-receipt verification (#719): analyzer excludes contradicted boots,
+#: plan commands emit ``--expect-perturbers``, and every attempt must carry the full
+#: ``PERTURBER_MODULES`` key set. The plan file IS the pre-registration, so a v3 plan that never
+#: recorded this policy must not be analyzed under it (Codex P2 on #721).
+PLAN_SCHEMA = "init-perturber-ab-plan/v4"
+#: v4 keeps the delivered-cycle endpoints from v3 and adds treatment-receipt policy.
+ANALYSIS_SCHEMA = "init-perturber-ab-analysis/v4"
 #: the interleaved single-boot design this module used to emit; refuted 2026-07-24 and
 #: rejected by :func:`load_plan` so a stale plan file cannot be analyzed as if it were valid.
 WITHDRAWN_PLAN_SCHEMA = "init-perturber-ab-plan/v1"
 #: the raw-launch-index pre-registration superseded by #710; rejected for the same reason.
 SUPERSEDED_PLAN_SCHEMA = "init-perturber-ab-plan/v2"
+#: delivered-cycle endpoints without treatment-receipt pre-registration (#719); regenerate.
+PRE_TREATMENT_PLAN_SCHEMA = "init-perturber-ab-plan/v3"
+#: Verdicts that imply acs.exe lived well past the ~3 s injection race measured on the rig.
+_LIVE_SESSION_VERDICTS = frozenset({"stable", "froze", "wedged_init"})
+#: Canonical perturber field set every report row must carry exactly.
+_PERTURBER_KEYS = frozenset(PERTURBER_MODULES)
 CONDITIONS = ("overlays_on", "overlays_off")
 DEFAULT_ALPHA = 0.05
 #: Seed used only when a caller explicitly asks to reproduce a plan. A REAL plan draws a fresh
@@ -252,7 +259,27 @@ def boot_perturber_state(observation: BootObservation) -> dict[str, str]:
     return state
 
 
-def treatment_receipt(condition: str, state: dict[str, str]) -> tuple[str, str | None]:
+def _launch_evidence(launch: LaunchObservation) -> dict[str, str]:
+    return dict(launch.perturbers)
+
+
+def _is_live_session(launch: LaunchObservation) -> bool:
+    """Whether this attempt lived long enough that a miss is informative for overlays_on.
+
+    The injection race is ~3 s on the measured rig; live-session verdicts only fire after the
+    stability / go-live watch, which is far past that window. Early ``never_live`` exits can
+    sample only inside the race and must not contradict an ``overlays_on`` arm (Codex P1 on #721).
+    """
+
+    return launch.verdict in _LIVE_SESSION_VERDICTS and launch.cycle_delivered is True
+
+
+def treatment_receipt(
+    condition: str,
+    state: dict[str, str],
+    *,
+    launches: Sequence[LaunchObservation] | None = None,
+) -> tuple[str, str | None]:
     """Did this boot actually RECEIVE the condition its arm label claims? (#719)
 
     Returns ``(verdict, detail)``.
@@ -262,24 +289,35 @@ def treatment_receipt(condition: str, state: dict[str, str]) -> tuple[str, str |
     simply failed to inject while enabled, a boot that did not receive its assigned condition
     cannot inform the contrast. The cause is irrelevant; receipt is what the design needs.
 
-    Evidence is asymmetric per launch, but a BOOT aggregates many launches, so both arms are
-    checkable here even though only ``off`` is refutable from a single attempt. Confirmation
-    requires **every** tracked perturber to match the planned arm; partial unknown evidence
-    stays ``unverified`` rather than silently admitting a half-applied treatment (Codex P1 on
-    #721):
+    Rules (Codex P1 round-2 on #721):
 
-    * planned ``overlays_off`` + any ``injected``            -> contradicted (dispositive)
-    * planned ``overlays_off`` + all ``not_observed``        -> confirmed
-    * planned ``overlays_on``  + all ``injected``            -> confirmed
-    * planned ``overlays_on``  + all successful looks miss
-      (no ``injected``, every field ``not_observed``)        -> contradicted
-    * anything resting on ``unavailable`` or mixed partial   -> unverified (no information; fall
-      back to the planned label rather than claiming confirmation we did not earn)
+    * planned ``overlays_off`` + any ``injected`` anywhere in the boot -> contradicted
+      (presence is dispositive; a perturber cannot un-inject)
+    * planned ``overlays_off`` + every field ``not_observed`` on the boot roll-up -> confirmed
+    * planned ``overlays_on`` is judged **per live-session launch**, not via a boot-wide union:
+      each long-lived ``acs.exe`` is its own injection event, so confirming the arm requires
+      every live launch to show every tracked perturber ``injected``. A boot-wide union would
+      let Steam on attempt 1 and NVIDIA on attempt 5 "confirm" a mixed-treatment boot.
+    * planned ``overlays_on`` + a live launch whose successful looks miss a perturber ->
+      contradicted for that launch (lived past the injection race)
+    * planned ``overlays_on`` with only early/never_live looks, or any ``unavailable`` gap ->
+      unverified (absence during the race is non-dispositive; no information falls back to the
+      planned label rather than manufacturing an exclusion)
     """
 
+    required = _PERTURBER_KEYS
     if not state:
         return TREATMENT_UNVERIFIED, "report carries no perturber evidence"
-    values = list(state.values())
+    if set(state) != required:
+        missing = sorted(required - set(state))
+        extra = sorted(set(state) - required)
+        detail = []
+        if missing:
+            detail.append(f"missing {', '.join(missing)}")
+        if extra:
+            detail.append(f"unknown {', '.join(extra)}")
+        return TREATMENT_UNVERIFIED, "perturber key set incomplete: " + "; ".join(detail)
+
     if condition == "overlays_off":
         injected = sorted(name for name, value in state.items() if value == "injected")
         if injected:
@@ -287,28 +325,46 @@ def treatment_receipt(condition: str, state: dict[str, str]) -> tuple[str, str |
                 TREATMENT_CONTRADICTED,
                 f"planned overlays_off but {', '.join(injected)} was injected into acs.exe",
             )
-        if all(value == "not_observed" for value in values):
+        if all(value == "not_observed" for value in state.values()):
             return TREATMENT_CONFIRMED, None
         return TREATMENT_UNVERIFIED, "partial or unavailable perturber evidence for overlays_off"
+
     if condition == "overlays_on":
-        if all(value == "injected" for value in values):
-            return TREATMENT_CONFIRMED, None
-        if all(value == "not_observed" for value in values):
-            missing = sorted(state)
+        live = [item for item in (launches or ()) if _is_live_session(item)]
+        if not live:
+            # No long-lived process: not_observed may be pure injection-race noise.
+            if all(value == "unavailable" for value in state.values()):
+                return TREATMENT_UNVERIFIED, "no successful module snapshot in this boot"
+            return (
+                TREATMENT_UNVERIFIED,
+                "no long-lived acs.exe look past the injection race for overlays_on",
+            )
+        incomplete: list[int] = []
+        short: list[str] = []
+        for item in live:
+            evidence = _launch_evidence(item)
+            if set(evidence) != required:
+                incomplete.append(item.launch)
+                continue
+            if any(evidence[name] == "unavailable" for name in required):
+                incomplete.append(item.launch)
+                continue
+            miss = sorted(name for name in required if evidence[name] != "injected")
+            if miss:
+                short.append(f"launch {item.launch}: {', '.join(miss)}")
+        if short and not incomplete:
             return (
                 TREATMENT_CONTRADICTED,
-                f"planned overlays_on but {', '.join(missing)} was never observed injected across "
-                "any successful snapshot in this boot",
+                "planned overlays_on but live session(s) never observed full injection "
+                f"({'; '.join(short)})",
             )
-        if any(value == "unavailable" for value in values):
-            return TREATMENT_UNVERIFIED, "partial or unavailable perturber evidence for overlays_on"
-        # Mixed injected + not_observed: some planned overlays never appeared after looks.
-        missing = sorted(name for name, value in state.items() if value != "injected")
-        return (
-            TREATMENT_CONTRADICTED,
-            f"planned overlays_on but {', '.join(missing)} was never observed injected across "
-            "any successful snapshot in this boot",
-        )
+        if incomplete:
+            return (
+                TREATMENT_UNVERIFIED,
+                "partial or unavailable perturber evidence on live session(s) for overlays_on",
+            )
+        return TREATMENT_CONFIRMED, None
+
     return TREATMENT_UNVERIFIED, f"unknown condition {condition!r}"
 
 
@@ -521,9 +577,13 @@ def build_plan(
     ]
     return {
         "schema": PLAN_SCHEMA,
-        # Every schema this plan supersedes, oldest first — both are rejected by `load_plan`, so
-        # the migration path is recorded rather than implied (#710 self-hosted reviewer MEDIUM).
-        "supersedes": [WITHDRAWN_PLAN_SCHEMA, SUPERSEDED_PLAN_SCHEMA],
+        # Every schema this plan supersedes, oldest first — rejected by `load_plan`, so the
+        # migration path is recorded rather than implied (#710 self-hosted reviewer MEDIUM).
+        "supersedes": [
+            WITHDRAWN_PLAN_SCHEMA,
+            SUPERSEDED_PLAN_SCHEMA,
+            PRE_TREATMENT_PLAN_SCHEMA,
+        ],
         "issue": 625,
         "generated_at_utc": stamp,
         "design": "randomized block; one boot per unit, two boots (one per arm) per block",
@@ -535,6 +595,17 @@ def build_plan(
         "run_id": run_id,
         "randomization_reference_set": 2**boots_per_arm,
         "smallest_attainable_two_sided_p": 2 / 2**boots_per_arm,
+        # Pre-registered with the plan so analyze cannot invent a receipt rule the operator never
+        # signed up for (Codex P2 on #721). ``exclude_on`` is only ``contradicted``: ``unverified``
+        # falls back to the planned label because no information must not manufacture missingness.
+        "treatment_receipt": {
+            "enabled": True,
+            "exclude_on": [TREATMENT_CONTRADICTED],
+            "expect_perturbers_in_commands": True,
+            "perturbers": sorted(PERTURBER_MODULES),
+            "on_arm_requires_live_session_looks": True,
+            "per_live_launch_full_injection": True,
+        },
         "launch": {
             "car": car,
             "track": track,
@@ -645,8 +716,22 @@ def load_plan(path: Path) -> dict[str, Any]:
             "No data is lost: pre-#710 boot reports use the withdrawn "
             "'resilient-launch-report/v1' schema and are rejected regardless"
         )
+    if schema == PRE_TREATMENT_PLAN_SCHEMA:
+        raise ValueError(
+            f"plan schema {PRE_TREATMENT_PLAN_SCHEMA!r} pre-dates treatment-receipt verification "
+            "(#719): it does not record the exclusion policy, the required perturber key set, or "
+            "that each boot command carries --expect-perturbers. Regenerate the plan under "
+            f"{PLAN_SCHEMA!r} before analyze; reusing a v3 plan would apply a receipt rule the "
+            "operator never pre-registered"
+        )
     if schema != PLAN_SCHEMA:
         raise ValueError(f"plan schema must be {PLAN_SCHEMA!r}")
+    receipt = plan.get("treatment_receipt")
+    if not isinstance(receipt, dict) or receipt.get("enabled") is not True:
+        raise ValueError(
+            f"plan {PLAN_SCHEMA!r} must record treatment_receipt.enabled=true "
+            "(the pre-registered receipt policy from #719)"
+        )
     boots_per_arm = plan.get("boots_per_arm")
     if not isinstance(boots_per_arm, int) or boots_per_arm <= 0:
         raise ValueError("plan boots_per_arm must be a positive integer")
@@ -743,6 +828,14 @@ def _parse_report(
                 f"report {path} arm_contradicted requires expect_perturbers='off' "
                 f"(got {report.get('expect_perturbers')!r})"
             )
+        # Short reports only exist for the fail-fast OFF arm. Accepting one under an overlays_on
+        # plan label would score a single-attempt boot as if it had the full budget (Codex P2).
+        if boot.condition != "overlays_off":
+            raise ValueError(
+                f"report {path} arm_contradicted with expect_perturbers='off' but plan condition "
+                f"is {boot.condition!r}; short contradiction reports are only valid for "
+                "overlays_off boots"
+            )
     else:
         if attempts != launches_per_boot:
             raise ValueError(
@@ -815,6 +908,11 @@ def _parse_report(
         if not isinstance(perturbers, dict) or not perturbers:
             raise ValueError(
                 f"report {path} launch {index} has a non-mapping or empty perturbers block"
+            )
+        if set(perturbers) != _PERTURBER_KEYS:
+            raise ValueError(
+                f"report {path} launch {index} perturbers keys must be exactly "
+                f"{sorted(_PERTURBER_KEYS)}; got {sorted(perturbers)}"
             )
         for name, value in perturbers.items():
             if not isinstance(name, str) or value not in _PERTURBER_EVIDENCE_VALUES:
@@ -1091,7 +1189,11 @@ def summarize_boot(observation: BootObservation) -> BootSummary:
     # 20 delivered never_live cycles — a perfectly good censored observation — while scoring 19
     # of the same cycles plus one stable row (#710 Codex P2).
     perturber_state = boot_perturber_state(observation)
-    treatment, treatment_detail = treatment_receipt(observation.condition, perturber_state)
+    treatment, treatment_detail = treatment_receipt(
+        observation.condition,
+        perturber_state,
+        launches=observation.launches,
+    )
     if delivered_cycles == 0:
         unusable_reason = "no_delivered_cycles"
     elif undelivered > MAX_UNDELIVERED_FRACTION * len(launches):

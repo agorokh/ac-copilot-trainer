@@ -204,8 +204,14 @@ def test_randomization_reference_set_is_the_full_two_to_the_blocks() -> None:
 
 def test_plan_is_boot_scoped_and_records_the_operator_gate() -> None:
     plan = build_plan(6, generated_at_utc="2026-07-28T12:00:00Z")
-    assert plan["schema"] == "init-perturber-ab-plan/v3"
-    assert plan["supersedes"] == [WITHDRAWN_PLAN_SCHEMA, SUPERSEDED_PLAN_SCHEMA]
+    assert plan["schema"] == "init-perturber-ab-plan/v4"
+    assert plan["supersedes"] == [
+        WITHDRAWN_PLAN_SCHEMA,
+        SUPERSEDED_PLAN_SCHEMA,
+        "init-perturber-ab-plan/v3",
+    ]
+    assert plan["treatment_receipt"]["enabled"] is True
+    assert plan["treatment_receipt"]["expect_perturbers_in_commands"] is True
     assert plan["operator_owned_settings"] is True
     assert plan["protocol"]["reboot_before_every_boot"] is True
     assert plan["protocol"]["graceful_first_teardown_both_arms"] is True
@@ -1477,14 +1483,101 @@ class TestTreatmentReceipt:
         half_injected = {"steam_overlay": "injected", "nvidia_capture": "not_observed"}
         mixed_unknown = {"steam_overlay": "injected", "nvidia_capture": "unavailable"}
         off_mixed = {"steam_overlay": "not_observed", "nvidia_capture": "unavailable"}
+        # On-arm confirmation is per live-session launch (not a boot-wide union).
+        live_half = _boot(1, "overlays_on", _stable_then_freeze(8), perturbers=half_injected)
+        live_mixed = _boot(1, "overlays_on", _stable_then_freeze(8), perturbers=mixed_unknown)
 
-        verdict, _detail = treatment_receipt("overlays_on", half_injected)
+        verdict, _detail = treatment_receipt(
+            "overlays_on", half_injected, launches=live_half.launches
+        )
         assert verdict == TREATMENT_CONTRADICTED
-        verdict, _detail = treatment_receipt("overlays_on", mixed_unknown)
+        verdict, _detail = treatment_receipt(
+            "overlays_on", mixed_unknown, launches=live_mixed.launches
+        )
         assert verdict == TREATMENT_UNVERIFIED
         # Off arm: partial unknown is unverified, not a free confirmation.
         verdict, _detail = treatment_receipt("overlays_off", off_mixed)
         assert verdict == TREATMENT_UNVERIFIED
+
+    def test_on_arm_requires_per_live_launch_full_injection(self):
+        """Boot-wide union must not confirm when no single live acs.exe had both overlays."""
+        from tools.ac_harness.init_perturber_ab import (
+            TREATMENT_CONTRADICTED,
+            TREATMENT_UNVERIFIED,
+            BootObservation,
+            LaunchObservation,
+            summarize_boot,
+            treatment_receipt,
+        )
+
+        launches = (
+            LaunchObservation(
+                launch=1,
+                verdict="froze",
+                started_at_utc="2026-07-28T10:01:00Z",
+                elapsed_s=12.5,
+                uptime_h=0.5,
+                cycle_delivered=True,
+                perturbers=tuple(
+                    sorted({"steam_overlay": "injected", "nvidia_capture": "not_observed"}.items())
+                ),
+            ),
+            LaunchObservation(
+                launch=2,
+                verdict="froze",
+                started_at_utc="2026-07-28T10:02:00Z",
+                elapsed_s=12.5,
+                uptime_h=0.55,
+                cycle_delivered=True,
+                perturbers=tuple(
+                    sorted({"steam_overlay": "not_observed", "nvidia_capture": "injected"}.items())
+                ),
+            ),
+        )
+        boot = BootObservation(boot=1, condition="overlays_on", launches=launches)
+        # Union would be both injected; per-launch is incomplete → contradicted, not confirmed.
+        state = {"steam_overlay": "injected", "nvidia_capture": "injected"}
+        verdict, _detail = treatment_receipt("overlays_on", state, launches=launches)
+        assert verdict == TREATMENT_CONTRADICTED
+        summary = summarize_boot(boot)
+        assert summary.usable is False
+        assert summary.unusable_reason == "treatment_contradicted"
+
+        # Early never_live-only looks are non-dispositive for the on arm.
+        early = _boot(
+            1,
+            "overlays_on",
+            ["never_live"] * 5,
+            delivered=[False] * 5,
+            perturbers=_ABSENT_PERTURBERS,
+        )
+        summary = summarize_boot(early)
+        assert summary.treatment == TREATMENT_UNVERIFIED
+
+    def test_incomplete_perturber_keys_are_rejected(self, tmp_path: Path) -> None:
+        plan = _two_boot_plan()
+        path = tmp_path / plan["boots"][0]["report"]
+        _write_boot_report(
+            path,
+            verdicts=["stable"] * _LAUNCHES,
+            start_minute=0,
+            uptime_start=0.5,
+            launch=_launch_config(_LAUNCHES),
+        )
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        for row in payload["attempts_log"]:
+            row["perturbers"] = {"steam_overlay": "injected"}  # missing nvidia_capture
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(ValueError, match="perturbers keys must be exactly"):
+            load_observations(plan, tmp_path, require_complete=False)
+
+    def test_pre_treatment_v3_plans_are_rejected(self, tmp_path: Path) -> None:
+        from tools.ac_harness.init_perturber_ab import PRE_TREATMENT_PLAN_SCHEMA, load_plan
+
+        stale = tmp_path / "plan.json"
+        stale.write_text(json.dumps({"schema": PRE_TREATMENT_PLAN_SCHEMA}), encoding="utf-8")
+        with pytest.raises(ValueError, match="treatment-receipt"):
+            load_plan(stale)
 
     def test_unavailable_evidence_is_unverified_not_contradicted(self):
         """No information must fall back to the plan, never manufacture an exclusion."""
