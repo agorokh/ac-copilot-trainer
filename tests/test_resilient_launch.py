@@ -2521,3 +2521,15 @@ class TestPerturberTreatmentReceipt:
         # A final successful miss restores not_observed (post-race look).
         watch.observe(frozenset({"ntdll.dll"}))
         assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
+
+    def test_partial_pid_sample_invalidates_prior_absence(self):
+        """Cursor HIGH: note_injected alone must not leave a sticky not_observed."""
+        from tools.ac_harness.resilient_launch import PerturberEvidence, PerturberWatch
+
+        watch = PerturberWatch()
+        watch.observe(frozenset({"ntdll.dll"}))
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
+        # Partial multi-PID path: union injection then invalidate absence.
+        watch.note_injected(frozenset({"ntdll.dll"}))
+        watch.observe(None)
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.UNAVAILABLE)

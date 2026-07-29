@@ -2219,6 +2219,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 elif any_failed:
                     for names in successes:
                         perturbers.note_injected(names)
+                    # Invalidate absence: a prior full miss must not stick when this poll only
+                    # partially sampled PIDs (cursor HIGH / Codex P1 on #721).
+                    perturbers.observe(None)
                 else:
                     for names in successes:
                         perturbers.observe(names)
