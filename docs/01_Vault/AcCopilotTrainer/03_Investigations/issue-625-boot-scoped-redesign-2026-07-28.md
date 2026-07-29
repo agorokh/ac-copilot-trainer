@@ -93,8 +93,11 @@ delivered cycles, so a boot containing a merely undelivered attempt scores inste
   settings fix + reboot. Exit is nonzero — scripted boot chains must treat that as stop-and-fix.
 - Analyzer **excludes** contradicted boots (and drops their block); never re-labels. Unverified
   receipt withholds causal conclusions (`treatment_receipt_unverified`) without inventing exclusions.
-- `go_live_timeout` must be ≥ 5 s (injection race ~3 s). Absence on `FROZE` is only dispositive when
-  `elapsed_s ≥ 5`. Module sampling requires **64-bit Python** on the rig.
+- `go_live_timeout` must be ≥ 5 s (injection race ~3 s). Absence is dispositive only on delivered
+  `stable`/`froze` (post-go-live: packet advanced + entry ready + drivable — past the race by
+  construction). `elapsed_s` is **not** used (includes pre-launch work). Module sampling requires
+  **64-bit Python** on the rig; mid-attempt PID replacement freezes evidence if any injection was
+  already seen, else re-pins cleanly.
 
 Design detail: [[issue-719-treatment-receipt-2026-07-28]].
 

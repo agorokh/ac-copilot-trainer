@@ -2305,10 +2305,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     primary_pid = pinned_acs_pid[0]
                 else:
                     if pinned_acs_pid[0] is not None:
-                        # Process replacement: drop ALL prior evidence so Steam from the corpse
-                        # cannot combine with NVIDIA from the replacement into a false full
-                        # injection (Codex P1 on #721). Off-arm positive sightings already
-                        # stop the loop on the poll that first saw them.
+                        # Process replacement mid-attempt. Two constraints (Codex P1 rounds):
+                        # (1) do not invent full treatment by unioning Steam on corpse A with
+                        #     NVIDIA on replacement B;
+                        # (2) do not erase a positive injection already seen (off-arm needs it).
+                        # If any injection was observed, freeze this attempt's evidence and stop
+                        # sampling — further PIDs would only pollute confirmation. Otherwise
+                        # start clean on the newest process.
+                        if any(perturbers.injected(name) for name in PERTURBER_MODULES):
+                            return
                         perturbers.reset()
                     primary_pid = max(pids)
                     pinned_acs_pid[0] = primary_pid

@@ -2654,14 +2654,20 @@ class TestPerturberTreatmentReceipt:
         assert report.arm_contradicted is True
         assert report.froze == 1
 
-    def test_pid_replacement_resets_injected_union(self):
-        """Codex P1: Steam on PID A + NVIDIA on PID B must not invent full treatment."""
+    def test_pid_replacement_freezes_when_injection_already_seen(self):
+        """Codex P1: keep injected sightings; do not union new PIDs after presence is known."""
         from tools.ac_harness.resilient_launch import PerturberEvidence, PerturberWatch
 
         watch = PerturberWatch()
         watch.observe(frozenset({"gameoverlayrenderer64.dll"}))
         assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
-        watch.reset()
-        watch.observe(frozenset({"nvspcap64.dll"}))
-        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
-        assert watch.evidence()["nvidia_capture"] == str(PerturberEvidence.INJECTED)
+        # Freezing (no further observe) preserves the off-arm signal and avoids inventing
+        # full treatment by sampling a replacement process.
+        assert watch.evidence()["nvidia_capture"] == str(PerturberEvidence.NOT_OBSERVED)
+        # Clean re-pin path still resets when no injection was seen.
+        clean = PerturberWatch()
+        clean.observe(frozenset({"ntdll.dll"}))
+        clean.reset()
+        clean.observe(frozenset({"nvspcap64.dll"}))
+        assert clean.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
+        assert clean.evidence()["nvidia_capture"] == str(PerturberEvidence.INJECTED)
