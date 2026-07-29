@@ -2161,7 +2161,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 )
 
                 try:
-                    pids = sorted(running_process_ids("acs.exe"))
+                    # strict=True: a partial Toolhelp enumeration must not look exhaustive — an
+                    # omitted live acs.exe with overlays would otherwise yield false not_observed
+                    # on the visible PID alone (Codex P2 on #721).
+                    pids = sorted(running_process_ids("acs.exe", strict=True))
                 except OSError:
                     perturbers.observe(None)
                     return
@@ -2303,7 +2306,22 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         )
         report_written = True
         if args.json_path is not None:
-            report_written = _write_report_json(report, args.json_path)
+            # Arm-contradiction salvage goes to a SIDE path so the planned exclusive report
+            # destination stays free for a corrected re-run after reboot (Codex P1 on #721).
+            # Analyze will treat the planned name as missing until the re-run succeeds; the
+            # salvage file keeps the positive injection evidence for the operator.
+            if report.arm_contradicted:
+                salvage = args.json_path.with_name(
+                    f"{args.json_path.stem}.arm_contradicted{args.json_path.suffix}"
+                )
+                report_written = _write_report_json(report, salvage)
+                if report_written:
+                    _log(
+                        f"arm contradicted — salvage report at {salvage}; planned path "
+                        f"{args.json_path} left free for re-run after settings fix + reboot"
+                    )
+            else:
+                report_written = _write_report_json(report, args.json_path)
             if not report_written and not trials_mode:
                 # Do not tear down a STABLE session over a missing artifact — that contradicts
                 # --no-hold (leave AC LIVE for a peer) and kills the operator's earned session

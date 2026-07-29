@@ -1554,14 +1554,33 @@ class TestTreatmentReceipt:
         summary = summarize_boot(early)
         assert summary.treatment == TREATMENT_UNVERIFIED
 
-        # Delivered never_live after go-live timeout is long enough to contradict.
-        long_nl = _boot(
+        # Short delivered never_live (early acs.exe death) is still non-dispositive.
+        short_nl = _boot(
             1,
             "overlays_on",
             ["never_live"] * 5,
             delivered=[True] * 5,
             perturbers=_ABSENT_PERTURBERS,
         )
+        summary = summarize_boot(short_nl)
+        assert summary.treatment == TREATMENT_UNVERIFIED
+
+        # Full go-live-timeout never_live (elapsed near DEFAULT_GO_LIVE_TIMEOUT) contradicts.
+        from tools.ac_harness.resilient_launch import DEFAULT_GO_LIVE_TIMEOUT
+
+        long_launches = tuple(
+            LaunchObservation(
+                launch=index,
+                verdict="never_live",
+                started_at_utc=f"2026-07-28T10:{index:02d}:00Z",
+                elapsed_s=DEFAULT_GO_LIVE_TIMEOUT,
+                uptime_h=0.5 + index * 0.05,
+                cycle_delivered=True,
+                perturbers=tuple(sorted(_ABSENT_PERTURBERS.items())),
+            )
+            for index in range(1, 6)
+        )
+        long_nl = BootObservation(boot=1, condition="overlays_on", launches=long_launches)
         summary = summarize_boot(long_nl)
         assert summary.treatment == TREATMENT_CONTRADICTED
 

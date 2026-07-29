@@ -89,6 +89,12 @@ from tools.ac_harness.resilient_launch import (
     resolve_report_path,
 )
 
+#: Fraction of the go-live budget a delivered ``never_live`` must have consumed before its
+#: ``not_observed`` evidence is treated as post-injection-race (Codex P1 on #721). Early
+#: deaths with ``cycle_delivered=True`` finish in seconds; a full-timeout watch is near
+#: ``DEFAULT_GO_LIVE_TIMEOUT``.
+_NEVER_LIVE_TIMEOUT_FRACTION = 0.9
+
 #: v4 pre-registers treatment-receipt verification (#719): analyzer excludes contradicted boots,
 #: plan commands emit ``--expect-perturbers``, and every attempt must carry the full
 #: ``PERTURBER_MODULES`` key set. The plan file IS the pre-registration, so a v3 plan that never
@@ -107,6 +113,17 @@ PRE_TREATMENT_PLAN_SCHEMA = "init-perturber-ab-plan/v3"
 _LIVE_SESSION_VERDICTS = frozenset({"stable", "froze", "wedged_init"})
 #: Canonical perturber field set every report row must carry exactly.
 _PERTURBER_KEYS = frozenset(PERTURBER_MODULES)
+#: Exact treatment-receipt policy a v4 plan must pre-register (Codex P2 on #721).
+#: Uses the string form of :data:`TREATMENT_CONTRADICTED` so this can live with the schema
+#: constants (the named constants are defined next to the receipt helpers below).
+CANONICAL_TREATMENT_RECEIPT: dict[str, object] = {
+    "enabled": True,
+    "exclude_on": ["contradicted"],
+    "expect_perturbers_in_commands": True,
+    "perturbers": sorted(PERTURBER_MODULES),
+    "on_arm_requires_live_session_looks": True,
+    "per_live_launch_full_injection": True,
+}
 CONDITIONS = ("overlays_on", "overlays_off")
 DEFAULT_ALPHA = 0.05
 #: Seed used only when a caller explicitly asks to reproduce a plan. A REAL plan draws a fresh
@@ -267,15 +284,22 @@ def _is_live_session(launch: LaunchObservation) -> bool:
     """Whether this attempt lived long enough that a miss is informative for overlays_on.
 
     The injection race is ~3 s on the measured rig. ``stable`` / ``froze`` / ``wedged_init`` only
-    fire after the stability / go-live watch. A **delivered** ``never_live`` is also long enough:
-    ``classify()`` emits it after the full go-live timeout when AC rendered but never reached
-    readiness — far past the race — so those successful looks must still count (Codex P1 on
-    #721). An *undelivered* ``never_live`` (CM absent / launch never spawned) does not.
+    fire after the stability / go-live watch, so their successful looks are past the race.
+
+    A delivered ``never_live`` is *not* automatically long enough: ``classify()`` also emits it
+    immediately when a newly observed ``acs.exe`` exits during startup (still
+    ``cycle_delivered=True``). Only a watch that consumed nearly the full go-live budget is the
+    timeout-stuck-before-readiness shape; early deaths stay non-dispositive for absence (Codex P1
+    on #721).
     """
 
     if launch.cycle_delivered is not True:
         return False
-    return launch.verdict in _LIVE_SESSION_VERDICTS or launch.verdict == "never_live"
+    if launch.verdict in _LIVE_SESSION_VERDICTS:
+        return True
+    if launch.verdict == "never_live":
+        return launch.elapsed_s >= DEFAULT_GO_LIVE_TIMEOUT * _NEVER_LIVE_TIMEOUT_FRACTION
+    return False
 
 
 def treatment_receipt(
@@ -605,14 +629,7 @@ def build_plan(
         # Pre-registered with the plan so analyze cannot invent a receipt rule the operator never
         # signed up for (Codex P2 on #721). ``exclude_on`` is only ``contradicted``: ``unverified``
         # falls back to the planned label because no information must not manufacture missingness.
-        "treatment_receipt": {
-            "enabled": True,
-            "exclude_on": [TREATMENT_CONTRADICTED],
-            "expect_perturbers_in_commands": True,
-            "perturbers": sorted(PERTURBER_MODULES),
-            "on_arm_requires_live_session_looks": True,
-            "per_live_launch_full_injection": True,
-        },
+        "treatment_receipt": dict(CANONICAL_TREATMENT_RECEIPT),
         "launch": {
             "car": car,
             "track": track,
@@ -739,6 +756,15 @@ def load_plan(path: Path) -> dict[str, Any]:
             f"plan {PLAN_SCHEMA!r} must record treatment_receipt.enabled=true "
             "(the pre-registered receipt policy from #719)"
         )
+    # Full policy match — a hand-edited v4 that changes exclude_on / perturbers / flags would
+    # otherwise be analyzed under today's hard-coded rules while claiming a different prereg
+    # (Codex P2 on #721).
+    for key, expected in CANONICAL_TREATMENT_RECEIPT.items():
+        if receipt.get(key) != expected:
+            raise ValueError(
+                f"plan treatment_receipt.{key}={receipt.get(key)!r} does not match the "
+                f"canonical v4 policy {expected!r}; regenerate the plan"
+            )
     boots_per_arm = plan.get("boots_per_arm")
     if not isinstance(boots_per_arm, int) or boots_per_arm <= 0:
         raise ValueError("plan boots_per_arm must be a positive integer")
@@ -1704,11 +1730,31 @@ def _format_optional(value: float | None, spec: str) -> str:
 
 def render_markdown(analysis: dict[str, Any]) -> str:
     arms = analysis["arms"]
+    boots = analysis.get("boots") or []
+    confirmed = sum(1 for boot in boots if boot.get("treatment") == TREATMENT_CONFIRMED)
+    contradicted = sum(1 for boot in boots if boot.get("treatment") == TREATMENT_CONTRADICTED)
+    unverified = sum(1 for boot in boots if boot.get("treatment") == TREATMENT_UNVERIFIED)
     lines = [
-        "| condition | boots | scoring | observed onsets | censored | ambiguous | "
-        "median onset | median boot burst (across-boot range) |",
-        "|---|---:|---:|---|---:|---:|---:|---:|",
+        # Receipt is the gate on every boot's usability for the contrast (#719 / Codex P2).
+        f"Treatment receipt: confirmed {confirmed}, contradicted {contradicted}, "
+        f"unverified {unverified}",
     ]
+    if contradicted or unverified:
+        for boot in boots:
+            treatment = boot.get("treatment")
+            if treatment in (TREATMENT_CONTRADICTED, TREATMENT_UNVERIFIED):
+                detail = boot.get("treatment_detail") or treatment
+                lines.append(
+                    f"  boot {boot.get('boot')} ({boot.get('condition')}): {treatment} — {detail}"
+                )
+    lines.extend(
+        [
+            "",
+            "| condition | boots | scoring | observed onsets | censored | ambiguous | "
+            "median onset | median boot burst (across-boot range) |",
+            "|---|---:|---:|---|---:|---:|---:|---:|",
+        ]
+    )
     for condition in CONDITIONS:
         arm = arms[condition]
         onsets = ", ".join(str(value) for value in arm["observed_onsets"]) or "—"
