@@ -1904,3 +1904,486 @@ def test_unknown_perturber_evidence_value_is_rejected(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="invalid perturber evidence"):
         load_observations(plan, tmp_path, require_complete=False)
+
+
+class TestScreeningStage:
+    """#724 — the screen answers 'is there a LARGE effect?' for 4 boots, never a p-value."""
+
+    @staticmethod
+    def _screen_plan() -> dict:
+        from tools.ac_harness.init_perturber_ab import build_plan
+
+        return build_plan(2, screen=True, randomization_seed=625)
+
+    def test_screen_plan_is_two_per_arm_and_carries_the_rule(self):
+        from tools.ac_harness.init_perturber_ab import (
+            CANONICAL_SCREEN_RULE,
+            SCREEN_PLAN_SCHEMA,
+        )
+
+        plan = self._screen_plan()
+        assert plan["schema"] == SCREEN_PLAN_SCHEMA
+        assert plan["boots_per_arm"] == 2
+        assert len(plan["boots"]) == 4
+        # The rule is pre-registered INTO the artifact so the verdict cannot be chosen after
+        # the boots are in.
+        assert plan["screen_rule"] == dict(CANONICAL_SCREEN_RULE)
+        assert plan["screen_rule"]["claims_p_value"] is False
+
+    def test_confirmatory_plan_carries_no_screen_rule(self):
+        from tools.ac_harness.init_perturber_ab import PLAN_SCHEMA, build_plan
+
+        plan = build_plan(6, randomization_seed=625)
+        assert plan["schema"] == PLAN_SCHEMA
+        assert "screen_rule" not in plan
+
+    def test_a_screen_plan_may_not_be_scored_by_analyze(self, tmp_path: Path):
+        """Confirmatory scoring of 2 blocks would print a p-value floored at 0.5."""
+        from tools.ac_harness.init_perturber_ab import load_plan
+
+        path = tmp_path / "screen.json"
+        path.write_text(json.dumps(self._screen_plan()), encoding="utf-8")
+        with pytest.raises(ValueError, match="SCREENING plan"):
+            load_plan(path)
+
+    def test_a_confirmatory_plan_may_not_be_scored_by_screen(self, tmp_path: Path):
+        from tools.ac_harness.init_perturber_ab import build_plan, load_plan
+
+        path = tmp_path / "confirm.json"
+        path.write_text(json.dumps(build_plan(6, randomization_seed=625)), encoding="utf-8")
+        with pytest.raises(ValueError, match="CONFIRMATORY plan"):
+            load_plan(path, expect_screen=True)
+
+    def test_screen_plan_refuses_a_size_other_than_two_per_arm(self):
+        """The rule's meaning is tied to the size; letting it drift renames nothing."""
+        from tools.ac_harness.init_perturber_ab import build_plan
+
+        with pytest.raises(ValueError, match="boots_per_arm=2"):
+            build_plan(3, screen=True, randomization_seed=625)
+
+    def test_tampered_screen_rule_is_refused(self, tmp_path: Path):
+        from tools.ac_harness.init_perturber_ab import load_plan
+
+        plan = self._screen_plan()
+        plan["screen_rule"]["baseline_onset_graceful"] = 2
+        path = tmp_path / "screen.json"
+        path.write_text(json.dumps(plan), encoding="utf-8")
+        with pytest.raises(ValueError, match="does not match the canonical rule"):
+            load_plan(path, expect_screen=True)
+
+    # ------------------------------------------------------------------ verdicts
+
+    def test_an_off_boot_freezing_at_baseline_kills_the_mitigation(self):
+        """`no_large_effect`: overlays-off still freezes on a normal budget."""
+        from tools.ac_harness.init_perturber_ab import SCREEN_NO_LARGE_EFFECT, screen
+
+        boots = [
+            _boot(1, "overlays_off", _stable_then_freeze(12), perturbers=_ABSENT_PERTURBERS),
+            _boot(2, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS),
+            _boot(3, "overlays_off", _stable_then_freeze(13), perturbers=_ABSENT_PERTURBERS),
+            _boot(4, "overlays_on", _stable_then_freeze(9), perturbers=_INJECTED_PERTURBERS),
+        ]
+        result = screen(self._screen_plan(), boots)
+        assert result["verdict"] == SCREEN_NO_LARGE_EFFECT
+        assert result["claims_p_value"] is False
+        # It must NOT overclaim: a modest effect (12/13 vs 8/9 here) is left unrefuted.
+        assert "does not say" not in result["rationale"].lower()
+        assert "not a mitigation worth adopting" in result["rationale"]
+
+    def test_clean_separation_promotes_to_the_confirmatory_run(self):
+        from tools.ac_harness.init_perturber_ab import SCREEN_LARGE_EFFECT_PLAUSIBLE, screen
+
+        clean = ["stable"] * _LAUNCHES  # never freezes -> censored
+        boots = [
+            _boot(1, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(2, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS),
+            _boot(3, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(4, "overlays_on", _stable_then_freeze(9), perturbers=_INJECTED_PERTURBERS),
+        ]
+        result = screen(self._screen_plan(), boots)
+        assert result["verdict"] == SCREEN_LARGE_EFFECT_PLAUSIBLE
+        assert "NOT conclusive" in result["rationale"]
+
+    def test_both_arms_clean_is_ambiguous_not_a_promotion(self):
+        """If the ON arm never froze either, the boots show nothing about the overlays."""
+        from tools.ac_harness.init_perturber_ab import SCREEN_AMBIGUOUS, screen
+
+        clean = ["stable"] * _LAUNCHES
+        boots = [
+            _boot(1, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(2, "overlays_on", clean, perturbers=_INJECTED_PERTURBERS),
+            _boot(3, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(4, "overlays_on", clean, perturbers=_INJECTED_PERTURBERS),
+        ]
+        assert screen(self._screen_plan(), boots)["verdict"] == SCREEN_AMBIGUOUS
+
+    def test_a_contradicted_boot_is_excluded_and_blocks_a_verdict(self):
+        """#719 exclusion applies unchanged; the screen must not score a corrupted arm."""
+        from tools.ac_harness.init_perturber_ab import SCREEN_INSUFFICIENT, screen
+
+        clean = ["stable"] * _LAUNCHES
+        boots = [
+            # Planned OFF but the overlay was demonstrably injected -> excluded.
+            _boot(1, "overlays_off", clean, perturbers=_INJECTED_PERTURBERS),
+            _boot(2, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS),
+            _boot(3, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(4, "overlays_on", _stable_then_freeze(9), perturbers=_INJECTED_PERTURBERS),
+        ]
+        result = screen(self._screen_plan(), boots)
+        assert result["verdict"] == SCREEN_INSUFFICIENT
+        excluded = {item["boot"] for item in result["excluded_boots"]}
+        assert 1 in excluded
+        # Non-vacuous: with boot 1's treatment honoured this would have promoted instead.
+        fixed = list(boots)
+        fixed[0] = _boot(1, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS)
+        from tools.ac_harness.init_perturber_ab import SCREEN_LARGE_EFFECT_PLAUSIBLE
+
+        assert screen(self._screen_plan(), fixed)["verdict"] == SCREEN_LARGE_EFFECT_PLAUSIBLE
+
+    def test_render_states_plainly_that_no_p_value_is_claimed(self):
+        from tools.ac_harness.init_perturber_ab import render_screen_markdown, screen
+
+        boots = [
+            _boot(1, "overlays_off", _stable_then_freeze(12), perturbers=_ABSENT_PERTURBERS),
+            _boot(2, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS),
+            _boot(3, "overlays_off", _stable_then_freeze(13), perturbers=_ABSENT_PERTURBERS),
+            _boot(4, "overlays_on", _stable_then_freeze(9), perturbers=_INJECTED_PERTURBERS),
+        ]
+        rendered = render_screen_markdown(screen(self._screen_plan(), boots))
+        assert "NOT run" in rendered
+        assert "0.5" in rendered
+        # The operator must be told what a null screen does NOT establish.
+        assert "MODEST effect is NOT ruled out" in rendered
+
+
+class TestScreenReviewFindings:
+    """#724 review round 1 — Codex P1 + three P2s, plus the self-hosted daemon's MEDIUMs."""
+
+    @staticmethod
+    def _screen_plan() -> dict:
+        from tools.ac_harness.init_perturber_ab import build_plan
+
+        return build_plan(2, screen=True, randomization_seed=625)
+
+    def test_unverified_receipt_withholds_any_causal_verdict(self):
+        """Codex P1 — `no_large_effect` says 'close #625'; it must not fire unmeasured."""
+        from tools.ac_harness.init_perturber_ab import SCREEN_RECEIPT_UNVERIFIED, screen
+
+        # Every boot usable, onsets that would otherwise read as `no_large_effect` — but no
+        # perturber evidence at all, so nothing shows the overlays were ever off.
+        boots = [
+            _boot(1, "overlays_off", _stable_then_freeze(12), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(2, "overlays_on", _stable_then_freeze(8), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(3, "overlays_off", _stable_then_freeze(13), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(4, "overlays_on", _stable_then_freeze(9), perturbers=_UNAVAILABLE_PERTURBERS),
+        ]
+        result = screen(self._screen_plan(), boots)
+        assert result["verdict"] == SCREEN_RECEIPT_UNVERIFIED
+        # Non-vacuous: with receipt measured, the identical onsets DO yield the closing verdict.
+        from tools.ac_harness.init_perturber_ab import SCREEN_NO_LARGE_EFFECT
+
+        measured = [
+            _boot(1, "overlays_off", _stable_then_freeze(12), perturbers=_ABSENT_PERTURBERS),
+            _boot(2, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS),
+            _boot(3, "overlays_off", _stable_then_freeze(13), perturbers=_ABSENT_PERTURBERS),
+            _boot(4, "overlays_on", _stable_then_freeze(9), perturbers=_INJECTED_PERTURBERS),
+        ]
+        assert screen(self._screen_plan(), measured)["verdict"] == SCREEN_NO_LARGE_EFFECT
+
+    def test_promotion_requires_the_off_budget_to_outrun_the_on_onset(self):
+        """Codex P2 — censoring at 20 cycles says nothing about an ON boot that froze at 24."""
+        from tools.ac_harness.init_perturber_ab import (
+            SCREEN_AMBIGUOUS,
+            SCREEN_LARGE_EFFECT_PLAUSIBLE,
+            screen,
+        )
+
+        # OFF arm: never freezes, but the last 4 attempts never reached AC, so the boot is
+        # censored after only 16 DELIVERED cycles — its onset is known only to exceed 16.
+        clean = ["stable"] * _LAUNCHES
+        short_delivery = [True] * (_LAUNCHES - 4) + [False] * 4
+        # ON arm: freezes LATER than that bound, at delivered cycle 18.
+        late_freeze = ["stable"] * 17 + ["froze"] * (_LAUNCHES - 17)
+
+        boots = [
+            _boot(
+                1,
+                "overlays_off",
+                clean,
+                perturbers=_ABSENT_PERTURBERS,
+                delivered=short_delivery,
+            ),
+            _boot(2, "overlays_on", late_freeze, perturbers=_INJECTED_PERTURBERS),
+            _boot(
+                3,
+                "overlays_off",
+                clean,
+                perturbers=_ABSENT_PERTURBERS,
+                delivered=short_delivery,
+            ),
+            _boot(4, "overlays_on", late_freeze, perturbers=_INJECTED_PERTURBERS),
+        ]
+        # off is known only to exceed 16; on froze at 18 -> NOT separated.
+        assert screen(self._screen_plan(), boots)["verdict"] == SCREEN_AMBIGUOUS
+
+        # Non-vacuous: give the OFF arm its full 24-cycle budget and the same data promotes.
+        full = [
+            _boot(1, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(2, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS),
+            _boot(3, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(4, "overlays_on", _stable_then_freeze(9), perturbers=_INJECTED_PERTURBERS),
+        ]
+        assert screen(self._screen_plan(), full)["verdict"] == SCREEN_LARGE_EFFECT_PLAUSIBLE
+
+    def test_hand_edited_screen_plan_cannot_grow_its_boot_count(self, tmp_path: Path):
+        """Codex P2 + cursor — canonical rule kept, plan size raised, previously accepted."""
+        from tools.ac_harness.init_perturber_ab import load_plan
+
+        plan = self._screen_plan()
+        plan["boots_per_arm"] = 3
+        plan["boots"].append(dict(plan["boots"][-1]))
+        plan["boots"].append(dict(plan["boots"][-1]))
+        path = tmp_path / "screen.json"
+        path.write_text(json.dumps(plan), encoding="utf-8")
+        with pytest.raises(ValueError, match="boots_per_arm"):
+            load_plan(path, expect_screen=True)
+
+    def test_screen_and_confirmatory_plans_never_share_report_names(self):
+        """cursor — the stage must enter the report namespace or the stages can collide."""
+        from tools.ac_harness.init_perturber_ab import build_plan
+
+        common = {
+            "launches_per_boot": 24,
+            "randomization_seed": 625,
+            "generated_at_utc": "2026-07-29T00:00:00Z",
+            "run_nonce": "",
+        }
+        screen_plan = build_plan(2, screen=True, **common)
+        confirm_plan = build_plan(2, allow_undersized=True, **common)
+        screen_reports = {boot["report"] for boot in screen_plan["boots"]}
+        confirm_reports = {boot["report"] for boot in confirm_plan["boots"]}
+        assert not (screen_reports & confirm_reports), (
+            "a screening and a confirmatory plan produced colliding report filenames; a shared "
+            "reports-dir would let one stage score the other's boots"
+        )
+
+    def test_screen_plan_supersedes_nothing(self):
+        """antigravity — the screen is a new first stage, not a successor lineage."""
+        assert self._screen_plan()["supersedes"] == []
+
+    def test_explicit_boots_per_arm_with_screen_is_rejected_not_overridden(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """antigravity — `plan --boots-per-arm 16 --screen` must fail, not silently emit 2."""
+        from tools.ac_harness.init_perturber_ab import main
+
+        monkeypatch.setattr(ab_mod, "repo_checkout_root", lambda: tmp_path)
+        out = tmp_path / ".scratch" / "screen.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        assert main(["plan", "--screen", "--boots-per-arm", "16", "--out", str(out)]) != 0, (
+            "an explicit size must reach build_plan and be refused, not be silently replaced"
+        )
+        assert not out.exists()
+
+    def test_screen_default_size_still_needs_no_flag(self, tmp_path: Path, monkeypatch):
+        """The passthrough must not make `plan --screen` require an explicit size."""
+        from tools.ac_harness.init_perturber_ab import main
+
+        monkeypatch.setattr(ab_mod, "repo_checkout_root", lambda: tmp_path)
+        out = tmp_path / ".scratch" / "screen.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        assert main(["plan", "--screen", "--out", str(out)]) == 0
+        assert json.loads(out.read_text(encoding="utf-8"))["boots_per_arm"] == 2
+
+
+class TestScreenReviewRoundTwo:
+    """#724 review round 2 — horizon guard, censoring off-by-one, and rule/code agreement."""
+
+    @staticmethod
+    def _screen_plan(**kwargs) -> dict:
+        from tools.ac_harness.init_perturber_ab import build_plan
+
+        params = {"randomization_seed": 625, "screen": True}
+        params.update(kwargs)
+        return build_plan(2, **params)
+
+    def test_off_censored_on_the_same_cycle_the_on_arm_froze_still_promotes(self):
+        """cursor MEDIUM — a censored boot's onset EXCEEDS its delivered count.
+
+        The cleanest possible result: OFF runs the whole budget clean while ON freezes on the
+        final cycle. Comparing raw delivered counts with `>` called that ambiguous.
+        """
+        from tools.ac_harness.init_perturber_ab import SCREEN_LARGE_EFFECT_PLAUSIBLE, screen
+
+        clean = ["stable"] * _LAUNCHES  # censored at _LAUNCHES delivered cycles
+        froze_on_last = ["stable"] * (_LAUNCHES - 1) + ["froze"]  # onset == _LAUNCHES
+        boots = [
+            _boot(1, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(2, "overlays_on", froze_on_last, perturbers=_INJECTED_PERTURBERS),
+            _boot(3, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(4, "overlays_on", froze_on_last, perturbers=_INJECTED_PERTURBERS),
+        ]
+        assert screen(self._screen_plan(), boots)["verdict"] == SCREEN_LARGE_EFFECT_PLAUSIBLE
+
+    def test_a_short_screen_cannot_promote_a_modest_shift_as_elimination(self):
+        """Codex P2 — off censored at 9 vs on freezing at 8 separates, but never reaches 14."""
+        from tools.ac_harness.init_perturber_ab import SCREEN_AMBIGUOUS, screen
+
+        short = 9
+        clean = ["stable"] * short
+        froze_early = ["stable"] * 7 + ["froze"] * (short - 7)
+        plan = self._screen_plan(launches_per_boot=short, allow_undersized=True)
+        boots = [
+            _boot(1, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(2, "overlays_on", froze_early, perturbers=_INJECTED_PERTURBERS),
+            _boot(3, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(4, "overlays_on", froze_early, perturbers=_INJECTED_PERTURBERS),
+        ]
+        # Separated (10 > 8) but nowhere near the pre-registered baseline horizon of 14.
+        assert screen(plan, boots)["verdict"] == SCREEN_AMBIGUOUS
+
+    def test_persisted_rule_states_every_clause_the_code_applies(self):
+        """Codex P2 — the artifact IS the pre-registration; it must not under-describe itself."""
+        from tools.ac_harness.init_perturber_ab import (
+            BASELINE_ONSET_INDEX_GRACEFUL,
+            CANONICAL_SCREEN_RULE,
+        )
+
+        clause = CANONICAL_SCREEN_RULE["large_effect_plausible_when"]
+        # All three conjuncts the predicate actually enforces.
+        assert "censored" in clause
+        assert "baseline_onset_graceful" in clause
+        assert "delivered_cycles + 1" in clause
+        assert (
+            CANONICAL_SCREEN_RULE["min_delivered_cycles_for_elimination"]
+            == BASELINE_ONSET_INDEX_GRACEFUL
+        )
+
+    def test_insufficient_recovery_advice_does_not_suggest_an_out_of_order_rerun(self):
+        """Codex P2 — load_observations enforces planned order, so a single re-run is refused."""
+        from tools.ac_harness.init_perturber_ab import screen
+
+        boots = [_boot(1, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS)]
+        rationale = screen(self._screen_plan(), boots)["rationale"]
+        assert "planned order" in rationale
+        assert "regenerate the screening plan" in rationale.lower()
+
+
+class TestScreenRecoveryAdviceIsConsistent:
+    """#724 review round 3 — every recovery path must respect the planned-order invariant.
+
+    `load_observations` rejects an experiment whose boots did not run in planned order, so any
+    instruction to "re-run that boot" is actively harmful: it costs a physical reboot and then
+    voids the run. Round 2 fixed this for `insufficient_usable_boots` but left the identical
+    wrong advice in the unverified-receipt path and in the renderer (Codex P2 + antigravity HIGH).
+    """
+
+    @staticmethod
+    def _screen_plan() -> dict:
+        from tools.ac_harness.init_perturber_ab import build_plan
+
+        return build_plan(2, screen=True, randomization_seed=625)
+
+    @staticmethod
+    def _unverified_boots() -> list:
+        return [
+            _boot(1, "overlays_off", _stable_then_freeze(12), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(2, "overlays_on", _stable_then_freeze(8), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(3, "overlays_off", _stable_then_freeze(13), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(4, "overlays_on", _stable_then_freeze(9), perturbers=_UNAVAILABLE_PERTURBERS),
+        ]
+
+    def test_unverified_rationale_sends_the_operator_to_a_full_regeneration(self):
+        from tools.ac_harness.init_perturber_ab import SCREEN_RECEIPT_UNVERIFIED, screen
+
+        result = screen(self._screen_plan(), self._unverified_boots())
+        assert result["verdict"] == SCREEN_RECEIPT_UNVERIFIED
+        rationale = result["rationale"]
+        assert "regenerate the screening plan" in rationale
+        assert "planned order" in rationale
+
+    def test_renderer_never_tells_the_operator_to_rerun_one_boot_in_place(self):
+        from tools.ac_harness.init_perturber_ab import render_screen_markdown, screen
+
+        rendered = render_screen_markdown(screen(self._screen_plan(), self._unverified_boots()))
+        assert "re-run all four boots in order" in rendered
+        # The exact advice that would cost a reboot and then void the run.
+        assert "re-run those boots rather than" not in rendered
+
+    def test_every_recovery_path_agrees_on_the_remedy(self):
+        """Both non-scoring verdicts must give the same, correct remedy — not two stories."""
+        from tools.ac_harness.init_perturber_ab import screen
+
+        unverified = screen(self._screen_plan(), self._unverified_boots())["rationale"]
+        insufficient = screen(
+            self._screen_plan(),
+            [_boot(1, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS)],
+        )["rationale"]
+        for text in (unverified, insufficient):
+            assert "planned order" in text
+            assert "regenerate the screening plan" in text.lower()
+
+
+class TestScreenPlanMetadataAndRecoveryNuance:
+    """#724 review round 4 — the plan must not pre-register two scoring stories."""
+
+    @staticmethod
+    def _screen_plan() -> dict:
+        from tools.ac_harness.init_perturber_ab import build_plan
+
+        return build_plan(2, screen=True, randomization_seed=625)
+
+    def test_screening_plan_does_not_preregister_the_permutation_endpoints(self):
+        """Codex P2 — the plan JSON IS the pre-registration; it cannot claim tests never run."""
+        plan = self._screen_plan()
+        endpoints = plan["endpoints"]
+        assert "permutation" not in endpoints["primary"]
+        assert endpoints["secondary"] is None
+        assert endpoints["sensitivity"] is None
+        # Confirmatory power metadata must not appear on a screen that computes no p-value.
+        assert plan["randomization_reference_set"] is None
+        assert plan["smallest_attainable_two_sided_p"] is None
+        assert "no_significance_test" in plan
+        # And the floor must describe the screen, not the confirmatory design.
+        assert plan["minimum_boots_per_arm"] == 2
+
+    def test_confirmatory_plan_keeps_its_permutation_endpoints(self):
+        from tools.ac_harness.init_perturber_ab import build_plan
+
+        plan = build_plan(6, randomization_seed=625)
+        assert "permutation" in plan["endpoints"]["primary"]
+        assert plan["endpoints"]["secondary"] is not None
+        assert plan["randomization_reference_set"] == 2**6
+        assert plan["minimum_boots_per_arm"] == 6
+        assert "no_significance_test" not in plan
+
+    def test_insufficient_advice_preserves_the_salvage_rerun_path(self):
+        """Codex P2 — an arm-contradicted boot leaves its planned name FREE on purpose.
+
+        `resolve_boot_report_path` documents that a successful re-run at the planned name
+        supersedes the salvage, so a blanket "regenerate everything" discards the intended
+        cheap recovery for the last boot.
+        """
+        from tools.ac_harness.init_perturber_ab import screen
+
+        boots = [_boot(1, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS)]
+        rationale = screen(self._screen_plan(), boots)["rationale"]
+        assert "salvage" in rationale
+        assert "re-run it in place" in rationale
+        # ...but the constraint that makes it safe must be stated, not dropped.
+        assert "LAST boot" in rationale
+        assert "planned order" in rationale
+
+    def test_unverified_advice_still_requires_regeneration(self):
+        """An unverified boot published a SUCCESSFUL report, so its planned name IS occupied."""
+        from tools.ac_harness.init_perturber_ab import screen
+
+        boots = [
+            _boot(1, "overlays_off", _stable_then_freeze(12), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(2, "overlays_on", _stable_then_freeze(8), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(3, "overlays_off", _stable_then_freeze(13), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(4, "overlays_on", _stable_then_freeze(9), perturbers=_UNAVAILABLE_PERTURBERS),
+        ]
+        rationale = screen(self._screen_plan(), boots)["rationale"]
+        assert "regenerate the screening plan" in rationale
+        assert "re-run it in place" not in rationale

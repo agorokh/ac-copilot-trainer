@@ -179,6 +179,50 @@ BASELINE_POST_ONSET_BURST_RATE = 0.44
 #: baseline-onset boot contributes no secondary observation at all.
 MIN_LAUNCHES_PER_BOOT = BASELINE_ONSET_INDEX_GRACEFUL + POST_ONSET_WINDOW
 DEFAULT_LAUNCHES_PER_BOOT = 24
+
+#: ---------------------------------------------------------------------------------------
+#: Screening stage (#724)
+#: ---------------------------------------------------------------------------------------
+#: The confirmatory design costs 16 physical reboots because it is powered to separate a MODEST
+#: shift (graceful onset ~14 vs ~8). That is the wrong target for the decision at hand: #627's
+#: resilient launcher already retries past the freeze, so "disable the overlays permanently" is
+#: only worth adopting if it roughly ELIMINATES the freeze — a large effect, detectable with ~4
+#: boots. #625 sat unrun for over a week because the cheapest question the tool could ask cost
+#: 16 reboots; the screen exists so the spike can be answered, or closed, at that price instead.
+SCREEN_PLAN_SCHEMA = "init-perturber-ab-screen-plan/v1"
+SCREEN_SCHEMA = "init-perturber-ab-screen/v1"
+#: 2 blocks is enough to SEE a large effect and is honestly labelled descriptive — the smallest
+#: attainable two-sided p at 2 blocks is 2/2**2 = 0.5, so the screen never runs the permutation
+#: test and never reports significance.
+SCREEN_BOOTS_PER_ARM = 2
+SCREEN_NO_LARGE_EFFECT = "no_large_effect"
+SCREEN_LARGE_EFFECT_PLAUSIBLE = "large_effect_plausible"
+SCREEN_AMBIGUOUS = "ambiguous"
+SCREEN_INSUFFICIENT = "insufficient_usable_boots"
+#: No causal statement is available because a scored boot's treatment was never measured. Named
+#: to match the confirmatory path's conclusion for the same condition.
+SCREEN_RECEIPT_UNVERIFIED = "treatment_receipt_unverified"
+#: Pre-registered screening rule, persisted into the plan so the verdict cannot be chosen after
+#: the boots are in. Mirrors :data:`CANONICAL_TREATMENT_RECEIPT`'s exact-match discipline.
+CANONICAL_SCREEN_RULE: dict[str, object] = {
+    "enabled": True,
+    "boots_per_arm": SCREEN_BOOTS_PER_ARM,
+    "no_large_effect_when": "any overlays_off boot froze at or before the graceful baseline onset",
+    # The persisted rule IS the pre-registration, so it must state the predicate the code
+    # actually applies — all three clauses, not just the first. An artifact that promised
+    # promotion on censoring alone while `screen()` also demanded a horizon and a censoring-aware
+    # separation would mis-describe its own experiment (#724 review, Codex P2).
+    "large_effect_plausible_when": (
+        "every overlays_off boot censored AND at least one overlays_on boot froze AND every "
+        "overlays_off boot delivered at least baseline_onset_graceful cycles AND the smallest "
+        "overlays_off censoring surrogate (delivered_cycles + 1) exceeds the latest overlays_on "
+        "onset"
+    ),
+    "baseline_onset_graceful": BASELINE_ONSET_INDEX_GRACEFUL,
+    "min_delivered_cycles_for_elimination": BASELINE_ONSET_INDEX_GRACEFUL,
+    "claims_p_value": False,
+    "promotes_to_confirmatory": True,
+}
 #: Above this share of **undelivered** launches the boot measured Content Manager's delivery
 #: failures, not the accumulator; it is reported and excluded rather than silently scored.
 #: Scoped to undelivered attempts since #710: a ``never_live`` that DID start acs.exe consumed a
@@ -535,6 +579,7 @@ def build_plan(
     generated_at_utc: str | None = None,
     run_nonce: str | None = None,
     allow_undersized: bool = False,
+    screen: bool = False,
 ) -> dict[str, Any]:
     """Build a boot-scoped experiment plan; settings remain operator-owned.
 
@@ -578,7 +623,14 @@ def build_plan(
         )
     if boots_per_arm <= 0 or launches_per_boot <= 0:
         raise ValueError("boots_per_arm and launches_per_boot must be > 0")
-    if boots_per_arm < MIN_BOOTS_PER_ARM and not allow_undersized:
+    if screen and boots_per_arm != SCREEN_BOOTS_PER_ARM:
+        # The screen's decision rule is written for exactly this size. Letting the count drift
+        # would silently change what `no_large_effect` means without changing its name.
+        raise ValueError(
+            f"a screening plan must use boots_per_arm={SCREEN_BOOTS_PER_ARM} "
+            f"(got {boots_per_arm}); the confirmatory design is the mode that scales"
+        )
+    if not screen and boots_per_arm < MIN_BOOTS_PER_ARM and not allow_undersized:
         raise ValueError(
             f"boots_per_arm must be >= {MIN_BOOTS_PER_ARM} "
             f"(the design-based test draws from 2**blocks orders, so its smallest attainable "
@@ -629,6 +681,11 @@ def build_plan(
         stability_window=stability_window,
         go_live_timeout=go_live_timeout,
         run_nonce=run_nonce,
+        # The stage is a plan input like any other (#724 review, cursor MEDIUM). Without it a
+        # screening plan and an allow_undersized confirmatory plan sharing boots_per_arm=2, the
+        # same seed/launch config and a pinned stamp emit IDENTICAL boot-*.json names, so a
+        # shared reports-dir lets one stage silently score the other's boots.
+        schema=SCREEN_PLAN_SCHEMA if screen else PLAN_SCHEMA,
     )
     boots = [
         asdict(
@@ -641,29 +698,57 @@ def build_plan(
         for index, condition in enumerate(sequence, start=1)
     ]
     return {
-        "schema": PLAN_SCHEMA,
+        "schema": SCREEN_PLAN_SCHEMA if screen else PLAN_SCHEMA,
         # Every schema this plan supersedes, oldest first — rejected by `load_plan`, so the
         # migration path is recorded rather than implied (#710 self-hosted reviewer MEDIUM).
-        "supersedes": [
-            WITHDRAWN_PLAN_SCHEMA,
-            SUPERSEDED_PLAN_SCHEMA,
-            PRE_TREATMENT_PLAN_SCHEMA,
-        ],
+        # A SCREENING plan supersedes nothing: it is a new first stage, not a successor to the
+        # confirmatory lineage, and claiming otherwise would assert a migration path that does
+        # not exist (#724 review, antigravity MEDIUM).
+        "supersedes": (
+            []
+            if screen
+            else [
+                WITHDRAWN_PLAN_SCHEMA,
+                SUPERSEDED_PLAN_SCHEMA,
+                PRE_TREATMENT_PLAN_SCHEMA,
+            ]
+        ),
         "issue": 625,
         "generated_at_utc": stamp,
         "design": "randomized block; one boot per unit, two boots (one per arm) per block",
         "boots_per_arm": boots_per_arm,
         "blocks": boots_per_arm,
         "launches_per_boot": launches_per_boot,
-        "minimum_boots_per_arm": MIN_BOOTS_PER_ARM,
+        # Confirmatory-only metadata. On a SCREENING plan these describe a test that `screen()`
+        # explicitly never runs, so emitting them verbatim would leave the artifact carrying two
+        # contradictory accounts of how its four boots will be scored — and the plan JSON IS the
+        # pre-registration (#724 review, Codex P2).
+        "minimum_boots_per_arm": SCREEN_BOOTS_PER_ARM if screen else MIN_BOOTS_PER_ARM,
         "randomization_seed": randomization_seed,
         "run_id": run_id,
-        "randomization_reference_set": 2**boots_per_arm,
-        "smallest_attainable_two_sided_p": 2 / 2**boots_per_arm,
+        **(
+            {
+                "randomization_reference_set": None,
+                "smallest_attainable_two_sided_p": None,
+                "no_significance_test": (
+                    "the screening stage runs no permutation test; at "
+                    f"{SCREEN_BOOTS_PER_ARM} blocks its floor would be "
+                    f"{2 / 2**SCREEN_BOOTS_PER_ARM:g}, which can never reach alpha"
+                ),
+            }
+            if screen
+            else {
+                "randomization_reference_set": 2**boots_per_arm,
+                "smallest_attainable_two_sided_p": 2 / 2**boots_per_arm,
+            }
+        ),
         # Pre-registered with the plan so analyze cannot invent a receipt rule the operator never
         # signed up for (Codex P2 on #721). ``exclude_on`` is only ``contradicted``: ``unverified``
         # falls back to the planned label because no information must not manufacture missingness.
         "treatment_receipt": dict(CANONICAL_TREATMENT_RECEIPT),
+        # Present ONLY on a screening plan, so `analyze` and `screen` can each refuse the other's
+        # artifact by shape as well as by schema string (#724).
+        **({"screen_rule": dict(CANONICAL_SCREEN_RULE)} if screen else {}),
         "launch": {
             "car": car,
             "track": track,
@@ -708,23 +793,37 @@ def build_plan(
                 "not the accumulator, and is unusable"
             ),
         },
-        "endpoints": {
-            "primary": (
-                "onset DELIVERED-CYCLE index (first freeze in the boot, counted in launch cycles "
-                "that actually reached AC), right-censored at the boot's delivered-cycle count; "
-                "exact block permutation test over the 2**blocks randomization reference set. A "
-                "censoring surrogate enters the statistic only when its bound establishes the "
-                "sign of the block's difference (#710)"
-            ),
-            "secondary": (
-                f"post-onset burst rate over a fixed {POST_ONSET_WINDOW}-DELIVERED-CYCLE window "
-                "from onset, one rate per boot, same block permutation test"
-            ),
-            "sensitivity": (
-                "exact sign test over blocks; plus an assumption-dependent rank-sum "
-                "permutation test on onset, reported for information and never gating"
-            ),
-        },
+        "endpoints": (
+            {
+                # The screen's ONLY endpoint. Stating the confirmatory permutation endpoints here
+                # would pre-register tests this artifact's own `screen_rule` says are never run.
+                "primary": (
+                    "onset DELIVERED-CYCLE index, right-censored at the boot's delivered-cycle "
+                    "count — evaluated against the pre-registered screen_rule, NOT by any "
+                    "significance test. See screen_rule.large_effect_plausible_when"
+                ),
+                "secondary": None,
+                "sensitivity": None,
+            }
+            if screen
+            else {
+                "primary": (
+                    "onset DELIVERED-CYCLE index (first freeze in the boot, counted in launch "
+                    "cycles that actually reached AC), right-censored at the boot's "
+                    "delivered-cycle count; exact block permutation test over the 2**blocks "
+                    "randomization reference set. A censoring surrogate enters the statistic "
+                    "only when its bound establishes the sign of the block's difference (#710)"
+                ),
+                "secondary": (
+                    f"post-onset burst rate over a fixed {POST_ONSET_WINDOW}-DELIVERED-CYCLE "
+                    "window from onset, one rate per boot, same block permutation test"
+                ),
+                "sensitivity": (
+                    "exact sign test over blocks; plus an assumption-dependent rank-sum "
+                    "permutation test on onset, reported for information and never gating"
+                ),
+            }
+        ),
         "prereg_baselines": {
             "onset_index_graceful": BASELINE_ONSET_INDEX_GRACEFUL,
             "onset_index_hard_kill": BASELINE_ONSET_INDEX_HARD_KILL,
@@ -753,7 +852,7 @@ def _require_mapping(value: object, *, where: str) -> dict[str, Any]:
     return value
 
 
-def load_plan(path: Path) -> dict[str, Any]:
+def load_plan(path: Path, *, expect_screen: bool = False) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -782,8 +881,60 @@ def load_plan(path: Path) -> dict[str, Any]:
             f"{PLAN_SCHEMA!r} before analyze; reusing a v3 plan would apply a receipt rule the "
             "operator never pre-registered"
         )
-    if schema != PLAN_SCHEMA:
-        raise ValueError(f"plan schema must be {PLAN_SCHEMA!r}")
+    # Cross-mode refusal (#724). A screening plan carries 2 blocks and a descriptive decision
+    # rule; the confirmatory analysis would run the block permutation test on it and report a
+    # p-value floored at 2/2**2 = 0.5, and the screen would misread a 16-boot confirmatory run
+    # as its own 4-boot rule. Neither artifact may be scored by the other's command.
+    expected = SCREEN_PLAN_SCHEMA if expect_screen else PLAN_SCHEMA
+    if expect_screen and schema == PLAN_SCHEMA:
+        raise ValueError(
+            f"plan {path} is a CONFIRMATORY plan ({PLAN_SCHEMA!r}); run `analyze`, not `screen` "
+            "— the screening rule is written for exactly "
+            f"{SCREEN_BOOTS_PER_ARM} boots per arm and would misread this run"
+        )
+    if not expect_screen and schema == SCREEN_PLAN_SCHEMA:
+        raise ValueError(
+            f"plan {path} is a SCREENING plan ({SCREEN_PLAN_SCHEMA!r}); run `screen`, not "
+            "`analyze` — the confirmatory test would report a p-value whose floor at "
+            f"{SCREEN_BOOTS_PER_ARM} blocks is {2 / 2**SCREEN_BOOTS_PER_ARM:g}, which can never "
+            "reach alpha and must not be presented as a result"
+        )
+    if schema != expected:
+        raise ValueError(f"plan schema must be {expected!r}")
+    if expect_screen:
+        rule = plan.get("screen_rule")
+        if not isinstance(rule, dict) or set(rule) != set(CANONICAL_SCREEN_RULE):
+            raise ValueError(
+                f"screening plan {path} must pre-register the canonical screen_rule key set; "
+                "regenerate the plan"
+            )
+        for key, value in CANONICAL_SCREEN_RULE.items():
+            if rule.get(key) != value:
+                raise ValueError(
+                    f"screening plan screen_rule.{key}={rule.get(key)!r} does not match the "
+                    f"canonical rule {value!r}; regenerate the plan"
+                )
+        # The rule matching is not enough on its own: a hand-edited artifact can keep the
+        # canonical screen_rule (which says boots_per_arm 2) while raising the plan's OWN
+        # boots_per_arm and boot list. `screen` only requires >= 2 usable boots per arm and then
+        # applies any/all across every usable boot, so the scored N would drift while the output
+        # still claimed the canonical 4-boot screen (#724 review, Codex P2 + cursor MEDIUM).
+        if plan.get("boots_per_arm") != SCREEN_BOOTS_PER_ARM:
+            raise ValueError(
+                f"screening plan boots_per_arm={plan.get('boots_per_arm')!r} must be "
+                f"{SCREEN_BOOTS_PER_ARM}; the pre-registered rule is written for exactly that "
+                "size, so a larger plan would be scored under a rule it never registered"
+            )
+        boots = plan.get("boots")
+        if not isinstance(boots, list) or len(boots) != 2 * SCREEN_BOOTS_PER_ARM:
+            raise ValueError(
+                f"screening plan must list exactly {2 * SCREEN_BOOTS_PER_ARM} boots; "
+                f"got {len(boots) if isinstance(boots, list) else boots!r}"
+            )
+    elif "screen_rule" in plan:
+        raise ValueError(
+            f"confirmatory plan {path} carries a screen_rule block; regenerate the plan"
+        )
     receipt = plan.get("treatment_receipt")
     if not isinstance(receipt, dict) or receipt.get("enabled") is not True:
         raise ValueError(
@@ -1860,6 +2011,203 @@ def _format_optional(value: float | None, spec: str) -> str:
     return "n/a" if value is None else format(value, spec)
 
 
+def screen(
+    plan: dict[str, Any],
+    observations: Sequence[BootObservation],
+) -> dict[str, Any]:
+    """Score the 4-boot screening stage against its pre-registered rule (#724).
+
+    Deliberately NOT the confirmatory test. It reuses :func:`summarize_boot` — the same onset,
+    the same delivered-cycle counting, the same #719 treatment-receipt exclusion — and then
+    applies a rule that can only ever answer "is there a LARGE effect here?". It never runs the
+    block permutation test and never emits a p-value: with 2 blocks the smallest attainable
+    two-sided p is 0.5, so any number printed here would be false precision.
+
+    What the verdicts mean:
+
+    * ``no_large_effect`` — an ``overlays_off`` boot still froze on a normal budget. Disabling
+      the overlays is therefore not the mitigation #625 was looking for. This does **not** say
+      "no effect": a modest real shift survives this screen unrefuted, and that is accepted,
+      because a modest shift does not justify adopting the mitigation over the existing retry.
+    * ``large_effect_plausible`` — a promotion signal, not a result. Worth the confirmatory run.
+    * ``ambiguous`` / ``insufficient_usable_boots`` — honest outcomes, not failures.
+    """
+
+    summaries = [summarize_boot(observation) for observation in observations]
+    usable = [item for item in summaries if item.usable and not item.onset_ambiguous]
+    excluded = [
+        {
+            "boot": item.boot,
+            "condition": item.condition,
+            "reason": item.unusable_reason or ("onset_ambiguous" if item.onset_ambiguous else None),
+            "treatment": item.treatment,
+            "treatment_detail": item.treatment_detail,
+        }
+        for item in summaries
+        if item not in usable
+    ]
+    off = [item for item in usable if item.condition == "overlays_off"]
+    on = [item for item in usable if item.condition == "overlays_on"]
+
+    unverified = [item for item in usable if item.treatment == TREATMENT_UNVERIFIED]
+    if len(off) < SCREEN_BOOTS_PER_ARM or len(on) < SCREEN_BOOTS_PER_ARM:
+        verdict = SCREEN_INSUFFICIENT
+        rationale = (
+            f"the screen needs {SCREEN_BOOTS_PER_ARM} usable boots per arm; got "
+            f"{len(on)} overlays_on and {len(off)} overlays_off. Recovery depends on WHY the "
+            "boot is unusable. An arm-contradicted boot published to a salvage name and left "
+            "its planned path free, so if it is the LAST boot that ran you may reboot and "
+            "re-run it in place — a successful report at the planned name supersedes the "
+            "salvage. Otherwise (the planned path holds a successful report, or later boots "
+            "have already run) re-running is not possible: reports publish exclusively and "
+            "load_observations enforces planned order, so a replacement for an earlier boot "
+            "would invert the timestamps and void the run. Then regenerate the screening plan "
+            "(it draws a new nonce, hence fresh report names) and run the four boots again in "
+            "order; keep the old reports as evidence"
+        )
+    elif unverified:
+        # A boot whose receipt is UNVERIFIED is still `usable` by `summarize_boot` — the
+        # confirmatory path handles this by refusing a causal conclusion rather than by
+        # excluding it. The screen must do the same, or a run with no perturber evidence at all
+        # could return `no_large_effect` and instruct the operator to CLOSE #625 with nothing
+        # showing the overlays were ever off (#724 review, Codex P1).
+        verdict = SCREEN_RECEIPT_UNVERIFIED
+        names = ", ".join(f"boot {item.boot} ({item.condition})" for item in unverified)
+        rationale = (
+            f"treatment receipt is unverified for {names}, so no causal statement about the "
+            "overlays is available from this screen — a verdict here would rest on an "
+            "unmeasured treatment. Recovery is the SAME as for insufficient boots, and for the "
+            "same two reasons: the affected boots' reports already occupy their planned paths, "
+            "and load_observations enforces planned order, so re-running one boot in place "
+            "would invert the timestamps and void the whole experiment. Fix perturber sampling "
+            "first (64-bit Python on the rig; go_live_timeout above the injection race), then "
+            "regenerate the screening plan and run all four boots again in order"
+        )
+    elif any(
+        not item.onset_censored
+        and item.onset_cycle is not None
+        and item.onset_cycle <= BASELINE_ONSET_INDEX_GRACEFUL
+        for item in off
+    ):
+        verdict = SCREEN_NO_LARGE_EFFECT
+        rationale = (
+            "at least one overlays_off boot froze at or before the pre-registered graceful "
+            f"baseline onset ({BASELINE_ONSET_INDEX_GRACEFUL} delivered cycles), so disabling "
+            "the overlays does not eliminate the freeze. #627's launcher retry already covers "
+            "the residual, so this is not a mitigation worth adopting"
+        )
+    elif (
+        all(item.onset_censored for item in off)
+        and any(not item.onset_censored for item in on)
+        # HORIZON. "Eliminates the freeze" is a claim about out-running the pre-registered
+        # baseline, so an off boot must actually reach it. Without this, a short boot (the
+        # public `allow_undersized` escape hatch, or a hand-edited launch budget) promotes a
+        # MODEST shift as elimination: off censored at 9 delivered cycles vs on freezing at 8
+        # satisfies any separation test while never approaching cycle 14 (#724 review, Codex P2).
+        and min(item.delivered_cycles for item in off) >= BASELINE_ONSET_INDEX_GRACEFUL
+        # SEPARATION, expressed in the module's own censoring surrogate. A censored boot's onset
+        # is strictly GREATER than its delivered count (`onset_value = delivered_cycles + 1`), so
+        # surviving N delivered cycles already beats an on-arm freeze AT cycle N. Comparing raw
+        # delivered counts with `>` was off by one against that semantics and refused to promote
+        # the cleanest possible result — off clean through the whole budget while on froze on the
+        # final cycle (#724 review, cursor MEDIUM).
+        and min(item.onset_value for item in off)
+        > max(
+            item.onset_cycle
+            for item in on
+            if not item.onset_censored and item.onset_cycle is not None
+        )
+    ):
+        verdict = SCREEN_LARGE_EFFECT_PLAUSIBLE
+        rationale = (
+            "every overlays_off boot ran its full delivered budget without freezing, that "
+            f"budget reached the pre-registered baseline horizon "
+            f"({BASELINE_ONSET_INDEX_GRACEFUL} delivered cycles), and it out-runs the latest "
+            "overlays_on onset — so the arms are genuinely separated under censoring. "
+            "Suggestive, NOT conclusive — promote to the confirmatory 16-boot design for a "
+            "design-based p-value"
+        )
+    else:
+        verdict = SCREEN_AMBIGUOUS
+        rationale = (
+            "the boots neither refute a large effect nor show the clean separation that would "
+            "justify the confirmatory run; the operator decides whether to spend it"
+        )
+
+    return {
+        "schema": SCREEN_SCHEMA,
+        "issue": 625,
+        "stage": "screen",
+        "verdict": verdict,
+        "rationale": rationale,
+        "claims_p_value": False,
+        "not_a_significance_test": (
+            f"the block permutation test is NOT run here: at {SCREEN_BOOTS_PER_ARM} blocks its "
+            f"smallest attainable two-sided p is {2 / 2**SCREEN_BOOTS_PER_ARM:g}"
+        ),
+        "screen_rule": dict(CANONICAL_SCREEN_RULE),
+        "boots": [
+            {
+                "boot": item.boot,
+                "condition": item.condition,
+                "onset_cycle": item.onset_cycle,
+                "onset_censored": item.onset_censored,
+                "delivered_cycles": item.delivered_cycles,
+                "treatment": item.treatment,
+            }
+            for item in summaries
+        ],
+        "excluded_boots": excluded,
+        "run_id": plan.get("run_id"),
+    }
+
+
+def render_screen_markdown(result: dict[str, Any]) -> str:
+    """Operator-facing screen result — states plainly what it does and does not claim."""
+
+    lines = [
+        "# #625 init-perturber screen (stage 1 of 2)",
+        "",
+        f"**Verdict:** `{result['verdict']}`",
+        "",
+        result["rationale"],
+        "",
+        f"> {result['not_a_significance_test']}.",
+        "",
+        "| boot | arm | onset (delivered cycles) | censored | treatment |",
+        "|---|---|---|---|---|",
+    ]
+    for boot in result["boots"]:
+        onset = "—" if boot["onset_cycle"] is None else boot["onset_cycle"]
+        lines.append(
+            f"| {boot['boot']} | {boot['condition']} | {onset} | "
+            f"{'yes' if boot['onset_censored'] else 'no'} | {boot['treatment']} |"
+        )
+    if result["excluded_boots"]:
+        lines += ["", "**Excluded boots**", ""]
+        for item in result["excluded_boots"]:
+            lines.append(
+                f"- boot {item['boot']} ({item['condition']}): {item['reason']}"
+                + (f" — {item['treatment_detail']}" if item.get("treatment_detail") else "")
+            )
+    lines += [
+        "",
+        "## What happens next",
+        "",
+        f"- `{SCREEN_NO_LARGE_EFFECT}` → close #625: the overlays are not a mitigation worth "
+        "adopting over the existing launcher retry. A MODEST effect is NOT ruled out — this "
+        "stage cannot see one, by design.",
+        f"- `{SCREEN_LARGE_EFFECT_PLAUSIBLE}` → run the confirmatory 16-boot design "
+        "(`plan` without `--screen`).",
+        f"- `{SCREEN_RECEIPT_UNVERIFIED}` → the treatment was never measured on at least one "
+        "scored boot. Read nothing into the onsets: fix perturber sampling, then **regenerate "
+        "the plan and re-run all four boots in order** — re-running a single boot in place "
+        "inverts the planned timestamps and voids the experiment.",
+        f"- `{SCREEN_AMBIGUOUS}` / `{SCREEN_INSUFFICIENT}` → operator decides.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def render_markdown(analysis: dict[str, Any]) -> str:
     arms = analysis["arms"]
     boots = analysis.get("boots") or []
@@ -2117,9 +2465,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     plan_parser.add_argument(
         "--boots-per-arm",
         type=int,
-        default=DEFAULT_BOOTS_PER_ARM,
+        # Sentinel rather than DEFAULT_BOOTS_PER_ARM so `--screen` can supply its own default
+        # WITHOUT silently discarding an explicit operator value: `plan --boots-per-arm 16
+        # --screen` must be rejected by build_plan, not quietly turned into a 2-boot plan
+        # (#724 review, antigravity MEDIUM).
+        default=None,
         help=(
-            f"boots per arm (= blocks); minimum {MIN_BOOTS_PER_ARM}, maximum {MAX_BOOTS_PER_ARM}"
+            f"boots per arm (= blocks); minimum {MIN_BOOTS_PER_ARM}, maximum "
+            f"{MAX_BOOTS_PER_ARM} (default {DEFAULT_BOOTS_PER_ARM}). With --screen the only "
+            f"accepted value is {SCREEN_BOOTS_PER_ARM}"
         ),
     )
     plan_parser.add_argument(
@@ -2138,6 +2492,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             "reproduce a known plan."
         ),
     )
+    plan_parser.add_argument(
+        "--screen",
+        action="store_true",
+        help=(
+            f"screening stage (#724): {SCREEN_BOOTS_PER_ARM} boots per arm = "
+            f"{SCREEN_BOOTS_PER_ARM * 2} reboots instead of 16, scored by a pre-registered "
+            "LARGE-effect rule instead of the permutation test. Answers 'is disabling the "
+            "overlays a mitigation worth adopting?' — the only outcome that changes what we do, "
+            "since the launcher already retries past the freeze. Score it with `screen`, never "
+            "`analyze`"
+        ),
+    )
     plan_parser.add_argument("--car", default=DEFAULT_CAR)
     plan_parser.add_argument("--track", default=DEFAULT_TRACK)
     plan_parser.add_argument("--layout", default=None)
@@ -2147,11 +2513,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     analyze_parser.add_argument("--plan", required=True, type=Path)
     analyze_parser.add_argument("--reports-dir", required=True, type=Path)
     analyze_parser.add_argument("--json", type=Path, default=None, dest="json_path")
+    screen_parser = subparsers.add_parser(
+        "screen",
+        help="score the 4-boot screening stage (#724) — descriptive, never a p-value",
+    )
+    screen_parser.add_argument("--plan", required=True, type=Path)
+    screen_parser.add_argument("--reports-dir", required=True, type=Path)
+    screen_parser.add_argument("--json", type=Path, default=None, dest="json_path")
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
+            # Resolve the DEFAULT per stage; an explicit value is passed straight through so the
+            # domain layer rejects it rather than the CLI silently overriding it.
+            if args.boots_per_arm is None:
+                boots_per_arm = SCREEN_BOOTS_PER_ARM if args.screen else DEFAULT_BOOTS_PER_ARM
+            else:
+                boots_per_arm = args.boots_per_arm
+            args.boots_per_arm = boots_per_arm
             plan = build_plan(
-                args.boots_per_arm,
+                boots_per_arm,
+                screen=args.screen,
                 launches_per_boot=args.launches_per_boot,
                 randomization_seed=args.seed,
                 car=args.car,
@@ -2198,22 +2579,46 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "it. REBOOT AGAIN before re-running that boot — a plain retry restarts launch "
                 "numbering at 1 and silently offsets the onset index."
             )
-            print(
-                f"Endpoint floor is {MIN_BOOTS_PER_ARM} usable blocks "
-                f"(scheduled {args.boots_per_arm}/arm = {2 * args.boots_per_arm} boots and "
-                f"reboots, {args.launches_per_boot} launches each). The randomization draws "
-                f"1 of {2**args.boots_per_arm} arm orders, so the smallest two-sided p this "
-                f"run can attain is {2 / 2**args.boots_per_arm:.4g}. Pre-registered graceful "
-                f"onset ~{BASELINE_ONSET_INDEX_GRACEFUL}, post-onset burst "
-                f"~{BASELINE_POST_ONSET_BURST_RATE:.0%}."
-            )
-            print(
-                "POWER NOTE: only blocks whose two arms differ carry information — a block "
-                "where both onsets tie contributes nothing to the test. Every tie effectively "
-                f"costs one block, so a run scheduled at exactly {MIN_BOOTS_PER_ARM}/arm "
-                "reports insufficient_sample as soon as one block ties. Schedule headroom "
-                f"(the default is {DEFAULT_BOOTS_PER_ARM}/arm) rather than re-running."
-            )
+            if args.screen:
+                # A screening plan must never carry the confirmatory power note: quoting a
+                # p-value floor on a run that will not compute one is the exact false-precision
+                # this stage exists to avoid.
+                print(
+                    f"SCREENING STAGE ({SCREEN_BOOTS_PER_ARM}/arm = "
+                    f"{2 * SCREEN_BOOTS_PER_ARM} boots and reboots, "
+                    f"{args.launches_per_boot} launches each). This stage answers ONE question: "
+                    "does disabling the overlays roughly ELIMINATE the freeze? That is the only "
+                    "outcome that changes what we do, because #627's launcher already retries "
+                    "past it."
+                )
+                print(
+                    "NO P-VALUE IS COMPUTED. The block permutation test is not run at "
+                    f"{SCREEN_BOOTS_PER_ARM} blocks (its floor is "
+                    f"{2 / 2**SCREEN_BOOTS_PER_ARM:g}). Score with `screen`, never `analyze` — "
+                    "the tool refuses the wrong one."
+                )
+                print(
+                    f"Verdicts: `{SCREEN_NO_LARGE_EFFECT}` -> close #625 (a MODEST effect is "
+                    f"NOT ruled out); `{SCREEN_LARGE_EFFECT_PLAUSIBLE}` -> run the confirmatory "
+                    f"16-boot design; `{SCREEN_AMBIGUOUS}` -> operator decides."
+                )
+            else:
+                print(
+                    f"Endpoint floor is {MIN_BOOTS_PER_ARM} usable blocks "
+                    f"(scheduled {args.boots_per_arm}/arm = {2 * args.boots_per_arm} boots and "
+                    f"reboots, {args.launches_per_boot} launches each). The randomization draws "
+                    f"1 of {2**args.boots_per_arm} arm orders, so the smallest two-sided p this "
+                    f"run can attain is {2 / 2**args.boots_per_arm:.4g}. Pre-registered graceful "
+                    f"onset ~{BASELINE_ONSET_INDEX_GRACEFUL}, post-onset burst "
+                    f"~{BASELINE_POST_ONSET_BURST_RATE:.0%}."
+                )
+                print(
+                    "POWER NOTE: only blocks whose two arms differ carry information — a block "
+                    "where both onsets tie contributes nothing to the test. Every tie effectively "
+                    f"costs one block, so a run scheduled at exactly {MIN_BOOTS_PER_ARM}/arm "
+                    "reports insufficient_sample as soon as one block ties. Schedule headroom "
+                    f"(the default is {DEFAULT_BOOTS_PER_ARM}/arm) rather than re-running."
+                )
             print(
                 "Paste each command on the Windows rig from that checkout's root "
                 "(cd to the rig's ac-copilot-trainer clone first; report paths are "
@@ -2226,6 +2631,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "— apply settings, REBOOT, then:"
                 )
                 print(command)
+            return 0
+        if args.command == "screen":
+            plan = load_plan(args.plan, expect_screen=True)
+            observations = load_observations(plan, args.reports_dir)
+            result = screen(plan, observations)
+            if args.json_path is not None:
+                destination = _output_path(args.json_path)
+                _write_new_json(destination, result)
+                print(f"screen -> {destination}")
+            print(render_screen_markdown(result))
             return 0
         plan = load_plan(args.plan)
         observations = load_observations(plan, args.reports_dir)
