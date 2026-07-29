@@ -2194,3 +2194,76 @@ class TestScreenReviewFindings:
         out.parent.mkdir(parents=True, exist_ok=True)
         assert main(["plan", "--screen", "--out", str(out)]) == 0
         assert json.loads(out.read_text(encoding="utf-8"))["boots_per_arm"] == 2
+
+
+class TestScreenReviewRoundTwo:
+    """#724 review round 2 — horizon guard, censoring off-by-one, and rule/code agreement."""
+
+    @staticmethod
+    def _screen_plan(**kwargs) -> dict:
+        from tools.ac_harness.init_perturber_ab import build_plan
+
+        params = {"randomization_seed": 625, "screen": True}
+        params.update(kwargs)
+        return build_plan(2, **params)
+
+    def test_off_censored_on_the_same_cycle_the_on_arm_froze_still_promotes(self):
+        """cursor MEDIUM — a censored boot's onset EXCEEDS its delivered count.
+
+        The cleanest possible result: OFF runs the whole budget clean while ON freezes on the
+        final cycle. Comparing raw delivered counts with `>` called that ambiguous.
+        """
+        from tools.ac_harness.init_perturber_ab import SCREEN_LARGE_EFFECT_PLAUSIBLE, screen
+
+        clean = ["stable"] * _LAUNCHES  # censored at _LAUNCHES delivered cycles
+        froze_on_last = ["stable"] * (_LAUNCHES - 1) + ["froze"]  # onset == _LAUNCHES
+        boots = [
+            _boot(1, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(2, "overlays_on", froze_on_last, perturbers=_INJECTED_PERTURBERS),
+            _boot(3, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(4, "overlays_on", froze_on_last, perturbers=_INJECTED_PERTURBERS),
+        ]
+        assert screen(self._screen_plan(), boots)["verdict"] == SCREEN_LARGE_EFFECT_PLAUSIBLE
+
+    def test_a_short_screen_cannot_promote_a_modest_shift_as_elimination(self):
+        """Codex P2 — off censored at 9 vs on freezing at 8 separates, but never reaches 14."""
+        from tools.ac_harness.init_perturber_ab import SCREEN_AMBIGUOUS, screen
+
+        short = 9
+        clean = ["stable"] * short
+        froze_early = ["stable"] * 7 + ["froze"] * (short - 7)
+        plan = self._screen_plan(launches_per_boot=short, allow_undersized=True)
+        boots = [
+            _boot(1, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(2, "overlays_on", froze_early, perturbers=_INJECTED_PERTURBERS),
+            _boot(3, "overlays_off", clean, perturbers=_ABSENT_PERTURBERS),
+            _boot(4, "overlays_on", froze_early, perturbers=_INJECTED_PERTURBERS),
+        ]
+        # Separated (10 > 8) but nowhere near the pre-registered baseline horizon of 14.
+        assert screen(plan, boots)["verdict"] == SCREEN_AMBIGUOUS
+
+    def test_persisted_rule_states_every_clause_the_code_applies(self):
+        """Codex P2 — the artifact IS the pre-registration; it must not under-describe itself."""
+        from tools.ac_harness.init_perturber_ab import (
+            BASELINE_ONSET_INDEX_GRACEFUL,
+            CANONICAL_SCREEN_RULE,
+        )
+
+        clause = CANONICAL_SCREEN_RULE["large_effect_plausible_when"]
+        # All three conjuncts the predicate actually enforces.
+        assert "censored" in clause
+        assert "baseline_onset_graceful" in clause
+        assert "delivered_cycles + 1" in clause
+        assert (
+            CANONICAL_SCREEN_RULE["min_delivered_cycles_for_elimination"]
+            == BASELINE_ONSET_INDEX_GRACEFUL
+        )
+
+    def test_insufficient_recovery_advice_does_not_suggest_an_out_of_order_rerun(self):
+        """Codex P2 — load_observations enforces planned order, so a single re-run is refused."""
+        from tools.ac_harness.init_perturber_ab import screen
+
+        boots = [_boot(1, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS)]
+        rationale = screen(self._screen_plan(), boots)["rationale"]
+        assert "planned order" in rationale
+        assert "Regenerate the screening plan" in rationale

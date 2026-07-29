@@ -208,10 +208,18 @@ CANONICAL_SCREEN_RULE: dict[str, object] = {
     "enabled": True,
     "boots_per_arm": SCREEN_BOOTS_PER_ARM,
     "no_large_effect_when": "any overlays_off boot froze at or before the graceful baseline onset",
+    # The persisted rule IS the pre-registration, so it must state the predicate the code
+    # actually applies — all three clauses, not just the first. An artifact that promised
+    # promotion on censoring alone while `screen()` also demanded a horizon and a censoring-aware
+    # separation would mis-describe its own experiment (#724 review, Codex P2).
     "large_effect_plausible_when": (
-        "every overlays_off boot censored and at least one overlays_on boot froze"
+        "every overlays_off boot censored AND at least one overlays_on boot froze AND every "
+        "overlays_off boot delivered at least baseline_onset_graceful cycles AND the smallest "
+        "overlays_off censoring surrogate (delivered_cycles + 1) exceeds the latest overlays_on "
+        "onset"
     ),
     "baseline_onset_graceful": BASELINE_ONSET_INDEX_GRACEFUL,
+    "min_delivered_cycles_for_elimination": BASELINE_ONSET_INDEX_GRACEFUL,
     "claims_p_value": False,
     "promotes_to_confirmatory": True,
 }
@@ -2014,11 +2022,13 @@ def screen(
         verdict = SCREEN_INSUFFICIENT
         rationale = (
             f"the screen needs {SCREEN_BOOTS_PER_ARM} usable boots per arm; got "
-            f"{len(on)} overlays_on and {len(off)} overlays_off. Re-running an excluded boot "
-            "is NOT just a reboot: its planned report name is already taken and "
-            "resilient_launch publishes reports exclusively, so move the existing report aside "
-            "(it is evidence — do not delete it) or regenerate the screening plan, which draws "
-            "a new nonce and therefore a fresh set of report names"
+            f"{len(on)} overlays_on and {len(off)} overlays_off. Recovery is NOT 'reboot and "
+            "re-run that one boot': its planned report name is already taken (reports are "
+            "published exclusively), AND load_observations requires boots to have run in "
+            "planned order — so a replacement for an EARLY boot would carry a timestamp later "
+            "than the boots that followed it and the whole experiment would be refused. "
+            "Regenerate the screening plan (it draws a new nonce, hence fresh report names) and "
+            "run the four boots again in order; keep the old reports as evidence"
         )
     elif unverified:
         # A boot whose receipt is UNVERIFIED is still `usable` by `summarize_boot` — the
@@ -2050,11 +2060,19 @@ def screen(
     elif (
         all(item.onset_censored for item in off)
         and any(not item.onset_censored for item in on)
-        # Censoring alone does NOT establish separation: an off boot censored after only 20
-        # delivered cycles (four attempts never reached AC) is known only to exceed 20, which
-        # says nothing about an on boot that froze at 24. Every off boot must have out-run the
-        # LATEST on-arm onset for the arms to be genuinely separated (#724 review, Codex P2).
-        and min(item.delivered_cycles for item in off)
+        # HORIZON. "Eliminates the freeze" is a claim about out-running the pre-registered
+        # baseline, so an off boot must actually reach it. Without this, a short boot (the
+        # public `allow_undersized` escape hatch, or a hand-edited launch budget) promotes a
+        # MODEST shift as elimination: off censored at 9 delivered cycles vs on freezing at 8
+        # satisfies any separation test while never approaching cycle 14 (#724 review, Codex P2).
+        and min(item.delivered_cycles for item in off) >= BASELINE_ONSET_INDEX_GRACEFUL
+        # SEPARATION, expressed in the module's own censoring surrogate. A censored boot's onset
+        # is strictly GREATER than its delivered count (`onset_value = delivered_cycles + 1`), so
+        # surviving N delivered cycles already beats an on-arm freeze AT cycle N. Comparing raw
+        # delivered counts with `>` was off by one against that semantics and refused to promote
+        # the cleanest possible result — off clean through the whole budget while on froze on the
+        # final cycle (#724 review, cursor MEDIUM).
+        and min(item.onset_value for item in off)
         > max(
             item.onset_cycle
             for item in on
@@ -2063,10 +2081,12 @@ def screen(
     ):
         verdict = SCREEN_LARGE_EFFECT_PLAUSIBLE
         rationale = (
-            "every overlays_off boot ran its full delivered budget without freezing, and that "
-            "budget out-runs the latest overlays_on onset, so the arms are genuinely separated "
-            "under censoring. Suggestive, NOT conclusive — promote to the confirmatory 16-boot "
-            "design for a design-based p-value"
+            "every overlays_off boot ran its full delivered budget without freezing, that "
+            f"budget reached the pre-registered baseline horizon "
+            f"({BASELINE_ONSET_INDEX_GRACEFUL} delivered cycles), and it out-runs the latest "
+            "overlays_on onset — so the arms are genuinely separated under censoring. "
+            "Suggestive, NOT conclusive — promote to the confirmatory 16-boot design for a "
+            "design-based p-value"
         )
     else:
         verdict = SCREEN_AMBIGUOUS
