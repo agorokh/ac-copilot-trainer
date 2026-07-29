@@ -803,6 +803,21 @@ def _utc_stamp(epoch_seconds: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch_seconds))
 
 
+def _arm_contradicted_salvage_path(path: Path, when: float | None = None) -> Path:
+    """Side path for a contradicted boot so the planned exclusive name stays free.
+
+    Must be unique across retries: ``_write_report_json`` refuses overwrite, and a second
+    contradicted re-run (settings still wrong) would otherwise fail as a generic report-write
+    error and drop the new receipt (cursor MEDIUM on #721). Filename uses a Windows-safe UTC
+    stamp with microseconds so same-second retries still diverge.
+    """
+
+    epoch = time.time() if when is None else when
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime(epoch))
+    micros = int((epoch % 1.0) * 1_000_000)
+    return path.with_name(f"{path.stem}.arm_contradicted.{stamp}{micros:06d}Z{path.suffix}")
+
+
 class PerturberWatch:
     """Fold repeated module snapshots of one ``acs.exe`` into per-perturber evidence (#719).
 
@@ -870,6 +885,42 @@ class PerturberWatch:
             else:
                 out[name] = str(PerturberEvidence.UNAVAILABLE)
         return out
+
+
+def fold_perturber_snapshots(
+    watch: PerturberWatch,
+    *,
+    enum_failed: bool = False,
+    pids_empty: bool = False,
+    successes: list[frozenset[str]] | None = None,
+    any_pid_failed: bool = False,
+) -> None:
+    """Apply one multi-PID sample poll to ``watch`` (pure; unit-tested off-rig).
+
+    Encoding rules (#721 reviews):
+    - ``enum_failed``: Toolhelp enumeration raised — treat as failed look.
+    - ``pids_empty``: acs.exe is gone — leave prior evidence intact (not a failed live look).
+    - all PID snapshots failed: failed look.
+    - partial success: union presence, then invalidate absence.
+    - full success: observe every snapshot (presence unions; absence counts only if complete).
+    """
+
+    if enum_failed:
+        watch.observe(None)
+        return
+    if pids_empty:
+        return
+    snaps = list(successes or ())
+    if not snaps:
+        watch.observe(None)
+        return
+    if any_pid_failed:
+        for names in snaps:
+            watch.note_injected(names)
+        watch.observe(None)
+        return
+    for names in snaps:
+        watch.observe(names)
 
 
 def _normalize_perturber_evidence(raw: dict[str, str] | None) -> dict[str, str]:
@@ -2194,10 +2245,14 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     # on the visible PID alone (Codex P2 on #721).
                     pids = sorted(running_process_ids("acs.exe", strict=True))
                 except OSError:
-                    perturbers.observe(None)
+                    fold_perturber_snapshots(perturbers, enum_failed=True)
                     return
                 if not pids:
-                    perturbers.observe(None)
+                    # Empty PID list means acs.exe is gone, not that a live process failed to
+                    # open. fold_perturber_snapshots leaves prior evidence intact so a successful
+                    # post-race miss (overlays_off confirmation) survives the dying-process /
+                    # final sample classify commonly hits after FROZE (cursor MEDIUM on #721).
+                    fold_perturber_snapshots(perturbers, pids_empty=True)
                     return
                 # Union presence across EVERY returned PID. Taking only the lowest PID (the old
                 # behaviour) can sample a leftover corpse without overlays while the live session
@@ -2214,17 +2269,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                         successes.append(process_module_names(pid, retries=1))
                     except OSError:
                         any_failed = True
-                if not successes:
-                    perturbers.observe(None)
-                elif any_failed:
-                    for names in successes:
-                        perturbers.note_injected(names)
-                    # Invalidate absence: a prior full miss must not stick when this poll only
-                    # partially sampled PIDs (cursor HIGH / Codex P1 on #721).
-                    perturbers.observe(None)
-                else:
-                    for names in successes:
-                        perturbers.observe(names)
+                fold_perturber_snapshots(
+                    perturbers,
+                    successes=successes,
+                    any_pid_failed=any_failed,
+                )
 
             def read_attempt_state() -> tuple[int | None, bool | None, bool | None, int | None]:
                 """Report shared memory; trust readiness only once the packet proves a live owner.
@@ -2344,10 +2393,16 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # Analyze will treat the planned name as missing until the re-run succeeds; the
             # salvage file keeps the positive injection evidence for the operator.
             if report.arm_contradicted:
-                salvage = args.json_path.with_name(
-                    f"{args.json_path.stem}.arm_contradicted{args.json_path.suffix}"
-                )
+                # Unique name: exclusive publish refuses overwrite, so a second contradicted
+                # re-run must not collide with a prior salvage (cursor MEDIUM on #721).
+                salvage = _arm_contradicted_salvage_path(args.json_path)
                 report_written = _write_report_json(report, salvage)
+                if not report_written:
+                    # Same-second collision is rare; one microsecond-nudged retry is enough.
+                    salvage = _arm_contradicted_salvage_path(
+                        args.json_path, when=time.time() + 0.001
+                    )
+                    report_written = _write_report_json(report, salvage)
                 if report_written:
                     _log(
                         f"arm contradicted — salvage report at {salvage}; planned path "

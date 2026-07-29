@@ -2533,3 +2533,78 @@ class TestPerturberTreatmentReceipt:
         watch.note_injected(frozenset({"ntdll.dll"}))
         watch.observe(None)
         assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.UNAVAILABLE)
+
+    def test_empty_pid_poll_must_not_clear_prior_absence(self):
+        """Cursor MEDIUM: gone acs.exe is not a failed look — leave post-race miss intact."""
+        from tools.ac_harness.resilient_launch import (
+            PerturberEvidence,
+            PerturberWatch,
+            fold_perturber_snapshots,
+        )
+
+        watch = PerturberWatch()
+        watch.observe(frozenset({"ntdll.dll"}))  # post-race miss
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
+        fold_perturber_snapshots(watch, pids_empty=True)
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
+        # Contrast: a real failed look at a live process does invalidate.
+        fold_perturber_snapshots(watch, enum_failed=True)
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.UNAVAILABLE)
+
+    def test_fold_partial_and_full_pid_samples(self):
+        """fold_perturber_snapshots covers partial invalidation and full multi-PID observe."""
+        from tools.ac_harness.resilient_launch import (
+            PerturberEvidence,
+            PerturberWatch,
+            fold_perturber_snapshots,
+        )
+
+        watch = PerturberWatch()
+        watch.observe(frozenset({"ntdll.dll"}))
+        fold_perturber_snapshots(
+            watch,
+            successes=[frozenset({"ntdll.dll"})],
+            any_pid_failed=True,
+        )
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.UNAVAILABLE)
+
+        watch2 = PerturberWatch()
+        fold_perturber_snapshots(
+            watch2,
+            successes=[
+                frozenset({"ntdll.dll"}),
+                frozenset({"gameoverlayrenderer64.dll"}),
+            ],
+            any_pid_failed=False,
+        )
+        assert watch2.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
+
+    def test_arm_contradicted_salvage_path_is_unique_per_timestamp(self, tmp_path):
+        """Cursor MEDIUM: salvage names must not collide under exclusive publish."""
+        from tools.ac_harness.resilient_launch import (
+            LaunchReport,
+            LaunchVerdict,
+            _arm_contradicted_salvage_path,
+            _write_report_json,
+        )
+
+        base = tmp_path / "boot3.json"
+        first = _arm_contradicted_salvage_path(base, when=1_753_766_510.100000)
+        second = _arm_contradicted_salvage_path(base, when=1_753_766_510.200000)
+        assert first != second
+        assert first.name.startswith("boot3.arm_contradicted.")
+        assert first.suffix == ".json"
+        # No colons — Windows path safety.
+        assert ":" not in first.name
+        report = LaunchReport(
+            verdict=LaunchVerdict.FROZE,
+            attempts=1,
+            froze=1,
+            never_live=0,
+            stable=0,
+            arm_contradicted=True,
+        )
+        assert _write_report_json(report, first) is True
+        assert _write_report_json(report, second) is True
+        # Same timestamp would refuse overwrite — uniqueness is what makes retry work.
+        assert _write_report_json(report, first) is False
