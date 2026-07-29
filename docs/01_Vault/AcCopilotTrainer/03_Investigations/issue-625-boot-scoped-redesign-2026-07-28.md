@@ -17,6 +17,37 @@ relates_to:
 **This page replaces the v1 runbook.** The old one is archived at
 [[issue-625-init-perturber-ab-prepared-2026-07-22]] and its protocol **must not be run**.
 
+## START HERE — run the SCREEN first (#724), not the 16-boot design
+
+**Do not open with the confirmatory run.** #625 sat unrun for over a week because the cheapest
+question this tool could ask cost **16 physical reboots**: `MIN_BOOTS_PER_ARM = 6` makes it return
+`insufficient_sample` below 12 boots. Four sessions found real instrument defects
+(#657 → #708 → #710 → #719) and fixed every one; none of them moved that price, because the price
+was never a defect — it was the design being **confirmatory-only for a screening question**.
+
+The power target was also wrong for the decision. The 16-boot design separates onset ~14 from ~8, a
+*modest* shift. But #627's resilient launcher already retries past the freeze, so
+"disable the overlays permanently" is only worth adopting if it roughly **eliminates** the freeze.
+That is a large effect, and a large effect is visible in ~4 boots.
+
+```bash
+python -m tools.ac_harness.init_perturber_ab plan --screen --out .scratch/<name>.json
+# ... run the 4 printed boots (one reboot each) ...
+python -m tools.ac_harness.init_perturber_ab screen --plan .scratch/<name>.json --reports-dir .scratch
+```
+
+| screen verdict | what to do |
+|---|---|
+| `no_large_effect` | **Close #625.** The overlays are not a mitigation worth adopting over the existing retry. A **modest** effect is *not* ruled out — the screen cannot see one, by design. |
+| `large_effect_plausible` | Now spend the confirmatory 16 boots (`plan` without `--screen`). |
+| `ambiguous` / `insufficient_usable_boots` | Operator decides. |
+
+The screen **never computes a p-value** — at 2 blocks the permutation floor is `2/2**2 = 0.5`, so
+any number would be false precision. `analyze` and `screen` refuse each other's plan artifacts, in
+both directions, so neither can be scored by the wrong rule.
+
+Everything below describes the **confirmatory** stage, which is now stage 2.
+
 ## Why the v1 protocol was withdrawn
 
 v1 interleaved single launches inside **one** boot and compared a pooled per-launch freeze rate —
