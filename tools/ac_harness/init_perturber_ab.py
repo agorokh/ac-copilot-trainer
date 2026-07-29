@@ -206,6 +206,9 @@ class LaunchObservation:
     elapsed_s: float
     uptime_h: float
     cycle_delivered: bool | None = None
+    #: #719 per-perturber evidence for this launch, keyed as in ``PERTURBER_MODULES``. Values are
+    #: :class:`PerturberEvidence` strings; only ``injected`` establishes anything.
+    perturbers: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -213,6 +216,86 @@ class BootObservation:
     boot: int
     condition: str
     launches: tuple[LaunchObservation, ...]
+
+
+#: Accepted per-launch perturber evidence values (mirrors ``PerturberEvidence``).
+_PERTURBER_EVIDENCE_VALUES = frozenset({"injected", "not_observed", "unavailable"})
+
+#: Treatment-receipt verdicts for a boot (#719).
+TREATMENT_CONFIRMED = "confirmed"
+TREATMENT_CONTRADICTED = "contradicted"
+TREATMENT_UNVERIFIED = "unverified"
+
+
+def boot_perturber_state(observation: BootObservation) -> dict[str, str]:
+    """Roll one boot's per-launch evidence up to one value per perturber.
+
+    Union on presence: a perturber cannot un-inject, so one sighting anywhere in the boot is
+    dispositive for the boot. ``not_observed`` requires at least one launch that looked
+    successfully and missed it; otherwise ``unavailable``.
+    """
+
+    fields: list[str] = []
+    for launch in observation.launches:
+        for name, _ in launch.perturbers:
+            if name not in fields:
+                fields.append(name)
+    state: dict[str, str] = {}
+    for name in fields:
+        values = [dict(launch.perturbers).get(name) for launch in observation.launches]
+        if "injected" in values:
+            state[name] = "injected"
+        elif "not_observed" in values:
+            state[name] = "not_observed"
+        else:
+            state[name] = "unavailable"
+    return state
+
+
+def treatment_receipt(condition: str, state: dict[str, str]) -> tuple[str, str | None]:
+    """Did this boot actually RECEIVE the condition its arm label claims? (#719)
+
+    Returns ``(verdict, detail)``.
+
+    This is **treatment-receipt verification, not operator-error detection** — and that framing is
+    what makes the ``overlays_on`` case tractable. Whether the operator forgot the toggle or Steam
+    simply failed to inject while enabled, a boot that did not receive its assigned condition
+    cannot inform the contrast. The cause is irrelevant; receipt is what the design needs.
+
+    Evidence is asymmetric per launch, but a BOOT aggregates many launches, so both arms are
+    checkable here even though only ``off`` is refutable from a single attempt:
+
+    * planned ``overlays_off`` + any ``injected``      -> contradicted (dispositive)
+    * planned ``overlays_on``  + all ``not_observed``  -> contradicted (the boot never saw the
+      perturber it was supposed to run with, across every successful look in the boot)
+    * anything resting on ``unavailable``              -> unverified (no information; fall back to
+      the planned label and say so, rather than claiming confirmation we did not earn)
+    """
+
+    if not state:
+        return TREATMENT_UNVERIFIED, "report carries no perturber evidence"
+    if condition == "overlays_off":
+        injected = sorted(name for name, value in state.items() if value == "injected")
+        if injected:
+            return (
+                TREATMENT_CONTRADICTED,
+                f"planned overlays_off but {', '.join(injected)} was injected into acs.exe",
+            )
+        if all(value == "unavailable" for value in state.values()):
+            return TREATMENT_UNVERIFIED, "no successful module snapshot in this boot"
+        return TREATMENT_CONFIRMED, None
+    if condition == "overlays_on":
+        if any(value == "injected" for value in state.values()):
+            return TREATMENT_CONFIRMED, None
+        if all(value == "unavailable" for value in state.values()):
+            return TREATMENT_UNVERIFIED, "no successful module snapshot in this boot"
+        missing = sorted(name for name, value in state.items() if value == "not_observed")
+        return (
+            TREATMENT_CONTRADICTED,
+            f"planned overlays_on but {', '.join(missing)} was never observed injected across "
+            "any successful snapshot in this boot",
+        )
+    return TREATMENT_UNVERIFIED, f"unknown condition {condition!r}"
 
 
 @dataclass(frozen=True)
@@ -241,6 +324,11 @@ class BootSummary:
     post_onset_launches: int
     post_onset_freezes: int
     post_onset_burst_rate: float | None
+    #: #719 treatment receipt: did this boot actually get the condition its arm label claims?
+    #: ``contradicted`` excludes the boot (and therefore its block) from the primary endpoint.
+    treatment: str
+    treatment_detail: str | None
+    perturber_state: tuple[tuple[str, str], ...]
     usable: bool
     unusable_reason: str | None
     first_uptime_h: float
@@ -605,6 +693,13 @@ def _parse_report(
             "records no per-attempt cycle_delivered flag (#710) — its never_live rows cannot be "
             "mapped onto accumulator positions. Re-run the boot on the current launcher"
         )
+    if report.get("schema") == "resilient-launch-report/v2":
+        raise ValueError(
+            f"report {path} uses the withdrawn {'resilient-launch-report/v2'!r} schema, which "
+            "records no per-attempt perturber evidence (#719) — its arm label rests entirely on "
+            "the operator's assertion and cannot be cross-checked against what was actually "
+            "injected into acs.exe. Re-run the boot on the current launcher"
+        )
     if report.get("schema") != REPORT_SCHEMA:
         raise ValueError(f"report {path} schema must be {REPORT_SCHEMA!r}")
     attempts = report.get("attempts")
@@ -671,6 +766,22 @@ def _parse_report(
                 f"report {path} launch {index} must record finite non-negative uptime_h "
                 "(the onset endpoint is meaningless without the boot's own clock)"
             )
+        perturbers = record.get("perturbers", _MISSING)
+        if perturbers is _MISSING:
+            raise ValueError(
+                f"report {path} launch {index} is missing perturbers; the {REPORT_SCHEMA!r} "
+                "schema records treatment evidence for every attempt (#719)"
+            )
+        if not isinstance(perturbers, dict) or not perturbers:
+            raise ValueError(
+                f"report {path} launch {index} has a non-mapping or empty perturbers block"
+            )
+        for name, value in perturbers.items():
+            if not isinstance(name, str) or value not in _PERTURBER_EVIDENCE_VALUES:
+                raise ValueError(
+                    f"report {path} launch {index} has invalid perturber evidence "
+                    f"{name!r}={value!r}; expected one of {sorted(_PERTURBER_EVIDENCE_VALUES)}"
+                )
         observations.append(
             LaunchObservation(
                 launch=index,
@@ -679,6 +790,7 @@ def _parse_report(
                 elapsed_s=float(elapsed_s),
                 uptime_h=float(uptime_h),
                 cycle_delivered=delivered,
+                perturbers=tuple(sorted(perturbers.items())),
             )
         )
     expected_counts = {
@@ -938,10 +1050,20 @@ def summarize_boot(observation: BootObservation) -> BootSummary:
     # some other verdict happened to occur. The old ``classified == 0`` guard discarded a boot of
     # 20 delivered never_live cycles — a perfectly good censored observation — while scoring 19
     # of the same cycles plus one stable row (#710 Codex P2).
+    perturber_state = boot_perturber_state(observation)
+    treatment, treatment_detail = treatment_receipt(observation.condition, perturber_state)
     if delivered_cycles == 0:
         unusable_reason = "no_delivered_cycles"
     elif undelivered > MAX_UNDELIVERED_FRACTION * len(launches):
         unusable_reason = "undelivered_fraction_exceeded"
+    elif treatment == TREATMENT_CONTRADICTED:
+        # The boot did not receive the condition its label claims, so nothing it measured can
+        # inform the contrast. It is EXCLUDED, never re-labelled to its observed arm: the
+        # permutation null is over the arm orders the randomization could have emitted, so the
+        # labels ARE the randomization. Re-labelling conditions on data observed after
+        # randomization, which breaks the design-based justification the whole test rests on —
+        # and can leave a block whose two boots share an arm, carrying no contrast anyway (#719).
+        unusable_reason = "treatment_contradicted"
     return BootSummary(
         boot=observation.boot,
         condition=observation.condition,
@@ -964,6 +1086,9 @@ def summarize_boot(observation: BootObservation) -> BootSummary:
         post_onset_burst_rate=(
             None if post_onset_launches == 0 else post_onset_freezes / post_onset_launches
         ),
+        treatment=treatment,
+        treatment_detail=treatment_detail,
+        perturber_state=tuple(sorted(perturber_state.items())),
         usable=unusable_reason is None,
         unusable_reason=unusable_reason,
         first_uptime_h=launches[0].uptime_h,

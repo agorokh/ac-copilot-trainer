@@ -57,6 +57,12 @@ def _default_delivery(verdicts: list[str]) -> list[bool | None]:
     return [verdict != "never_live" for verdict in verdicts]
 
 
+#: "We could not look" — the honest no-information default for fixtures (#719).
+_UNAVAILABLE_PERTURBERS = {"steam_overlay": "unavailable", "nvidia_capture": "unavailable"}
+_INJECTED_PERTURBERS = {"steam_overlay": "injected", "nvidia_capture": "injected"}
+_ABSENT_PERTURBERS = {"steam_overlay": "not_observed", "nvidia_capture": "not_observed"}
+
+
 def _write_boot_report(
     path: Path,
     *,
@@ -66,10 +72,15 @@ def _write_boot_report(
     launch: dict[str, object] | None = None,
     attempts: int | None = None,
     delivered: list[bool | None] | None = None,
+    perturbers: dict[str, str] | None = None,
 ) -> None:
     """Emit one ``resilient_launch --trials N`` style report for a whole boot."""
     counts = {"stable": 0, "froze": 0, "wedged_init": 0, "never_live": 0}
     flags = _default_delivery(verdicts) if delivered is None else delivered
+    # Default to "we could not look" so a fixture that says nothing about treatment yields
+    # `unverified` and falls back to the planned label — the pre-#719 behaviour. Tests that care
+    # about treatment receipt pass explicit evidence.
+    evidence = perturbers or _UNAVAILABLE_PERTURBERS
     log = []
     for index, (verdict, delivery) in enumerate(zip(verdicts, flags, strict=True), start=1):
         counts[verdict] += 1
@@ -79,6 +90,7 @@ def _write_boot_report(
                 "attempt": index,
                 "verdict": verdict,
                 "cycle_delivered": delivery,
+                "perturbers": dict(evidence),
                 "started_at_utc": f"2026-07-28T{minute // 60:02d}:{minute % 60:02d}:00Z",
                 "elapsed_s": 12.5,
                 "uptime_h": round(uptime_start + index * 0.05, 4),
@@ -115,8 +127,10 @@ def _boot(
     *,
     uptime_start: float = 0.5,
     delivered: list[bool | None] | None = None,
+    perturbers: dict[str, str] | None = None,
 ) -> BootObservation:
     flags = _default_delivery(verdicts) if delivered is None else delivered
+    evidence = tuple(sorted((perturbers or _UNAVAILABLE_PERTURBERS).items()))
     return BootObservation(
         boot=number,
         condition=condition,
@@ -128,6 +142,7 @@ def _boot(
                 elapsed_s=12.5,
                 uptime_h=uptime_start + index * 0.05,
                 cycle_delivered=delivery,
+                perturbers=evidence,
             )
             for index, (verdict, delivery) in enumerate(zip(verdicts, flags, strict=True), start=1)
         ),
@@ -1408,3 +1423,144 @@ def test_analyze_cli_reports_a_clean_error_for_a_withdrawn_plan(capsys, tmp_path
     stale.write_text(json.dumps({"schema": WITHDRAWN_PLAN_SCHEMA}), encoding="utf-8")
     assert main(["analyze", "--plan", str(stale), "--reports-dir", str(tmp_path)]) == 2
     assert "withdrawn" in capsys.readouterr().err
+
+
+class TestTreatmentReceipt:
+    """#719 — a boot that did not RECEIVE its assigned condition cannot inform the contrast."""
+
+    def test_off_arm_with_an_injected_perturber_is_contradicted_and_excluded(self):
+        from tools.ac_harness.init_perturber_ab import (
+            TREATMENT_CONTRADICTED,
+            summarize_boot,
+        )
+
+        boot = _boot(1, "overlays_off", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS)
+        summary = summarize_boot(boot)
+        assert summary.treatment == TREATMENT_CONTRADICTED
+        assert summary.usable is False
+        assert summary.unusable_reason == "treatment_contradicted"
+        assert "overlays_off" in (summary.treatment_detail or "")
+
+    def test_on_arm_never_observing_the_perturber_is_contradicted(self):
+        """Symmetric at BOOT level even though one attempt cannot refute the `on` arm."""
+        from tools.ac_harness.init_perturber_ab import (
+            TREATMENT_CONTRADICTED,
+            summarize_boot,
+        )
+
+        boot = _boot(2, "overlays_on", _stable_then_freeze(8), perturbers=_ABSENT_PERTURBERS)
+        summary = summarize_boot(boot)
+        assert summary.treatment == TREATMENT_CONTRADICTED
+        assert summary.usable is False
+
+    def test_matching_arms_are_confirmed_and_stay_usable(self):
+        from tools.ac_harness.init_perturber_ab import TREATMENT_CONFIRMED, summarize_boot
+
+        on = summarize_boot(
+            _boot(1, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS)
+        )
+        off = summarize_boot(
+            _boot(2, "overlays_off", _stable_then_freeze(14), perturbers=_ABSENT_PERTURBERS)
+        )
+        assert on.treatment == TREATMENT_CONFIRMED
+        assert off.treatment == TREATMENT_CONFIRMED
+        assert on.usable and off.usable
+
+    def test_unavailable_evidence_is_unverified_not_contradicted(self):
+        """No information must fall back to the plan, never manufacture an exclusion."""
+        from tools.ac_harness.init_perturber_ab import (
+            TREATMENT_UNVERIFIED,
+            summarize_boot,
+        )
+
+        for condition in ("overlays_on", "overlays_off"):
+            summary = summarize_boot(
+                _boot(1, condition, _stable_then_freeze(8), perturbers=_UNAVAILABLE_PERTURBERS)
+            )
+            assert summary.treatment == TREATMENT_UNVERIFIED
+            assert summary.usable is True
+
+    def test_one_sighting_anywhere_in_the_boot_is_dispositive(self):
+        """Union across launches: the injection races startup, so early misses prove nothing."""
+        from tools.ac_harness.init_perturber_ab import (
+            BootObservation,
+            LaunchObservation,
+            boot_perturber_state,
+        )
+
+        launches = tuple(
+            LaunchObservation(
+                launch=index,
+                verdict="stable",
+                started_at_utc=f"2026-07-28T10:{index:02d}:00Z",
+                elapsed_s=12.5,
+                uptime_h=0.5 + index * 0.05,
+                cycle_delivered=True,
+                perturbers=tuple(sorted(evidence.items())),
+            )
+            for index, evidence in enumerate(
+                [
+                    {"steam_overlay": "unavailable"},
+                    {"steam_overlay": "not_observed"},
+                    {"steam_overlay": "injected"},
+                    {"steam_overlay": "not_observed"},
+                ],
+                start=1,
+            )
+        )
+        state = boot_perturber_state(
+            BootObservation(boot=1, condition="overlays_off", launches=launches)
+        )
+        assert state["steam_overlay"] == "injected"
+
+    def test_a_contradicted_boot_drops_its_whole_block(self):
+        """The block is the unit of inference — excluding one boot must remove the pair."""
+        from tools.ac_harness.init_perturber_ab import _summarize_blocks, summarize_boot
+
+        boots = [
+            summarize_boot(
+                _boot(1, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS)
+            ),
+            summarize_boot(
+                # Planned OFF but the overlay was demonstrably injected: label is a lie.
+                _boot(2, "overlays_off", _stable_then_freeze(14), perturbers=_INJECTED_PERTURBERS)
+            ),
+        ]
+        blocks = _summarize_blocks(boots)
+        assert len(blocks) == 1
+        # The surviving block carries no usable difference, so it cannot enter the statistic.
+        assert blocks[0].onset_difference is None
+
+
+def test_v2_reports_are_rejected_with_a_reason(tmp_path: Path) -> None:
+    """#719 — a v2 report has no treatment evidence, so its arm label cannot be cross-checked."""
+    plan = _two_boot_plan()
+
+    def drop_perturbers(payload: dict) -> None:
+        payload["schema"] = "resilient-launch-report/v2"
+        payload.pop("perturbers", None)
+        for row in payload["attempts_log"]:
+            row.pop("perturbers")
+
+    _mutate_first_report(tmp_path, plan, drop_perturbers)
+    with pytest.raises(ValueError, match="resilient-launch-report/v2"):
+        load_observations(plan, tmp_path, require_complete=False)
+
+
+def test_missing_perturbers_key_is_rejected(tmp_path: Path) -> None:
+    plan = _two_boot_plan()
+    _mutate_first_report(tmp_path, plan, lambda p: p["attempts_log"][2].pop("perturbers"))
+    with pytest.raises(ValueError, match="missing perturbers"):
+        load_observations(plan, tmp_path, require_complete=False)
+
+
+def test_unknown_perturber_evidence_value_is_rejected(tmp_path: Path) -> None:
+    """A tri-state that silently accepts a fourth value is not a tri-state."""
+    plan = _two_boot_plan()
+    _mutate_first_report(
+        tmp_path,
+        plan,
+        lambda p: p["attempts_log"][0]["perturbers"].__setitem__("steam_overlay", "probably"),
+    )
+    with pytest.raises(ValueError, match="invalid perturber evidence"):
+        load_observations(plan, tmp_path, require_complete=False)
