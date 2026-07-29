@@ -1543,7 +1543,7 @@ class TestTreatmentReceipt:
         assert summary.usable is False
         assert summary.unusable_reason == "treatment_contradicted"
 
-        # Early never_live-only looks are non-dispositive for the on arm.
+        # Undelivered never_live looks are non-dispositive for the on arm.
         early = _boot(
             1,
             "overlays_on",
@@ -1553,6 +1553,45 @@ class TestTreatmentReceipt:
         )
         summary = summarize_boot(early)
         assert summary.treatment == TREATMENT_UNVERIFIED
+
+        # Delivered never_live after go-live timeout is long enough to contradict.
+        long_nl = _boot(
+            1,
+            "overlays_on",
+            ["never_live"] * 5,
+            delivered=[True] * 5,
+            perturbers=_ABSENT_PERTURBERS,
+        )
+        summary = summarize_boot(long_nl)
+        assert summary.treatment == TREATMENT_CONTRADICTED
+
+        # A dispositive miss is not erased by a sibling unavailable live launch.
+        mixed = (
+            LaunchObservation(
+                launch=1,
+                verdict="froze",
+                started_at_utc="2026-07-28T10:01:00Z",
+                elapsed_s=12.5,
+                uptime_h=0.5,
+                cycle_delivered=True,
+                perturbers=tuple(sorted(_ABSENT_PERTURBERS.items())),
+            ),
+            LaunchObservation(
+                launch=2,
+                verdict="froze",
+                started_at_utc="2026-07-28T10:02:00Z",
+                elapsed_s=12.5,
+                uptime_h=0.55,
+                cycle_delivered=True,
+                perturbers=tuple(sorted(_UNAVAILABLE_PERTURBERS.items())),
+            ),
+        )
+        verdict, _detail = treatment_receipt(
+            "overlays_on",
+            {"steam_overlay": "not_observed", "nvidia_capture": "unavailable"},
+            launches=mixed,
+        )
+        assert verdict == TREATMENT_CONTRADICTED
 
     def test_incomplete_perturber_keys_are_rejected(self, tmp_path: Path) -> None:
         plan = _two_boot_plan()

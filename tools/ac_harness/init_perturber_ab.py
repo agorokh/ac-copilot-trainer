@@ -266,12 +266,16 @@ def _launch_evidence(launch: LaunchObservation) -> dict[str, str]:
 def _is_live_session(launch: LaunchObservation) -> bool:
     """Whether this attempt lived long enough that a miss is informative for overlays_on.
 
-    The injection race is ~3 s on the measured rig; live-session verdicts only fire after the
-    stability / go-live watch, which is far past that window. Early ``never_live`` exits can
-    sample only inside the race and must not contradict an ``overlays_on`` arm (Codex P1 on #721).
+    The injection race is ~3 s on the measured rig. ``stable`` / ``froze`` / ``wedged_init`` only
+    fire after the stability / go-live watch. A **delivered** ``never_live`` is also long enough:
+    ``classify()`` emits it after the full go-live timeout when AC rendered but never reached
+    readiness — far past the race — so those successful looks must still count (Codex P1 on
+    #721). An *undelivered* ``never_live`` (CM absent / launch never spawned) does not.
     """
 
-    return launch.verdict in _LIVE_SESSION_VERDICTS and launch.cycle_delivered is True
+    if launch.cycle_delivered is not True:
+        return False
+    return launch.verdict in _LIVE_SESSION_VERDICTS or launch.verdict == "never_live"
 
 
 def treatment_receipt(
@@ -352,7 +356,10 @@ def treatment_receipt(
             miss = sorted(name for name in required if evidence[name] != "injected")
             if miss:
                 short.append(f"launch {item.launch}: {', '.join(miss)}")
-        if short and not incomplete:
+        # A dispositive miss on any fully observed live launch cannot be erased by a sibling
+        # launch whose snapshot failed (``unavailable``). Prefer contradicted over unverified
+        # whenever short is non-empty (Codex P1 on #721).
+        if short:
             return (
                 TREATMENT_CONTRADICTED,
                 "planned overlays_on but live session(s) never observed full injection "

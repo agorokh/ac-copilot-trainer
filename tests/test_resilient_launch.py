@@ -2494,3 +2494,16 @@ class TestPerturberTreatmentReceipt:
                 uptime_hours=lambda: None,
                 expect_perturbers="overlays_off",
             )
+
+    def test_partial_multi_pid_sample_does_not_invent_absence(self):
+        """Codex P1: a failed PID snapshot must not turn a miss on another PID into not_observed."""
+        from tools.ac_harness.resilient_launch import PerturberEvidence, PerturberWatch
+
+        watch = PerturberWatch()
+        # One PID opened cleanly with no overlay; the other failed — presence unknown for absence.
+        watch.note_injected(frozenset({"ntdll.dll"}))
+        assert watch.successful_looks == 0
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.UNAVAILABLE)
+        # Dispositive presence still records through the partial path.
+        watch.note_injected(frozenset({"gameoverlayrenderer64.dll"}))
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)

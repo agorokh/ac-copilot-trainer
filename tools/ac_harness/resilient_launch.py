@@ -830,6 +830,16 @@ class PerturberWatch:
         if module_names is None:
             return
         self._successful_looks += 1
+        self.note_injected(module_names)
+
+    def note_injected(self, module_names: frozenset[str]) -> None:
+        """Union dispositive presence without counting a successful *absence* look.
+
+        Used when a multi-PID sample only partially succeeded: we can still learn that a
+        perturber was injected into some process, but we must not promote a miss on the
+        accessible PID into ``not_observed`` while another PID was unreachable (Codex P1 on #721).
+        """
+
         for name, dll in self._modules.items():
             if dll.casefold() in module_names:
                 self._injected.add(name)
@@ -2161,17 +2171,24 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 # Union presence across EVERY returned PID. Taking only the lowest PID (the old
                 # behaviour) can sample a leftover corpse without overlays while the live session
                 # has them, and miss the dispositive `injected` proof for the off-arm (cursor
-                # MEDIUM on #721). One successful look of any PID is enough; all failures collapse
-                # to a single failed snapshot so we never invent absence from access errors.
-                looked = False
+                # MEDIUM on #721). If any PID snapshot fails, presence may still be recorded from
+                # the successes, but we do NOT count a successful absence look — an inaccessible
+                # live process would otherwise be invented as `not_observed` (Codex P1 on #721).
+                successes: list[frozenset[str]] = []
+                any_failed = False
                 for pid in pids:
                     try:
-                        perturbers.observe(process_module_names(pid))
-                        looked = True
+                        successes.append(process_module_names(pid))
                     except OSError:
-                        continue
-                if not looked:
+                        any_failed = True
+                if not successes:
                     perturbers.observe(None)
+                elif any_failed:
+                    for names in successes:
+                        perturbers.note_injected(names)
+                else:
+                    for names in successes:
+                        perturbers.observe(names)
 
             def read_attempt_state() -> tuple[int | None, bool | None, bool | None, int | None]:
                 """Report shared memory; trust readiness only once the packet proves a live owner.
@@ -2330,6 +2347,17 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 # automated run must not read as successful when the requested record was never
                 # produced (#646 review P1) — the per-trial log lines above remain as salvage.
                 _log("TRIALS FAILED: the requested report JSON could not be written")
+                return 1
+            if report.arm_contradicted:
+                # Short contradicted report is a deliberate measurement of a bad arm, but it is
+                # NOT a successful completion of the planned trial budget. Exit nonzero so a
+                # manual/scripted reboot chain stops instead of burning the remaining boots under
+                # a post-treatment exclusion that withholds the causal conclusion (Codex P1).
+                _log(
+                    "TRIALS FAILED: arm contradicted by injected perturber evidence "
+                    f"(expect={report.expect_perturbers!r}) — fix settings, reboot, re-run this "
+                    "boot before continuing the plan"
+                )
                 return 1
             return 0
         _log(report.summary())
