@@ -2569,6 +2569,8 @@ class TestPerturberTreatmentReceipt:
         assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.UNAVAILABLE)
 
         watch2 = PerturberWatch()
+        # primary_only (default): only the first snapshot is classified — unioning two
+        # PIDs would invent full treatment when Steam and NVIDIA sit on different processes.
         fold_perturber_snapshots(
             watch2,
             successes=[
@@ -2577,7 +2579,14 @@ class TestPerturberTreatmentReceipt:
             ],
             any_pid_failed=False,
         )
-        assert watch2.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
+        assert watch2.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
+        watch3 = PerturberWatch()
+        fold_perturber_snapshots(
+            watch3,
+            successes=[frozenset({"gameoverlayrenderer64.dll", "nvspcap64.dll"})],
+        )
+        assert watch3.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
+        assert watch3.evidence()["nvidia_capture"] == str(PerturberEvidence.INJECTED)
 
     def test_arm_contradicted_salvage_path_is_unique_per_timestamp(self, tmp_path):
         """Cursor MEDIUM: salvage names must not collide under exclusive publish."""
@@ -2608,3 +2617,42 @@ class TestPerturberTreatmentReceipt:
         assert _write_report_json(report, second) is True
         # Same timestamp would refuse overwrite — uniqueness is what makes retry work.
         assert _write_report_json(report, first) is False
+
+    def test_stable_on_arm_miss_stops_the_loop(self):
+        """Codex P1: STABLE + successful miss makes on-arm confirmation impossible."""
+        from tools.ac_harness.resilient_launch import (
+            AttemptOutcome,
+            LaunchVerdict,
+            PerturberEvidence,
+            contradicts_expectation,
+            run_retry_loop,
+        )
+
+        evidence = {
+            "steam_overlay": str(PerturberEvidence.NOT_OBSERVED),
+            "nvidia_capture": str(PerturberEvidence.NOT_OBSERVED),
+        }
+        assert (
+            contradicts_expectation(evidence, "on", verdict=LaunchVerdict.STABLE) is True
+        )
+        assert (
+            contradicts_expectation(evidence, "on", verdict=LaunchVerdict.FROZE) is False
+        )
+
+        def watch(_attempt: int) -> AttemptOutcome:
+            return AttemptOutcome(
+                LaunchVerdict.STABLE,
+                cycle_delivered=True,
+                perturbers=evidence,
+            )
+
+        report = run_retry_loop(
+            watch,
+            max_attempts=24,
+            stop_on_stable=False,
+            uptime_hours=lambda: None,
+            expect_perturbers="on",
+        )
+        assert report.attempts == 1
+        assert report.arm_contradicted is True
+        assert report.stable == 1

@@ -894,6 +894,7 @@ def fold_perturber_snapshots(
     pids_empty: bool = False,
     successes: list[frozenset[str]] | None = None,
     any_pid_failed: bool = False,
+    primary_only: bool = True,
 ) -> None:
     """Apply one multi-PID sample poll to ``watch`` (pure; unit-tested off-rig).
 
@@ -901,8 +902,9 @@ def fold_perturber_snapshots(
     - ``enum_failed``: Toolhelp enumeration raised — treat as failed look.
     - ``pids_empty``: acs.exe is gone — leave prior evidence intact (not a failed live look).
     - all PID snapshots failed: failed look.
-    - partial success: union presence, then invalidate absence.
-    - full success: observe every snapshot (presence unions; absence counts only if complete).
+    - partial success: union presence via ``note_injected``, then invalidate absence.
+    - full success: observe a **single** primary session (caller passes only that snapshot when
+      ``primary_only``), never invent full treatment by unioning unrelated PIDs (Codex P2 on #721).
     """
 
     if enum_failed:
@@ -919,6 +921,10 @@ def fold_perturber_snapshots(
             watch.note_injected(names)
         watch.observe(None)
         return
+    if primary_only or len(snaps) == 1:
+        watch.observe(snaps[0])
+        return
+    # Legacy multi-observe path kept for tests that deliberately disable primary_only.
     for names in snaps:
         watch.observe(names)
 
@@ -944,18 +950,31 @@ def _normalize_perturber_evidence(raw: dict[str, str] | None) -> dict[str, str]:
     return out
 
 
-def contradicts_expectation(evidence: dict[str, str], expectation: str | None) -> bool:
+def contradicts_expectation(
+    evidence: dict[str, str],
+    expectation: str | None,
+    *,
+    verdict: LaunchVerdict | None = None,
+) -> bool:
     """Whether this attempt's evidence DISPOSITIVELY refutes the arm it was launched under.
 
-    Only the ``off`` arm can be refuted from a single attempt, and only by a positive sighting:
-    expected-off plus ``INJECTED`` is proof the treatment was not applied. Expected-on plus
-    ``NOT_OBSERVED`` is **not** symmetric — the injection race makes a single miss uninformative,
-    so that direction is left to the analyzer, which aggregates the whole boot (#719 Part C).
+    * ``off`` — any ``INJECTED`` sighting is proof the treatment was not applied.
+    * ``on`` — a ``STABLE`` attempt that successfully looked and still missed a perturber is
+      dispositive non-receipt (stability window >> the measured injection race). A bare
+      ``NOT_OBSERVED`` without a stable verdict remains non-dispositive and is left to the
+      analyzer, which aggregates the whole boot (#719 Part C; Codex P1 on #721).
     """
 
-    if expectation != "off":
-        return False
-    return any(value == str(PerturberEvidence.INJECTED) for value in evidence.values())
+    if expectation == "off":
+        return any(value == str(PerturberEvidence.INJECTED) for value in evidence.values())
+    if expectation == "on" and verdict is LaunchVerdict.STABLE:
+        if not evidence:
+            return False
+        if any(value == str(PerturberEvidence.UNAVAILABLE) for value in evidence.values()):
+            return False
+        # Full successful look on a stable session that still misses a required perturber.
+        return any(value == str(PerturberEvidence.NOT_OBSERVED) for value in evidence.values())
+    return False
 
 
 def _watched_delivery(samples: Sequence[Sample]) -> bool | None:
@@ -1132,12 +1151,10 @@ def run_retry_loop(
             else:
                 wedged_init += 1
             never_live_run = 0
-        if contradicts_expectation(evidence, expect_perturbers):
-            # The boot was launched as `overlays_off` and a perturber is demonstrably injected, so
-            # its arm label is a lie and nothing measured after this point can inform the contrast.
-            # Stop now: the accumulator has already advanced (this boot needs another reboot either
-            # way), but stopping at attempt N instead of 24 saves ~28 minutes of rig time per
-            # mistake. Only this direction is dispositive — see `contradicts_expectation` (#719).
+        if contradicts_expectation(evidence, expect_perturbers, verdict=verdict):
+            # Arm label is already a lie under the analyzer's own rules, so further trials only
+            # burn rig time before a post-treatment exclusion / withheld conclusion (Codex P1
+            # on #721). Off-arm: any injected sighting. On-arm: STABLE + successful miss.
             arm_contradicted = True
             break
         if verdict is LaunchVerdict.STABLE and stop_on_stable:
@@ -2254,26 +2271,19 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     # final sample classify commonly hits after FROZE (cursor MEDIUM on #721).
                     fold_perturber_snapshots(perturbers, pids_empty=True)
                     return
-                # Union presence across EVERY returned PID. Taking only the lowest PID (the old
-                # behaviour) can sample a leftover corpse without overlays while the live session
-                # has them, and miss the dispositive `injected` proof for the off-arm (cursor
-                # MEDIUM on #721). If any PID snapshot fails, presence may still be recorded from
-                # the successes, but we do NOT count a successful absence look — an inaccessible
-                # live process would otherwise be invented as `not_observed` (Codex P1 on #721).
-                successes: list[frozenset[str]] = []
-                any_failed = False
-                for pid in pids:
-                    try:
-                        # retries=1: do not sleep inside the go-live poll path; BAD_LENGTH during
-                        # module load is retried by the next poll tick instead (cursor HIGH #721).
-                        successes.append(process_module_names(pid, retries=1))
-                    except OSError:
-                        any_failed = True
-                fold_perturber_snapshots(
-                    perturbers,
-                    successes=successes,
-                    any_pid_failed=any_failed,
-                )
+                # Classify the newest acs.exe only. Unioning modules across PIDs invents a full
+                # treatment when Steam is on one process and NVIDIA on another (Codex P2 on #721).
+                # max(pid) is the usual live session after a leftover corpse; a failed primary
+                # look is unavailable, never a synthetic multi-PID miss (Codex P1 on #721).
+                primary_pid = max(pids)
+                try:
+                    # retries=1: do not sleep inside the go-live poll path; BAD_LENGTH during
+                    # module load is retried by the next poll tick instead (cursor HIGH #721).
+                    names = process_module_names(primary_pid, retries=1)
+                except OSError:
+                    fold_perturber_snapshots(perturbers, enum_failed=True)
+                    return
+                fold_perturber_snapshots(perturbers, successes=[names])
 
             def read_attempt_state() -> tuple[int | None, bool | None, bool | None, int | None]:
                 """Report shared memory; trust readiness only once the packet proves a live owner.

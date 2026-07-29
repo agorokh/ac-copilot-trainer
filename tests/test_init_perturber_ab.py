@@ -115,6 +115,10 @@ def _write_boot_report(
         "launch": launch or _launch_config(len(verdicts)),
         "attempts_log": log,
     }
+    if condition == "overlays_on":
+        payload["expect_perturbers"] = "on"
+    elif condition == "overlays_off":
+        payload["expect_perturbers"] = "off"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -346,6 +350,7 @@ def test_report_must_cover_every_planned_launch(tmp_path: Path) -> None:
     plan = _two_boot_plan()
     _write_boot_report(
         tmp_path / plan["boots"][0]["report"],
+        condition=plan["boots"][0]["condition"],
         verdicts=["stable"] * (_LAUNCHES - 1),
         start_minute=0,
         uptime_start=0.5,
@@ -359,6 +364,7 @@ def test_report_attempts_header_must_match_its_log(tmp_path: Path) -> None:
     plan = _two_boot_plan()
     _write_boot_report(
         tmp_path / plan["boots"][0]["report"],
+        condition=plan["boots"][0]["condition"],
         verdicts=["stable"] * (_LAUNCHES - 2),
         start_minute=0,
         uptime_start=0.5,
@@ -371,7 +377,13 @@ def test_report_attempts_header_must_match_its_log(tmp_path: Path) -> None:
 def test_report_counts_must_match_the_attempts_log(tmp_path: Path) -> None:
     plan = _two_boot_plan()
     path = tmp_path / plan["boots"][0]["report"]
-    _write_boot_report(path, verdicts=["stable"] * _LAUNCHES, start_minute=0, uptime_start=0.5)
+    _write_boot_report(
+        path,
+        condition=plan["boots"][0]["condition"],
+        verdicts=["stable"] * _LAUNCHES,
+        start_minute=0,
+        uptime_start=0.5,
+    )
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["counts"]["stable"] = 0
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -381,7 +393,13 @@ def test_report_counts_must_match_the_attempts_log(tmp_path: Path) -> None:
 
 def _mutate_first_report(tmp_path: Path, plan: dict[str, object], mutate) -> None:
     path = tmp_path / plan["boots"][0]["report"]
-    _write_boot_report(path, verdicts=["stable"] * _LAUNCHES, start_minute=0, uptime_start=0.5)
+    _write_boot_report(
+        path,
+        condition=plan["boots"][0]["condition"],
+        verdicts=["stable"] * _LAUNCHES,
+        start_minute=0,
+        uptime_start=0.5,
+    )
     payload = json.loads(path.read_text(encoding="utf-8"))
     mutate(payload)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -435,6 +453,7 @@ def test_delivery_flags_survive_the_report_round_trip(tmp_path: Path) -> None:
     verdicts = ["stable"] * 9 + ["never_live"] + ["froze"] + ["stable"] * 9
     _write_boot_report(
         tmp_path / plan["boots"][0]["report"],
+        condition=plan["boots"][0]["condition"],
         verdicts=verdicts,
         start_minute=0,
         uptime_start=0.5,
@@ -452,6 +471,7 @@ def test_incomplete_experiment_is_refused(tmp_path: Path) -> None:
     plan = _two_boot_plan()
     _write_boot_report(
         tmp_path / plan["boots"][0]["report"],
+        condition=plan["boots"][0]["condition"],
         verdicts=["stable"] * _LAUNCHES,
         start_minute=0,
         uptime_start=0.5,
@@ -470,6 +490,7 @@ def test_continuous_uptime_across_a_boundary_is_refused(tmp_path: Path) -> None:
     # Boot 1 launches at minutes 1..20 -> last uptime 0.5 + 20*0.05 = 1.5h at minute 20.
     _write_boot_report(
         tmp_path / plan["boots"][0]["report"],
+        condition=plan["boots"][0]["condition"],
         verdicts=["stable"] * _LAUNCHES,
         start_minute=0,
         uptime_start=0.5,
@@ -478,6 +499,7 @@ def test_continuous_uptime_across_a_boundary_is_refused(tmp_path: Path) -> None:
     # (1.5h + 0.6833h = 2.1833h, minus the +0.05 the writer adds for launch 1) -> no reboot.
     _write_boot_report(
         tmp_path / plan["boots"][1]["report"],
+        condition=plan["boots"][1]["condition"],
         verdicts=["stable"] * _LAUNCHES,
         start_minute=60,
         uptime_start=1.5 + (41 / 60) - 0.05,
@@ -540,6 +562,7 @@ def test_reboot_is_accepted_even_when_the_operator_waits_a_long_time(tmp_path: P
     # Boot 1 ends at uptime 1.5h.
     _write_boot_report(
         tmp_path / plan["boots"][0]["report"],
+        condition=plan["boots"][0]["condition"],
         verdicts=["stable"] * _LAUNCHES,
         start_minute=0,
         uptime_start=0.5,
@@ -549,6 +572,7 @@ def test_reboot_is_accepted_even_when_the_operator_waits_a_long_time(tmp_path: P
     # did not track the ~16h of wall clock since boot 1's final launch.
     _write_boot_report(
         tmp_path / plan["boots"][1]["report"],
+        condition=plan["boots"][1]["condition"],
         verdicts=_stable_then_freeze(14),
         start_minute=1000,
         uptime_start=9.0,
@@ -562,12 +586,14 @@ def test_boot_boundary_accepts_a_real_reboot(tmp_path: Path) -> None:
     plan = _two_boot_plan()
     _write_boot_report(
         tmp_path / plan["boots"][0]["report"],
+        condition=plan["boots"][0]["condition"],
         verdicts=["stable"] * _LAUNCHES,
         start_minute=0,
         uptime_start=2.0,
     )
     _write_boot_report(
         tmp_path / plan["boots"][1]["report"],
+        condition=plan["boots"][1]["condition"],
         verdicts=_stable_then_freeze(14),
         start_minute=200,
         uptime_start=0.1,
@@ -580,7 +606,13 @@ def test_boot_boundary_accepts_a_real_reboot(tmp_path: Path) -> None:
 def test_mid_boot_uptime_drop_is_refused(tmp_path: Path) -> None:
     plan = _two_boot_plan()
     path = tmp_path / plan["boots"][0]["report"]
-    _write_boot_report(path, verdicts=["stable"] * _LAUNCHES, start_minute=0, uptime_start=0.5)
+    _write_boot_report(
+        path,
+        condition=plan["boots"][0]["condition"],
+        verdicts=["stable"] * _LAUNCHES,
+        start_minute=0,
+        uptime_start=0.5,
+    )
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["attempts_log"][10]["uptime_h"] = 0.01
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -594,6 +626,7 @@ def test_report_launch_must_match_plan(tmp_path: Path) -> None:
     wrong["car"] = "wrong_car"
     _write_boot_report(
         tmp_path / plan["boots"][0]["report"],
+        condition=plan["boots"][0]["condition"],
         verdicts=["stable"] * _LAUNCHES,
         start_minute=0,
         uptime_start=0.5,
@@ -1615,6 +1648,7 @@ class TestTreatmentReceipt:
         path = tmp_path / plan["boots"][0]["report"]
         _write_boot_report(
             path,
+            condition=plan["boots"][0]["condition"],
             verdicts=["stable"] * _LAUNCHES,
             start_minute=0,
             uptime_start=0.5,
@@ -1648,6 +1682,41 @@ class TestTreatmentReceipt:
             )
             assert summary.treatment == TREATMENT_UNVERIFIED
             assert summary.usable is True
+
+    def test_short_froze_miss_is_unverified_not_contradicted(self):
+        """Codex P1: FROZE inside the injection-race floor cannot invent absence."""
+        from tools.ac_harness.init_perturber_ab import (
+            TREATMENT_UNVERIFIED,
+            BootObservation,
+            LaunchObservation,
+            treatment_receipt,
+        )
+
+        short = LaunchObservation(
+            launch=1,
+            verdict="froze",
+            started_at_utc="2026-07-28T10:01:00Z",
+            elapsed_s=2.0,  # below MIN_ABSENCE_ELAPSED_S
+            uptime_h=0.5,
+            cycle_delivered=True,
+            perturbers=tuple(sorted(_ABSENT_PERTURBERS.items())),
+        )
+        boot = BootObservation(boot=1, condition="overlays_on", launches=(short,))
+        verdict, _detail = treatment_receipt(
+            "overlays_on", dict(_ABSENT_PERTURBERS), launches=boot.launches
+        )
+        assert verdict == TREATMENT_UNVERIFIED
+
+    def test_go_live_timeout_below_injection_floor_is_rejected(self) -> None:
+        """Codex P2: plans must not allow WEDGED_INIT inside the measured race."""
+        from tools.ac_harness.init_perturber_ab import MIN_GO_LIVE_TIMEOUT_S, build_plan
+
+        with pytest.raises(ValueError, match="go_live_timeout"):
+            build_plan(
+                6,
+                launches_per_boot=_LAUNCHES,
+                go_live_timeout=MIN_GO_LIVE_TIMEOUT_S - 0.1,
+            )
 
     def test_one_sighting_anywhere_in_the_boot_is_dispositive(self):
         """Union across launches: the injection races startup, so early misses prove nothing."""
@@ -1712,6 +1781,7 @@ def test_early_arm_contradiction_report_is_loadable(tmp_path: Path) -> None:
     path = reports_dir / first["report"]
     _write_boot_report(
         path,
+        condition="overlays_off",
         verdicts=["froze"],
         start_minute=10,
         uptime_start=0.5,
@@ -1722,7 +1792,7 @@ def test_early_arm_contradiction_report_is_loadable(tmp_path: Path) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["arm_contradicted"] = True
     payload["expect_perturbers"] = "off"
-    # Plan boots[0] is overlays_on in the helper — force the planned condition to off for this case.
+    # Force the planned condition to off for this case (helper may have drawn either arm).
     plan["boots"][0] = {**first, "condition": "overlays_off"}
     path.write_text(json.dumps(payload), encoding="utf-8")
     observations = load_observations(plan, reports_dir, require_complete=False)

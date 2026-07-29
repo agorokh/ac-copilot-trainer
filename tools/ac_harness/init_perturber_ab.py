@@ -103,8 +103,21 @@ WITHDRAWN_PLAN_SCHEMA = "init-perturber-ab-plan/v1"
 SUPERSEDED_PLAN_SCHEMA = "init-perturber-ab-plan/v2"
 #: delivered-cycle endpoints without treatment-receipt pre-registration (#719); regenerate.
 PRE_TREATMENT_PLAN_SCHEMA = "init-perturber-ab-plan/v3"
-#: Verdicts that imply acs.exe lived well past the ~3 s injection race measured on the rig.
-_LIVE_SESSION_VERDICTS = frozenset({"stable", "froze", "wedged_init"})
+#: Verdicts that *may* carry post-race absence evidence. ``wedged_init`` is excluded: it means
+#: the process never reached readiness, so a short ``go_live_timeout`` can end before the
+#: measured ~3 s injection race (Codex P1/P2 on #721). ``stable`` is always past the race
+#: (stability window >> 3 s). ``froze`` additionally requires :data:`MIN_ABSENCE_ELAPSED_S`.
+_LIVE_SESSION_VERDICTS = frozenset({"stable", "froze"})
+#: Measured injection race on the rig (~3 s). Plans must not set ``go_live_timeout`` below this
+#: plus a small margin, or ``WEDGED_INIT`` can fire inside the race window.
+INJECTION_RACE_S = 3.0
+#: Minimum ``elapsed_s`` before a non-stable live verdict's ``not_observed`` is treated as
+#: dispositive absence. ``elapsed_s`` includes pre-launch work, so this is a floor, not a
+#: precise post-spawn clock (Codex P1 on #721).
+MIN_ABSENCE_ELAPSED_S = 5.0
+#: Plan floor for ``--go-live-timeout`` so a valid plan cannot trust live-session absence
+#: evidence that is shorter than the injection race (Codex P2 on #721).
+MIN_GO_LIVE_TIMEOUT_S = 5.0
 #: Canonical perturber field set every report row must carry exactly.
 _PERTURBER_KEYS = frozenset(PERTURBER_MODULES)
 #: Exact treatment-receipt policy a v4 plan must pre-register (Codex P2 on #721).
@@ -277,17 +290,21 @@ def _launch_evidence(launch: LaunchObservation) -> dict[str, str]:
 def _is_live_session(launch: LaunchObservation) -> bool:
     """Whether this attempt's absence evidence is informative (post injection race).
 
-    The injection race is ~3 s on the measured rig. Only delivered ``stable`` / ``froze`` /
-    ``wedged_init`` are treated as past that window: each requires the go-live / stability
-    watch (far longer than the race). ``never_live`` is never dispositive for *absence* —
-    ``elapsed_s`` includes pre-launch work and cannot prove post-race lifetime (Codex P1 on
-    #721). Presence (``injected``) remains dispositive on any attempt via the off-arm path.
+    The injection race is ~3 s on the measured rig. ``never_live`` / ``wedged_init`` are never
+    dispositive for *absence* — the process may have died inside the race, and ``elapsed_s``
+    includes pre-launch work so it cannot prove post-race lifetime on those shapes (Codex P1
+    on #721). Presence (``injected``) remains dispositive on any attempt via the off-arm path.
 
-    A ``FROZE`` after go-live is still past the race: go-live itself requires a ready session,
-    which on this rig is orders of magnitude longer than the measured 3 s injection window.
+    * ``stable`` — always past the race (stability window >> 3 s).
+    * ``froze`` — only when ``elapsed_s >= MIN_ABSENCE_ELAPSED_S``, so an immediate post-go-live
+      freeze cannot turn a pre-injection miss into a contradicted / confirmed arm.
     """
 
-    return launch.cycle_delivered is True and launch.verdict in _LIVE_SESSION_VERDICTS
+    if launch.cycle_delivered is not True or launch.verdict not in _LIVE_SESSION_VERDICTS:
+        return False
+    if launch.verdict == "stable":
+        return True
+    return launch.elapsed_s >= MIN_ABSENCE_ELAPSED_S
 
 
 def treatment_receipt(
@@ -557,6 +574,12 @@ def build_plan(
         raise ValueError("stability_window must be finite and > 0")
     if not math.isfinite(go_live_timeout) or go_live_timeout <= 0:
         raise ValueError("go_live_timeout must be finite and > 0")
+    if go_live_timeout < MIN_GO_LIVE_TIMEOUT_S:
+        raise ValueError(
+            f"go_live_timeout must be >= {MIN_GO_LIVE_TIMEOUT_S:g}s so a WEDGED_INIT "
+            f"cannot fire inside the measured ~{INJECTION_RACE_S:g}s injection race "
+            f"(got {go_live_timeout:g})"
+        )
     if boots_per_arm <= 0 or launches_per_boot <= 0:
         raise ValueError("boots_per_arm and launches_per_boot must be > 0")
     if boots_per_arm < MIN_BOOTS_PER_ARM and not allow_undersized:
@@ -780,6 +803,14 @@ def load_plan(path: Path) -> dict[str, Any]:
                 f"plan treatment_receipt.{key}={receipt.get(key)!r} does not match the "
                 f"canonical v4 policy {expected!r}; regenerate the plan"
             )
+    launch = plan.get("launch")
+    if isinstance(launch, dict):
+        go_live = launch.get("go_live_timeout")
+        if isinstance(go_live, (int, float)) and go_live < MIN_GO_LIVE_TIMEOUT_S:
+            raise ValueError(
+                f"plan launch.go_live_timeout={go_live!r} is below the "
+                f"{MIN_GO_LIVE_TIMEOUT_S:g}s injection-race floor; regenerate the plan"
+            )
     boots_per_arm = plan.get("boots_per_arm")
     if not isinstance(boots_per_arm, int) or boots_per_arm <= 0:
         raise ValueError("plan boots_per_arm must be a positive integer")
@@ -871,34 +902,52 @@ def _parse_report(
                 f"report {path} arm_contradicted log length {log_len} "
                 f"does not match attempts={attempts}"
             )
-        if report.get("expect_perturbers") != "off":
+        reported_expect = report.get("expect_perturbers")
+        if reported_expect not in ("off", "on"):
             raise ValueError(
-                f"report {path} arm_contradicted requires expect_perturbers='off' "
-                f"(got {report.get('expect_perturbers')!r})"
+                f"report {path} arm_contradicted requires expect_perturbers 'on' or 'off' "
+                f"(got {reported_expect!r})"
             )
-        # Short reports only exist for the fail-fast OFF arm. Accepting one under an overlays_on
-        # plan label would score a single-attempt boot as if it had the full budget (Codex P2).
-        if boot.condition != "overlays_off":
+        # Short reports are fail-fast stops for either arm. Off-arm: injected sighting.
+        # On-arm: STABLE + successful miss (Codex P1 on #721). Condition must still match.
+        if reported_expect == "off" and boot.condition != "overlays_off":
             raise ValueError(
                 f"report {path} arm_contradicted with expect_perturbers='off' but plan condition "
-                f"is {boot.condition!r}; short contradiction reports are only valid for "
-                "overlays_off boots"
+                f"is {boot.condition!r}"
             )
-        # The summary flag alone is not enough: require dispositive injected evidence in the
-        # log so a truncated clean report cannot enter via arm_contradicted (Codex P2 on #721).
-        has_injected = False
+        if reported_expect == "on" and boot.condition != "overlays_on":
+            raise ValueError(
+                f"report {path} arm_contradicted with expect_perturbers='on' but plan condition "
+                f"is {boot.condition!r}"
+            )
+        # The summary flag alone is not enough: require dispositive evidence in the log so a
+        # truncated clean report cannot enter via arm_contradicted (Codex P2 on #721).
+        has_dispositive = False
         if isinstance(attempts_log, list):
             for raw in attempts_log:
                 if not isinstance(raw, dict):
                     continue
                 block = raw.get("perturbers")
-                if isinstance(block, dict) and any(value == "injected" for value in block.values()):
-                    has_injected = True
+                if not isinstance(block, dict):
+                    continue
+                if reported_expect == "off" and any(
+                    value == "injected" for value in block.values()
+                ):
+                    has_dispositive = True
                     break
-        if not has_injected:
+                if (
+                    reported_expect == "on"
+                    and raw.get("verdict") == "stable"
+                    and any(value == "not_observed" for value in block.values())
+                    and all(value != "unavailable" for value in block.values())
+                ):
+                    has_dispositive = True
+                    break
+        if not has_dispositive:
             raise ValueError(
-                f"report {path} arm_contradicted but attempts_log has no injected perturber "
-                "evidence — refusing the short-report exception"
+                f"report {path} arm_contradicted but attempts_log has no dispositive "
+                f"receipt failure for expect_perturbers={reported_expect!r} — refusing the "
+                "short-report exception"
             )
     else:
         if attempts != launches_per_boot:
@@ -909,6 +958,16 @@ def _parse_report(
             )
         if not isinstance(attempts_log, list) or len(attempts_log) != launches_per_boot:
             raise ValueError(f"report {path} must log all {launches_per_boot} launches")
+    # Receipt flag on the report must match the planned arm for every loaded boot, not only the
+    # short arm_contradicted path — otherwise a mis-pasted --expect-perturbers command is scored
+    # under the wrong treatment rules (antigravity HIGH / Codex P2 on #721).
+    expected_flag = "on" if boot.condition == "overlays_on" else "off"
+    reported_flag = report.get("expect_perturbers")
+    if reported_flag != expected_flag:
+        raise ValueError(
+            f"report {path} expect_perturbers={reported_flag!r} does not match planned "
+            f"condition {boot.condition!r} (expected {expected_flag!r})"
+        )
     launch = report.get("launch")
     if not isinstance(launch, dict):
         raise ValueError(f"report {path} must record launch configuration")
