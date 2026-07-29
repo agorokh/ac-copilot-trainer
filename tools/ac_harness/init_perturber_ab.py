@@ -275,13 +275,16 @@ def _launch_evidence(launch: LaunchObservation) -> dict[str, str]:
 
 
 def _is_live_session(launch: LaunchObservation) -> bool:
-    """Whether this attempt lived long enough that a miss is informative for overlays_on.
+    """Whether this attempt's absence evidence is informative (post injection race).
 
-    The injection race is ~3 s on the measured rig. Only ``stable`` / ``froze`` / ``wedged_init``
-    with a delivered cycle are treated as past that window: they require the stability /
-    go-live watch. ``never_live`` is never dispositive for *absence* — ``elapsed_s`` includes
-    pre-launch cleanup / CM startup, so it cannot prove the process lived past the race (Codex
-    P1 on #721). Presence (``injected``) remains dispositive on any attempt via the off-arm path.
+    The injection race is ~3 s on the measured rig. Only delivered ``stable`` / ``froze`` /
+    ``wedged_init`` are treated as past that window: each requires the go-live / stability
+    watch (far longer than the race). ``never_live`` is never dispositive for *absence* —
+    ``elapsed_s`` includes pre-launch work and cannot prove post-race lifetime (Codex P1 on
+    #721). Presence (``injected``) remains dispositive on any attempt via the off-arm path.
+
+    A ``FROZE`` after go-live is still past the race: go-live itself requires a ready session,
+    which on this rig is orders of magnitude longer than the measured 3 s injection window.
     """
 
     return launch.cycle_delivered is True and launch.verdict in _LIVE_SESSION_VERDICTS
@@ -339,28 +342,30 @@ def treatment_receipt(
                 TREATMENT_CONTRADICTED,
                 f"planned overlays_off but {', '.join(injected)} was injected into acs.exe",
             )
-        # Absence is only confirmable from LIVE-SESSION looks themselves — not from a boot
-        # roll-up that may still carry early never_live not_observed noise (Codex P1 on #721).
-        live = [item for item in rows if _is_live_session(item)]
-        if not live:
+        # Every DELIVERED cycle enters the onset coordinate, so each must have live-session
+        # not_observed evidence for confirmation. Early delivered never_live (race-window
+        # not_observed / unavailable) keeps the boot unverified (Codex P1 on #721).
+        delivered = [item for item in rows if item.cycle_delivered is True]
+        if not delivered:
             return (
                 TREATMENT_UNVERIFIED,
-                "no long-lived acs.exe look past the injection race for overlays_off",
+                "no delivered cycles with perturber evidence for overlays_off",
             )
         incomplete: list[int] = []
-        for item in live:
+        for item in delivered:
             evidence = _launch_evidence(item)
-            if set(evidence) != required or any(
-                evidence.get(name) == "unavailable" for name in required
-            ):
+            if not _is_live_session(item):
                 incomplete.append(item.launch)
                 continue
-            if any(evidence.get(name) != "not_observed" for name in required):
+            if set(evidence) != required or any(
+                evidence.get(name) != "not_observed" for name in required
+            ):
                 incomplete.append(item.launch)
         if incomplete:
             return (
                 TREATMENT_UNVERIFIED,
-                "partial or unavailable perturber evidence on live session(s) for overlays_off",
+                "partial, early, or unavailable perturber evidence on delivered cycles "
+                "for overlays_off",
             )
         return TREATMENT_CONFIRMED, None
 
