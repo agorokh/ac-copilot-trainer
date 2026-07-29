@@ -867,6 +867,27 @@ class PerturberWatch:
         return out
 
 
+def _normalize_perturber_evidence(raw: dict[str, str] | None) -> dict[str, str]:
+    """Fill canonical keys and reject unknown fields before emitting a v3 report (#721)."""
+
+    if raw is None:
+        return _unavailable_perturbers()
+    unknown = set(raw) - set(PERTURBER_MODULES)
+    if unknown:
+        raise ValueError(f"unknown perturber field(s): {sorted(unknown)}")
+    allowed = {
+        str(PerturberEvidence.INJECTED),
+        str(PerturberEvidence.NOT_OBSERVED),
+        str(PerturberEvidence.UNAVAILABLE),
+    }
+    out = _unavailable_perturbers()
+    for name, value in raw.items():
+        if value not in allowed:
+            raise ValueError(f"invalid perturber evidence {name!r}={value!r}")
+        out[name] = value
+    return out
+
+
 def contradicts_expectation(evidence: dict[str, str], expectation: str | None) -> bool:
     """Whether this attempt's evidence DISPOSITIVELY refutes the arm it was launched under.
 
@@ -1006,7 +1027,9 @@ def run_retry_loop(
         verdict = outcome.verdict
         if verdict is LaunchVerdict.PENDING:
             raise ValueError("watch_attempt returned a non-terminal PENDING verdict")
-        evidence = dict(outcome.perturbers) if outcome.perturbers else _unavailable_perturbers()
+        evidence = _normalize_perturber_evidence(
+            dict(outcome.perturbers) if outcome.perturbers else None
+        )
         records.append(
             AttemptRecord(
                 attempt=attempt,
@@ -2181,7 +2204,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 any_failed = False
                 for pid in pids:
                     try:
-                        successes.append(process_module_names(pid))
+                        # retries=1: do not sleep inside the go-live poll path; BAD_LENGTH during
+                        # module load is retried by the next poll tick instead (cursor HIGH #721).
+                        successes.append(process_module_names(pid, retries=1))
                     except OSError:
                         any_failed = True
                 if not successes:
@@ -2378,6 +2403,14 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 )
                 return 1
             return 0
+        if report.arm_contradicted:
+            # Same fail-closed exit outside --trials (Codex P2 on #721).
+            _make_rig_safe(acs_present, release_requested=release_requested)
+            _log(
+                "FAILED: arm contradicted by injected perturber evidence "
+                f"(expect={report.expect_perturbers!r}) — fix settings and re-run"
+            )
+            return 1
         _log(report.summary())
         if not report.succeeded:
             # A FROZE terminal verdict deliberately leaves acs.exe alive so the watcher can

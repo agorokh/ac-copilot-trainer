@@ -89,12 +89,6 @@ from tools.ac_harness.resilient_launch import (
     resolve_report_path,
 )
 
-#: Fraction of the go-live budget a delivered ``never_live`` must have consumed before its
-#: ``not_observed`` evidence is treated as post-injection-race (Codex P1 on #721). Early
-#: deaths with ``cycle_delivered=True`` finish in seconds; a full-timeout watch is near
-#: ``DEFAULT_GO_LIVE_TIMEOUT``.
-_NEVER_LIVE_TIMEOUT_FRACTION = 0.9
-
 #: v4 pre-registers treatment-receipt verification (#719): analyzer excludes contradicted boots,
 #: plan commands emit ``--expect-perturbers``, and every attempt must carry the full
 #: ``PERTURBER_MODULES`` key set. The plan file IS the pre-registration, so a v3 plan that never
@@ -283,23 +277,14 @@ def _launch_evidence(launch: LaunchObservation) -> dict[str, str]:
 def _is_live_session(launch: LaunchObservation) -> bool:
     """Whether this attempt lived long enough that a miss is informative for overlays_on.
 
-    The injection race is ~3 s on the measured rig. ``stable`` / ``froze`` / ``wedged_init`` only
-    fire after the stability / go-live watch, so their successful looks are past the race.
-
-    A delivered ``never_live`` is *not* automatically long enough: ``classify()`` also emits it
-    immediately when a newly observed ``acs.exe`` exits during startup (still
-    ``cycle_delivered=True``). Only a watch that consumed nearly the full go-live budget is the
-    timeout-stuck-before-readiness shape; early deaths stay non-dispositive for absence (Codex P1
-    on #721).
+    The injection race is ~3 s on the measured rig. Only ``stable`` / ``froze`` / ``wedged_init``
+    with a delivered cycle are treated as past that window: they require the stability /
+    go-live watch. ``never_live`` is never dispositive for *absence* — ``elapsed_s`` includes
+    pre-launch cleanup / CM startup, so it cannot prove the process lived past the race (Codex
+    P1 on #721). Presence (``injected``) remains dispositive on any attempt via the off-arm path.
     """
 
-    if launch.cycle_delivered is not True:
-        return False
-    if launch.verdict in _LIVE_SESSION_VERDICTS:
-        return True
-    if launch.verdict == "never_live":
-        return launch.elapsed_s >= DEFAULT_GO_LIVE_TIMEOUT * _NEVER_LIVE_TIMEOUT_FRACTION
-    return False
+    return launch.cycle_delivered is True and launch.verdict in _LIVE_SESSION_VERDICTS
 
 
 def treatment_receipt(
@@ -352,6 +337,13 @@ def treatment_receipt(
             return (
                 TREATMENT_CONTRADICTED,
                 f"planned overlays_off but {', '.join(injected)} was injected into acs.exe",
+            )
+        # Absence is only confirmable from live-session looks (same race as the on arm).
+        live = [item for item in (launches or ()) if _is_live_session(item)]
+        if not live:
+            return (
+                TREATMENT_UNVERIFIED,
+                "no long-lived acs.exe look past the injection race for overlays_off",
             )
         if all(value == "not_observed" for value in state.values()):
             return TREATMENT_CONFIRMED, None
@@ -1617,6 +1609,10 @@ def analyze(
     )
     missing_blocks = max(0, (expected_blocks or 0) - len(blocks))
     exclusions_present = sum(excluded.values()) > 0 or incomplete_blocks > 0 or missing_blocks > 0
+    # Unverified receipt is not a post-treatment exclusion (no information must not invent
+    # missingness), but it must still withhold causal claims — otherwise a run whose module
+    # snapshots all failed recreates the honor-system arm label (Codex P1 on #721).
+    unverified_present = any(boot.treatment == TREATMENT_UNVERIFIED for boot in boots)
     if (
         usable_blocks < endpoint_floor
         # Blocks that learned nothing cannot fill the floor. This subsumes the old
@@ -1635,6 +1631,8 @@ def analyze(
     elif exclusions_present:
         # Report the p-value, but do not let it carry a causal claim it cannot support.
         conclusion = "post_treatment_exclusions_present"
+    elif unverified_present:
+        conclusion = "treatment_receipt_unverified"
     elif onset_p >= alpha:
         conclusion = "no_measurable_effect"
     elif blocked_effect == 0:

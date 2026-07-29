@@ -486,7 +486,9 @@ def process_module_names(
     """
 
     if sys.platform != "win32":
-        return frozenset()
+        # Fail closed: an empty frozenset would read as a successful "no modules" look and
+        # invent not_observed / absence on non-Windows hosts (cursor HIGH on #721).
+        raise OSError(f"process_module_names is only supported on win32 (got {sys.platform})")
 
     import ctypes
     from ctypes import wintypes

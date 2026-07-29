@@ -73,14 +73,20 @@ def _write_boot_report(
     attempts: int | None = None,
     delivered: list[bool | None] | None = None,
     perturbers: dict[str, str] | None = None,
+    condition: str | None = None,
 ) -> None:
     """Emit one ``resilient_launch --trials N`` style report for a whole boot."""
     counts = {"stable": 0, "froze": 0, "wedged_init": 0, "never_live": 0}
     flags = _default_delivery(verdicts) if delivered is None else delivered
-    # Default to "we could not look" so a fixture that says nothing about treatment yields
-    # `unverified` and falls back to the planned label — the pre-#719 behaviour. Tests that care
-    # about treatment receipt pass explicit evidence.
-    evidence = perturbers or _UNAVAILABLE_PERTURBERS
+    # Prefer arm-matching evidence so analysis fixtures are not silently `unverified` under the
+    # receipt gate (#721). Explicit `perturbers=` still wins; unavailable is the pre-receipt default
+    # only when no condition is known.
+    if perturbers is not None:
+        evidence = perturbers
+    elif condition is not None:
+        evidence = _default_perturbers_for(condition)
+    else:
+        evidence = _UNAVAILABLE_PERTURBERS
     log = []
     for index, (verdict, delivery) in enumerate(zip(verdicts, flags, strict=True), start=1):
         counts[verdict] += 1
@@ -120,6 +126,16 @@ def _stable_then_freeze(onset: int, total: int = _LAUNCHES) -> list[str]:
     return verdicts[:total]
 
 
+def _default_perturbers_for(condition: str) -> dict[str, str]:
+    """Matching receipt evidence so analysis fixtures are not silently unverified (#721)."""
+
+    if condition == "overlays_on":
+        return dict(_INJECTED_PERTURBERS)
+    if condition == "overlays_off":
+        return dict(_ABSENT_PERTURBERS)
+    return dict(_UNAVAILABLE_PERTURBERS)
+
+
 def _boot(
     number: int,
     condition: str,
@@ -130,7 +146,7 @@ def _boot(
     perturbers: dict[str, str] | None = None,
 ) -> BootObservation:
     flags = _default_delivery(verdicts) if delivered is None else delivered
-    evidence = tuple(sorted((perturbers or _UNAVAILABLE_PERTURBERS).items()))
+    evidence = tuple(sorted((perturbers or _default_perturbers_for(condition)).items()))
     return BootObservation(
         boot=number,
         condition=condition,
@@ -1399,6 +1415,7 @@ def test_analyze_cli_round_trip(capsys, tmp_path, monkeypatch) -> None:
             verdicts=_stable_then_freeze(next(onsets[boot["condition"]])),
             start_minute=index * 100,
             uptime_start=0.1,
+            condition=boot["condition"],
         )
     assert main(["analyze", "--plan", str(plan_path), "--reports-dir", str(scratch)]) == 0
     printed = capsys.readouterr().out
@@ -1554,7 +1571,7 @@ class TestTreatmentReceipt:
         summary = summarize_boot(early)
         assert summary.treatment == TREATMENT_UNVERIFIED
 
-        # Short delivered never_live (early acs.exe death) is still non-dispositive.
+        # Delivered never_live is never dispositive for absence (elapsed includes pre-launch work).
         short_nl = _boot(
             1,
             "overlays_on",
@@ -1564,25 +1581,6 @@ class TestTreatmentReceipt:
         )
         summary = summarize_boot(short_nl)
         assert summary.treatment == TREATMENT_UNVERIFIED
-
-        # Full go-live-timeout never_live (elapsed near DEFAULT_GO_LIVE_TIMEOUT) contradicts.
-        from tools.ac_harness.resilient_launch import DEFAULT_GO_LIVE_TIMEOUT
-
-        long_launches = tuple(
-            LaunchObservation(
-                launch=index,
-                verdict="never_live",
-                started_at_utc=f"2026-07-28T10:{index:02d}:00Z",
-                elapsed_s=DEFAULT_GO_LIVE_TIMEOUT,
-                uptime_h=0.5 + index * 0.05,
-                cycle_delivered=True,
-                perturbers=tuple(sorted(_ABSENT_PERTURBERS.items())),
-            )
-            for index in range(1, 6)
-        )
-        long_nl = BootObservation(boot=1, condition="overlays_on", launches=long_launches)
-        summary = summarize_boot(long_nl)
-        assert summary.treatment == TREATMENT_CONTRADICTED
 
         # A dispositive miss is not erased by a sibling unavailable live launch.
         mixed = (
