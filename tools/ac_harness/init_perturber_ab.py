@@ -719,11 +719,29 @@ def build_plan(
         "boots_per_arm": boots_per_arm,
         "blocks": boots_per_arm,
         "launches_per_boot": launches_per_boot,
-        "minimum_boots_per_arm": MIN_BOOTS_PER_ARM,
+        # Confirmatory-only metadata. On a SCREENING plan these describe a test that `screen()`
+        # explicitly never runs, so emitting them verbatim would leave the artifact carrying two
+        # contradictory accounts of how its four boots will be scored — and the plan JSON IS the
+        # pre-registration (#724 review, Codex P2).
+        "minimum_boots_per_arm": SCREEN_BOOTS_PER_ARM if screen else MIN_BOOTS_PER_ARM,
         "randomization_seed": randomization_seed,
         "run_id": run_id,
-        "randomization_reference_set": 2**boots_per_arm,
-        "smallest_attainable_two_sided_p": 2 / 2**boots_per_arm,
+        **(
+            {
+                "randomization_reference_set": None,
+                "smallest_attainable_two_sided_p": None,
+                "no_significance_test": (
+                    "the screening stage runs no permutation test; at "
+                    f"{SCREEN_BOOTS_PER_ARM} blocks its floor would be "
+                    f"{2 / 2**SCREEN_BOOTS_PER_ARM:g}, which can never reach alpha"
+                ),
+            }
+            if screen
+            else {
+                "randomization_reference_set": 2**boots_per_arm,
+                "smallest_attainable_two_sided_p": 2 / 2**boots_per_arm,
+            }
+        ),
         # Pre-registered with the plan so analyze cannot invent a receipt rule the operator never
         # signed up for (Codex P2 on #721). ``exclude_on`` is only ``contradicted``: ``unverified``
         # falls back to the planned label because no information must not manufacture missingness.
@@ -775,23 +793,37 @@ def build_plan(
                 "not the accumulator, and is unusable"
             ),
         },
-        "endpoints": {
-            "primary": (
-                "onset DELIVERED-CYCLE index (first freeze in the boot, counted in launch cycles "
-                "that actually reached AC), right-censored at the boot's delivered-cycle count; "
-                "exact block permutation test over the 2**blocks randomization reference set. A "
-                "censoring surrogate enters the statistic only when its bound establishes the "
-                "sign of the block's difference (#710)"
-            ),
-            "secondary": (
-                f"post-onset burst rate over a fixed {POST_ONSET_WINDOW}-DELIVERED-CYCLE window "
-                "from onset, one rate per boot, same block permutation test"
-            ),
-            "sensitivity": (
-                "exact sign test over blocks; plus an assumption-dependent rank-sum "
-                "permutation test on onset, reported for information and never gating"
-            ),
-        },
+        "endpoints": (
+            {
+                # The screen's ONLY endpoint. Stating the confirmatory permutation endpoints here
+                # would pre-register tests this artifact's own `screen_rule` says are never run.
+                "primary": (
+                    "onset DELIVERED-CYCLE index, right-censored at the boot's delivered-cycle "
+                    "count — evaluated against the pre-registered screen_rule, NOT by any "
+                    "significance test. See screen_rule.large_effect_plausible_when"
+                ),
+                "secondary": None,
+                "sensitivity": None,
+            }
+            if screen
+            else {
+                "primary": (
+                    "onset DELIVERED-CYCLE index (first freeze in the boot, counted in launch "
+                    "cycles that actually reached AC), right-censored at the boot's "
+                    "delivered-cycle count; exact block permutation test over the 2**blocks "
+                    "randomization reference set. A censoring surrogate enters the statistic "
+                    "only when its bound establishes the sign of the block's difference (#710)"
+                ),
+                "secondary": (
+                    f"post-onset burst rate over a fixed {POST_ONSET_WINDOW}-DELIVERED-CYCLE "
+                    "window from onset, one rate per boot, same block permutation test"
+                ),
+                "sensitivity": (
+                    "exact sign test over blocks; plus an assumption-dependent rank-sum "
+                    "permutation test on onset, reported for information and never gating"
+                ),
+            }
+        ),
         "prereg_baselines": {
             "onset_index_graceful": BASELINE_ONSET_INDEX_GRACEFUL,
             "onset_index_hard_kill": BASELINE_ONSET_INDEX_HARD_KILL,
@@ -2022,13 +2054,16 @@ def screen(
         verdict = SCREEN_INSUFFICIENT
         rationale = (
             f"the screen needs {SCREEN_BOOTS_PER_ARM} usable boots per arm; got "
-            f"{len(on)} overlays_on and {len(off)} overlays_off. Recovery is NOT 'reboot and "
-            "re-run that one boot': its planned report name is already taken (reports are "
-            "published exclusively), AND load_observations requires boots to have run in "
-            "planned order — so a replacement for an EARLY boot would carry a timestamp later "
-            "than the boots that followed it and the whole experiment would be refused. "
-            "Regenerate the screening plan (it draws a new nonce, hence fresh report names) and "
-            "run the four boots again in order; keep the old reports as evidence"
+            f"{len(on)} overlays_on and {len(off)} overlays_off. Recovery depends on WHY the "
+            "boot is unusable. An arm-contradicted boot published to a salvage name and left "
+            "its planned path free, so if it is the LAST boot that ran you may reboot and "
+            "re-run it in place — a successful report at the planned name supersedes the "
+            "salvage. Otherwise (the planned path holds a successful report, or later boots "
+            "have already run) re-running is not possible: reports publish exclusively and "
+            "load_observations enforces planned order, so a replacement for an earlier boot "
+            "would invert the timestamps and void the run. Then regenerate the screening plan "
+            "(it draws a new nonce, hence fresh report names) and run the four boots again in "
+            "order; keep the old reports as evidence"
         )
     elif unverified:
         # A boot whose receipt is UNVERIFIED is still `usable` by `summarize_boot` — the

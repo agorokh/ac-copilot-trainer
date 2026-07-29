@@ -2266,7 +2266,7 @@ class TestScreenReviewRoundTwo:
         boots = [_boot(1, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS)]
         rationale = screen(self._screen_plan(), boots)["rationale"]
         assert "planned order" in rationale
-        assert "Regenerate the screening plan" in rationale
+        assert "regenerate the screening plan" in rationale.lower()
 
 
 class TestScreenRecoveryAdviceIsConsistent:
@@ -2322,3 +2322,68 @@ class TestScreenRecoveryAdviceIsConsistent:
         for text in (unverified, insufficient):
             assert "planned order" in text
             assert "regenerate the screening plan" in text.lower()
+
+
+class TestScreenPlanMetadataAndRecoveryNuance:
+    """#724 review round 4 — the plan must not pre-register two scoring stories."""
+
+    @staticmethod
+    def _screen_plan() -> dict:
+        from tools.ac_harness.init_perturber_ab import build_plan
+
+        return build_plan(2, screen=True, randomization_seed=625)
+
+    def test_screening_plan_does_not_preregister_the_permutation_endpoints(self):
+        """Codex P2 — the plan JSON IS the pre-registration; it cannot claim tests never run."""
+        plan = self._screen_plan()
+        endpoints = plan["endpoints"]
+        assert "permutation" not in endpoints["primary"]
+        assert endpoints["secondary"] is None
+        assert endpoints["sensitivity"] is None
+        # Confirmatory power metadata must not appear on a screen that computes no p-value.
+        assert plan["randomization_reference_set"] is None
+        assert plan["smallest_attainable_two_sided_p"] is None
+        assert "no_significance_test" in plan
+        # And the floor must describe the screen, not the confirmatory design.
+        assert plan["minimum_boots_per_arm"] == 2
+
+    def test_confirmatory_plan_keeps_its_permutation_endpoints(self):
+        from tools.ac_harness.init_perturber_ab import build_plan
+
+        plan = build_plan(6, randomization_seed=625)
+        assert "permutation" in plan["endpoints"]["primary"]
+        assert plan["endpoints"]["secondary"] is not None
+        assert plan["randomization_reference_set"] == 2**6
+        assert plan["minimum_boots_per_arm"] == 6
+        assert "no_significance_test" not in plan
+
+    def test_insufficient_advice_preserves_the_salvage_rerun_path(self):
+        """Codex P2 — an arm-contradicted boot leaves its planned name FREE on purpose.
+
+        `resolve_boot_report_path` documents that a successful re-run at the planned name
+        supersedes the salvage, so a blanket "regenerate everything" discards the intended
+        cheap recovery for the last boot.
+        """
+        from tools.ac_harness.init_perturber_ab import screen
+
+        boots = [_boot(1, "overlays_on", _stable_then_freeze(8), perturbers=_INJECTED_PERTURBERS)]
+        rationale = screen(self._screen_plan(), boots)["rationale"]
+        assert "salvage" in rationale
+        assert "re-run it in place" in rationale
+        # ...but the constraint that makes it safe must be stated, not dropped.
+        assert "LAST boot" in rationale
+        assert "planned order" in rationale
+
+    def test_unverified_advice_still_requires_regeneration(self):
+        """An unverified boot published a SUCCESSFUL report, so its planned name IS occupied."""
+        from tools.ac_harness.init_perturber_ab import screen
+
+        boots = [
+            _boot(1, "overlays_off", _stable_then_freeze(12), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(2, "overlays_on", _stable_then_freeze(8), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(3, "overlays_off", _stable_then_freeze(13), perturbers=_UNAVAILABLE_PERTURBERS),
+            _boot(4, "overlays_on", _stable_then_freeze(9), perturbers=_UNAVAILABLE_PERTURBERS),
+        ]
+        rationale = screen(self._screen_plan(), boots)["rationale"]
+        assert "regenerate the screening plan" in rationale
+        assert "re-run it in place" not in rationale
