@@ -2357,7 +2357,13 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                             if perturbers.injected(name):
                                 latched_injected.add(name)
                         perturbers.reset()
-                    primary_pid = max(pids)
+                    # Prefer a PID that is not the previous pin when concurrent PIDs exist —
+                    # Windows PIDs are not creation-ordered (Codex P2 on #721).
+                    if pinned_acs_pid[0] is not None and extra_pids:
+                        candidates = [pid for pid in pids if pid != pinned_acs_pid[0]]
+                        primary_pid = max(candidates) if candidates else max(pids)
+                    else:
+                        primary_pid = max(pids)
                     pinned_acs_pid[0] = primary_pid
                 try:
                     # retries=1: do not sleep inside the go-live poll path; BAD_LENGTH during

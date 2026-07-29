@@ -103,10 +103,14 @@ WITHDRAWN_PLAN_SCHEMA = "init-perturber-ab-plan/v1"
 SUPERSEDED_PLAN_SCHEMA = "init-perturber-ab-plan/v2"
 #: delivered-cycle endpoints without treatment-receipt pre-registration (#719); regenerate.
 PRE_TREATMENT_PLAN_SCHEMA = "init-perturber-ab-plan/v3"
-#: Verdicts used when *absence* must be dispositive for the off-arm confirmation path.
-#: ``stable`` / ``froze`` are post-go-live (packet advanced + ready). ``wedged_init`` is not —
-#: the stream never initialized. On-arm *miss* contradiction uses only ``stable`` (see
-#: :func:`treatment_receipt`); positive ``injected`` is evaluated on every delivered launch.
+#: Post-go-live verdicts for *absence* confirmation (off-arm) and live-session checks.
+#: ``stable`` / ``froze`` require packet advance + ready (past the measured ~3 s race by
+#: construction; plans also floor go_live/stability at 5 s). ``wedged_init`` is excluded.
+#: On-arm *miss* contradiction uses only ``stable`` (see :func:`treatment_receipt`).
+#: Positive ``injected`` is evaluated on every delivered launch regardless of verdict.
+#:
+#: Codex has repeatedly re-litigated freze-as-absence; the contract is: freze is post-go-live
+#: absence-OK for off-arm confirmation of every delivered launch; on-arm miss stays STABLE-only.
 _LIVE_SESSION_VERDICTS = frozenset({"stable", "froze"})
 #: Measured injection race on the rig (~3 s). Plans must not set timeouts below this plus margin.
 INJECTION_RACE_S = 3.0
@@ -348,9 +352,7 @@ def treatment_receipt(
                 TREATMENT_CONTRADICTED,
                 f"planned overlays_off but {', '.join(injected)} was injected into acs.exe",
             )
-        # Every delivered launch must show full not_observed on a post-go-live verdict
-        # (stable/froze). Omitting freze/wedged would let mixed-treatment boots score
-        # (Codex P1 on #721).
+        # Every delivered post-go-live launch (stable/froze) must show full not_observed.
         delivered = [item for item in rows if item.cycle_delivered is True]
         if not delivered:
             return (
