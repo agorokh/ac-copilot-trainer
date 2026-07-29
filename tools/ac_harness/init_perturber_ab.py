@@ -263,17 +263,23 @@ def treatment_receipt(condition: str, state: dict[str, str]) -> tuple[str, str |
     cannot inform the contrast. The cause is irrelevant; receipt is what the design needs.
 
     Evidence is asymmetric per launch, but a BOOT aggregates many launches, so both arms are
-    checkable here even though only ``off`` is refutable from a single attempt:
+    checkable here even though only ``off`` is refutable from a single attempt. Confirmation
+    requires **every** tracked perturber to match the planned arm; partial unknown evidence
+    stays ``unverified`` rather than silently admitting a half-applied treatment (Codex P1 on
+    #721):
 
-    * planned ``overlays_off`` + any ``injected``      -> contradicted (dispositive)
-    * planned ``overlays_on``  + all ``not_observed``  -> contradicted (the boot never saw the
-      perturber it was supposed to run with, across every successful look in the boot)
-    * anything resting on ``unavailable``              -> unverified (no information; fall back to
-      the planned label and say so, rather than claiming confirmation we did not earn)
+    * planned ``overlays_off`` + any ``injected``            -> contradicted (dispositive)
+    * planned ``overlays_off`` + all ``not_observed``        -> confirmed
+    * planned ``overlays_on``  + all ``injected``            -> confirmed
+    * planned ``overlays_on``  + all successful looks miss
+      (no ``injected``, every field ``not_observed``)        -> contradicted
+    * anything resting on ``unavailable`` or mixed partial   -> unverified (no information; fall
+      back to the planned label rather than claiming confirmation we did not earn)
     """
 
     if not state:
         return TREATMENT_UNVERIFIED, "report carries no perturber evidence"
+    values = list(state.values())
     if condition == "overlays_off":
         injected = sorted(name for name, value in state.items() if value == "injected")
         if injected:
@@ -281,15 +287,23 @@ def treatment_receipt(condition: str, state: dict[str, str]) -> tuple[str, str |
                 TREATMENT_CONTRADICTED,
                 f"planned overlays_off but {', '.join(injected)} was injected into acs.exe",
             )
-        if all(value == "unavailable" for value in state.values()):
-            return TREATMENT_UNVERIFIED, "no successful module snapshot in this boot"
-        return TREATMENT_CONFIRMED, None
-    if condition == "overlays_on":
-        if any(value == "injected" for value in state.values()):
+        if all(value == "not_observed" for value in values):
             return TREATMENT_CONFIRMED, None
-        if all(value == "unavailable" for value in state.values()):
-            return TREATMENT_UNVERIFIED, "no successful module snapshot in this boot"
-        missing = sorted(name for name, value in state.items() if value == "not_observed")
+        return TREATMENT_UNVERIFIED, "partial or unavailable perturber evidence for overlays_off"
+    if condition == "overlays_on":
+        if all(value == "injected" for value in values):
+            return TREATMENT_CONFIRMED, None
+        if all(value == "not_observed" for value in values):
+            missing = sorted(state)
+            return (
+                TREATMENT_CONTRADICTED,
+                f"planned overlays_on but {', '.join(missing)} was never observed injected across "
+                "any successful snapshot in this boot",
+            )
+        if any(value == "unavailable" for value in values):
+            return TREATMENT_UNVERIFIED, "partial or unavailable perturber evidence for overlays_on"
+        # Mixed injected + not_observed: some planned overlays never appeared after looks.
+        missing = sorted(name for name, value in state.items() if value != "injected")
         return (
             TREATMENT_CONTRADICTED,
             f"planned overlays_on but {', '.join(missing)} was never observed injected across "
@@ -704,14 +718,40 @@ def _parse_report(
         raise ValueError(f"report {path} schema must be {REPORT_SCHEMA!r}")
     attempts = report.get("attempts")
     attempts_log = report.get("attempts_log")
-    if attempts != launches_per_boot:
-        raise ValueError(
-            f"report {path} recorded {attempts!r} attempts; the plan requires exactly "
-            f"{launches_per_boot} launches in this boot (run one --trials "
-            f"{launches_per_boot} invocation per boot)"
-        )
-    if not isinstance(attempts_log, list) or len(attempts_log) != launches_per_boot:
-        raise ValueError(f"report {path} must log all {launches_per_boot} launches")
+    arm_contradicted = report.get("arm_contradicted") is True
+    # A full boot must run the planned launch budget. The one deliberate short form is an
+    # early arm-contradiction stop under ``--expect-perturbers off`` (#719 Part C): the report
+    # is still a usable treatment-receipt artifact (the boot is excluded), so accepting it
+    # here is what makes the fail-fast path loadable instead of looking like a corrupt run
+    # (Codex P1 on #721).
+    if arm_contradicted:
+        if not isinstance(attempts, int) or attempts < 1 or attempts > launches_per_boot:
+            raise ValueError(
+                f"report {path} recorded arm_contradicted with attempts={attempts!r}; "
+                f"expected 1..{launches_per_boot}"
+            )
+        if not isinstance(attempts_log, list) or len(attempts_log) != attempts:
+            log_len = (
+                len(attempts_log) if isinstance(attempts_log, list) else type(attempts_log).__name__
+            )
+            raise ValueError(
+                f"report {path} arm_contradicted log length {log_len} "
+                f"does not match attempts={attempts}"
+            )
+        if report.get("expect_perturbers") != "off":
+            raise ValueError(
+                f"report {path} arm_contradicted requires expect_perturbers='off' "
+                f"(got {report.get('expect_perturbers')!r})"
+            )
+    else:
+        if attempts != launches_per_boot:
+            raise ValueError(
+                f"report {path} recorded {attempts!r} attempts; the plan requires exactly "
+                f"{launches_per_boot} launches in this boot (run one --trials "
+                f"{launches_per_boot} invocation per boot)"
+            )
+        if not isinstance(attempts_log, list) or len(attempts_log) != launches_per_boot:
+            raise ValueError(f"report {path} must log all {launches_per_boot} launches")
     launch = report.get("launch")
     if not isinstance(launch, dict):
         raise ValueError(f"report {path} must record launch configuration")
@@ -1740,8 +1780,20 @@ def _format_boot_command(
     go_live_timeout: float,
     launches_per_boot: int,
     report_path: str,
+    condition: str,
 ) -> str:
-    """Build a pasteable per-boot launch line rooted at the checkout (so ``tools`` imports)."""
+    """Build a pasteable per-boot launch line rooted at the checkout (so ``tools`` imports).
+
+    Emits ``--expect-perturbers on|off`` derived from the planned arm so the standard experiment
+    workflow activates the fail-fast off-arm check without a hand-edited command (Codex P2 on
+    #721).
+    """
+    if condition == "overlays_on":
+        expect = "on"
+    elif condition == "overlays_off":
+        expect = "off"
+    else:
+        raise ValueError(f"unknown planned condition {condition!r}")
     parts = [
         "python",
         "-m",
@@ -1761,6 +1813,8 @@ def _format_boot_command(
             f"{go_live_timeout:g}",
             "--trials",
             str(launches_per_boot),
+            "--expect-perturbers",
+            expect,
             "--json",
             report_path,
         ]
@@ -1835,6 +1889,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         go_live_timeout=args.go_live_timeout,
                         launches_per_boot=args.launches_per_boot,
                         report_path=_checkout_relative_report_path(destination, boot["report"]),
+                        condition=boot["condition"],
                     ),
                 )
                 for boot in plan["boots"]

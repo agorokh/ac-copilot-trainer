@@ -2388,11 +2388,22 @@ class TestPerturberTreatmentReceipt:
         assert report.arm_contradicted is True
         assert report.expect_perturbers == "off"
         # Without the counters running before the break, this attempt would appear in the log but
-        # not in `cycles`, and the analyzer would reject the report as corrupt.
+        # not in `cycles`/`counts`, and the analyzer would reject the report as corrupt
+        # (cursor HIGH / Codex P1 on #721).
         assert report.cycles_delivered == 1
+        assert report.froze == 1
+        assert report.stable == 0
+        assert report.never_live == 0
+        assert report.wedged_init == 0
         assert len(report.attempts_log) == 1
         payload = report.as_dict()
         assert payload["cycles"]["delivered"] == len(payload["attempts_log"])
+        assert payload["counts"] == {
+            "stable": 0,
+            "froze": 1,
+            "wedged_init": 0,
+            "never_live": 0,
+        }
         assert payload["arm_contradicted"] is True
 
     def test_matching_off_arm_runs_the_whole_budget(self):

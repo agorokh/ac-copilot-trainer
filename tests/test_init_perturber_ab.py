@@ -1466,6 +1466,26 @@ class TestTreatmentReceipt:
         assert off.treatment == TREATMENT_CONFIRMED
         assert on.usable and off.usable
 
+    def test_partial_on_arm_injection_is_not_confirmation(self):
+        """Codex P1 on #721: both planned overlays must match; one of two is not enough."""
+        from tools.ac_harness.init_perturber_ab import (
+            TREATMENT_CONTRADICTED,
+            TREATMENT_UNVERIFIED,
+            treatment_receipt,
+        )
+
+        half_injected = {"steam_overlay": "injected", "nvidia_capture": "not_observed"}
+        mixed_unknown = {"steam_overlay": "injected", "nvidia_capture": "unavailable"}
+        off_mixed = {"steam_overlay": "not_observed", "nvidia_capture": "unavailable"}
+
+        verdict, _detail = treatment_receipt("overlays_on", half_injected)
+        assert verdict == TREATMENT_CONTRADICTED
+        verdict, _detail = treatment_receipt("overlays_on", mixed_unknown)
+        assert verdict == TREATMENT_UNVERIFIED
+        # Off arm: partial unknown is unverified, not a free confirmation.
+        verdict, _detail = treatment_receipt("overlays_off", off_mixed)
+        assert verdict == TREATMENT_UNVERIFIED
+
     def test_unavailable_evidence_is_unverified_not_contradicted(self):
         """No information must fall back to the plan, never manufacture an exclusion."""
         from tools.ac_harness.init_perturber_ab import (
@@ -1530,6 +1550,56 @@ class TestTreatmentReceipt:
         assert len(blocks) == 1
         # The surviving block carries no usable difference, so it cannot enter the statistic.
         assert blocks[0].onset_difference is None
+
+
+def test_early_arm_contradiction_report_is_loadable(tmp_path: Path) -> None:
+    """Codex P1 on #721: fail-fast off-arm stop must parse as a contradicted boot, not corrupt."""
+    from tools.ac_harness.init_perturber_ab import TREATMENT_CONTRADICTED, summarize_boot
+
+    plan = _two_boot_plan()
+    reports_dir = tmp_path
+    first = plan["boots"][0]
+    # Planned off arm, stopped after one injected sighting — shorter than launches_per_boot.
+    path = reports_dir / first["report"]
+    _write_boot_report(
+        path,
+        verdicts=["froze"],
+        start_minute=10,
+        uptime_start=0.5,
+        launch=_launch_config(plan["launches_per_boot"]),
+        attempts=1,
+        perturbers=_INJECTED_PERTURBERS,
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["arm_contradicted"] = True
+    payload["expect_perturbers"] = "off"
+    # Plan boots[0] is overlays_on in the helper — force the planned condition to off for this case.
+    plan["boots"][0] = {**first, "condition": "overlays_off"}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    observations = load_observations(plan, reports_dir, require_complete=False)
+    assert len(observations) == 1
+    assert len(observations[0].launches) == 1
+    summary = summarize_boot(observations[0])
+    assert summary.treatment == TREATMENT_CONTRADICTED
+    assert summary.usable is False
+    assert summary.unusable_reason == "treatment_contradicted"
+
+
+def test_plan_commands_emit_expect_perturbers(tmp_path, monkeypatch, capsys) -> None:
+    """Codex P2 on #721: generated plan lines must activate the fail-fast arm check."""
+    from tools.ac_harness.init_perturber_ab import main
+
+    monkeypatch.setattr(ab_mod, "repo_checkout_root", lambda: tmp_path)
+    out = tmp_path / ".scratch" / "plan.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    assert main(["plan", "--out", str(out), "--boots-per-arm", "6", "--seed", "1"]) == 0
+    printed = capsys.readouterr().out
+    assert "--expect-perturbers on" in printed
+    assert "--expect-perturbers off" in printed
+    plan = json.loads(out.read_text(encoding="utf-8"))
+    # Both arms appear in the printed schedule; counts match the planned boots.
+    assert sum(boot["condition"] == "overlays_on" for boot in plan["boots"]) == 6
+    assert sum(boot["condition"] == "overlays_off" for boot in plan["boots"]) == 6
 
 
 def test_v2_reports_are_rejected_with_a_reason(tmp_path: Path) -> None:

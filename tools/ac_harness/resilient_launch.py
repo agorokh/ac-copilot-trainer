@@ -1016,24 +1016,14 @@ def run_retry_loop(
             undetermined += 1
         last_verdict = verdict
         attempts_run = attempt
-        if contradicts_expectation(evidence, expect_perturbers):
-            # The boot was launched as `overlays_off` and a perturber is demonstrably injected, so
-            # its arm label is a lie and nothing measured after this point can inform the contrast.
-            # Stop now: the accumulator has already advanced (this boot needs another reboot either
-            # way), but stopping at attempt N instead of 24 saves ~28 minutes of rig time per
-            # mistake. Only this direction is dispositive — see `contradicts_expectation` (#719).
-            #
-            # Placed AFTER the delivery counters on purpose: breaking before them would leave this
-            # attempt in ``attempts_log`` but absent from ``cycles``, and the analyzer checks those
-            # for exact agreement — a desync would look like a corrupt report rather than a
-            # deliberate early stop.
-            arm_contradicted = True
-            break
+        # Verdict histogram BEFORE any early-stop: an arm-contradiction break used to leave this
+        # attempt in ``attempts_log`` while omitting it from ``counts``, and the analyzer rejects
+        # exactly that shape (`counts do not match its attempts_log`). Same placement rule as the
+        # delivery counters above — the deliberate stop must not desync any integrity check
+        # (cursor HIGH / Codex P1 on #721).
         if verdict is LaunchVerdict.STABLE:
             stable += 1
             never_live_run = 0
-            if stop_on_stable:
-                break
         elif verdict is LaunchVerdict.NEVER_LIVE:
             never_live += 1
             # Delivery deliberately does NOT gate this streak. A delivered NEVER_LIVE also covers
@@ -1053,6 +1043,16 @@ def run_retry_loop(
             else:
                 wedged_init += 1
             never_live_run = 0
+        if contradicts_expectation(evidence, expect_perturbers):
+            # The boot was launched as `overlays_off` and a perturber is demonstrably injected, so
+            # its arm label is a lie and nothing measured after this point can inform the contrast.
+            # Stop now: the accumulator has already advanced (this boot needs another reboot either
+            # way), but stopping at attempt N instead of 24 saves ~28 minutes of rig time per
+            # mistake. Only this direction is dispositive — see `contradicts_expectation` (#719).
+            arm_contradicted = True
+            break
+        if verdict is LaunchVerdict.STABLE and stop_on_stable:
+            break
     return LaunchReport(
         last_verdict,
         attempts_run,
@@ -2158,9 +2158,19 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 if not pids:
                     perturbers.observe(None)
                     return
-                try:
-                    perturbers.observe(process_module_names(pids[0]))
-                except OSError:
+                # Union presence across EVERY returned PID. Taking only the lowest PID (the old
+                # behaviour) can sample a leftover corpse without overlays while the live session
+                # has them, and miss the dispositive `injected` proof for the off-arm (cursor
+                # MEDIUM on #721). One successful look of any PID is enough; all failures collapse
+                # to a single failed snapshot so we never invent absence from access errors.
+                looked = False
+                for pid in pids:
+                    try:
+                        perturbers.observe(process_module_names(pid))
+                        looked = True
+                    except OSError:
+                        continue
+                if not looked:
                     perturbers.observe(None)
 
             def read_attempt_state() -> tuple[int | None, bool | None, bool | None, int | None]:
