@@ -984,13 +984,14 @@ def contradicts_expectation(
 
     if expectation == "off":
         return any(value == str(PerturberEvidence.INJECTED) for value in evidence.values())
-    # Match analyzer _is_live_session: only STABLE is inherently post-race for absence.
-    if expectation == "on" and verdict is LaunchVerdict.STABLE:
+    # Match analyzer _is_live_session: STABLE and WEDGED_INIT are post-race for absence
+    # (go_live_timeout / stability floors exceed the injection race).
+    if expectation == "on" and verdict in (LaunchVerdict.STABLE, LaunchVerdict.WEDGED_INIT):
         if not evidence:
             return False
         if any(value == str(PerturberEvidence.UNAVAILABLE) for value in evidence.values()):
             return False
-        # Full successful look on a stable session that still misses a required perturber.
+        # Full successful look that still misses a required perturber.
         return any(value == str(PerturberEvidence.NOT_OBSERVED) for value in evidence.values())
     return False
 
@@ -2385,11 +2386,12 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             if args.expect_perturbers is not None:
                 sample_perturbers(soft_fail=True)
             evidence = dict(perturbers.evidence())
-            # Off-arm latch: restore dispositive injection from a replaced PID without letting
-            # those sightings count as the replacement session's full on-arm confirmation
-            # (missing keys stay unavailable after reset).
-            for name in latched_injected:
-                evidence[name] = str(PerturberEvidence.INJECTED)
+            # Off-arm only: restore dispositive injection from a replaced PID. Never overlay
+            # latched keys for on-arm — that would invent full treatment for the replacement
+            # (Codex P1 / qodo on #721).
+            if args.expect_perturbers == "off":
+                for name in latched_injected:
+                    evidence[name] = str(PerturberEvidence.INJECTED)
             outcome = replace(outcome, perturbers=evidence)
             delivery = _delivery_label(outcome.cycle_delivered)
             injected = sorted(
