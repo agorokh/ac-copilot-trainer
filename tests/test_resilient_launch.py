@@ -2633,11 +2633,12 @@ class TestPerturberTreatmentReceipt:
             "nvidia_capture": str(PerturberEvidence.NOT_OBSERVED),
         }
         assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.STABLE) is True
-        assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.FROZE) is False
+        assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.FROZE) is True
+        assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.WEDGED_INIT) is False
 
         def watch(_attempt: int) -> AttemptOutcome:
             return AttemptOutcome(
-                LaunchVerdict.STABLE,
+                LaunchVerdict.FROZE,
                 cycle_delivered=True,
                 perturbers=evidence,
             )
@@ -2651,4 +2652,16 @@ class TestPerturberTreatmentReceipt:
         )
         assert report.attempts == 1
         assert report.arm_contradicted is True
-        assert report.stable == 1
+        assert report.froze == 1
+
+    def test_pid_replacement_resets_injected_union(self):
+        """Codex P1: Steam on PID A + NVIDIA on PID B must not invent full treatment."""
+        from tools.ac_harness.resilient_launch import PerturberEvidence, PerturberWatch
+
+        watch = PerturberWatch()
+        watch.observe(frozenset({"gameoverlayrenderer64.dll"}))
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.INJECTED)
+        watch.reset()
+        watch.observe(frozenset({"nvspcap64.dll"}))
+        assert watch.evidence()["steam_overlay"] == str(PerturberEvidence.NOT_OBSERVED)
+        assert watch.evidence()["nvidia_capture"] == str(PerturberEvidence.INJECTED)

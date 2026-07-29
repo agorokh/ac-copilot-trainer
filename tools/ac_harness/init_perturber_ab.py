@@ -940,7 +940,7 @@ def _parse_report(
                     break
                 if (
                     reported_expect == "on"
-                    and raw.get("verdict") == "stable"
+                    and raw.get("verdict") in ("stable", "froze")
                     and any(value == "not_observed" for value in block.values())
                     and all(value != "unavailable" for value in block.values())
                 ):

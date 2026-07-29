@@ -838,6 +838,13 @@ class PerturberWatch:
         # followed by failed later looks must not stick as not_observed (Codex P1 on #721).
         self._last_full_look_ok = False
 
+    def reset(self) -> None:
+        """Clear all evidence. Used when the pinned acs.exe PID is replaced mid-attempt."""
+
+        self._injected.clear()
+        self._successful_looks = 0
+        self._last_full_look_ok = False
+
     def observe(self, module_names: frozenset[str] | None) -> None:
         """Record one snapshot. ``None`` means the snapshot FAILED — not "no modules".
 
@@ -967,12 +974,13 @@ def contradicts_expectation(
 
     if expectation == "off":
         return any(value == str(PerturberEvidence.INJECTED) for value in evidence.values())
-    if expectation == "on" and verdict is LaunchVerdict.STABLE:
+    # Match analyzer _is_live_session: STABLE and FROZE are both post-go-live (Codex P1 on #721).
+    if expectation == "on" and verdict in (LaunchVerdict.STABLE, LaunchVerdict.FROZE):
         if not evidence:
             return False
         if any(value == str(PerturberEvidence.UNAVAILABLE) for value in evidence.values()):
             return False
-        # Full successful look on a stable session that still misses a required perturber.
+        # Full successful look on a post-go-live session that still misses a required perturber.
         return any(value == str(PerturberEvidence.NOT_OBSERVED) for value in evidence.values())
     return False
 
@@ -2297,8 +2305,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     primary_pid = pinned_acs_pid[0]
                 else:
                     if pinned_acs_pid[0] is not None:
-                        # Process replacement: prior not_observed must not stick to the new PID.
-                        fold_perturber_snapshots(perturbers, enum_failed=True)
+                        # Process replacement: drop ALL prior evidence so Steam from the corpse
+                        # cannot combine with NVIDIA from the replacement into a false full
+                        # injection (Codex P1 on #721). Off-arm positive sightings already
+                        # stop the loop on the poll that first saw them.
+                        perturbers.reset()
                     primary_pid = max(pids)
                     pinned_acs_pid[0] = primary_pid
                 try:
