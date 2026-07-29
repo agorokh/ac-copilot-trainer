@@ -331,6 +331,7 @@ def treatment_receipt(
             detail.append(f"unknown {', '.join(extra)}")
         return TREATMENT_UNVERIFIED, "perturber key set incomplete: " + "; ".join(detail)
 
+    rows = list(launches or ())
     if condition == "overlays_off":
         injected = sorted(name for name, value in state.items() if value == "injected")
         if injected:
@@ -338,30 +339,45 @@ def treatment_receipt(
                 TREATMENT_CONTRADICTED,
                 f"planned overlays_off but {', '.join(injected)} was injected into acs.exe",
             )
-        # Absence is only confirmable from live-session looks (same race as the on arm).
-        live = [item for item in (launches or ()) if _is_live_session(item)]
+        # Absence is only confirmable from LIVE-SESSION looks themselves — not from a boot
+        # roll-up that may still carry early never_live not_observed noise (Codex P1 on #721).
+        live = [item for item in rows if _is_live_session(item)]
         if not live:
             return (
                 TREATMENT_UNVERIFIED,
                 "no long-lived acs.exe look past the injection race for overlays_off",
             )
-        if all(value == "not_observed" for value in state.values()):
-            return TREATMENT_CONFIRMED, None
-        return TREATMENT_UNVERIFIED, "partial or unavailable perturber evidence for overlays_off"
-
-    if condition == "overlays_on":
-        live = [item for item in (launches or ()) if _is_live_session(item)]
-        if not live:
-            # No long-lived process: not_observed may be pure injection-race noise.
-            if all(value == "unavailable" for value in state.values()):
-                return TREATMENT_UNVERIFIED, "no successful module snapshot in this boot"
+        incomplete: list[int] = []
+        for item in live:
+            evidence = _launch_evidence(item)
+            if set(evidence) != required or any(
+                evidence.get(name) == "unavailable" for name in required
+            ):
+                incomplete.append(item.launch)
+                continue
+            if any(evidence.get(name) != "not_observed" for name in required):
+                incomplete.append(item.launch)
+        if incomplete:
             return (
                 TREATMENT_UNVERIFIED,
-                "no long-lived acs.exe look past the injection race for overlays_on",
+                "partial or unavailable perturber evidence on live session(s) for overlays_off",
+            )
+        return TREATMENT_CONFIRMED, None
+
+    if condition == "overlays_on":
+        # Every DELIVERED cycle enters the onset coordinate, so each must be fully injected for
+        # confirmation. Early delivered never_live with not_observed keeps the boot unverified
+        # rather than being dropped while later lives confirm (Codex P1 on #721).
+        delivered = [item for item in rows if item.cycle_delivered is True]
+        if not delivered:
+            return (
+                TREATMENT_UNVERIFIED,
+                "no delivered cycles with perturber evidence for overlays_on",
             )
         incomplete: list[int] = []
-        short: list[str] = []
-        for item in live:
+        short_live: list[str] = []
+        early_miss: list[int] = []
+        for item in delivered:
             evidence = _launch_evidence(item)
             if set(evidence) != required:
                 incomplete.append(item.launch)
@@ -370,21 +386,23 @@ def treatment_receipt(
                 incomplete.append(item.launch)
                 continue
             miss = sorted(name for name in required if evidence[name] != "injected")
-            if miss:
-                short.append(f"launch {item.launch}: {', '.join(miss)}")
-        # A dispositive miss on any fully observed live launch cannot be erased by a sibling
-        # launch whose snapshot failed (``unavailable``). Prefer contradicted over unverified
-        # whenever short is non-empty (Codex P1 on #721).
-        if short:
+            if not miss:
+                continue
+            if _is_live_session(item):
+                short_live.append(f"launch {item.launch}: {', '.join(miss)}")
+            else:
+                early_miss.append(item.launch)
+        if short_live:
             return (
                 TREATMENT_CONTRADICTED,
                 "planned overlays_on but live session(s) never observed full injection "
-                f"({'; '.join(short)})",
+                f"({'; '.join(short_live)})",
             )
-        if incomplete:
+        if incomplete or early_miss:
             return (
                 TREATMENT_UNVERIFIED,
-                "partial or unavailable perturber evidence on live session(s) for overlays_on",
+                "partial, early, or unavailable perturber evidence on delivered cycles "
+                "for overlays_on",
             )
         return TREATMENT_CONFIRMED, None
 
@@ -860,6 +878,22 @@ def _parse_report(
                 f"report {path} arm_contradicted with expect_perturbers='off' but plan condition "
                 f"is {boot.condition!r}; short contradiction reports are only valid for "
                 "overlays_off boots"
+            )
+        # The summary flag alone is not enough: require dispositive injected evidence in the
+        # log so a truncated clean report cannot enter via arm_contradicted (Codex P2 on #721).
+        has_injected = False
+        if isinstance(attempts_log, list):
+            for raw in attempts_log:
+                if not isinstance(raw, dict):
+                    continue
+                block = raw.get("perturbers")
+                if isinstance(block, dict) and any(value == "injected" for value in block.values()):
+                    has_injected = True
+                    break
+        if not has_injected:
+            raise ValueError(
+                f"report {path} arm_contradicted but attempts_log has no injected perturber "
+                "evidence — refusing the short-report exception"
             )
     else:
         if attempts != launches_per_boot:
