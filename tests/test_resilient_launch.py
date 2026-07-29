@@ -2633,12 +2633,12 @@ class TestPerturberTreatmentReceipt:
             "nvidia_capture": str(PerturberEvidence.NOT_OBSERVED),
         }
         assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.STABLE) is True
-        assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.FROZE) is True
+        assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.FROZE) is False
         assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.WEDGED_INIT) is False
 
         def watch(_attempt: int) -> AttemptOutcome:
             return AttemptOutcome(
-                LaunchVerdict.FROZE,
+                LaunchVerdict.STABLE,
                 cycle_delivered=True,
                 perturbers=evidence,
             )
@@ -2652,7 +2652,7 @@ class TestPerturberTreatmentReceipt:
         )
         assert report.attempts == 1
         assert report.arm_contradicted is True
-        assert report.froze == 1
+        assert report.stable == 1
 
     def test_pid_replacement_freezes_presence_and_invalidates_absence(self):
         """Codex P1: keep injected; convert leftover not_observed to unavailable on replace."""

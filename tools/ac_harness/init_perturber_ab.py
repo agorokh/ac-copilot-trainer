@@ -103,12 +103,11 @@ WITHDRAWN_PLAN_SCHEMA = "init-perturber-ab-plan/v1"
 SUPERSEDED_PLAN_SCHEMA = "init-perturber-ab-plan/v2"
 #: delivered-cycle endpoints without treatment-receipt pre-registration (#719); regenerate.
 PRE_TREATMENT_PLAN_SCHEMA = "init-perturber-ab-plan/v3"
-#: Verdicts whose *absence* evidence is post-injection-race. ``classify`` only returns
-#: ``stable``/``froze`` after go-live (packet advanced + entry ready + drivable), which on this
-#: rig is far past the ~3 s injection race. ``wedged_init`` never reached readiness — excluded.
-#: ``elapsed_s`` is intentionally not used: it includes pre-launch work and is not process life
-#: (Codex P1 on #721).
-_LIVE_SESSION_VERDICTS = frozenset({"stable", "froze"})
+#: Only ``stable`` is inherently past the injection race for *absence* evidence: it required the
+#: full stability window. ``froze`` can fire on the first post-go-live death / packet regression
+#: (and ``_Car0NotDrivable`` is mapped to ``FROZE``), so a race-window miss can still be attached
+#: to that verdict (Codex P1 on #721). ``wedged_init`` never reached readiness.
+_LIVE_SESSION_VERDICTS = frozenset({"stable"})
 #: Measured injection race on the rig (~3 s). Plans must not set ``go_live_timeout`` below this
 #: plus a small margin, or ``WEDGED_INIT`` can fire inside the race window.
 INJECTION_RACE_S = 3.0
@@ -287,12 +286,11 @@ def _launch_evidence(launch: LaunchObservation) -> dict[str, str]:
 def _is_live_session(launch: LaunchObservation) -> bool:
     """Whether this attempt's absence evidence is informative (post injection race).
 
-    The injection race is ~3 s on the measured rig. Delivered ``stable`` / ``froze`` are the
-    only post-go-live verdicts: ``classify`` requires packet advance + entry ready + drivable
-    before either, which is past the race by construction. ``elapsed_s`` is **not** consulted —
-    it includes pre-launch work and cannot prove process lifetime (Codex P1 on #721).
-    ``wedged_init`` / ``never_live`` never reached readiness, so their misses are non-dispositive.
-    Presence (``injected``) remains dispositive on any attempt via the off-arm path.
+    Only a delivered ``stable`` attempt is dispositive for *absence*: the stability window is
+    known to exceed the measured ~3 s injection race. ``froze`` is not — it can fire on the
+    first post-go-live sample (process exit / packet regression), and ``_Car0NotDrivable`` is
+    also mapped to ``FROZE`` without a proven late sample (Codex P1 on #721). Presence
+    (``injected``) remains dispositive on any attempt via the off-arm path.
     """
 
     return launch.cycle_delivered is True and launch.verdict in _LIVE_SESSION_VERDICTS
@@ -350,21 +348,21 @@ def treatment_receipt(
                 TREATMENT_CONTRADICTED,
                 f"planned overlays_off but {', '.join(injected)} was injected into acs.exe",
             )
-        # Every DELIVERED cycle enters the onset coordinate, so each must have live-session
-        # not_observed evidence for confirmation. Early delivered never_live (race-window
-        # not_observed / unavailable) keeps the boot unverified (Codex P1 on #721).
-        delivered = [item for item in rows if item.cycle_delivered is True]
-        if not delivered:
+        # Confirmation uses STABLE delivered cycles only — the sole post-race absence signal
+        # (Codex P1 on #721). Non-stable delivered cycles do not confirm or deny absence.
+        stables = [
+            item
+            for item in rows
+            if item.cycle_delivered is True and _is_live_session(item)
+        ]
+        if not stables:
             return (
                 TREATMENT_UNVERIFIED,
-                "no delivered cycles with perturber evidence for overlays_off",
+                "no stable delivered cycles with perturber evidence for overlays_off",
             )
         incomplete: list[int] = []
-        for item in delivered:
+        for item in stables:
             evidence = _launch_evidence(item)
-            if not _is_live_session(item):
-                incomplete.append(item.launch)
-                continue
             if set(evidence) != required or any(
                 evidence.get(name) != "not_observed" for name in required
             ):
@@ -372,25 +370,26 @@ def treatment_receipt(
         if incomplete:
             return (
                 TREATMENT_UNVERIFIED,
-                "partial, early, or unavailable perturber evidence on delivered cycles "
-                "for overlays_off",
+                "partial or unavailable perturber evidence on stable cycles for overlays_off",
             )
         return TREATMENT_CONFIRMED, None
 
     if condition == "overlays_on":
-        # Every DELIVERED cycle enters the onset coordinate, so each must be fully injected for
-        # confirmation. Early delivered never_live with not_observed keeps the boot unverified
-        # rather than being dropped while later lives confirm (Codex P1 on #721).
-        delivered = [item for item in rows if item.cycle_delivered is True]
-        if not delivered:
+        # Confirmation / contradiction of absence uses STABLE delivered cycles only. Injected
+        # presence on any launch remains dispositive via boot roll-up; a stable miss contradicts.
+        stables = [
+            item
+            for item in rows
+            if item.cycle_delivered is True and _is_live_session(item)
+        ]
+        if not stables:
             return (
                 TREATMENT_UNVERIFIED,
-                "no delivered cycles with perturber evidence for overlays_on",
+                "no stable delivered cycles with perturber evidence for overlays_on",
             )
         incomplete: list[int] = []
         short_live: list[str] = []
-        early_miss: list[int] = []
-        for item in delivered:
+        for item in stables:
             evidence = _launch_evidence(item)
             if set(evidence) != required:
                 incomplete.append(item.launch)
@@ -399,23 +398,18 @@ def treatment_receipt(
                 incomplete.append(item.launch)
                 continue
             miss = sorted(name for name in required if evidence[name] != "injected")
-            if not miss:
-                continue
-            if _is_live_session(item):
+            if miss:
                 short_live.append(f"launch {item.launch}: {', '.join(miss)}")
-            else:
-                early_miss.append(item.launch)
         if short_live:
             return (
                 TREATMENT_CONTRADICTED,
-                "planned overlays_on but live session(s) never observed full injection "
+                "planned overlays_on but stable session(s) never observed full injection "
                 f"({'; '.join(short_live)})",
             )
-        if incomplete or early_miss:
+        if incomplete:
             return (
                 TREATMENT_UNVERIFIED,
-                "partial, early, or unavailable perturber evidence on delivered cycles "
-                "for overlays_on",
+                "partial or unavailable perturber evidence on stable cycles for overlays_on",
             )
         return TREATMENT_CONFIRMED, None
 
@@ -940,7 +934,7 @@ def _parse_report(
                     break
                 if (
                     reported_expect == "on"
-                    and raw.get("verdict") in ("stable", "froze")
+                    and raw.get("verdict") == "stable"
                     and any(value == "not_observed" for value in block.values())
                     and all(value != "unavailable" for value in block.values())
                 ):
@@ -1083,6 +1077,28 @@ def _parse_report(
     return BootObservation(boot=boot.boot, condition=boot.condition, launches=tuple(observations))
 
 
+def resolve_boot_report_path(reports_dir: Path, planned_name: str) -> Path | None:
+    """Locate the planned report, or its unique arm-contradicted salvage sibling (#721).
+
+    Fail-fast contradicted runs publish to ``{stem}.arm_contradicted.{UTC}Z{suffix}`` so the
+    exclusive planned path stays free for re-run. Analysis must still discover that salvage so
+    the exclusion is scored rather than reported as a missing planned file (Codex P2 on #721).
+    A successful re-run at the planned name wins over any salvage.
+    """
+
+    planned = reports_dir / planned_name
+    if planned.is_file():
+        return planned
+    stem = Path(planned_name).stem
+    suffix = Path(planned_name).suffix
+    matches = sorted(reports_dir.glob(f"{stem}.arm_contradicted.*{suffix}"))
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+    return max(matches, key=lambda path: path.stat().st_mtime)
+
+
 def load_observations(
     plan: dict[str, Any], reports_dir: Path, *, require_complete: bool = True
 ) -> tuple[BootObservation, ...]:
@@ -1093,8 +1109,8 @@ def load_observations(
     missing: list[str] = []
     for raw in plan["boots"]:
         boot = PlannedBoot(boot=raw["boot"], condition=raw["condition"], report=raw["report"])
-        report_path = reports_dir / boot.report
-        if not report_path.is_file():
+        report_path = resolve_boot_report_path(reports_dir, boot.report)
+        if report_path is None:
             missing.append(boot.report)
             continue
         observations.append(_parse_report(report_path, boot, plan_launch, launches_per_boot))

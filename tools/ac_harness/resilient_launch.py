@@ -984,13 +984,13 @@ def contradicts_expectation(
 
     if expectation == "off":
         return any(value == str(PerturberEvidence.INJECTED) for value in evidence.values())
-    # Match analyzer _is_live_session: STABLE and FROZE are both post-go-live (Codex P1 on #721).
-    if expectation == "on" and verdict in (LaunchVerdict.STABLE, LaunchVerdict.FROZE):
+    # Match analyzer _is_live_session: only STABLE is inherently post-race for absence.
+    if expectation == "on" and verdict is LaunchVerdict.STABLE:
         if not evidence:
             return False
         if any(value == str(PerturberEvidence.UNAVAILABLE) for value in evidence.values()):
             return False
-        # Full successful look on a post-go-live session that still misses a required perturber.
+        # Full successful look on a stable session that still misses a required perturber.
         return any(value == str(PerturberEvidence.NOT_OBSERVED) for value in evidence.values())
     return False
 

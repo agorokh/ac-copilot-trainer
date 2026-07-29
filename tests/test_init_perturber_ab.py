@@ -91,12 +91,24 @@ def _write_boot_report(
     for index, (verdict, delivery) in enumerate(zip(verdicts, flags, strict=True), start=1):
         counts[verdict] += 1
         minute = start_minute + index
+        # Only stable is post-race for absence; keep injected on any verdict, demote
+        # not_observed to unavailable on non-stable rows so analyze fixtures stay confirmed.
+        row_evidence = dict(evidence)
+        if verdict != "stable":
+            row_evidence = {
+                key: (
+                    value
+                    if value == "injected"
+                    else ("unavailable" if value == "not_observed" else value)
+                )
+                for key, value in evidence.items()
+            }
         log.append(
             {
                 "attempt": index,
                 "verdict": verdict,
                 "cycle_delivered": delivery,
-                "perturbers": dict(evidence),
+                "perturbers": row_evidence,
                 "started_at_utc": f"2026-07-28T{minute // 60:02d}:{minute % 60:02d}:00Z",
                 "elapsed_s": 12.5,
                 "uptime_h": round(uptime_start + index * 0.05, 4),
@@ -150,7 +162,22 @@ def _boot(
     perturbers: dict[str, str] | None = None,
 ) -> BootObservation:
     flags = _default_delivery(verdicts) if delivered is None else delivered
-    evidence = tuple(sorted((perturbers or _default_perturbers_for(condition)).items()))
+    base = dict(perturbers or _default_perturbers_for(condition))
+
+    def _row_evidence(verdict: str) -> tuple[tuple[str, str], ...]:
+        # Only stable is post-race for absence; demote not_observed on other verdicts.
+        if verdict == "stable":
+            return tuple(sorted(base.items()))
+        demoted = {
+            key: (
+                value
+                if value == "injected"
+                else ("unavailable" if value == "not_observed" else value)
+            )
+            for key, value in base.items()
+        }
+        return tuple(sorted(demoted.items()))
+
     return BootObservation(
         boot=number,
         condition=condition,
@@ -162,7 +189,7 @@ def _boot(
                 elapsed_s=12.5,
                 uptime_h=uptime_start + index * 0.05,
                 cycle_delivered=delivery,
-                perturbers=evidence,
+                perturbers=_row_evidence(verdict),
             )
             for index, (verdict, delivery) in enumerate(zip(verdicts, flags, strict=True), start=1)
         ),
@@ -1583,7 +1610,7 @@ class TestTreatmentReceipt:
                     sorted({"steam_overlay": "not_observed", "nvidia_capture": "injected"}.items())
                 ),
             ),
-        )
+        )  # both stable: only stable is post-race for absence (Codex P1 on #721)
         boot = BootObservation(boot=1, condition="overlays_on", launches=launches)
         # Union would be both injected; per-launch is incomplete → contradicted, not confirmed.
         state = {"steam_overlay": "injected", "nvidia_capture": "injected"}
