@@ -103,20 +103,17 @@ WITHDRAWN_PLAN_SCHEMA = "init-perturber-ab-plan/v1"
 SUPERSEDED_PLAN_SCHEMA = "init-perturber-ab-plan/v2"
 #: delivered-cycle endpoints without treatment-receipt pre-registration (#719); regenerate.
 PRE_TREATMENT_PLAN_SCHEMA = "init-perturber-ab-plan/v3"
-#: Verdicts that *may* carry post-race absence evidence. ``wedged_init`` is excluded: it means
-#: the process never reached readiness, so a short ``go_live_timeout`` can end before the
-#: measured ~3 s injection race (Codex P1/P2 on #721). ``stable`` is always past the race
-#: (stability window >> 3 s). ``froze`` additionally requires :data:`MIN_ABSENCE_ELAPSED_S`.
+#: Verdicts whose *absence* evidence is post-injection-race. ``classify`` only returns
+#: ``stable``/``froze`` after go-live (packet advanced + entry ready + drivable), which on this
+#: rig is far past the ~3 s injection race. ``wedged_init`` never reached readiness — excluded.
+#: ``elapsed_s`` is intentionally not used: it includes pre-launch work and is not process life
+#: (Codex P1 on #721).
 _LIVE_SESSION_VERDICTS = frozenset({"stable", "froze"})
 #: Measured injection race on the rig (~3 s). Plans must not set ``go_live_timeout`` below this
 #: plus a small margin, or ``WEDGED_INIT`` can fire inside the race window.
 INJECTION_RACE_S = 3.0
-#: Minimum ``elapsed_s`` before a non-stable live verdict's ``not_observed`` is treated as
-#: dispositive absence. ``elapsed_s`` includes pre-launch work, so this is a floor, not a
-#: precise post-spawn clock (Codex P1 on #721).
-MIN_ABSENCE_ELAPSED_S = 5.0
-#: Plan floor for ``--go-live-timeout`` so a valid plan cannot trust live-session absence
-#: evidence that is shorter than the injection race (Codex P2 on #721).
+#: Plan floor for ``--go-live-timeout`` so a valid plan cannot end the go-live watch inside the
+#: measured injection race (Codex P2 on #721).
 MIN_GO_LIVE_TIMEOUT_S = 5.0
 #: Canonical perturber field set every report row must carry exactly.
 _PERTURBER_KEYS = frozenset(PERTURBER_MODULES)
@@ -290,21 +287,15 @@ def _launch_evidence(launch: LaunchObservation) -> dict[str, str]:
 def _is_live_session(launch: LaunchObservation) -> bool:
     """Whether this attempt's absence evidence is informative (post injection race).
 
-    The injection race is ~3 s on the measured rig. ``never_live`` / ``wedged_init`` are never
-    dispositive for *absence* — the process may have died inside the race, and ``elapsed_s``
-    includes pre-launch work so it cannot prove post-race lifetime on those shapes (Codex P1
-    on #721). Presence (``injected``) remains dispositive on any attempt via the off-arm path.
-
-    * ``stable`` — always past the race (stability window >> 3 s).
-    * ``froze`` — only when ``elapsed_s >= MIN_ABSENCE_ELAPSED_S``, so an immediate post-go-live
-      freeze cannot turn a pre-injection miss into a contradicted / confirmed arm.
+    The injection race is ~3 s on the measured rig. Delivered ``stable`` / ``froze`` are the
+    only post-go-live verdicts: ``classify`` requires packet advance + entry ready + drivable
+    before either, which is past the race by construction. ``elapsed_s`` is **not** consulted —
+    it includes pre-launch work and cannot prove process lifetime (Codex P1 on #721).
+    ``wedged_init`` / ``never_live`` never reached readiness, so their misses are non-dispositive.
+    Presence (``injected``) remains dispositive on any attempt via the off-arm path.
     """
 
-    if launch.cycle_delivered is not True or launch.verdict not in _LIVE_SESSION_VERDICTS:
-        return False
-    if launch.verdict == "stable":
-        return True
-    return launch.elapsed_s >= MIN_ABSENCE_ELAPSED_S
+    return launch.cycle_delivered is True and launch.verdict in _LIVE_SESSION_VERDICTS
 
 
 def treatment_receipt(
@@ -797,6 +788,18 @@ def load_plan(path: Path) -> dict[str, Any]:
     # Full policy match — a hand-edited v4 that changes exclude_on / perturbers / flags would
     # otherwise be analyzed under today's hard-coded rules while claiming a different prereg
     # (Codex P2 on #721).
+    if set(receipt) != set(CANONICAL_TREATMENT_RECEIPT):
+        extra = sorted(set(receipt) - set(CANONICAL_TREATMENT_RECEIPT))
+        missing = sorted(set(CANONICAL_TREATMENT_RECEIPT) - set(receipt))
+        detail = []
+        if extra:
+            detail.append(f"unknown {extra}")
+        if missing:
+            detail.append(f"missing {missing}")
+        raise ValueError(
+            "plan treatment_receipt key set must exactly match the canonical v4 policy "
+            f"({'; '.join(detail)}); regenerate the plan"
+        )
     for key, expected in CANONICAL_TREATMENT_RECEIPT.items():
         if receipt.get(key) != expected:
             raise ValueError(

@@ -2632,12 +2632,8 @@ class TestPerturberTreatmentReceipt:
             "steam_overlay": str(PerturberEvidence.NOT_OBSERVED),
             "nvidia_capture": str(PerturberEvidence.NOT_OBSERVED),
         }
-        assert (
-            contradicts_expectation(evidence, "on", verdict=LaunchVerdict.STABLE) is True
-        )
-        assert (
-            contradicts_expectation(evidence, "on", verdict=LaunchVerdict.FROZE) is False
-        )
+        assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.STABLE) is True
+        assert contradicts_expectation(evidence, "on", verdict=LaunchVerdict.FROZE) is False
 
         def watch(_attempt: int) -> AttemptOutcome:
             return AttemptOutcome(

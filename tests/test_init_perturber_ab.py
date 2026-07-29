@@ -1563,9 +1563,9 @@ class TestTreatmentReceipt:
         launches = (
             LaunchObservation(
                 launch=1,
-                verdict="froze",
+                verdict="stable",
                 started_at_utc="2026-07-28T10:01:00Z",
-                elapsed_s=12.5,
+                elapsed_s=150.0,
                 uptime_h=0.5,
                 cycle_delivered=True,
                 perturbers=tuple(
@@ -1574,9 +1574,9 @@ class TestTreatmentReceipt:
             ),
             LaunchObservation(
                 launch=2,
-                verdict="froze",
+                verdict="stable",
                 started_at_utc="2026-07-28T10:02:00Z",
-                elapsed_s=12.5,
+                elapsed_s=150.0,
                 uptime_h=0.55,
                 cycle_delivered=True,
                 perturbers=tuple(
@@ -1615,22 +1615,22 @@ class TestTreatmentReceipt:
         summary = summarize_boot(short_nl)
         assert summary.treatment == TREATMENT_UNVERIFIED
 
-        # A dispositive miss is not erased by a sibling unavailable live launch.
+        # A stable miss is not erased by a sibling unavailable live launch.
         mixed = (
             LaunchObservation(
                 launch=1,
-                verdict="froze",
+                verdict="stable",
                 started_at_utc="2026-07-28T10:01:00Z",
-                elapsed_s=12.5,
+                elapsed_s=150.0,
                 uptime_h=0.5,
                 cycle_delivered=True,
                 perturbers=tuple(sorted(_ABSENT_PERTURBERS.items())),
             ),
             LaunchObservation(
                 launch=2,
-                verdict="froze",
+                verdict="stable",
                 started_at_utc="2026-07-28T10:02:00Z",
-                elapsed_s=12.5,
+                elapsed_s=150.0,
                 uptime_h=0.55,
                 cycle_delivered=True,
                 perturbers=tuple(sorted(_UNAVAILABLE_PERTURBERS.items())),
@@ -1683,8 +1683,8 @@ class TestTreatmentReceipt:
             assert summary.treatment == TREATMENT_UNVERIFIED
             assert summary.usable is True
 
-    def test_short_froze_miss_is_unverified_not_contradicted(self):
-        """Codex P1: FROZE inside the injection-race floor cannot invent absence."""
+    def test_wedged_init_miss_is_unverified_not_contradicted(self):
+        """Codex P1: wedged_init never reached readiness — absence is non-dispositive."""
         from tools.ac_harness.init_perturber_ab import (
             TREATMENT_UNVERIFIED,
             BootObservation,
@@ -1692,16 +1692,16 @@ class TestTreatmentReceipt:
             treatment_receipt,
         )
 
-        short = LaunchObservation(
+        wedged = LaunchObservation(
             launch=1,
-            verdict="froze",
+            verdict="wedged_init",
             started_at_utc="2026-07-28T10:01:00Z",
-            elapsed_s=2.0,  # below MIN_ABSENCE_ELAPSED_S
+            elapsed_s=80.0,
             uptime_h=0.5,
             cycle_delivered=True,
             perturbers=tuple(sorted(_ABSENT_PERTURBERS.items())),
         )
-        boot = BootObservation(boot=1, condition="overlays_on", launches=(short,))
+        boot = BootObservation(boot=1, condition="overlays_on", launches=(wedged,))
         verdict, _detail = treatment_receipt(
             "overlays_on", dict(_ABSENT_PERTURBERS), launches=boot.launches
         )

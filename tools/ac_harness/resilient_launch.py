@@ -2171,6 +2171,20 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             _log(f"launch aborted: Content Manager executable not found: {actuator.cm_exe}")
             return 1
 
+        if args.expect_perturbers is not None and sys.platform == "win32":
+            # 32-bit Python cannot enumerate 64-bit acs.exe modules (ERROR_PARTIAL_COPY). Without
+            # this preflight every poll becomes unavailable and a 16-reboot run ends as
+            # treatment_receipt_unverified (Codex P1 on #721).
+            import struct
+
+            bits = struct.calcsize("P") * 8
+            if bits < 64:
+                _log(
+                    f"launch aborted: --expect-perturbers requires 64-bit Python to inspect "
+                    f"64-bit acs.exe (this interpreter is {bits}-bit)"
+                )
+                return 1
+
         # The previous attempt's verdict gates the #668 graceful-teardown grace: only a session
         # that PROVED it could pump messages (STABLE) is asked to honor WM_CLOSE. One-element
         # list so the closure can rebind it.
@@ -2236,6 +2250,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 )
             )
             perturbers = PerturberWatch()
+            # Pin the process identity for this attempt so successive polls cannot union
+            # complementary modules from different acs.exe instances into one "full" receipt
+            # (qodo / Codex P2 on #721).
+            pinned_acs_pid: list[int | None] = [None]
 
             def sample_perturbers() -> None:
                 """Fold one module snapshot of the live acs.exe into this attempt's evidence.
@@ -2271,11 +2289,18 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     # final sample classify commonly hits after FROZE (cursor MEDIUM on #721).
                     fold_perturber_snapshots(perturbers, pids_empty=True)
                     return
-                # Classify the newest acs.exe only. Unioning modules across PIDs invents a full
-                # treatment when Steam is on one process and NVIDIA on another (Codex P2 on #721).
-                # max(pid) is the usual live session after a leftover corpse; a failed primary
-                # look is unavailable, never a synthetic multi-PID miss (Codex P1 on #721).
-                primary_pid = max(pids)
+                # Classify one process identity per attempt. Re-picking max(pid) every poll can
+                # union Steam from a corpse with NVIDIA from a replacement live process and
+                # invent full treatment (qodo on #721). Prefer the pinned PID when still alive;
+                # otherwise pin the newest and invalidate prior absence (new process).
+                if pinned_acs_pid[0] in pids:
+                    primary_pid = pinned_acs_pid[0]
+                else:
+                    if pinned_acs_pid[0] is not None:
+                        # Process replacement: prior not_observed must not stick to the new PID.
+                        fold_perturber_snapshots(perturbers, enum_failed=True)
+                    primary_pid = max(pids)
+                    pinned_acs_pid[0] = primary_pid
                 try:
                     # retries=1: do not sleep inside the go-live poll path; BAD_LENGTH during
                     # module load is retried by the next poll tick instead (cursor HIGH #721).
