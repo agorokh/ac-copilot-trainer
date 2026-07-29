@@ -3,15 +3,22 @@ type: investigation
 status: active
 memory_tier: canonical
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-07-29
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/719
+pr: https://github.com/agorokh/ac-copilot-trainer/pull/721
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-625-boot-scoped-redesign-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-710-cycle-delivered-2026-07-28.md
+  - AcCopilotTrainer/00_System/handoffs/2026-07-29-grok-pr721.md
+  - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
 
 # #719 — the #625 A/B never verifies that the treatment was received
+
+**Shipped 2026-07-29** via PR [#721](https://github.com/agorokh/ac-copilot-trainer/pull/721)
+(`de5bd6b`). Issue CLOSED. See
+[2026-07-29-grok-pr721](../00_System/handoffs/2026-07-29-grok-pr721.md).
 
 ## The gap, stated precisely
 
