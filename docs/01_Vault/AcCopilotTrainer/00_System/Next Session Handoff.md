@@ -2,10 +2,12 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-28T23:15:00Z
+last_updated: 2026-07-29T16:45:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/tier3-substrate-unreachable-rig-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-719-treatment-receipt-2026-07-28.md
+
   - AcCopilotTrainer/03_Investigations/issue-710-cycle-delivered-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-703-decoupled-ladder-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-625-boot-scoped-redesign-2026-07-28.md
@@ -127,11 +129,28 @@ relates_to:
 
 # Next session handoff
 
-## BLOCKED (2026-07-28, later) — Tier-3 unreachable from the rig; #719 filed but not implementable
+## Delivered (2026-07-29) — #712 CLOSED via governance-hub #341
 
-**Start here.** A `/autonomous-deliver 625` session ran on the rig and could not touch code at all.
-Full detail: [[tier3-substrate-unreachable-rig-2026-07-28]] and
-[[issue-719-treatment-receipt-2026-07-28]].
+**Start here for memory-hook context.** Operator re-diagnosis stood: resolver was fine; rig
+config (overlay → `ac_copilot` + m4max + SNI) already fixed. Code remainder shipped in the hub:
+
+- Dual-write SessionStart markers to main **and** session worktree
+- Distinct failure phrases (no more collapsed `unreachable or empty`)
+- `stale-endpoint-suspect` for missed consumer repoint
+
+Hub MERGED [`3757ec3`](https://github.com/agorokh/governance-hub/commit/3757ec3d37b3b65d765a40906607d3b3b07d970b).
+Observed hermetic dual-write/phrase/stale verification `VERIFIED_OK`. Node:
+[[issue-712-prefetch-worktree-markers-2026-07-29]].
+
+**Host action:** `git -C ~/.fleet-governance pull --ff-only` (or hub refresh) so SessionStart
+loads the new hook. Spoke shims need no PR.
+
+## Prior note (2026-07-28) — Tier-3 / AG_PC Tailscale (may still apply on the rig)
+
+A `/autonomous-deliver 625` session on the rig hit unroutable Tier-3. Full detail:
+[[tier3-substrate-unreachable-rig-2026-07-28]] and [[issue-719-treatment-receipt-2026-07-28]]
+(#719 later shipped as treatment-receipt code). If AG_PC Tailscale is still wedged, reboot is
+still the operator call — unrelated to the #712 hub fix.
 
 ### The blocker — and the correction to the previous handoff
 
