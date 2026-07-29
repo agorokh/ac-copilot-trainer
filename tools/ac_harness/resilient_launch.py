@@ -2295,6 +2295,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # Injected names latched from a replaced PID for off-arm contradiction only — never
             # mixed into on-arm full-injection confirmation for the replacement (Codex P1).
             latched_injected: set[str] = set()
+            # Toolhelp saw acs.exe this attempt — promote undetermined delivery (Codex P2 on #721).
+            acs_pid_observed: list[bool] = [False]
 
             def sample_perturbers(*, soft_fail: bool = False) -> None:
                 """Fold one module snapshot of the live acs.exe into this attempt's evidence.
@@ -2333,11 +2335,17 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     # final sample classify commonly hits after FROZE (cursor MEDIUM on #721).
                     fold_perturber_snapshots(perturbers, pids_empty=True)
                     return
+                acs_pid_observed[0] = True
                 # Classify one process identity per attempt. Re-picking max(pid) every poll can
                 # union Steam from a corpse with NVIDIA from a replacement live process and
-                # invent full treatment (qodo on #721). Prefer the pinned PID when still alive;
-                # otherwise pin the newest and invalidate prior absence (new process).
-                if pinned_acs_pid[0] in pids:
+                # invent full treatment (qodo on #721). Prefer the pinned PID when still alone;
+                # if another PID appears alongside it, treat as replacement (Codex P2 on #721).
+                extra_pids = (
+                    pinned_acs_pid[0] is not None
+                    and pinned_acs_pid[0] in pids
+                    and any(pid != pinned_acs_pid[0] for pid in pids)
+                )
+                if pinned_acs_pid[0] in pids and not extra_pids:
                     primary_pid = pinned_acs_pid[0]
                 else:
                     if pinned_acs_pid[0] is not None:
@@ -2410,7 +2418,12 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             if args.expect_perturbers == "off":
                 for name in latched_injected:
                     evidence[name] = str(PerturberEvidence.INJECTED)
-            outcome = replace(outcome, perturbers=evidence)
+            # Toolhelp saw acs.exe → the launch cycle was delivered even if later reads miss it
+            # (Codex P2 on #721).
+            delivered = outcome.cycle_delivered
+            if delivered is None and acs_pid_observed[0]:
+                delivered = True
+            outcome = replace(outcome, perturbers=evidence, cycle_delivered=delivered)
             delivery = _delivery_label(outcome.cycle_delivered)
             injected = sorted(
                 name
