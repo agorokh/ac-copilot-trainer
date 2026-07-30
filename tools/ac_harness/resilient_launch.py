@@ -128,6 +128,9 @@ class AttemptOutcome:
     #: Per-perturber evidence gathered while this attempt's ``acs.exe`` was alive (#719). Defaults
     #: to "we could not look", which is the only honest value for a producer that never sampled.
     perturbers: dict[str, str] | None = None
+    #: Seconds since the CURRENT pinned acs.exe first entered the perturber observation window.
+    #: ``None`` means that window was never established or was not measured.
+    live_observation_s: float | None = None
 
 
 #: v4 adds the ``not_drivable`` bucket to ``counts`` (2026-07-29). The field addition is additive,
@@ -722,6 +725,7 @@ class AttemptRecord:
     elapsed_s: float
     uptime_h: float | None
     cycle_delivered: bool | None = None
+    live_observation_s: float | None = None
     #: Per-perturber evidence for this attempt (#719). Always present and always complete — every
     #: key in ``PERTURBER_MODULES`` carries a :class:`PerturberEvidence` value, defaulting to
     #: ``unavailable`` so a producer that never looked cannot be mistaken for one that looked and
@@ -736,6 +740,9 @@ class AttemptRecord:
             "perturbers": dict(self.perturbers),
             "started_at_utc": self.started_at_utc,
             "elapsed_s": round(self.elapsed_s, 3),
+            "live_observation_s": (
+                None if self.live_observation_s is None else round(self.live_observation_s, 3)
+            ),
             "uptime_h": None if self.uptime_h is None else round(self.uptime_h, 4),
         }
 
@@ -1107,6 +1114,13 @@ def _normalize_attempt_result(result: LaunchVerdict | AttemptOutcome) -> Attempt
             f"verdict {outcome.verdict} requires a live acs.exe but was reported with "
             f"cycle_delivered={outcome.cycle_delivered!r}"
         )
+    if outcome.live_observation_s is not None and (
+        not math.isfinite(outcome.live_observation_s) or outcome.live_observation_s < 0
+    ):
+        raise ValueError(
+            "live_observation_s must be finite and non-negative when present, got "
+            f"{outcome.live_observation_s!r}"
+        )
     return outcome
 
 
@@ -1184,6 +1198,7 @@ def run_retry_loop(
                 elapsed_s=clock() - started,
                 uptime_h=uptime,
                 cycle_delivered=outcome.cycle_delivered,
+                live_observation_s=outcome.live_observation_s,
                 perturbers=evidence,
             )
         )
@@ -2399,6 +2414,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             latched_injected: set[str] = set()
             # Toolhelp saw acs.exe this attempt — promote undetermined delivery (Codex P2 on #721).
             acs_pid_observed: list[bool] = [False]
+            # Start of the CURRENT pinned process's treatment-observation window. Attempt elapsed
+            # time includes cleanup, CM startup, and AC loading, so it cannot certify that a
+            # not_drivable module miss happened after the injection race (Codex P1 on #726).
+            acs_pid_observed_since: list[float | None] = [None]
             # Packet that triggered the (blocking) Car0 probe. If the probe fails, a fresh raw
             # sample must advance beyond this value before the attempt may be called a rendering
             # pre-drive menu; otherwise the renderer could have wedged during the probe.
@@ -2456,6 +2475,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                         perturbers.reset()
                     primary_pid = max(pids)
                     pinned_acs_pid[0] = primary_pid
+                    acs_pid_observed_since[0] = time.monotonic()
                 try:
                     # retries=1: do not sleep inside the go-live poll path; BAD_LENGTH during
                     # module load is retried by the next poll tick instead (cursor HIGH #721).
@@ -2526,7 +2546,16 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             delivered = outcome.cycle_delivered
             if delivered is None and acs_pid_observed[0]:
                 delivered = True
-            outcome = replace(outcome, perturbers=evidence, cycle_delivered=delivered)
+            observed_since = acs_pid_observed_since[0]
+            live_observation_s = (
+                None if observed_since is None else max(0.0, time.monotonic() - observed_since)
+            )
+            outcome = replace(
+                outcome,
+                perturbers=evidence,
+                cycle_delivered=delivered,
+                live_observation_s=live_observation_s,
+            )
             delivery = _delivery_label(outcome.cycle_delivered)
             injected = sorted(
                 name

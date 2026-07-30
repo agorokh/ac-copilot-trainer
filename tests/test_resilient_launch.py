@@ -1109,6 +1109,32 @@ class TestRetryLoop:
             ).as_dict()
         )
 
+    def test_report_preserves_current_process_observation_window(self):
+        """#726: analyzer timing excludes cleanup/CM startup before acs.exe was observable."""
+        report = run_retry_loop(
+            lambda _attempt: AttemptOutcome(
+                LaunchVerdict.NOT_DRIVABLE,
+                cycle_delivered=True,
+                live_observation_s=6.25,
+            ),
+            max_attempts=1,
+            uptime_hours=lambda: None,
+        )
+
+        assert report.attempts_log[0].live_observation_s == 6.25
+        assert report.as_dict()["attempts_log"][0]["live_observation_s"] == 6.25
+
+    def test_invalid_process_observation_window_is_rejected(self):
+        with pytest.raises(ValueError, match="live_observation_s"):
+            run_retry_loop(
+                lambda _attempt: AttemptOutcome(
+                    LaunchVerdict.NOT_DRIVABLE,
+                    cycle_delivered=True,
+                    live_observation_s=-0.1,
+                ),
+                max_attempts=1,
+            )
+
     def test_bare_verdict_leaves_never_live_delivery_undetermined(self):
         """#710 — a caller returning a bare verdict supplies no delivery evidence.
 

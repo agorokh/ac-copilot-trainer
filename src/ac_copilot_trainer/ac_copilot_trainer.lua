@@ -1057,9 +1057,9 @@ if not appDir or appDir == "" then
   appDir = "."  -- fallback; .bat will fail and log clearly
 end
 
--- Kick off sidecar spawn at script load. Subsequent wsBridge.tick calls also
--- invoke startSidecarIfNeeded so a crashed child gets relaunched after the
--- LAUNCH_RETRY_SEC gap.
+-- Kick off sidecar spawn at script load. script.update explicitly retries this maintenance in
+-- both menu and driving branches so a crashed child gets relaunched after the LAUNCH_RETRY_SEC
+-- gap; wsBridge.tick itself only maintains the socket.
 pcall(function() wsBridge.startSidecarIfNeeded(appDir) end)
 
 local lastDriveCar ---@type ac.StateCar|nil
@@ -2385,6 +2385,9 @@ function script.update(dt)
     -- alive independently of the post-session review queue; gating this tick on
     -- pendingSessionReview leaves a fresh launch unable to receive the request that exits it.
     if wsBridge then
+      -- Child maintenance is isolated from socket maintenance: a spawn/retry failure must not
+      -- prevent an already-running sidecar connection from draining session.start this frame.
+      pcall(function() wsBridge.startSidecarIfNeeded(appDir) end)
       pcall(function()
         wsBridge.tick(ch.simSeconds(sim))
         wsBridge.pollInbound(8)

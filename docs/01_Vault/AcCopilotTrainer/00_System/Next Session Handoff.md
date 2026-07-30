@@ -182,6 +182,14 @@ pending post-session review. The structural contracts cover both paths and prese
 lap-archive flush ordering. Final combined-head evidence after those fixes: 44 focused checks plus
 `make ci-fast` with 3,847 passed, 89 skipped, 83.58% coverage.
 
+**Final current-SHA follow-up:** treatment-receipt timing now records
+`attempts_log[].live_observation_s` from the current pinned `acs.exe` rather than using total
+attempt elapsed time (which includes cleanup, CM startup, and loading). Missing or sub-five-second
+live-window evidence keeps `not_drivable` absence unverified. Menu frames also retry
+`wsBridge.startSidecarIfNeeded(appDir)` in an isolated `pcall`, so a failed child spawn cannot
+prevent an existing socket from draining `session.start`. Focused result: 349 passed; final
+`make ci-fast`: 3,850 passed, 89 skipped, 83.58% coverage.
+
 **Mechanism correction (static analysis, no rig time)** —
 [issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).
 The wedge loop in CSP `accRenderingAdv.dll` (SHA256 `6546FDF7…`, **verified identical** to the one

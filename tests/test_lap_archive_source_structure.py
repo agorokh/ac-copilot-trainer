@@ -43,6 +43,7 @@ def test_session_end_flushes_pending_lap_archive() -> None:
     # A fresh launch needs this same bridge to receive session.start and leave the pre-drive menu.
     assert "pendingSessionReview ~= nil and wsBridge" not in menu_prefix
     assert "if wsBridge then" in menu_prefix
+    assert "wsBridge.startSidecarIfNeeded(appDir)" in menu_prefix
     assert "wsBridge.tick(ch.simSeconds(sim))" in menu_prefix
     assert "wsBridge.pollInbound(8)" in menu_prefix
     assert menu_prefix.index("wsBridge.tick(ch.simSeconds(sim))") < menu_prefix.index(
