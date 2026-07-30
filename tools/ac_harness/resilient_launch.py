@@ -2128,6 +2128,28 @@ def car0_handshake_failure_outcome(
     return AttemptOutcome(verdict, cycle_delivered=True)
 
 
+def _wait_for_graphics_change(
+    read_state: Callable[[], tuple[int | None, bool | None, int | None]],
+    baseline_packet: int,
+    *,
+    timeout: float = 1.0,
+    poll_interval: float = 0.05,
+) -> int | None:
+    """Return the first graphics observation different from ``baseline_packet``.
+
+    A local recovery failure can return synchronously, before even one render frame elapses. A
+    zero-delay equality is therefore not evidence of a wedge. Wait a short bounded interval for
+    either advancement, regression, unreadability, or a genuinely pinned timeout.
+    """
+
+    deadline = time.monotonic() + timeout
+    while True:
+        packet, _entry_ready, _phys_packet = read_state()
+        if packet != baseline_packet or time.monotonic() >= deadline:
+            return packet
+        time.sleep(poll_interval)
+
+
 def request_session_start(*, timeout: float = 5.0) -> bool:
     """Press AC's in-sim Start control through the sidecar/Lua bridge (#726).
 
@@ -2644,7 +2666,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                         # post-probe advance. If the renderer wedges during it, preserving the
                         # earlier NOT_DRIVABLE outcome would again contaminate the #627 bucket.
                         # Require one more fresh advance before retaining the menu verdict.
-                        post_request_packet, _post_request_ready, _post_request_phys = read_state()
+                        post_request_packet = _wait_for_graphics_change(
+                            read_state,
+                            post_probe_packet,
+                        )
                         menu_outcome = car0_handshake_failure_outcome(
                             post_probe_packet,
                             post_request_packet,

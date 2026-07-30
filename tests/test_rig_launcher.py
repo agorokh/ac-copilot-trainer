@@ -271,6 +271,8 @@ def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> N
         return proc
 
     cfg = GamePointConfig(
+        port=9999,
+        token="sidecar-secret",
         resilient_car="car",
         resilient_track="track",
         rig_lock_path=tmp_path / "rig-session.lock",
@@ -307,6 +309,8 @@ def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> N
     ]
     assert not release_path.exists()
     assert calls[0][1]["cwd"] == str(_repo_root())
+    assert calls[0][1]["env"]["AC_COPILOT_SIDECAR_PORT"] == "9999"
+    assert calls[0][1]["env"]["AC_COPILOT_SIDECAR_TOKEN"] == "sidecar-secret"
     assert (tmp_path / "logs" / "resilient-launch.log").exists()
     assert proc.terminated is False
 

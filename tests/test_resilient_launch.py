@@ -43,6 +43,7 @@ from tools.ac_harness.resilient_launch import (
     _retry_telemetry_cleanup_holds,
     _run_with_safe_release,
     _sample_now,
+    _wait_for_graphics_change,
     _wait_process_exit,
     _watch_live,
     _watched_delivery,
@@ -326,6 +327,40 @@ def test_session_start_sender_fails_closed_without_websocket_extra(
     monkeypatch.setattr(builtins, "__import__", _without_websockets)
 
     assert request_session_start(timeout=0.1) is False
+
+
+def test_fast_recovery_failure_waits_for_next_render_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    packets = iter([100, 100, 101])
+    clock = [0.0]
+
+    def read_state() -> tuple[int | None, bool | None, int | None]:
+        return next(packets), None, None
+
+    def sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+
+    assert _wait_for_graphics_change(read_state, 100) == 101
+    assert clock[0] == pytest.approx(0.1)
+
+
+def test_fast_recovery_failure_times_out_on_a_pinned_renderer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [0.0]
+
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch.time.sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+
+    assert _wait_for_graphics_change(lambda: (100, None, None), 100, timeout=0.2) == 100
+    assert clock[0] == pytest.approx(0.2)
 
 
 @pytest.mark.parametrize(

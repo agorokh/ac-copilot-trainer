@@ -676,11 +676,20 @@ class GamePointSupervisor:
                 self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
                 log = self.paths.resilient_log_path.open("a", encoding="utf-8")
                 self._resilient_log_handle = log
+                resilient_env = dict(self._environ)
+                # The resilient child must target the launcher's RESOLVED sidecar endpoint.
+                # settings.json can select a port without setting the raw environment variable.
+                resilient_env["AC_COPILOT_SIDECAR_PORT"] = str(self.config.port)
+                _put_if_present(
+                    resilient_env,
+                    "AC_COPILOT_SIDECAR_TOKEN",
+                    self.config.token,
+                )
                 self._resilient_process = self._popen(
                     self.resilient_command(),
                     **_subprocess_kwargs(
                         cwd=self._sidecar_working_directory(),
-                        env=dict(self._environ),
+                        env=resilient_env,
                         stdout=log,
                         stderr=subprocess.STDOUT,
                         text=True,

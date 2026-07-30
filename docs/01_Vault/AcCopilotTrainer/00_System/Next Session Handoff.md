@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-29T23:17:00-07:00
+last_updated: 2026-07-29T23:46:00-07:00
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
@@ -234,6 +234,15 @@ custom upgrade header, which keeps the adb-reversed browser outside the control 
 or timed-out `session.start` is followed by another raw graphics read, and `NOT_DRIVABLE` survives
 only if the renderer advances again after that blocking interval. Focused result: 298 passed.
 Final `make ci-fast`: 3,866 passed, 89 skipped, 83.61% coverage.
+
+**Delivery-gap follow-up:** deferred sidecar-URL changes are now applied before the main-menu
+early return, so runtime reconfiguration cannot strand the recovery bridge while AC is parked.
+The Game Point launcher passes its resolved sidecar port (including the `settings.json` value) and
+configured token into the resilient child instead of letting the child fall back to 8765. Finally,
+a fast synchronous `session.start` failure now waits up to one bounded second for a subsequent
+graphics-packet change; a same-frame reread can no longer turn a still-rendering menu into a false
+`FROZE`, while a pinned renderer still fails closed. Focused result: 361 passed. Final
+`make ci-fast`: 3,868 passed, 89 skipped, 83.61% coverage.
 
 **Mechanism correction (static analysis, no rig time)** —
 [issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).

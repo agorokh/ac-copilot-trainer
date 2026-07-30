@@ -2380,6 +2380,13 @@ function script.update(dt)
     state.realtimeActiveHint = nil
   end
 
+  -- Apply a deferred config.set URL on the frame AFTER its ack was sent, before either branch can
+  -- return. Keeping this below the menu return strands runtime reconfiguration while parked.
+  if pendingWsSidecarUrl ~= nil then
+    wsBridge.configure(pendingWsSidecarUrl)
+    pendingWsSidecarUrl = nil
+  end
+
   if sim.isInMainMenu then
     -- The #466 pre-drive menu is exactly where `session.start` must arrive. Keep the bridge
     -- alive independently of the post-session review queue; gating this tick on
@@ -2480,10 +2487,6 @@ function script.update(dt)
   pcall(function() wsBridge.startSidecarIfNeeded(appDir, dt) end)
   wsBridge.tick(ch.simSeconds(sim), dt)
   wsBridge.pollInbound(8)
-  if pendingWsSidecarUrl ~= nil then
-    wsBridge.configure(pendingWsSidecarUrl)
-    pendingWsSidecarUrl = nil
-  end
   pumpLapArchiveJobs()
   pumpLapArchiveNotifications()
 
