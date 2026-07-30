@@ -37,6 +37,7 @@ from tools.ai_sidecar.server import (  # noqa: E402
     _RateLimiter,
     _reset_external_state,
     _with_snapshot_age,
+    make_process_request,
     make_token_check,
 )
 from tools.ai_sidecar.setup_optimizer import rebuild_experiments  # noqa: E402
@@ -106,7 +107,7 @@ def _write_setup_lap(
 @asynccontextmanager
 async def _running_sidecar(token: str | None = None) -> AsyncIterator[int]:
     port = _free_port()
-    process_request = make_token_check(token)
+    process_request = make_process_request(token)
     _reset_external_state()
     try:
         async with ws_serve(
@@ -679,7 +680,7 @@ def test_remote_session_start_is_rejected() -> None:
     error = asyncio.run(_run())
     assert error["type"] == ep.TYPE_ERROR
     assert error["ref_type"] == ep.TYPE_SESSION_START
-    assert "loopback" in str(error["message"])
+    assert "authenticated resilient-launch" in str(error["message"])
 
 
 def test_upgrade_accepted_with_token_for_non_loopback_peer() -> None:
@@ -2020,15 +2021,22 @@ def test_session_start_round_trip_via_hub() -> None:
     """The resilient harness request reaches Lua and its positive ack returns."""
 
     async def _run() -> tuple[dict, dict]:
-        async with _running_sidecar() as port:
+        async with _running_sidecar(token="s3cret") as port:
             async with (
-                ws_connect(f"ws://127.0.0.1:{port}/") as harness,
+                ws_connect(
+                    f"ws://127.0.0.1:{port}/",
+                    additional_headers={
+                        ep.AUTH_HEADER: "s3cret",
+                        ep.CLIENT_HEADER: "resilient-launch",
+                    },
+                ) as harness,
                 ws_connect(f"ws://127.0.0.1:{port}/") as lua,
             ):
                 await harness.send(
                     json.dumps({"v": 1, "type": "hello", "client": "resilient-launch"})
                 )
-                await asyncio.wait_for(harness.recv(), timeout=2.0)
+                hello_ack = json.loads(await asyncio.wait_for(harness.recv(), timeout=2.0))
+                assert ep.TYPE_SESSION_START in hello_ack["capabilities"]
                 await lua.send(
                     json.dumps(
                         {
@@ -2063,6 +2071,25 @@ def test_session_start_round_trip_via_hub() -> None:
     assert ack["type"] == ep.TYPE_SESSION_START_ACK
     assert ack["ok"] is True
     assert ack["started"] is True
+
+
+def test_untokened_loopback_peer_cannot_start_session() -> None:
+    """adb reverse also looks loopback; it must not inherit physical-rig control."""
+
+    async def _run() -> tuple[dict, dict]:
+        async with _running_sidecar(token="s3cret") as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as tablet:
+                await tablet.send(json.dumps({"v": 1, "type": "hello", "client": "tablet"}))
+                hello_ack = json.loads(await asyncio.wait_for(tablet.recv(), timeout=2.0))
+                await tablet.send(json.dumps({"v": 1, "type": ep.TYPE_SESSION_START}))
+                error = json.loads(await asyncio.wait_for(tablet.recv(), timeout=2.0))
+                return hello_ack, error
+
+    hello_ack, error = asyncio.run(_run())
+    assert ep.TYPE_SESSION_START not in hello_ack["capabilities"]
+    assert error["type"] == ep.TYPE_ERROR
+    assert error["ref_type"] == ep.TYPE_SESSION_START
+    assert "authenticated resilient-launch" in error["message"]
 
 
 def test_telemetry_tick_routes_to_physical_clients_and_generates_haptic_event() -> None:

@@ -9,6 +9,7 @@ semantics against synthetic traces — no Assetto Corsa, no Windows shared memor
 from __future__ import annotations
 
 import argparse
+import builtins
 import json
 import os
 import subprocess
@@ -302,6 +303,27 @@ def test_session_start_sender_fails_closed_on_websocket_handshake_error(
             return None
 
     monkeypatch.setattr(harness_client, "HarnessClient", _RejectedHarnessClient)
+
+    assert request_session_start(timeout=0.1) is False
+
+
+def test_session_start_sender_fails_closed_without_websocket_extra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_import = builtins.__import__
+
+    def _without_websockets(
+        name: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name == "websockets.exceptions":
+            raise ModuleNotFoundError("No module named 'websockets'")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _without_websockets)
 
     assert request_session_start(timeout=0.1) is False
 

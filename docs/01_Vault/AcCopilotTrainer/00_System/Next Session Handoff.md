@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-29T22:47:00-07:00
+last_updated: 2026-07-29T23:03:00-07:00
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
@@ -217,6 +217,15 @@ verdict instead of unwinding rig ownership. Finally, `session.start` is loopback
 capabilities omit it and non-loopback senders receive an error even if they hold the external-client
 token. Focused regression result: 431 passed. Final `make ci-fast`: 3,862 passed, 89 skipped,
 83.60% coverage.
+
+**Authenticated-control follow-up:** loopback address alone is not authority because the supported
+tablet `adb reverse` tunnel presents browser traffic as loopback. The sidecar now grants
+`session.start` only to a WebSocket upgrade that is loopback, supplies the exact configured
+`AC_COPILOT_SIDECAR_TOKEN`, and carries the dedicated `X-AC-Copilot-Client: resilient-launch`
+header. Other loopback peers neither see the capability in `hello_ack` nor pass the request gate.
+If the optional WebSocket extra is absent, the launcher logs the unavailable recovery and retains
+the original menu/freeze verdict rather than unwinding rig ownership. Focused result: 296 passed.
+Final `make ci-fast`: 3,864 passed, 89 skipped, 83.61% coverage.
 
 **Mechanism correction (static analysis, no rig time)** —
 [issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).

@@ -162,6 +162,11 @@ _ollama_followup_sem: asyncio.Semaphore | None = None
 # Connected external-protocol peers (any client that has spoken a `{v,type}`
 # frame, including the Lua loopback client). Used for hub-style fan-out.
 _external_peers: set[Any] = set()
+# `session.start` controls the physical rig. Authorization is earned only during a loopback
+# upgrade carrying both the configured token and the dedicated harness client header. Peer IP
+# alone is insufficient because adb reverse presents tablet traffic as loopback (#726).
+_session_start_authorized_peers: set[Any] = set()
+SESSION_START_CLIENT_ID = "resilient-launch"
 _setup_experiment_store_path: Path | None = None
 _setup_experiment_store_seeded = False
 _setup_exchange_endpoint: str | None = None
@@ -514,6 +519,7 @@ def _with_snapshot_age(
 def _reset_external_state() -> None:
     global _observer_feed_peer, _observer_feed_warned
     _external_peers.clear()
+    _session_start_authorized_peers.clear()
     _external_peer_classes.clear()
     _sidecar_state_cache.clear()
     _identity_cache_producers.clear()
@@ -1467,6 +1473,18 @@ def make_process_request(token: str | None):
         # the upgrade request), then the token gate applies if one is configured.
         if request.headers.get(CLIENT_HEADER):
             observability.METRICS.note_screen_seen()
+        supplied = request.headers.get(AUTH_HEADER)
+        client_id = request.headers.get(CLIENT_HEADER)
+        if (
+            token
+            and _is_loopback_peer(connection)
+            and client_id == SESSION_START_CLIENT_ID
+            and supplied is not None
+            and secrets.compare_digest(supplied, token)
+        ):
+            _session_start_authorized_peers.add(connection)
+        else:
+            _session_start_authorized_peers.discard(connection)
         if token_check is not None:
             return token_check(connection, request)
         return None
@@ -1535,6 +1553,7 @@ def _drop_external_peer(peer: Any) -> None:
     calls this when the USB link drops.
     """
     _external_peers.discard(peer)
+    _session_start_authorized_peers.discard(peer)
     _external_peer_classes.pop(peer, None)
     _release_observer_feed(peer)
 
@@ -1551,6 +1570,7 @@ async def _broadcast_targets(frame: dict[str, Any], *, targets: list[Any]) -> No
                 "broadcast send failed peer=%s err=%s", getattr(p, "remote_address", None), err
             )
             _external_peers.discard(p)
+            _session_start_authorized_peers.discard(p)
             _external_peer_classes.pop(p, None)
 
 
@@ -2383,10 +2403,14 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             client_class,
             len(_external_peers),
         )
-        await _safe_send(
-            websocket,
-            make_hello_ack(include_loopback_only=_is_loopback_peer(websocket)),
-        )
+        hello_ack = make_hello_ack(include_loopback_only=_is_loopback_peer(websocket))
+        if websocket not in _session_start_authorized_peers:
+            hello_ack["capabilities"] = [
+                capability
+                for capability in hello_ack["capabilities"]
+                if capability != TYPE_SESSION_START
+            ]
+        await _safe_send(websocket, hello_ack)
         return
     if websocket not in _external_peers:
         await _safe_send(
@@ -2394,10 +2418,13 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             make_error("peer must send hello before other frame types", ref_type=t),
         )
         return
-    if t == TYPE_SESSION_START and not _is_loopback_peer(websocket):
+    if t == TYPE_SESSION_START and websocket not in _session_start_authorized_peers:
         await _safe_send(
             websocket,
-            make_error("session.start is accepted only from loopback peers", ref_type=t),
+            make_error(
+                "session.start requires the authenticated resilient-launch loopback client",
+                ref_type=t,
+            ),
         )
         return
     if t in (TYPE_SETUP_EXCHANGE_SEARCH, TYPE_SETUP_EXCHANGE_DOWNLOAD):
@@ -2795,6 +2822,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     brain_task.add_done_callback(_followup_done)
     finally:
         _external_peers.discard(websocket)
+        _session_start_authorized_peers.discard(websocket)
         _external_peer_classes.pop(websocket, None)
         # Identity snapshots cached for late-subscriber replay die with their producer:
         # replaying a disconnected trainer's setup/session to a fresh tablet would render

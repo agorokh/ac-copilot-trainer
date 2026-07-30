@@ -2137,9 +2137,13 @@ def request_session_start(*, timeout: float = 5.0) -> bool:
     not-drivable/freeze classification.
     """
 
-    from websockets.exceptions import WebSocketException
+    try:
+        from websockets.exceptions import WebSocketException
 
-    from tools.ai_sidecar.harness_client import HarnessClient
+        from tools.ai_sidecar.harness_client import HarnessClient
+    except ImportError as exc:
+        _log(f"session.start unavailable: install the coaching WebSocket extra ({exc})")
+        return False
 
     raw_port = os.environ.get("AC_COPILOT_SIDECAR_PORT", "8765")
     try:
