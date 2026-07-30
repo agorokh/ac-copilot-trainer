@@ -130,6 +130,53 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-07-30 PM) — the multi-second stall was OURS, and it is FIXED
+
+**PR #730 MERGED (`d5585b8`), deployed to the rig.** The operator's long-standing *"loading is
+delayed 5-15 s"* and *"after every lap the video freezes 5-10 s while the game keeps running"* was
+our own code:
+
+`refreshActiveReference` passed `persistence.bestImportedReference(car, sim)` **inline** as an
+argument. Lua evaluates arguments eagerly, so a scan that **fully parses every `lap_*.json`**
+(**401 files / 480.5 MB**, of which **0** were `imported`) ran on every session load and lap-end
+refresh — and `chooseImportedReference` discarded it on its first line because
+`useImportedReference` defaults to **false**. Unbounded: every lap ever driven made it slower,
+which is why it read as a slowly-worsening "long time problem".
+
+Its floats were parsed through CSP's divide-by-100 loop in `accRenderingAdv.dll` — the same loop as
+the #627 wedge (`freeze_forensics` RIPs at `DWrite+0x14e7169` / `+0x14e7162`). **The scan is what
+fed it.**
+
+**Measured, deployed `main`, same car/track, lap completed both times:**
+
+| | largest main-thread gap |
+|---|---|
+| before | **21,945 ms (21.9 s)** |
+| after | **3,017 ms (3.0 s)** — the app's own RT-DIAG cadence, i.e. no stall |
+
+Drive unchanged: `PASS, laps=1, 210.7 km/h, 2767 m, recoveries=0`, `provenance: match`.
+Guarded by **SC-04** in `tests/test_design_conformance.py`, mutation-checked.
+
+Full node:
+[issue-627-journal-scan-stall-2026-07-30.md](../03_Investigations/issue-627-journal-scan-stall-2026-07-30.md).
+
+### Rig state
+
+- `REPLACE_MAIN_MENU=0` (required by CSP 0.2.11 + the launcher gate).
+- Primary checkout on `main` @ `d5585b8`; junction serves it; fix confirmed deployed.
+- No `acs.exe`; no rig lock held.
+
+### Next, in order
+
+1. **Journal retention** — 401 files / 480 MB, unbounded. Now the top remaining hygiene item.
+2. **Make the scan itself cheap** for users who ENABLE imported references. The `"source"` key sits
+   at byte ~255,834 of ~256,241, so a header prefilter is impossible — tail read or a small index.
+3. **Pit-start stall (intermittent, ~50%)** — every recovery logs `teleport_to_pits`, never
+   `line_teleport`; `_teleport_onto_line`'s 25 m read-back fails and its custom-teleport offsets are
+   flagged `VERIFY LIVE` in `custom_ai.py`. Trace shows the car stationary at ~8600 rpm in gear 2.
+4. **`menu_config_required` ergonomics** — hard-blocks Stable AC rather than warning, forcing a
+   choice between the New UI menu and a working harness.
+
 ## Delivered (2026-07-30) — autonomous drive RESTORED; the post-lap freeze IS #627
 
 **Autonomous testing works again.** `main` @ `c586893`, `REPLACE_MAIN_MENU=0`, shipped path:
