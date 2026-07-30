@@ -459,9 +459,26 @@ local function archiveMayBeImported(path)
   -- Tolerant path: a differently-spaced encoder (`"source": "in_game"`). Never taken for archives
   -- this app wrote, so the pattern engine stays off the hot path, but it keeps the filter correct
   -- for hand-edited or externally-produced files instead of forcing a full decode.
-  local _, _, spaced = raw:find('"source"%s*:%s*"([^"]*)"')
-  if spaced ~= nil then
-    return spaced == "imported"
+  --
+  -- Scan EVERY match, not just the first. The fast path above is a whole-buffer OR; taking only
+  -- the first spaced match here would break that symmetry and violate this function's contract:
+  -- a pretty-printed archive with a nested `source` key ahead of a top-level `"source":
+  -- "imported"` would be reported as PROVEN not-imported and silently skipped.
+  local found = false
+  local pos = 1
+  while true do
+    local s, e, value = raw:find('"source"%s*:%s*"([^"]*)"', pos)
+    if not s then
+      break
+    end
+    if value == "imported" then
+      return true
+    end
+    found = true
+    pos = e + 1
+  end
+  if found then
+    return false -- key present in every occurrence and none said "imported": proven
   end
   return true -- key absent in any recognised form: unknown shape, decode it
 end

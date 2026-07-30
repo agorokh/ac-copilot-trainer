@@ -91,6 +91,8 @@ def test_undetermined_source_is_protected_not_pruned(tmp_path: Path) -> None:
     plan = build_plan(laps, state, keep=1)
 
     assert "lap_odd.json" not in {p.name for p in plan.prune}
+    # Positively accounted for, so a mutation that dropped it from every list would still fail.
+    assert "lap_odd.json" in {p.name for p in plan.protected_imported}
 
 
 def test_archives_referenced_by_state_are_never_pruned(tmp_path: Path) -> None:
@@ -108,7 +110,7 @@ def test_archives_referenced_by_state_are_never_pruned(tmp_path: Path) -> None:
 
     assert "lap_reference.json" not in {p.name for p in plan.prune}
     assert {p.name for p in plan.protected_referenced} == {"lap_reference.json"}
-    assert referenced_names(state) == {"lap_reference.json"}
+    assert referenced_names(state)[0] == {"lap_reference.json"}
 
 
 def test_archives_referenced_by_a_nested_report_are_never_pruned(tmp_path: Path) -> None:
@@ -131,7 +133,7 @@ def test_archives_referenced_by_a_nested_report_are_never_pruned(tmp_path: Path)
     plan = build_plan(laps, state, keep=1)
 
     assert "lap_cited_by_report.json" not in {p.name for p in plan.prune}
-    assert referenced_names(state) == {"lap_cited_by_report.json"}
+    assert referenced_names(state)[0] == {"lap_cited_by_report.json"}
 
 
 def test_archives_do_not_protect_each_other(tmp_path: Path) -> None:
@@ -150,7 +152,7 @@ def test_archives_do_not_protect_each_other(tmp_path: Path) -> None:
     os.utime(citing, (time.time() - 9_000,) * 2)
     _write_archive(laps, "lap_newest.json", age_s=1)
 
-    assert referenced_names(state) == set()
+    assert referenced_names(state)[0] == set()
     assert "lap_old.json" in {p.name for p in build_plan(laps, state, keep=1).prune}
 
 
@@ -164,7 +166,131 @@ def test_reference_scan_ignores_lap_shaped_keys(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    assert referenced_names(state) == set()
+    assert referenced_names(state)[0] == set()
+
+
+def test_an_unreadable_state_file_vetoes_the_whole_prune(tmp_path: Path) -> None:
+    """An empty reference set authorises deletion, so failing to read one must not look empty.
+
+    AC holding a state file open, a dehydrated OneDrive placeholder, or an antivirus lock would
+    otherwise present as "this file protects nothing" and every archive it was the sole protector
+    of would be deleted.
+    """
+    state, laps = _journal(tmp_path)
+    for i in range(4):
+        _write_archive(laps, f"lap_{i}.json", age_s=10_000 - i)
+    # A directory named `*.json`: `read_bytes` raises OSError on every platform.
+    (state / "unreadable.json").mkdir()
+
+    plan = build_plan(laps, state, keep=1)
+
+    assert plan.unreadable_state, "the unreadable state file must be reported"
+    assert plan.prune == (), "nothing may be pruned while the reference scan is incomplete"
+
+
+def test_unreadable_state_file_is_reported_and_exits_nonzero(tmp_path: Path, capsys) -> None:
+    state, laps = _journal(tmp_path)
+    for i in range(4):
+        _write_archive(laps, f"lap_{i}.json", age_s=10_000 - i)
+    (state / "unreadable.json").mkdir()
+
+    code = main(["--state-dir", str(state), "--keep", "1", "--apply"])
+
+    assert code == 4
+    assert len(list(laps.glob("lap_*.json"))) == 4
+    assert "REFUSING TO PRUNE" in capsys.readouterr().out
+
+
+def test_a_missing_state_dir_does_not_read_as_nothing_protected(tmp_path: Path) -> None:
+    names, unreadable = referenced_names(tmp_path / "absent")
+    assert names == set()
+    assert unreadable, "an absent state dir is unknown protection, not absent protection"
+
+
+def test_reference_matching_is_case_insensitive(tmp_path: Path) -> None:
+    """This runs on a case-insensitive filesystem; casing must not un-protect an archive."""
+    state, laps = _journal(tmp_path)
+    _write_archive(laps, "lap_Ref_ABC.json", age_s=10_000)
+    for i in range(3):
+        _write_archive(laps, f"lap_local_{i}.json", age_s=9_000 - i)
+    (state / "combo.json").write_text(json.dumps({"ref": "lap_ref_abc.JSON"}), encoding="utf-8")
+
+    assert "lap_Ref_ABC.json" not in {p.name for p in build_plan(laps, state, keep=1).prune}
+
+
+def test_build_plan_survives_an_archive_vanishing_mid_run(tmp_path: Path, monkeypatch) -> None:
+    """`lap_archive.rotate` deletes from this directory after every lap, so this is expected."""
+    state, laps = _journal(tmp_path)
+    for i in range(5):
+        _write_archive(laps, f"lap_{i}.json", age_s=10_000 - i)
+
+    real_glob = Path.glob
+
+    def vanishing_glob(self, pattern, *args, **kwargs):
+        results = list(real_glob(self, pattern, *args, **kwargs))
+        if pattern == "lap_*.json":
+            for hit in results:
+                if hit.name == "lap_2.json":
+                    hit.unlink()  # gone between the glob and the sort key
+        return iter(results)
+
+    monkeypatch.setattr(Path, "glob", vanishing_glob)
+
+    plan = build_plan(laps, state, keep=1)  # must not raise FileNotFoundError
+
+    assert plan.total == 5
+    assert not (laps / "lap_2.json").exists()
+
+
+def test_apply_rechecks_source_before_unlinking(tmp_path: Path) -> None:
+    """A lap can be archived while this runs; the plan is a snapshot, the file is the truth."""
+    state, laps = _journal(tmp_path)
+    for i in range(4):
+        _write_archive(laps, f"lap_{i}.json", age_s=10_000 - i)
+    plan = build_plan(laps, state, keep=1)
+    victim = plan.prune[0]
+    # It became an imported reference after the plan was built.
+    victim.write_text(
+        json.dumps({"source": "imported", "lap": {"lap_ms": 1}}, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+    removed, errors = apply_plan(plan)
+
+    assert victim.exists(), "a file that stopped classifying as in_game must not be deleted"
+    assert removed == len(plan.prune) - 1
+    assert any("no longer classifies" in e for e in errors)
+
+
+def test_apply_keep_zero_requires_an_explicit_yes(tmp_path: Path) -> None:
+    """`--keep 0` disables the only protection that does not depend on parsing a file."""
+    state, laps = _journal(tmp_path)
+    for i in range(3):
+        _write_archive(laps, f"lap_{i}.json", age_s=100 - i)
+
+    assert main(["--state-dir", str(state), "--keep", "0", "--apply"]) == 2
+    assert len(list(laps.glob("lap_*.json"))) == 3, "the refused run must delete nothing"
+    assert main(["--state-dir", str(state), "--keep", "0", "--apply", "--yes"]) == 0
+    assert list(laps.glob("lap_*.json")) == []
+
+
+def test_partial_failure_exits_nonzero(tmp_path: Path, monkeypatch) -> None:
+    """A wrapper script must be able to tell a partial prune from a clean one."""
+    state, laps = _journal(tmp_path)
+    for i in range(4):
+        _write_archive(laps, f"lap_{i}.json", age_s=10_000 - i)
+
+    real_unlink = Path.unlink
+
+    def failing_unlink(self, *args, **kwargs):
+        if self.name == "lap_1.json":
+            raise PermissionError("locked by another process")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+
+    assert main(["--state-dir", str(state), "--keep", "1", "--apply"]) == 3
+    assert (laps / "lap_1.json").exists()
 
 
 def test_newest_are_always_kept(tmp_path: Path) -> None:

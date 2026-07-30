@@ -204,8 +204,10 @@ def test_prefilter_is_independent_of_json_key_order(tmp_path: Path) -> None:
     raw = json.dumps(rec)
     # Force "source" to the very front, then pad far past any plausible tail window.
     assert raw.index('"source"') < 200
-    padded = raw[:-1] + ',"zz_pad":"' + ("x" * 40_000) + '"}'
-    assert padded.index('"source"') < len(padded) - 8192
+    padded = raw[:-1] + ',"zz_pad":"' + ("x" * 400_000) + '"}'
+    # Past the measured median distance-from-EOF (247 KB), so reintroducing a tail window of any
+    # plausible size — 8 KiB, 64 KiB, 256 KiB — fails this test rather than sneaking through.
+    assert padded.index('"source"') < len(padded) - 262_144
     (laps / "lap_front_source.json").write_text(padded, encoding="utf-8")
 
     rt, calls = _counting_runtime(tmp_path, ["lap_front_source.json"])
@@ -252,6 +254,58 @@ def test_prefilter_handles_a_differently_spaced_encoder(tmp_path: Path) -> None:
         """
     )
     assert verdict is False
+
+
+def test_prefilter_spaced_path_scans_every_match_not_just_the_first(tmp_path: Path) -> None:
+    """A nested `source` key must not shadow a later top-level `"source": "imported"`.
+
+    The compact fast path is a whole-buffer OR. The tolerant path has to be one too: taking only
+    the first match reports a genuinely imported archive as PROVEN not-imported and silently drops
+    the user's lap. That is the one direction this filter is never allowed to be wrong in.
+    """
+    laps = tmp_path / "ac_copilot_trainer" / "journal" / "laps"
+    laps.mkdir(parents=True)
+    path = laps / "lap_nested_source.json"
+    # Pretty-printed (spaced), with a nested `source` ahead of the real one.
+    path.write_text(
+        json.dumps({"meta": {"source": "motec_export"}, "source": "imported"}, indent=2),
+        encoding="utf-8",
+    )
+    rt = _runtime(tmp_path, [])
+    verdict = rt.execute(
+        f"""
+        local p = require("persistence")
+        return p._archiveMayBeImported({str(path).replace(chr(92), "/")!r})
+        """
+    )
+    assert verdict is True
+
+
+def test_prefilter_fails_open_when_the_read_itself_fails(tmp_path: Path) -> None:
+    """Opening succeeds but reading throws — distinct from the file simply not existing."""
+    laps = tmp_path / "ac_copilot_trainer" / "journal" / "laps"
+    laps.mkdir(parents=True)
+    path = laps / "lap_read_explodes.json"
+    path.write_text('{"source":"in_game"}', encoding="utf-8")
+    rt = _runtime(tmp_path, [])
+    verdict = rt.execute(
+        f"""
+        local p = require("persistence")
+        local realOpen = io.open
+        io.open = function(...)
+          local f = realOpen(...)
+          if f == nil then return nil end
+          return {{
+            read = function() error("simulated I/O failure") end,
+            close = function() return f:close() end,
+          }}
+        end
+        local v = p._archiveMayBeImported({str(path).replace(chr(92), "/")!r})
+        io.open = realOpen
+        return v
+        """
+    )
+    assert verdict is True, "a failed read must fall back to decoding, not to 'not imported'"
 
 
 def test_prefilter_fails_open_when_there_is_no_source_key_at_all(tmp_path: Path) -> None:

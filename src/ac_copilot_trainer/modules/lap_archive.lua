@@ -427,7 +427,19 @@ function M.buildRecord(opts)
   return buildRecordEnvelope(opts, samplesColumnar, #samplesColumnar)
 end
 
+--- Imported references are written as `lap_imported_<timestamp>_…` by `tools/import_motec`.
+--- Name-based on purpose: `rotate` runs after every completed lap, so it must not open and parse
+--- hundreds of 250 KB archives to decide what to keep (#627).
+---@param name string
+---@return boolean
+local function isImportedArchiveName(name)
+  return type(name) == "string" and name:sub(1, 13) == "lap_imported_"
+end
+
+M._isImportedArchiveName = isImportedArchiveName
+
 --- Walk archive dir, sum file sizes, delete oldest until total <= capMB.
+--- Imported references are never evicted — see the loop body.
 --- Returns (filesKept, mbUsed, filesDeleted).
 ---@param capMB number
 ---@return integer, number, integer
@@ -494,11 +506,20 @@ function M.rotate(capMB)
   local idx = 1
   while total > capBytes and idx <= #files do
     local f = files[idx]
-    local okRm, rmRes = pcall(os.remove, f.path)
-    if okRm and rmRes ~= nil and rmRes ~= false then
-      local delta = f.charge or 0
-      total = math.max(0, total - delta)
-      deleted = deleted + 1
+    -- NEVER size-evict an imported reference (#627). Imported laps are user-supplied data that
+    -- driving cannot regenerate; an in-game lap is reproducible by driving another one. They were
+    -- previously spared only by accident: the sort is by name, and `lap_<YYYYMMDD…>` happens to
+    -- order before `lap_imported_…` because digits precede `i`. That is not a guarantee — it
+    -- fails the moment the in-game naming changes, and it fails today once every in-game archive
+    -- has already been evicted. If imports alone exceed the cap the cap is simply exceeded; the
+    -- operator chose to import them and can remove them deliberately.
+    if not isImportedArchiveName(f.name) then
+      local okRm, rmRes = pcall(os.remove, f.path)
+      if okRm and rmRes ~= nil and rmRes ~= false then
+        local delta = f.charge or 0
+        total = math.max(0, total - delta)
+        deleted = deleted + 1
+      end
     end
     idx = idx + 1
   end
