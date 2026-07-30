@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from tools.ac_harness.resilient_launch import (
+    FREEZE_VERDICTS,
     AttemptOutcome,
     AttemptReadiness,
     LaunchVerdict,
@@ -170,10 +171,32 @@ def test_unknown_readiness_breaks_the_consecutive_not_ready_run():
     )
 
 
-def test_sustained_not_ready_state_fails_the_attempt():
+def test_sustained_not_ready_with_an_advancing_stream_is_not_drivable_not_a_freeze():
+    """A rendering session that never becomes drivable is AC's pre-drive menu (#466), not a wedge.
+
+    Measured on AG_PC 2026-07-29 at 23.4 h uptime: four consecutive attempts scored ``froze`` at
+    14.38/14.40/15.41/14.39 s while the graphics packet advanced ~114/s and physics ~374/s, and a
+    screenshot showed AC parked at the Drive/Setup/Exit menu. The #627 wedge REQUIRES a pinned
+    graphics packet (§2), so an advancing stream must not land in the freeze bucket.
+    """
     samples = steady(0.0, 10.0, first_packet=100)
     samples += [
         Sample(t=11.0 + index, gfx_packet=800 + index, acs_alive=True, entry_ready=False)
+        for index in range(4)
+    ]
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.NOT_DRIVABLE
+    )
+    assert LaunchVerdict.NOT_DRIVABLE.value not in FREEZE_VERDICTS
+
+
+def test_sustained_not_ready_with_a_pinned_stream_is_still_a_freeze():
+    """Readiness lost AND the render stream pinned is a genuine wedge — keep it in FROZE."""
+    samples = steady(0.0, 10.0, first_packet=100)
+    samples += [
+        Sample(t=11.0 + index, gfx_packet=800, acs_alive=True, entry_ready=False)
         for index in range(4)
     ]
 
@@ -937,12 +960,13 @@ class TestRetryLoop:
             lambda i: LaunchVerdict.STABLE, max_attempts=1, uptime_hours=lambda: None
         )
         payload = json_module.loads(json_module.dumps(report.as_dict()))
-        assert payload["schema"] == "resilient-launch-report/v3"
+        assert payload["schema"] == "resilient-launch-report/v4"
         assert payload["verdict"] == "stable"
         assert payload["counts"] == {
             "stable": 1,
             "froze": 0,
             "wedged_init": 0,
+            "not_drivable": 0,
             "never_live": 0,
         }
         assert payload["cycles"] == {"delivered": 1, "undelivered": 0, "undetermined": 0}
@@ -2402,6 +2426,7 @@ class TestPerturberTreatmentReceipt:
             "stable": 0,
             "froze": 1,
             "wedged_init": 0,
+            "not_drivable": 0,
             "never_live": 0,
         }
         assert payload["arm_contradicted"] is True
@@ -2449,7 +2474,13 @@ class TestPerturberTreatmentReceipt:
         }
         assert payload["perturbers"]["steam_overlay"] == str(PerturberEvidence.UNAVAILABLE)
         # Perturbers ride OUTSIDE `counts`, which stays the verdict histogram consumers compare.
-        assert set(payload["counts"]) == {"stable", "froze", "wedged_init", "never_live"}
+        assert set(payload["counts"]) == {
+            "stable",
+            "froze",
+            "wedged_init",
+            "not_drivable",
+            "never_live",
+        }
         # No declared arm -> the experiment-only fields stay absent entirely.
         assert "expect_perturbers" not in payload
         assert "arm_contradicted" not in payload

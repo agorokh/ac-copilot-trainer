@@ -84,6 +84,7 @@ from tools.ac_harness.resilient_launch import (
     FREEZE_VERDICTS,
     PERTURBER_MODULES,
     REPORT_SCHEMA,
+    SUPERSEDED_REPORT_SCHEMAS,
     TERMINAL_VERDICTS,
     repo_checkout_root,
     resolve_report_path,
@@ -1043,8 +1044,15 @@ def _parse_report(
             "the operator's assertion and cannot be cross-checked against what was actually "
             "injected into acs.exe. Re-run the boot on the current launcher"
         )
-    if report.get("schema") != REPORT_SCHEMA:
-        raise ValueError(f"report {path} schema must be {REPORT_SCHEMA!r}")
+    # v3 is SUPERSEDED, not withdrawn: v4 only ADDED the ``not_drivable`` counts bucket, so a v3
+    # boot carries every field this analyzer reads and stays scoreable (the counts check below
+    # defaults an absent bucket to zero). Withdrawn schemas above are rejected because they lack
+    # evidence this analyzer requires; a purely additive bump must not invalidate recorded boots.
+    if report.get("schema") not in (REPORT_SCHEMA, *SUPERSEDED_REPORT_SCHEMAS):
+        raise ValueError(
+            f"report {path} schema must be {REPORT_SCHEMA!r} "
+            f"(or one of the superseded-but-readable {SUPERSEDED_REPORT_SCHEMAS!r})"
+        )
     attempts = report.get("attempts")
     attempts_log = report.get("attempts_log")
     arm_contradicted = report.get("arm_contradicted") is True
@@ -1222,7 +1230,17 @@ def _parse_report(
     expected_counts = {
         name: sum(item.verdict == name for item in observations) for name in TERMINAL_VERDICTS
     }
-    if report.get("counts") != expected_counts:
+    reported_counts = report.get("counts")
+    if not isinstance(reported_counts, dict):
+        raise ValueError(f"report {path} has no counts block")
+    # A boot recorded before a verdict bucket existed (e.g. ``not_drivable``, added with
+    # resilient-launch-report/v4) simply omits that key. A missing bucket is ZERO, not a
+    # mismatch — normalizing keeps historical boots loadable instead of failing the whole
+    # experiment on a schema addition. An UNKNOWN key is still a mismatch: it means the writer
+    # produced a verdict this analyzer cannot score.
+    normalized_counts = {name: reported_counts.get(name, 0) for name in TERMINAL_VERDICTS}
+    unknown = set(reported_counts) - set(TERMINAL_VERDICTS)
+    if unknown or normalized_counts != expected_counts:
         raise ValueError(f"report {path} counts do not match its attempts_log")
     expected_cycles = {
         "delivered": sum(item.cycle_delivered is True for item in observations),

@@ -247,11 +247,22 @@ launch, probe outcome, and re-bake stats so a recycle's timing is visible.
 
 > **Verified in-sim (2026-07-03, #466/#482).** A keypress nudge to clear the overlay in place was
 > implemented and tested — with AC correctly focused (foreground-lock defeated via `AttachThreadInput`)
-> and receiving real Enter/Space, the CSP "0 seconds" overlay does **not** dismiss (consistent with
-> #465: only the `FORCE_START` config skips it, no keypress) — so it was **removed**; the fast-fail
-> relaunch is the recovery. The
-> **no-setup drive path is reliable** (CM auto-starts; fast-fail retries land the hijack — e.g. LIVE
-> and hijacked on cycle 1). The **`--setup` path is not yet reliable**, and instrumentation
+> and receiving real Enter/Space, the CSP "0 seconds" overlay does **not** dismiss — so it was
+> **removed**; the fast-fail relaunch is the recovery.
+>
+> **Correction (2026-07-29): `FORCE_START` does NOT skip this overlay — do not go and try it.**
+> An earlier revision of this paragraph said "only the `FORCE_START` config skips it", which reads
+> as a working lever and is wrong. The #466 investigation
+> ([`issue-466-setup-drive-rebake-race-2026-07-03.md`](../01_Vault/AcCopilotTrainer/03_Investigations/issue-466-setup-drive-rebake-race-2026-07-03.md))
+> measured `gui.ini [GUI] FORCE_START=1` failing **0/8+** across both the CM-launch and the
+> direct-`acs`-relaunch paths, with `FORCE_START=1` confirmed present through acs startup and the
+> setup applied (fuel=45) — overlay still stalled. #465 removed the mechanism for exactly that
+> reason, and the repo-wide rule is **no `force_start` / `gui.ini` writes**. On this rig
+> `gui.ini` currently reads `FORCE_START=0`; setting it to 1 is a refuted dead end, not a fix.
+>
+> The **no-setup drive path is reliable** (CM auto-starts; fast-fail retries land the hijack — e.g.
+> LIVE and hijacked on cycle 1), **but it is not unconditional** — see the pre-drive-menu row in
+> the troubleshooting table for the 2026-07-29 observation of it failing every cycle. The **`--setup` path is not yet reliable**, and instrumentation
 > (`--setup-rebake-interval`, re-bake stats) pinned *why*: the overlay stall is the setup re-bake
 > itself. The write that injects the setup into `race.ini` races acs's spawn-read that CM's
 > immediate-start depends on — baking aggressively (0.05 s default) applies the setup but **breaks**
@@ -425,6 +436,8 @@ traversed *and* the served tree matches the checkout the harness is running from
 | Run FAILS with `recovery cap exceeded at <N>m` | Real stall: the car repeatedly stopped at the same spot. Inspect `hud.png` plus `report.drive.control_trace` (especially the forced `recovery:*` rows); do **not** raise the cap to make it "pass" |
 | `acs.exe` dies mid-drive | The main physics packet watchdog fails that attempt and the CLI automatically runs one fresh full launch (bounded by `--sim-death-retries`). Inspect `report.attempts`: every failed attempt, reason, and control trace is retained even when the final attempt passes. |
 | `OSError: [WinError 448] … untrusted mount point` on the app junction | You are running in Windows **session 0** (an SSH logon), which cannot traverse the user-created junction and has no desktop for AC to render on. Not a harness bug and **not** a reason to relax the provenance preflight — re-run through `python -m tools.ac_harness.remote_launcher start` (see *Driving the harness from off-rig*) |
+| `stage=hijack` on EVERY cycle, and `resilient_launch` reports `not_drivable` (before 2026-07-29: `froze`) | AC reached LIVE and is **rendering normally** but parked at AC's pre-drive session menu (Drive/Setup/Exit sidebar, "Practice — 0 seconds"), so CSP never exposes `Car0`. **This is #466, NOT the #627 render wedge** — confirm by reading the packet streams: a wedge PINS `acpmf_graphics.packetId`, whereas this keeps it advancing (measured 2026-07-29: gfx +114/s, physics +374/s, stable ≥66 s, screenshot at `.scratch/issue627/live-after-cold-cm.png`). A reboot does **not** address it and `FORCE_START` is a refuted dead end (above). The human path still works — the operator clicks **Drive** — so a rig in this state serves human coaching sessions while blocking autonomous ones. Suspect Content Manager's own immediate-start ("skip pre-drive menu") setting, which lives in CM's opaque `%LOCALAPPDATA%\AcTools Content Manager\Values.data`, not in the harness preset (the generated preset's `StartType=START` is correct and not the lever) |
+| CM launch silently does nothing — `acs.exe` never appears, yet a reader still sees `status=LIVE` with static packets | The `acmanager://` URL is IPC to an already-running CM (trap §7.7) and a CM in a stale/cached-session state ignores it. What you are reading is a **corpse**: `acpmf_*` outlives `acs.exe` — measured 2026-07-29 holding `status=LIVE` with both packets frozen for **74 s** after exit, far longer than the ~14 s in #628. Never trust any `acpmf` field until the packet id **advances**. Recovery: cold-restart CM (kill `Content Manager.exe`, relaunch, wait ~12 s for single-instance IPC) before re-firing the URL |
 | Two agents, one rig | **Yield**: a single AC instance cannot serve two autonomous sessions (see the issue-277 investigation). Check for a running `acs.exe`/peer sidecar before launching |
 | Sidecar port already in use | That's usually the Game Point launcher's supervised sidecar — the harness reuses it; don't spawn a second |
 

@@ -78,6 +78,19 @@ class LaunchVerdict(StrEnum):
     ``NEVER_LIVE`` alone still cannot say whether an AC launch *cycle* happened — "appeared and
     exited" and "was never spawned" share the bucket. That axis is recorded separately as
     :class:`AttemptOutcome.cycle_delivered` (#710); do not infer it from the verdict.
+
+    ``NOT_DRIVABLE`` splits the **post**-go-live pre-drive menu out of ``FROZE`` (2026-07-29).
+    The pre-go-live branch already refuses to call a menu a wedge — "a stream that ADVANCED but
+    never reached readiness is a stuck pre-drive menu — rendering, therefore not wedged" — but the
+    post-go-live readiness path returned ``FROZE`` for exactly that shape, so a session that was
+    **LIVE, rendering, and ticking physics** while merely parked at AC's pre-drive session menu
+    (no ``Car0``, #466) landed in the #627 wedge bucket. Measured on AG_PC at 23.4 h uptime:
+    4 consecutive attempts scored ``froze`` at 14.38/14.40/15.41/14.39 s — a ±0.5 s spread that a
+    stochastic livelock does not produce — while the graphics packet was advancing ~114/s and
+    physics ~374/s, and a screenshot showed AC sitting at the Drive/Setup/Exit menu. A render
+    wedge REQUIRES a pinned graphics packet (#627 §2), so an advancing stream is dispositive that
+    this is launch plumbing, not the livelock. Keeping it in ``FROZE`` inflated the #627 rate from
+    the one side the ``NEVER_LIVE`` docstring above promises to protect.
     """
 
     PENDING = "pending"
@@ -85,6 +98,7 @@ class LaunchVerdict(StrEnum):
     FROZE = "froze"
     NEVER_LIVE = "never_live"
     WEDGED_INIT = "wedged_init"
+    NOT_DRIVABLE = "not_drivable"
 
 
 @dataclass(frozen=True)
@@ -116,7 +130,11 @@ class AttemptOutcome:
     perturbers: dict[str, str] | None = None
 
 
-REPORT_SCHEMA = "resilient-launch-report/v3"
+#: v4 adds the ``not_drivable`` bucket to ``counts`` (2026-07-29). The addition is backward
+#: compatible on the READ side: ``load_observations`` treats a bucket absent from an older report
+#: as zero, so v3 boots stay loadable rather than failing on a schema addition.
+REPORT_SCHEMA = "resilient-launch-report/v4"
+SUPERSEDED_REPORT_SCHEMAS = ("resilient-launch-report/v3",)
 WITHDRAWN_REPORT_SCHEMAS = ("resilient-launch-report/v1", "resilient-launch-report/v2")
 
 
@@ -163,8 +181,12 @@ TERMINAL_VERDICTS = frozenset(
         LaunchVerdict.FROZE.value,
         LaunchVerdict.NEVER_LIVE.value,
         LaunchVerdict.WEDGED_INIT.value,
+        LaunchVerdict.NOT_DRIVABLE.value,
     }
 )
+#: The #627 render-wedge bucket. ``NOT_DRIVABLE`` is deliberately EXCLUDED: it is a rendering,
+#: physics-advancing session parked at the pre-drive menu (#466 launch plumbing), and counting it
+#: here is what let four sessions chase a livelock that was not occurring.
 FREEZE_VERDICTS = frozenset({LaunchVerdict.FROZE.value, LaunchVerdict.WEDGED_INIT.value})
 
 
@@ -377,6 +399,13 @@ def classify(
                 if not_ready:
                     not_ready_run += 1
                     if not_ready_run >= stall_samples:
+                        # A render wedge REQUIRES a pinned graphics packet (#627 §2). If the
+                        # stream is still ADVANCING while readiness stays false, the session is
+                        # demonstrably rendering and merely not drivable — AC's pre-drive menu
+                        # (#466), which the pre-go-live branch above already refuses to call a
+                        # wedge. Report it as its own verdict so it never pollutes the #627 rate.
+                        if advanced:
+                            return LaunchVerdict.NOT_DRIVABLE
                         return LaunchVerdict.FROZE
                 elif ready:
                     not_ready_run = 0
@@ -715,6 +744,9 @@ class LaunchReport:
     never_live: int
     wedged_init: int = 0
     stable: int = 0
+    #: Rendering, physics-advancing sessions parked at AC's pre-drive menu (#466). Counted apart
+    #: from ``froze``/``wedged_init`` so the #627 wedge rate keeps a clean denominator.
+    not_drivable: int = 0
     #: attempts that actually started an ``acs.exe`` — the #625 accumulator's own denominator
     #: (#710). ``cycles_undetermined`` counts attempts whose producer did not report delivery.
     cycles_delivered: int = 0
@@ -735,7 +767,8 @@ class LaunchReport:
 
     def _counts(self) -> str:
         return (
-            f"froze {self.froze}, wedged_init {self.wedged_init}, never_live {self.never_live}"
+            f"froze {self.froze}, wedged_init {self.wedged_init}, "
+            f"not_drivable {self.not_drivable}, never_live {self.never_live}"
             f"; cycles delivered {self.cycles_delivered}/{self.attempts}"
         )
 
@@ -744,6 +777,15 @@ class LaunchReport:
             return (
                 f"stable drivable session held on attempt {self.attempts} "
                 f"({self._counts()}) — AC left LIVE"
+            )
+        # Remediation must match the failure. A run dominated by NOT_DRIVABLE saw AC render
+        # perfectly and merely never leave the pre-drive menu (#466), so "reboot to lower the
+        # freeze rate" is the wrong advice — there was no freeze to lower.
+        if self.not_drivable > self.froze + self.wedged_init:
+            return (
+                f"no stable session in {self.attempts} attempt(s) ({self._counts()}); "
+                "AC rendered but never became drivable — the pre-drive menu-skip never landed "
+                "(#466), NOT the #627 wedge; a reboot does not address this"
             )
         return (
             f"no stable session in {self.attempts} attempt(s) ({self._counts()}); "
@@ -760,6 +802,7 @@ class LaunchReport:
                 "stable": self.stable,
                 "froze": self.froze,
                 "wedged_init": self.wedged_init,
+                "not_drivable": self.not_drivable,
                 "never_live": self.never_live,
             },
             # Kept OUT of ``counts`` on purpose: ``counts`` is the verdict histogram and
@@ -1105,7 +1148,7 @@ def run_retry_loop(
             return None
 
     records: list[AttemptRecord] = []
-    stable = froze = never_live = wedged_init = 0
+    stable = froze = never_live = wedged_init = not_drivable = 0
     delivered = undelivered = undetermined = 0
     never_live_run = 0
     last_verdict = LaunchVerdict.NEVER_LIVE
@@ -1162,9 +1205,11 @@ def run_retry_loop(
                 on_never_live_streak()
                 never_live_run = 0
         else:
-            # FROZE and WEDGED_INIT both prove CM delivered a real acs.exe.
+            # FROZE, WEDGED_INIT and NOT_DRIVABLE all prove CM delivered a real acs.exe.
             if verdict is LaunchVerdict.FROZE:
                 froze += 1
+            elif verdict is LaunchVerdict.NOT_DRIVABLE:
+                not_drivable += 1
             else:
                 wedged_init += 1
             never_live_run = 0
@@ -1182,6 +1227,7 @@ def run_retry_loop(
         froze,
         never_live,
         wedged_init=wedged_init,
+        not_drivable=not_drivable,
         stable=stable,
         cycles_delivered=delivered,
         cycles_undelivered=undelivered,
