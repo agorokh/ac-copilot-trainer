@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-29T16:45:00Z
+last_updated: 2026-07-29T18:30:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/tier3-substrate-unreachable-rig-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-719-treatment-receipt-2026-07-28.md
@@ -128,6 +129,69 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-29 PM) — #627: the freeze instrument was scoring AC's pre-drive MENU as a wedge (PR #726 OPEN `72c9853`)
+
+**Read this before believing any recorded #627 freeze rate.**
+
+`resilient_launch` returned `FROZE` whenever post-go-live readiness stayed false for
+`stall_samples` — regardless of whether the render stream was still advancing. So a session that
+was **LIVE, rendering, physics ticking** but merely parked at AC's pre-drive session menu (no
+`Car0`, #466) landed in the **#627 wedge bucket**. The pre-go-live branch of the same function
+already refuses this ("a stream that ADVANCED but never reached readiness is a stuck pre-drive
+menu — rendering, therefore not wedged"); the post-go-live path contradicted its sibling.
+
+Measured on AG_PC at **23.4 h uptime** (boot 2026-07-28T18:27, ~22 h since prior AC activity):
+4/4 `froze` at **14.382 / 14.400 / 15.406 / 14.385 s**. A ±0.5 s spread is not a stochastic
+livelock — that was the tell. A screenshot showed the Drive/Setup/Exit sidebar; an independent
+packet trace on the same boot ran **66+ s at ~114 gfx/s and ~374 phys/s with zero stall**, and the
+AC/CSP logs were clean (`TIME TO INIT: 2888 ms`, app loaded `windows: 3`, `[COPILOT][RT-DIAG]`
+ticking). **There was no wedge on this rig today.**
+
+Shipped in PR #726: `LaunchVerdict.NOT_DRIVABLE`, terminal but **outside `FREEZE_VERDICTS`**;
+`counts.not_drivable`; schema → `resilient-launch-report/v4`, additive so v3 boots stay readable
+(analyzer accepts the superseded schema, absent bucket = 0, unknown bucket still a mismatch);
+remediation no longer says "reboot" when nothing froze. `make ci-fast` OK, 306 tests pass, all PR
+checks green. Also corrected the runbook's stale *"only `FORCE_START` skips it"* line (#466
+measured it failing **0/8+**) and added troubleshooting rows for the menu-park shape and for CM
+silently ignoring `acmanager://`.
+
+**Mechanism correction (static analysis, no rig time)** —
+[issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).
+The wedge loop in CSP `accRenderingAdv.dll` (SHA256 `6546FDF7…`, **verified identical** to the one
+filed upstream) is a **decimal→float `strtod` core, NOT a float→decimal printer** — v2's §3.5
+correction has the direction inverted, and so does upstream #622. Evidence: ASCII reads with
+`and al,0xF`, `d1*10+d2` packing, `cvtsi2sd` (`0x14E703C`), ±inf bit patterns on overflow
+(`0x14E707B`), 18/20-digit fast-path bounds. All three in-function RIP samples sit in ONE loop
+(`0x14E70E0…0x14E71C5`) whose progress variable `r11d` is incremented **only conditionally on
+data** with **no iteration cap** — structurally able to not terminate. Out-of-domain-limb trigger
+is **plausible, untested** (the packer never validates that a byte is a digit).
+
+### Rig state / what actually blocks the business goal
+
+- **Human coaching sessions work today**: AC live, trainer app loaded (3 windows), sidecar accepts
+  the app's WS peer (`sidecar client connected protocol=1`), ESP32 rig screen live on COM6.
+- **Autonomous drive is blocked** by #466: the pre-drive menu-skip lost every cycle today, so CSP
+  never exposes `Car0` (`stage=hijack`, 3/3 probes). **Operator confirmed CM's "start race
+  immediately" was always enabled — do NOT re-diagnose it as a CM setting.** Documented recovery is
+  the fast-fail relaunch recycle (~4/20 historical stall rate); if invocations exhaust, the runbook
+  and the launcher both point at a reboot to reset the per-boot accumulator. A 6-invocation budget
+  run was in flight at session end — check `.scratch/harness-evidence/issue627-budget-*/`.
+- **Corpse lifetime**: one probe read `status=LIVE` with both packets frozen for **74 s** with no
+  `acs.exe` at all. #628 records ~14 s. Widen your distrust window accordingly.
+
+### Rig-config defects found (hub/machine, NOT this repo; not filed per operator directive)
+
+1. **SessionStart Tier-3 prefetch cannot reach the substrate from AG_PC.** Registry row
+   `ac_copilot → https://100.84.101.4:8045` with `tls_server_name = m4max-studio.tail31ce1b.ts.net`.
+   Measured: bare-IP `urlopen` → `SSL TLSV1_ALERT_INTERNAL_ERROR`; the ts.net name → read timeout at
+   8 s. The hook does not honour `tls_server_name` (SNI) and its timeout is too short; the MCP
+   bridge honours both, which is why the MCP tool works while the hook reports "substrate
+   unreachable". Gate stamp therefore never written → `CLAUDE_MEMORY_GATE=0` used with rationale in
+   `.scratch/.memory_bypass_rationale`. The substantive Tier-3 query DID run and was used.
+2. **`AGENTIC_MEMORY_BRIDGE_HOST` is `https://100.84.101.4`** — a URL where the resolver requires a
+   **bare** host (`_is_tailnet_shaped("https://100.84.101.4")` is False; bare `100.84.101.4` is
+   True), so the `env_bridge` candidate is never built. Fixing this alone does **not** fix (1).
 
 ## Delivered (2026-07-29) — #712 CLOSED via governance-hub #341
 
