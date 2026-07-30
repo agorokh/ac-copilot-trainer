@@ -2281,6 +2281,88 @@ end
 
 --- CSP lap invalidation flags differ by build; probe known names without throwing.
 --- `ac.StateCar` is userdata in real CSP — never gate on `type(...) == "table"` (Codex #78).
+
+-- #627/#466: press AC's Start button ourselves when the session is parked at the pre-drive menu.
+--
+-- The `session.start` handler above is the EXPLICIT control surface. This is the autonomous one,
+-- and it exists because the relay cannot be relied on: the sidecar only relays to peers that
+-- registered via an external `hello`, and the Lua bridge connects on the legacy path, so a
+-- `session.start` from the harness is answered "no loopback Lua peer connected" (measured
+-- 2026-07-29). Pressing from inside the app needs no sidecar, no peer classes, and no Car0.
+--
+-- VERIFIED LIVE 2026-07-29: attempt 1 returned false, attempt 2 returned true, AC left the menu,
+-- the hijack then landed (Car0) on probe 3/3 and the car drove to 133.5 km/h in gear 4. The
+-- baseline immediately before was 0 landed drives / 6 auto_drive invocations.
+--
+-- Two measured facts encoded here, each of which cost a live cycle:
+--   * `sim.isSessionStarted` is TRUE while AC still shows the pre-drive screen, so it is USELESS
+--     as the gate. `sim.isInMainMenu` is the real "parked, waiting for Start" signal.
+--   * `ac.tryToStart` returns false on the first call and true ~1 s later, so one press is not
+--     enough - it needs bounded retries.
+--
+-- REQUIRES CSP `[NEW_UI] REPLACE_MAIN_MENU=0` on 0.2.11: with the New UI active, tryToStart
+-- returned false on ALL 12 attempts (measured both ways in one session). CSP's 0.3.0-preview110
+-- changelog lists New-UI/tryToStart compatibility as a NEW item, and 0.2.11 predates it.
+--
+-- Bounded so it can never fight a driver: only while `isInMainMenu`, only inside PRESS_WINDOW_S
+-- of the app's first frame (so a later, deliberate menu visit is untouched), at most
+-- PRESS_MAX_ATTEMPTS presses PRESS_INTERVAL_S apart, latching permanently on success or expiry.
+local PRESS_WINDOW_S = 30.0
+local PRESS_INTERVAL_S = 1.0
+local PRESS_MAX_ATTEMPTS = 12
+local pressElapsed = 0.0
+local pressSince = 0.0
+local pressAttempts = 0
+local pressDone = false
+local pressLoggedState = false
+
+local function pressStartIfWaiting(dt)
+  if pressDone then return end
+  local step = tonumber(dt)
+  if not step or step ~= step or step < 0 then step = 0 end
+  pressElapsed = pressElapsed + step
+
+  if not pressLoggedState and ac and type(ac.log) == "function" then
+    pressLoggedState = true
+    pcall(ac.log, string.format(
+      "[COPILOT][AUTOSTART] state: isInMainMenu=%s isSessionStarted=%s isPaused=%s tryToStart=%s",
+      tostring(sim and sim.isInMainMenu), tostring(sim and sim.isSessionStarted),
+      tostring(sim and sim.isPaused), tostring(ac and type(ac.tryToStart) == "function")))
+  end
+
+  if sim and sim.isInMainMenu == false then
+    if pressAttempts > 0 and ac and type(ac.log) == "function" then
+      pcall(ac.log, "[COPILOT][AUTOSTART] left the menu after " .. pressAttempts .. " press(es)")
+    end
+    pressDone = true
+    return
+  end
+  if pressElapsed > PRESS_WINDOW_S or pressAttempts >= PRESS_MAX_ATTEMPTS then
+    if pressAttempts > 0 and ac and type(ac.log) == "function" then
+      pcall(ac.log, "[COPILOT][AUTOSTART] gave up after " .. pressAttempts .. " press(es)")
+    end
+    pressDone = true
+    return
+  end
+  if pressAttempts > 0 and (pressElapsed - pressSince) < PRESS_INTERVAL_S then return end
+  if not (ac and type(ac.tryToStart) == "function") then
+    if ac and type(ac.log) == "function" then
+      pcall(ac.log, "[COPILOT][AUTOSTART] ac.tryToStart unavailable on this CSP build")
+    end
+    pressDone = true
+    return
+  end
+
+  pressSince = pressElapsed
+  pressAttempts = pressAttempts + 1
+  local okCall, pressed = pcall(ac.tryToStart, true)
+  if ac and type(ac.log) == "function" then
+    pcall(ac.log, string.format(
+      "[COPILOT][AUTOSTART] attempt %d/%d t=%.1fs call_ok=%s returned=%s",
+      pressAttempts, PRESS_MAX_ATTEMPTS, pressElapsed, tostring(okCall), tostring(pressed)))
+  end
+end
+
 local function carLapInvalidatedFlag(carObj)
   if carObj == nil then
     return false
@@ -2301,6 +2383,7 @@ function script.update(dt)
   car = ac.getCar(0)
 
   autoPlaceOnce()
+  pressStartIfWaiting(dt)
 
   -- Live-frame coaching tick (issue #72 rebuild).
   -- Inputs are LIVE FRAME values and persisted reference data, NOT lap aggregates.
