@@ -26,6 +26,7 @@ Exit codes: ``0`` nothing to do or report produced, ``0`` after a successful ``-
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -62,30 +63,41 @@ def archive_source(path: Path) -> str | None:
     return None
 
 
-def referenced_names(state_dir: Path) -> set[str]:
-    """Archive filenames mentioned by any persisted state file under ``state_dir``.
+#: An archive filename as it appears inside a state file. Requires the ``.json`` suffix so it
+#: cannot match unrelated keys like ``lap_history`` or ``lap_ms``.
+_ARCHIVE_TOKEN = re.compile(rb"lap_[0-9A-Za-z._-]+\.json")
 
-    Substring matching on purpose: it does not need to understand the state schema, so a schema
-    change cannot silently un-protect a referenced archive.
+
+def referenced_names(state_dir: Path) -> set[str]:
+    """Archive filenames mentioned by any persisted state file under ``state_dir``, recursively.
+
+    **Recursive on purpose.** On the rig, ``journal/reports/*.json`` names 187 lap archives while
+    the per-combo files at the top level name none — a top-level-only scan would have left every
+    one of those unprotected. Anything that can name an archive can protect it.
+
+    Token extraction rather than schema parsing, so a schema change cannot silently un-protect a
+    referenced archive, and one pass over the bytes rather than a scan per archive. Over-matching
+    is the safe direction: a spurious name protects a file that did not need protecting.
+
+    The ``journal/laps`` tree is excluded — archives referencing each other must not keep each
+    other alive, and reading them here would re-introduce the very cost this work removes.
     """
     names: set[str] = set()
     if not state_dir.is_dir():
         return names
-    blobs: list[bytes] = []
-    for candidate in sorted(state_dir.glob("*.json")):
+    for candidate in state_dir.rglob("*.json"):
         try:
-            blobs.append(candidate.read_bytes())
+            relative = candidate.relative_to(state_dir).parts
+        except ValueError:  # pragma: no cover - rglob results are always relative
+            continue
+        if relative[:2] == ("journal", "laps"):
+            continue
+        try:
+            raw = candidate.read_bytes()
         except OSError:
             continue
-    if not blobs:
-        return names
-    laps_dir = state_dir / "journal" / "laps"
-    if not laps_dir.is_dir():
-        return names
-    for archive in laps_dir.glob("lap_*.json"):
-        needle = archive.name.encode("utf-8")
-        if any(blob.find(needle) >= 0 for blob in blobs):
-            names.add(archive.name)
+        for match in _ARCHIVE_TOKEN.finditer(raw):
+            names.add(match.group(0).decode("ascii"))
     return names
 
 

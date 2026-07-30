@@ -102,6 +102,62 @@ def test_archives_referenced_by_state_are_never_pruned(tmp_path: Path) -> None:
     assert referenced_names(state) == {"lap_reference.json"}
 
 
+def test_archives_referenced_by_a_nested_report_are_never_pruned(tmp_path: Path) -> None:
+    """Regression: the rig's ``journal/reports/*.json`` names 187 archives.
+
+    A top-level-only scan of the state directory left every one of them unprotected. Anything
+    that can name an archive, at any depth, must protect it.
+    """
+    state, laps = _journal(tmp_path)
+    kept = _write_archive(laps, "lap_cited_by_report.json", age_s=10_000)
+    for i in range(4):
+        _write_archive(laps, f"lap_local_{i}.json", age_s=9_000 - i)
+    reports = state / "journal" / "reports"
+    reports.mkdir(parents=True)
+    (reports / "session_abc_car_track.json").write_text(
+        json.dumps({"laps": [{"archive": kept.name}]}),
+        encoding="utf-8",
+    )
+
+    plan = build_plan(laps, state, keep=1)
+
+    assert "lap_cited_by_report.json" not in {p.name for p in plan.prune}
+    assert referenced_names(state) == {"lap_cited_by_report.json"}
+
+
+def test_archives_do_not_protect_each_other(tmp_path: Path) -> None:
+    """The ``journal/laps`` tree is excluded from the reference scan.
+
+    Otherwise an archive naming its predecessor would keep the whole chain alive forever — and
+    reading 480 MB of archives here would re-introduce the cost this work exists to remove.
+    """
+    state, laps = _journal(tmp_path)
+    old = _write_archive(laps, "lap_old.json", age_s=10_000)
+    citing = laps / "lap_citing.json"
+    citing.write_text(
+        json.dumps({"source": "in_game", "previous": old.name}, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    os.utime(citing, (time.time() - 9_000,) * 2)
+    _write_archive(laps, "lap_newest.json", age_s=1)
+
+    assert referenced_names(state) == set()
+    assert "lap_old.json" in {p.name for p in build_plan(laps, state, keep=1).prune}
+
+
+def test_reference_scan_ignores_lap_shaped_keys(tmp_path: Path) -> None:
+    """``lap_history`` / ``lap_ms`` appear in every session file and are not filenames."""
+    state, laps = _journal(tmp_path)
+    _write_archive(laps, "lap_a.json", age_s=10_000)
+    (state / "journal").mkdir(parents=True, exist_ok=True)
+    (state / "journal" / "session_x.json").write_text(
+        json.dumps({"lap_history": [{"lap_ms": 90_000}]}),
+        encoding="utf-8",
+    )
+
+    assert referenced_names(state) == set()
+
+
 def test_newest_are_always_kept(tmp_path: Path) -> None:
     state, laps = _journal(tmp_path)
     for i in range(10):
