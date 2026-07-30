@@ -835,6 +835,19 @@ class GamePointSupervisor:
     def _stable_ac_menu_config(self) -> ProbeResult:
         """Verify CSP 0.2.11 can honor ``ac.tryToStart`` before launching Stable AC."""
 
+        # Stable AC's authenticated session.start relay depends on the CSP Lua app already
+        # being connected to this sidecar. The launcher's port setting is available to its
+        # Python children, but CSP's per-app ``ac.storage`` WebSocket URL is not safely
+        # writable before AC starts. Fail closed instead of launching a recovery client on
+        # one port while the Lua control peer silently dials the built-in 8765 endpoint.
+        if self.config.port != DEFAULT_PORT:
+            return ProbeResult(
+                "ac_session",
+                False,
+                "sidecar_port_unsupported",
+                f"Stable AC requires sidecar_port={DEFAULT_PORT}; configured "
+                f"sidecar_port={self.config.port} cannot be propagated to the CSP Lua bridge.",
+            )
         explicit = Path(self.config.ac_user_dir) if self.config.ac_user_dir else None
         if explicit is None and sys.platform != "win32":
             return ProbeResult("ac_session", True, "menu_config_skipped")

@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-30T00:41:00-07:00
+last_updated: 2026-07-30T00:54:39-07:00
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
@@ -275,6 +275,14 @@ the real `ac-copilot-screen*` identity does. Game Point's CLI/GUI reconstruction
 `ac_user_dir`, and standard discovery selects the Documents/OneDrive candidate containing
 `cfg/extension/gui.ini` rather than the first merely existing directory. Focused result: 195
 passed. Final `make ci-fast`: 3,878 passed, 89 skipped, 83.61% coverage.
+
+**Final endpoint-consistency follow-up:** Stable AC now fails closed when Game Point resolves a
+non-default sidecar port. Python children can inherit that port, but the launcher cannot safely
+rewrite CSP's persisted `wsSidecarUrl` before the Lua peer must connect, so a custom port could
+leave the authenticated `session.start` route without a Lua recipient. The AC Session row reports
+`sidecar_port_unsupported` with both configured and required ports, while custom ports remain
+available for sidecar-only operation. Focused launcher result: 125 passed. Final `make ci-fast`:
+3,879 passed, 89 skipped, 83.61% coverage.
 
 **Mechanism correction (static analysis, no rig time)** —
 [issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).

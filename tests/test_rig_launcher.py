@@ -271,7 +271,7 @@ def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> N
         return proc
 
     cfg = GamePointConfig(
-        port=9999,
+        port=8765,
         token="sidecar-secret",
         resilient_car="car",
         resilient_track="track",
@@ -309,10 +309,36 @@ def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> N
     ]
     assert not release_path.exists()
     assert calls[0][1]["cwd"] == str(_repo_root())
-    assert calls[0][1]["env"]["AC_COPILOT_SIDECAR_PORT"] == "9999"
+    assert calls[0][1]["env"]["AC_COPILOT_SIDECAR_PORT"] == "8765"
     assert calls[0][1]["env"]["AC_COPILOT_SIDECAR_TOKEN"] == "sidecar-secret"
     assert (tmp_path / "logs" / "resilient-launch.log").exists()
     assert proc.terminated is False
+
+
+def test_stable_ac_rejects_custom_sidecar_port_before_spawn(tmp_path: Path) -> None:
+    spawned: list[list[str]] = []
+    cfg = GamePointConfig(
+        port=9999,
+        resilient_car="car",
+        resilient_track="track",
+        paths=LauncherPaths(tmp_path),
+    )
+    sup = GamePointSupervisor(
+        cfg,
+        environ={},
+        popen=lambda command, **_kwargs: spawned.append(command),
+        python_executable="python",
+    )
+
+    result = sup.start_resilient_session()
+    status = sup._resilient_process_status()
+
+    assert result.ok is False
+    assert result.state == "sidecar_port_unsupported"
+    assert "requires sidecar_port=8765" in result.detail
+    assert "configured sidecar_port=9999" in result.detail
+    assert status == result
+    assert spawned == []
 
 
 def test_stable_ac_blocks_new_ui_with_actionable_path(tmp_path: Path) -> None:

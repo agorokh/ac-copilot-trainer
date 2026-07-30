@@ -156,6 +156,13 @@ with the exact remediation path instead of exhausting the launch budget at the
 pre-drive screen. `ac_user_dir` is optional when the standard Documents or
 OneDrive Documents path can be discovered.
 
+Stable AC currently requires the default `sidecar_port` of `8765`. Game Point
+can pass another port to its Python children, but it cannot safely rewrite the
+CSP app's persisted `wsSidecarUrl` before AC starts. It therefore reports
+`sidecar_port_unsupported` and refuses to launch when these endpoints could
+diverge, instead of claiming that the authenticated Lua start-control path is
+armed. Custom ports remain supported for sidecar-only operation.
+
 Environment variables `AC_COPILOT_RESILIENT_CAR`,
 `AC_COPILOT_RESILIENT_TRACK`, `AC_COPILOT_RESILIENT_LAYOUT`, and
 `AC_COPILOT_RESILIENT_CM_EXE` override those values;
