@@ -61,6 +61,8 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_KEY,
     TYPE_SESSION_REVIEW_GENERATE,
     TYPE_SESSION_REVIEW_RESULT,
+    TYPE_SESSION_START,
+    TYPE_SESSION_START_ACK,
     TYPE_SETUP_ADVICE,
     TYPE_SETUP_ADVICE_RESULT,
     TYPE_SETUP_CLOSED_LOOP,
@@ -423,6 +425,7 @@ CLIENT_TO_SERVER_TYPES = frozenset(
         TYPE_SETUP_EXCHANGE_SEARCH,
         TYPE_SETUP_EXCHANGE_DOWNLOAD,
         TYPE_SESSION_REVIEW_GENERATE,
+        TYPE_SESSION_START,
         # NOTE: TYPE_VOICE_ECHO / TYPE_VOICE_DEMO are deliberately NOT listed here — they
         # are handled explicitly (and early-return) in _handle_external_frame before the
         # type-set routing runs, so membership would be dead configuration (PR #519 review).
@@ -454,6 +457,7 @@ SERVER_TO_CLIENT_TYPES = frozenset(
         TYPE_SETUP_CLOSED_LOOP_RESULT,
         TYPE_SETUP_EXCHANGE_SEARCH_RESULT,
         TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
+        TYPE_SESSION_START_ACK,
     }
 )
 SIDECAR_LOCAL_TYPES = frozenset(

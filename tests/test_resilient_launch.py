@@ -48,6 +48,7 @@ from tools.ac_harness.resilient_launch import (
     car0_handshake_failure_outcome,
     classify,
     cycle_delivered,
+    request_session_start,
     run_retry_loop,
 )
 from tools.ac_harness.shared_memory import SharedMemoryUnavailable
@@ -144,6 +145,25 @@ def test_unknown_graphics_sample_breaks_the_consecutive_stall_run():
     )
 
 
+def test_sustained_unreadable_graphics_fails_with_unknown_readiness():
+    samples = steady(0.0, 10.0, first_packet=100)
+    samples += [
+        Sample(
+            t=float(t),
+            gfx_packet=None,
+            acs_alive=True,
+            entry_ready=None,
+            drivable=None,
+        )
+        for t in range(11, 15)
+    ]
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.FROZE
+    )
+
+
 def test_single_not_ready_flicker_does_not_abort_stability_window():
     samples = steady(0.0, 10.0, first_packet=100)
     samples.append(Sample(t=11.0, gfx_packet=800, acs_alive=True, entry_ready=False))
@@ -226,6 +246,42 @@ def test_car0_handshake_failure_is_not_drivable_when_render_still_advances():
     assert str(outcome.verdict) not in FREEZE_VERDICTS
     # The session WAS rendering, so CM really started an acs.exe and a cycle was consumed (#710).
     assert outcome.cycle_delivered is True
+
+
+def test_session_start_sender_requires_positive_lua_ack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import harness_client
+
+    class _FakeHarnessClient:
+        def __init__(self, url: str, **kwargs: object) -> None:
+            assert url == "ws://127.0.0.1:9876"
+            assert kwargs["token"] == "secret"
+            self.closed = False
+
+        async def connect(self, **_kwargs: object) -> None:
+            return None
+
+        async def hello(self, **_kwargs: object) -> dict[str, object]:
+            return {"type": "hello_ack"}
+
+        async def request_session_start(self, **_kwargs: object) -> dict[str, object]:
+            return {"type": "session.start.ack", "ok": True, "started": True}
+
+        async def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setenv("AC_COPILOT_SIDECAR_PORT", "9876")
+    monkeypatch.setenv("AC_COPILOT_SIDECAR_TOKEN", "secret")
+    monkeypatch.setattr(harness_client, "HarnessClient", _FakeHarnessClient)
+
+    assert request_session_start(timeout=0.1) is True
+
+
+def test_session_start_sender_rejects_invalid_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AC_COPILOT_SIDECAR_PORT", "not-a-port")
+
+    assert request_session_start(timeout=0.1) is False
 
 
 @pytest.mark.parametrize(

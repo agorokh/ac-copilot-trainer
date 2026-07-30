@@ -101,6 +101,9 @@ TYPE_SETUP_CLOSED_LOOP = "setup.closed_loop"
 TYPE_SETUP_EXCHANGE_SEARCH = "se.search"
 TYPE_SETUP_EXCHANGE_DOWNLOAD = "se.download"
 TYPE_SESSION_REVIEW_GENERATE = "session.review.generate"
+# Issue #726: resilient-launch harness → trainer Lua request that presses CSP's supported
+# in-sim Start control while AC is rendering at the pre-drive menu but Car0 does not exist yet.
+TYPE_SESSION_START = "session.start"
 # Issue #511 Part D: a remote voice endpoint (tablet page) reports per-cue client-side
 # timestamps back to the sidecar so the audible-latency harness can decompose network-hop
 # vs audio-stack delay. Accepted from any authenticated peer; never relayed.
@@ -157,6 +160,7 @@ TYPE_SETUP_CLOSED_LOOP_RESULT = "setup.closed_loop.result"
 TYPE_SETUP_EXCHANGE_SEARCH_RESULT = "se.search.result"
 TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK = "se.download.ack"
 TYPE_SESSION_REVIEW_RESULT = "session.review.result"
+TYPE_SESSION_START_ACK = "session.start.ack"
 # Issue #118: high-rate physical-peripheral frames. `telemetry_tick` is sent
 # from the Lua loopback peer to physical clients; the sidecar can derive and
 # route `haptic_event` frames to haptic-class clients.
@@ -199,6 +203,7 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_SETUP_EXCHANGE_SEARCH,
     TYPE_SETUP_EXCHANGE_DOWNLOAD,
     TYPE_SESSION_REVIEW_GENERATE,
+    TYPE_SESSION_START,
     TYPE_SETUP_SPINNER_LIST,
     TYPE_SETUP_SPINNER_SET,
     TYPE_TELEMETRY_TICK,
@@ -836,11 +841,17 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
                     "generated, imported, none"
                 )
         return None
+    if t == TYPE_SESSION_START:
+        instant = frame.get("instant")
+        if instant is not None and not isinstance(instant, bool):
+            return "session.start optional 'instant' must be a boolean"
+        return None
     if t in (
         TYPE_SETUP_LIST_RESULT,
         TYPE_SETUP_LOAD_ACK,
         TYPE_SETUP_SPINNER_LIST_RESULT,
         TYPE_SETUP_SPINNER_SET_ACK,
+        TYPE_SESSION_START_ACK,
     ):
         # Server-to-client replies forwarded from the Lua peer — accept silently.
         return None

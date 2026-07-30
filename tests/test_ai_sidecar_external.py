@@ -190,6 +190,7 @@ def test_validate_inbound_accepts_known_types() -> None:
         is None
     )
     assert ep.validate_inbound({"v": 1, "type": "action", "name": "toggleFocusPractice"}) is None
+    assert ep.validate_inbound({"v": 1, "type": "session.start", "instant": True}) is None
     assert ep.validate_inbound({"v": 1, "type": "state.subscribe", "topics": ["lap"]}) is None
     assert (
         ep.validate_inbound(
@@ -1989,6 +1990,55 @@ def test_config_set_round_trip_via_hub() -> None:
     assert forwarded["value"] is False
     assert ack_back["type"] == "config.ack"
     assert ack_back["applied"] is True
+
+
+def test_session_start_round_trip_via_hub() -> None:
+    """The resilient harness request reaches Lua and its positive ack returns."""
+
+    async def _run() -> tuple[dict, dict]:
+        async with _running_sidecar() as port:
+            async with (
+                ws_connect(f"ws://127.0.0.1:{port}/") as harness,
+                ws_connect(f"ws://127.0.0.1:{port}/") as lua,
+            ):
+                await harness.send(
+                    json.dumps({"v": 1, "type": "hello", "client": "resilient-launch"})
+                )
+                await asyncio.wait_for(harness.recv(), timeout=2.0)
+                await lua.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "hello",
+                            "client": "trainer-lua",
+                            "client_class": ep.CLIENT_CLASS_LUA,
+                        }
+                    )
+                )
+                await asyncio.wait_for(lua.recv(), timeout=2.0)
+
+                await harness.send(
+                    json.dumps({"v": 1, "type": ep.TYPE_SESSION_START, "instant": True})
+                )
+                forwarded = json.loads(await asyncio.wait_for(lua.recv(), timeout=2.0))
+                await lua.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": ep.TYPE_SESSION_START_ACK,
+                            "ok": True,
+                            "started": True,
+                        }
+                    )
+                )
+                ack = json.loads(await asyncio.wait_for(harness.recv(), timeout=2.0))
+                return forwarded, ack
+
+    forwarded, ack = asyncio.run(_run())
+    assert forwarded == {"v": 1, "type": ep.TYPE_SESSION_START, "instant": True}
+    assert ack["type"] == ep.TYPE_SESSION_START_ACK
+    assert ack["ok"] is True
+    assert ack["started"] is True
 
 
 def test_telemetry_tick_routes_to_physical_clients_and_generates_haptic_event() -> None:

@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-29T20:59:00-07:00
+last_updated: 2026-07-29T22:30:00-07:00
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
@@ -190,13 +190,23 @@ live-window evidence keeps `not_drivable` absence unverified. Menu frames also r
 prevent an existing socket from draining `session.start`. Focused result: 349 passed; final
 `make ci-fast`: 3,850 passed, 89 skipped, 83.58% coverage.
 
-**Independent-review follow-up:** sidecar launch/reconnect backoff is now frame-paced rather than
-sim-time-paced, because the pre-drive menu freezes `currentSimT`. `not_drivable` absence requires
-the latest successful full module snapshot itself to be at least five seconds into the current
-pinned process (a blocked Car0 probe cannot age one early miss into proof). Sustained not-ready
-samples with an unreadable graphics page fail closed at `stall_samples`, and a menu-park/freeze
-tie no longer recommends a reboot. Final focused result: 369 passed; final `make ci-fast`: 3,854
-passed, 89 skipped, 83.58% coverage.
+**Independent-review follow-up:** `not_drivable` absence requires the latest successful full
+module snapshot itself to be at least five seconds into the current pinned process (a blocked Car0
+probe cannot age one early miss into proof), and a menu-park/freeze tie no longer recommends a
+reboot. The first retry implementation correctly stopped using frozen sim time but incorrectly
+counted frames as if the rig rendered at 60 Hz; the final path accumulates `script.update(dt)`, so
+the five-second retry and 120-second backoff remain wall-time-equivalent at the measured ~114 Hz.
+Sustained unreadable graphics samples are counted independently of readiness because production
+shared-memory failures report readiness as unknown, not false.
+
+The menu escape is now a complete protocol path rather than only a Lua handler:
+`session.start`/`session.start.ack` are validator-known, sidecar allow-listed, capability-advertised,
+round-trip-tested message types. After a failed Car0 probe, the launcher first requires a fresh
+render-packet advance, then sends `session.start` through an authenticated `HarnessClient`; it
+retries Car0 readiness only after Lua positively acks both `ok=true` and `started=true`, and sends
+at most once per launch attempt. Connection failures, invalid configured ports, negative acks, and
+timeouts fail closed to the original menu/freeze verdict. Final focused result: 422 passed. Final
+`make ci-fast`: 3,858 passed, 89 skipped, 83.59% coverage.
 
 **Mechanism correction (static analysis, no rig time)** —
 [issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).

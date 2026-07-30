@@ -2387,7 +2387,7 @@ function script.update(dt)
     if wsBridge then
       -- Child maintenance is isolated from socket maintenance: a spawn/retry failure must not
       -- prevent an already-running sidecar connection from draining session.start this frame.
-      pcall(function() wsBridge.startSidecarIfNeeded(appDir) end)
+      pcall(function() wsBridge.startSidecarIfNeeded(appDir, dt) end)
       pcall(function()
         wsBridge.tick(ch.simSeconds(sim))
         wsBridge.pollInbound(8)
@@ -2477,7 +2477,7 @@ function script.update(dt)
   end
 
   -- Issue #77 Part A: start sidecar before tick so we do not duplicate tryOpen() in the same frame.
-  pcall(function() wsBridge.startSidecarIfNeeded(appDir) end)
+  pcall(function() wsBridge.startSidecarIfNeeded(appDir, dt) end)
   wsBridge.tick(ch.simSeconds(sim))
   wsBridge.pollInbound(8)
   if pendingWsSidecarUrl ~= nil then

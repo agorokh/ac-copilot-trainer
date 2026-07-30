@@ -30,6 +30,7 @@ is unit-tested off-rig with no Assetto Corsa present.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import math
 import os
@@ -309,6 +310,7 @@ def classify(
     prev_t: float | None = None
     stall_run = 0
     not_ready_run = 0
+    unreadable_run = 0
     paused_total = 0.0
     seen_acs_alive = False
     seen_stream_advance = False
@@ -385,6 +387,15 @@ def classify(
                 # packetId reset means the render stream/session was replaced; never let a new
                 # acs.exe inherit stability time accumulated by its predecessor.
                 return LaunchVerdict.FROZE
+            if sample.gfx_packet is None:
+                unreadable_run += 1
+                if unreadable_run >= stall_samples:
+                    # Production shared-memory failures arrive with readiness unknown, not false.
+                    # Count the unreadable graphics page independently so a sustained loss cannot
+                    # evade both the not-ready and pinned-packet thresholds until wall timeout.
+                    return LaunchVerdict.FROZE
+            else:
+                unreadable_run = 0
             if phys_stagnant and prev_t is not None:
                 # Physics pinned: this interval is NEVER credited as proven-live time, whatever
                 # the budget — STABLE must be earned with physics RUNNING, so a pause that
@@ -419,12 +430,6 @@ def classify(
                     # intermittently-hitching menu never does. Both Codex P1s on #726.
                     if not_ready_run >= stall_samples and advanced:
                         return LaunchVerdict.NOT_DRIVABLE
-                    if not_ready_run >= stall_samples and sample.gfx_packet is None:
-                        # Sustained not-readiness plus an unreadable graphics page cannot prove a
-                        # rendering menu and otherwise resets stall_run forever. Fail closed at
-                        # the same bounded threshold instead of waiting out _watch_live's whole
-                        # wall budget (self-hosted reviewer on #726).
-                        return LaunchVerdict.FROZE
                 elif ready:
                     not_ready_run = 0
                 else:
@@ -2123,6 +2128,48 @@ def car0_handshake_failure_outcome(
     return AttemptOutcome(verdict, cycle_delivered=True)
 
 
+def request_session_start(*, timeout: float = 5.0) -> bool:
+    """Press AC's in-sim Start control through the sidecar/Lua bridge (#726).
+
+    The request is attempted only after section ownership and a fresh post-Car0 render advance
+    prove the current process is alive. A true result requires the Lua handler's positive ack;
+    connection errors and negative/time-out acks fail closed so the caller retains the original
+    not-drivable/freeze classification.
+    """
+
+    from tools.ai_sidecar.harness_client import HarnessClient
+
+    raw_port = os.environ.get("AC_COPILOT_SIDECAR_PORT", "8765")
+    try:
+        port = int(raw_port)
+    except ValueError:
+        _log(f"session.start skipped: invalid AC_COPILOT_SIDECAR_PORT={raw_port!r}")
+        return False
+    if not (1 <= port <= 65535):
+        _log(f"session.start skipped: invalid AC_COPILOT_SIDECAR_PORT={raw_port!r}")
+        return False
+    url = f"ws://127.0.0.1:{port}"
+    token = os.environ.get("AC_COPILOT_SIDECAR_TOKEN") or None
+
+    async def _request() -> bool:
+        client = HarnessClient(url, token=token, client_id="resilient-launch")
+        try:
+            await client.connect(retries=2, retry_delay=0.25)
+            hello_ack = await client.hello(timeout=timeout)
+            if hello_ack is None:
+                return False
+            ack = await client.request_session_start(timeout=timeout)
+            return bool(ack and ack.get("ok") is True and ack.get("started") is True)
+        finally:
+            await client.close()
+
+    try:
+        return asyncio.run(_request())
+    except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
+        _log(f"session.start request failed: {exc}")
+        return False
+
+
 def _positive_float(value: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed) or parsed <= 0:
@@ -2549,24 +2596,46 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 ready, drivable = readiness.observe(packet=packet, entry_ready=entry_ready)
                 return packet, ready, drivable, phys_packet
 
-            try:
-                outcome = _watch_live(
-                    read_attempt_state,
-                    acs_alive,
-                    go_live_timeout=args.go_live_timeout,
-                    stability_window=args.stability_window,
-                    delivery_baseline=delivery_baseline,
-                )
-            except _Car0NotDrivable:
-                # The handshake can block for five seconds after the advance that triggered it.
-                # Re-sample raw graphics after failure: only another advance proves the renderer
-                # remained alive throughout that window. A pinned/regressed/unreadable packet is
-                # still a possible #627 wedge and must remain FROZE (Codex P1 on #726).
-                post_probe_packet, _post_probe_ready, _post_probe_phys = read_state()
-                outcome = car0_handshake_failure_outcome(
-                    packet_before_car0_probe[0],
-                    post_probe_packet,
-                )
+            session_start_attempted = False
+            while True:
+                try:
+                    outcome = _watch_live(
+                        read_attempt_state,
+                        acs_alive,
+                        go_live_timeout=args.go_live_timeout,
+                        stability_window=args.stability_window,
+                        delivery_baseline=delivery_baseline,
+                    )
+                    break
+                except _Car0NotDrivable:
+                    # The handshake can block for five seconds after the advance that triggered
+                    # it. Re-sample raw graphics: only another advance proves the renderer stayed
+                    # alive long enough to accept session.start. A pinned/regressed/unreadable
+                    # packet remains FROZE (Codex P1 on #726).
+                    post_probe_packet, _post_probe_ready, _post_probe_phys = read_state()
+                    menu_outcome = car0_handshake_failure_outcome(
+                        packet_before_car0_probe[0],
+                        post_probe_packet,
+                    )
+                    if (
+                        menu_outcome.verdict is LaunchVerdict.NOT_DRIVABLE
+                        and not session_start_attempted
+                    ):
+                        session_start_attempted = True
+                        if request_session_start():
+                            _log(
+                                f"attempt {attempt}: session.start acknowledged; "
+                                "retrying Car0 readiness"
+                            )
+                            readiness = AttemptReadiness(
+                                lambda: _probe_car0_drivable(
+                                    release_requested=release_requested,
+                                    retain_telemetry_controller=telemetry_cleanup_holds.append,
+                                )
+                            )
+                            continue
+                    outcome = menu_outcome
+                    break
             # One last look before the process is torn down: the perturbers inject late, so the
             # final sample is the most informative one in the attempt (#719). soft_fail: a
             # transient Toolhelp error must not erase a successful post-race miss already on

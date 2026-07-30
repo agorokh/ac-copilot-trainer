@@ -135,8 +135,8 @@ def test_hello_retry_is_frame_paced_under_frozen_sim_clock():
     assert int(rt.eval("_ws_sent")) > sent_before
 
 
-def test_sidecar_spawn_retry_is_frame_paced_under_frozen_sim_clock():
-    """#726: a failed child must retry while the pre-drive menu freezes sim time."""
+def test_sidecar_spawn_retry_uses_elapsed_time_under_frozen_sim_clock():
+    """#726: retry follows real update time, not frozen sim time or display refresh rate."""
     rt = _runtime()
     rt.execute(
         """
@@ -148,11 +148,14 @@ def test_sidecar_spawn_retry_is_frame_paced_under_frozen_sim_clock():
         end
         local wb = require("ws_bridge")
         wb.configure("ws://127.0.0.1:8765")
-        wb.startSidecarIfNeeded("C:/app")
-        for _ = 1, 300 do wb.startSidecarIfNeeded("C:/app") end
+        wb.startSidecarIfNeeded("C:/app", 0)
+        for _ = 1, 49 do wb.startSidecarIfNeeded("C:/app", 0.1) end
+        _spawn_calls_before_five_seconds = _spawn_calls
+        wb.startSidecarIfNeeded("C:/app", 0.2)
         """
     )
 
+    assert int(rt.eval("_spawn_calls_before_five_seconds")) == 1
     assert int(rt.eval("_spawn_calls")) >= 2
 
 

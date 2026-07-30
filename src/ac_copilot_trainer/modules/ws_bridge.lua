@@ -61,23 +61,23 @@ local currentSimT = 0
 --- Issue #77 Part A: sidecar auto-launch state.
 --- spawnedAlive: true while CSP believes the console child is running; cleared
 ---               from os.runConsoleProcess exit callback so we can relaunch.
---- Spawn/backoff pacing uses calls to startSidecarIfNeeded (one per update frame), not sim time:
---- the pre-drive menu freezes currentSimT but must still recover a failed child before it can
---- receive session.start (#726).
+--- Spawn/backoff pacing accumulates script.update's real frame delta, not sim time: the pre-drive
+--- menu freezes currentSimT but update(dt) continues and must recover a failed child before it can
+--- receive session.start (#726). Do not count frames here: the rig renders at ~114 Hz.
 local spawnedAlive = false
 --- True after this bridge successfully started a console child (used to drop only *our* stale sockets).
 local sidecarChildEverLaunched = false
-local sidecarMaintenanceFrame = 0
-local lastLaunchAttemptFrame = -1e9
-local LAUNCH_RETRY_FRAMES = 300  -- ~5 s at 60 Hz
+local sidecarMaintenanceElapsed = 0
+local lastLaunchAttemptElapsed = -1e9
+local LAUNCH_RETRY_SECONDS = 5
 --- Back off `runConsoleProcess` after streak failures or bat exit 2 (missing repo/tools — Copilot #78).
 local spawnFailStreak = 0
 --- Count rapid nonzero child exits (bat starts then dies — Codex #78); not the same as spawn pcall failures.
 local nonzeroExitStreak = 0
-local spawnAbandonUntilFrame = -1e9
-local SPAWN_BACKOFF_FRAMES = 7200  -- ~120 s at 60 Hz
+local spawnAbandonUntilElapsed = -1e9
+local SPAWN_BACKOFF_SECONDS = 120
 --- Throttle `tryOpen` during spawn backoff so we do not allocate a socket every frame (Cursor Bugbot #78).
-local lastBackoffTryOpenFrame = -1e9
+local lastBackoffTryOpenElapsed = -1e9
 local SIDECAR_BAT_RELATIVE = "start_sidecar.bat"  -- next to ws_bridge.lua's app dir
 --- Per-corner last-query timestamp (unused after round 10c moved the
 --- debounce to realtime_coaching; kept for backward compat with M.reset).
@@ -178,8 +178,9 @@ end
 --- elapsed.
 ---
 ---@param appDir string|nil  absolute path to the deployed app dir (where the .bat lives)
-function M.startSidecarIfNeeded(appDir)
-  sidecarMaintenanceFrame = sidecarMaintenanceFrame + 1
+function M.startSidecarIfNeeded(appDir, dt)
+  local elapsed = (type(dt) == "number" and dt == dt and dt >= 0) and dt or 0
+  sidecarMaintenanceElapsed = sidecarMaintenanceElapsed + elapsed
   -- Child we spawned died but CSP kept a stale socket handle (reconnect=true); do not tear down
   -- sockets opened for a manually started sidecar (spawnedAlive was never true).
   if not spawnedAlive and sock ~= nil and sidecarChildEverLaunched then
@@ -195,20 +196,20 @@ function M.startSidecarIfNeeded(appDir)
   if sock then return end
   if spawnedAlive then return end
 
-  -- During backoff, only dial occasionally. Frame pacing is load-bearing: currentSimT is frozen
-  -- at the pre-drive menu where the child must recover to receive session.start (#726).
-  if sidecarMaintenanceFrame < spawnAbandonUntilFrame then
-    if sidecarMaintenanceFrame - lastBackoffTryOpenFrame < LAUNCH_RETRY_FRAMES then
+  -- During backoff, only dial occasionally. update(dt) pacing is load-bearing: currentSimT is
+  -- frozen at the pre-drive menu where the child must recover to receive session.start (#726).
+  if sidecarMaintenanceElapsed < spawnAbandonUntilElapsed then
+    if sidecarMaintenanceElapsed - lastBackoffTryOpenElapsed < LAUNCH_RETRY_SECONDS then
       return
     end
-    lastBackoffTryOpenFrame = sidecarMaintenanceFrame
+    lastBackoffTryOpenElapsed = sidecarMaintenanceElapsed
     if tryOpen() then
       nonzeroExitStreak = 0
     end
     return
   end
 
-  if sidecarMaintenanceFrame - lastLaunchAttemptFrame < LAUNCH_RETRY_FRAMES then return end
+  if sidecarMaintenanceElapsed - lastLaunchAttemptElapsed < LAUNCH_RETRY_SECONDS then return end
 
   -- WebSocket dial first: if a sidecar is already listening, connect instead of spawning a second copy (CodeRabbit #78).
   if tryOpen() then
@@ -216,7 +217,7 @@ function M.startSidecarIfNeeded(appDir)
     return
   end
 
-  lastLaunchAttemptFrame = sidecarMaintenanceFrame
+  lastLaunchAttemptElapsed = sidecarMaintenanceElapsed
 
   if type(os) ~= "table" or type(os.runConsoleProcess) ~= "function" then
     if ac and type(ac.log) == "function" then
@@ -263,7 +264,7 @@ function M.startSidecarIfNeeded(appDir)
       -- `start_sidecar.bat` uses `exit /b 2` when `tools/ai_sidecar` cannot be resolved (Copilot #78).
       -- Must not depend on `ac.log` (Cursor #78 / Bugbot).
       if codeNum == 2 then
-        spawnAbandonUntilFrame = 1e12
+        spawnAbandonUntilElapsed = 1e12
         spawnFailStreak = 0
         nonzeroExitStreak = 0
       elseif codeNum == 0 then
@@ -272,9 +273,9 @@ function M.startSidecarIfNeeded(appDir)
         -- Includes missing/unparseable exit metadata (`codeNum == nil`, Bugbot #78): do not treat as clean.
         nonzeroExitStreak = nonzeroExitStreak + 1
         if nonzeroExitStreak >= 8 then
-          spawnAbandonUntilFrame = math.max(
-            spawnAbandonUntilFrame,
-            sidecarMaintenanceFrame + SPAWN_BACKOFF_FRAMES
+          spawnAbandonUntilElapsed = math.max(
+            spawnAbandonUntilElapsed,
+            sidecarMaintenanceElapsed + SPAWN_BACKOFF_SECONDS
           )
           nonzeroExitStreak = 0
           if ac and type(ac.log) == "function" then
@@ -302,9 +303,9 @@ function M.startSidecarIfNeeded(appDir)
   if not okSpawn then
     spawnFailStreak = spawnFailStreak + 1
     if spawnFailStreak >= 10 then
-      spawnAbandonUntilFrame = math.max(
-        spawnAbandonUntilFrame,
-        sidecarMaintenanceFrame + SPAWN_BACKOFF_FRAMES
+      spawnAbandonUntilElapsed = math.max(
+        spawnAbandonUntilElapsed,
+        sidecarMaintenanceElapsed + SPAWN_BACKOFF_SECONDS
       )
       spawnFailStreak = 0
       if ac and type(ac.log) == "function" then
@@ -354,8 +355,8 @@ function M.reset()
   cornerAdvisories = {}
   lastCornerQueryAt = {}
   currentSimT = 0
-  sidecarMaintenanceFrame = 0
-  lastLaunchAttemptFrame = -1e9
+  sidecarMaintenanceElapsed = 0
+  lastLaunchAttemptElapsed = -1e9
   _recvQueue = {}
   sidecarProtocolReady = false
   sessionReplayRequested = false
@@ -363,8 +364,8 @@ function M.reset()
   sidecarChildEverLaunched = false
   spawnFailStreak = 0
   nonzeroExitStreak = 0
-  spawnAbandonUntilFrame = -1e9
-  lastBackoffTryOpenFrame = -1e9
+  spawnAbandonUntilElapsed = -1e9
+  lastBackoffTryOpenElapsed = -1e9
   setupExperimentStoreSent = false
   setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
 end

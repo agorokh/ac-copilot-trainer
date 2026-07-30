@@ -36,6 +36,8 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_HELLO,
     TYPE_HELLO_ACK,
     TYPE_KEY,
+    TYPE_SESSION_START,
+    TYPE_SESSION_START_ACK,
 )
 from tools.ai_sidecar.protocol import (
     EVENT_COACHING_RESPONSE,
@@ -199,6 +201,22 @@ class HarnessClient:
     async def subscribe(self, topics: list[str], *, timeout: float = 2.0) -> None:
         await self.send(
             {ENVELOPE_KEY: ENVELOPE_VERSION, TYPE_KEY: "state.subscribe", "topics": topics}
+        )
+
+    async def request_session_start(
+        self, *, instant: bool = True, timeout: float = 5.0
+    ) -> dict[str, Any] | None:
+        """Ask the loopback trainer app to leave AC's pre-drive menu (#726)."""
+        await self.send(
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SESSION_START,
+                "instant": instant,
+            }
+        )
+        return await self.wait_for(
+            lambda f: f.get(TYPE_KEY) == TYPE_SESSION_START_ACK,
+            timeout=timeout,
         )
 
     async def wait_for(
