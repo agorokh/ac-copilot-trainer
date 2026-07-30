@@ -111,10 +111,10 @@ class Plan:
     prune: tuple[Path, ...]
     protected_imported: tuple[Path, ...]
     protected_referenced: tuple[Path, ...]
-
-    @property
-    def reclaimed_bytes(self) -> int:
-        return sum(_size(p) for p in self.prune)
+    #: Measured while the files still exist. It cannot be a property: the report is rendered AFTER
+    #: `apply_plan` has unlinked them, and re-stat'ing a deleted file yields 0 — an `--apply` run
+    #: would have cheerfully reported reclaiming 0.0 MB.
+    reclaimed_bytes: int
 
 
 def _size(path: Path) -> int:
@@ -154,6 +154,7 @@ def build_plan(laps_dir: Path, state_dir: Path, *, keep: int = DEFAULT_KEEP) -> 
         prune=tuple(prune),
         protected_imported=tuple(imported),
         protected_referenced=tuple(ref_protected),
+        reclaimed_bytes=sum(_size(p) for p in prune),
     )
 
 
@@ -217,14 +218,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--apply", action="store_true", help="actually delete (default: dry run)")
     args = parser.parse_args(argv)
 
+    # Argument validation before environment inspection: a bad `--keep` is a bad `--keep`
+    # whether or not a journal happens to exist.
+    if args.keep < 0:
+        print("--keep must be >= 0", file=sys.stderr)
+        return 2
     state_dir = args.state_dir or default_state_dir()
     laps_dir = state_dir / "journal" / "laps"
     if not laps_dir.is_dir():
         print(f"no lap journal at {laps_dir}", file=sys.stderr)
         return 1
-    if args.keep < 0:
-        print("--keep must be >= 0", file=sys.stderr)
-        return 2
 
     plan = build_plan(laps_dir, state_dir, keep=args.keep)
     removed = 0

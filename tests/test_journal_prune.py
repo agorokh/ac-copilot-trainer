@@ -21,13 +21,22 @@ from tools.journal_prune import (
 )
 
 
-def _write_archive(laps: Path, name: str, *, source: str = "in_game", age_s: float = 0.0) -> Path:
+def _write_archive(
+    laps: Path,
+    name: str,
+    *,
+    source: str = "in_game",
+    age_s: float = 0.0,
+    pad_bytes: int = 0,
+) -> Path:
     path = laps / name
+    payload: dict[str, object] = {"source": source, "lap": {"lap_ms": 90_000}}
+    if pad_bytes:
+        # Stand in for the trace array. Real archives are ~250 KB; tests that assert on reported
+        # sizes need enough bytes that MB rounding can tell "reclaimed" from "reclaimed nothing".
+        payload["trace"] = "x" * pad_bytes
     # Compact separators: this is what the Lua encoder emits, and what the plain scan keys on.
-    path.write_text(
-        json.dumps({"source": source, "lap": {"lap_ms": 90_000}}, separators=(",", ":")),
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
     if age_s:
         old = time.time() - age_s
         os.utime(path, (old, old))
@@ -206,6 +215,36 @@ def test_apply_deletes_only_the_planned_files(tmp_path: Path, capsys) -> None:
     assert planned and planned.isdisjoint(survivors)
     assert "lap_imported.json" in survivors
     assert "removed" in capsys.readouterr().out
+
+
+def test_apply_reports_the_bytes_it_actually_reclaimed(tmp_path: Path, capsys) -> None:
+    """The report is rendered after the unlink, so the size must be measured before it.
+
+    Re-stat'ing a deleted file yields 0, which would have made every ``--apply`` run claim it
+    reclaimed 0.0 MB — an operator reading that would reasonably conclude nothing happened.
+    """
+    state, laps = _journal(tmp_path)
+    for i in range(8):
+        _write_archive(laps, f"lap_{i}.json", age_s=10_000 - i * 10, pad_bytes=250_000)
+    expected = build_plan(laps, state, keep=2).reclaimed_bytes
+    assert expected > 1_000_000
+
+    main(["--state-dir", str(state), "--keep", "2", "--apply"])
+
+    out = capsys.readouterr().out
+    assert "0.0 MB" not in out.split("removed")[1]
+    assert f"{expected / 1_000_000:.1f} MB" in out
+
+
+def test_keep_zero_is_honoured_and_negative_keep_is_rejected(tmp_path: Path) -> None:
+    """``--keep 0`` must not be silently read as "unset" and fall back to the default."""
+    state, laps = _journal(tmp_path)
+    for i in range(3):
+        _write_archive(laps, f"lap_{i}.json", age_s=100 - i)
+
+    assert len(build_plan(laps, state, keep=0).prune) == 3
+    # Rejected before the journal is even looked at.
+    assert main(["--state-dir", str(tmp_path / "nope"), "--keep", "-1"]) == 2
 
 
 def test_apply_reports_errors_without_raising(tmp_path: Path) -> None:
