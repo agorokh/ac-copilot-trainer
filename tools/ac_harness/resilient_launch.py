@@ -302,6 +302,11 @@ def classify(
     prev_t: float | None = None
     stall_run = 0
     not_ready_run = 0
+    #: advancing-stream samples seen INSIDE the current not-ready run. A wedge cannot produce
+    #: any (it pins the packet), so >0 is sustained proof of a rendering-but-not-drivable
+    #: session. Basing the split on the FINAL sample alone let one hitch at the threshold
+    #: mislabel a healthy menu as FROZE (Codex P1 on #726).
+    not_ready_advances = 0
     paused_total = 0.0
     seen_acs_alive = False
     seen_stream_advance = False
@@ -394,24 +399,31 @@ def classify(
                 # sample falls through to the ordinary stall/not-ready paths and the attempt still
                 # fails (#637 daemon MEDIUM).
                 not_ready_run = 0
+                not_ready_advances = 0
                 stall_run = 0
             else:
                 if not_ready:
                     not_ready_run += 1
+                    if advanced:
+                        not_ready_advances += 1
                     if not_ready_run >= stall_samples:
                         # A render wedge REQUIRES a pinned graphics packet (#627 §2). If the
-                        # stream is still ADVANCING while readiness stays false, the session is
+                        # stream ADVANCED at any point during this not-ready run, the session is
                         # demonstrably rendering and merely not drivable — AC's pre-drive menu
                         # (#466), which the pre-go-live branch above already refuses to call a
                         # wedge. Report it as its own verdict so it never pollutes the #627 rate.
-                        if advanced:
+                        # The test is the RUN's history, not the final sample: a menu that hitches
+                        # on exactly the threshold sample has still proven it renders.
+                        if not_ready_advances:
                             return LaunchVerdict.NOT_DRIVABLE
                         return LaunchVerdict.FROZE
                 elif ready:
                     not_ready_run = 0
+                    not_ready_advances = 0
                 else:
                     # An unavailable graphics observation cannot extend a consecutive run.
                     not_ready_run = 0
+                    not_ready_advances = 0
                 if advanced:
                     stall_run = 0
                 elif sample.gfx_packet is not None and sample.gfx_packet == prev_packet:
@@ -2029,6 +2041,20 @@ def _watch_live(  # pragma: no cover - rig-only
     return AttemptOutcome(LaunchVerdict.FROZE, _watched_delivery(delivery_trace(samples)))
 
 
+def car0_handshake_failure_outcome() -> AttemptOutcome:
+    """Outcome for a RENDERED session whose Car0 handshake failed — AC's pre-drive menu (#466).
+
+    Extracted from ``main`` so the production route is unit-testable: ``main`` is a rig-only
+    entrypoint marked ``pragma: no cover``, and the previous inline mapping sent this exact
+    condition to ``FROZE``. That kept the #627 contamination flowing through production while the
+    pure classifier looked correct (Codex P1 on #726).
+
+    ``cycle_delivered`` is ``True``: the session was rendering, so Content Manager really did
+    start an ``acs.exe`` and the launch cycle was consumed (#710).
+    """
+    return AttemptOutcome(LaunchVerdict.NOT_DRIVABLE, cycle_delivered=True)
+
+
 def _positive_float(value: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed) or parsed <= 0:
@@ -2282,9 +2308,14 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # previous session (STABLE verdict — trials mode continues past those) gets the #668
             # WM_CLOSE grace first: hard kills accelerate the freeze-accumulator's onset, and a
             # wedge cannot pump WM_CLOSE anyway, so grace is verdict-gated rather than blanket.
+            # NOT_DRIVABLE joins STABLE as pump-capable: a menu-parked session is
+            # demonstrably RENDERING, so it can process WM_CLOSE, and #668 measured that hard
+            # kills move accumulator onset from ~launch 14 to ~8. Hard-killing menu-park
+            # attempts would change the very exposure the #625/#627 experiment measures
+            # (Codex P1 on #726). A wedge still gets no grace — it cannot pump.
             grace = (
                 DEFAULT_GRACEFUL_EXIT_GRACE
-                if last_attempt_verdict[0] is LaunchVerdict.STABLE
+                if last_attempt_verdict[0] in (LaunchVerdict.STABLE, LaunchVerdict.NOT_DRIVABLE)
                 else 0.0
             )
             if not _ensure_acs_gone(
@@ -2441,7 +2472,14 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 # CM did start a LIVE session; only the Car0 handoff failed. Treat this as a bad
                 # rendered attempt so it cannot advance the stale-CM/never-live restart streak.
                 # The session was rendering, so the launch cycle WAS delivered (#710).
-                outcome = AttemptOutcome(LaunchVerdict.FROZE, cycle_delivered=True)
+                #
+                # NOT_DRIVABLE, not FROZE: this exception fires when shared memory reports
+                # entry_ready but the RENDERED session has no usable Car0 — the pre-drive menu
+                # (#466), which is exactly what the classifier's not-ready branch now excludes
+                # from FREEZE_VERDICTS. Leaving this path on FROZE would keep the same
+                # contamination flowing through the production route while the pure classifier
+                # looked correct (Codex P1 on #726).
+                outcome = car0_handshake_failure_outcome()
             # One last look before the process is torn down: the perturbers inject late, so the
             # final sample is the most informative one in the attempt (#719). soft_fail: a
             # transient Toolhelp error must not erase a successful post-race miss already on
@@ -2588,7 +2626,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 # A stable FINAL trial left a healthy session — it gets the WM_CLOSE grace
                 # (#668); any other final verdict left a corpse/wedge and stays forced-only.
                 graceful_grace=(
-                    DEFAULT_GRACEFUL_EXIT_GRACE if report.verdict is LaunchVerdict.STABLE else 0.0
+                    DEFAULT_GRACEFUL_EXIT_GRACE
+                    if report.verdict in (LaunchVerdict.STABLE, LaunchVerdict.NOT_DRIVABLE)
+                    else 0.0
                 ),
             )
             if not rig_safe:

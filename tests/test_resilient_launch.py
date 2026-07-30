@@ -45,6 +45,7 @@ from tools.ac_harness.resilient_launch import (
     _wait_process_exit,
     _watch_live,
     _watched_delivery,
+    car0_handshake_failure_outcome,
     classify,
     cycle_delivered,
     run_retry_loop,
@@ -193,16 +194,59 @@ def test_sustained_not_ready_with_an_advancing_stream_is_not_drivable_not_a_free
 
 
 def test_sustained_not_ready_with_a_pinned_stream_is_still_a_freeze():
-    """Readiness lost AND the render stream pinned is a genuine wedge — keep it in FROZE."""
+    """Readiness lost AND the render stream pinned is a genuine wedge — keep it in FROZE.
+
+    The pinned packet must equal the LAST live packet: a real wedge freezes the stream where it
+    stood, so there is no advance anywhere inside the not-ready run. (Jumping to a fresh higher
+    packet would itself be an advance, i.e. evidence the renderer was still running.)
+    """
     samples = steady(0.0, 10.0, first_packet=100)
+    pinned = samples[-1].gfx_packet
     samples += [
-        Sample(t=11.0 + index, gfx_packet=800, acs_alive=True, entry_ready=False)
+        Sample(t=11.0 + index, gfx_packet=pinned, acs_alive=True, entry_ready=False)
         for index in range(4)
     ]
 
     assert (
         classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
         is LaunchVerdict.FROZE
+    )
+
+
+def test_car0_handshake_failure_is_not_drivable_not_a_freeze():
+    """The PRODUCTION route for a rendered-but-not-drivable session must match the classifier.
+
+    `main` catches `_Car0NotDrivable` and previously mapped it to FROZE, so real menu-park
+    attempts kept landing in FREEZE_VERDICTS even after the pure classifier was fixed
+    (Codex P1 on #726). `main` is `pragma: no cover`, so the mapping lives in this helper.
+    """
+    outcome = car0_handshake_failure_outcome()
+
+    assert outcome.verdict is LaunchVerdict.NOT_DRIVABLE
+    assert str(outcome.verdict) not in FREEZE_VERDICTS
+    # The session WAS rendering, so CM really started an acs.exe and a cycle was consumed (#710).
+    assert outcome.cycle_delivered is True
+
+
+def test_one_hitch_on_the_threshold_sample_does_not_flip_a_menu_to_froze():
+    """The split reads the not-ready RUN's history, not just its final sample (Codex P1 on #726).
+
+    A rendering menu whose graphics packet happens to repeat on exactly the sample that trips the
+    not-ready threshold has still proven it renders three times over; only one interval stalled,
+    so `stall_run` alone would also be 1. Labelling that FROZE re-contaminates the #627 bucket
+    through the back door.
+    """
+    samples = steady(0.0, 10.0, first_packet=100)
+    samples += [
+        Sample(t=11.0 + index, gfx_packet=800 + index, acs_alive=True, entry_ready=False)
+        for index in range(3)
+    ]
+    # 4th not-ready sample repeats the 3rd's packet — a single stalled interval at the boundary.
+    samples.append(Sample(t=14.0, gfx_packet=802, acs_alive=True, entry_ready=False))
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.NOT_DRIVABLE
     )
 
 
