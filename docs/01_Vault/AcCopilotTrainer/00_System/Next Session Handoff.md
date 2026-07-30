@@ -171,12 +171,37 @@ is **plausible, untested** (the packer never validates that a byte is a digit).
 
 - **Human coaching sessions work today**: AC live, trainer app loaded (3 windows), sidecar accepts
   the app's WS peer (`sidecar client connected protocol=1`), ESP32 rig screen live on COM6.
-- **Autonomous drive is blocked** by #466: the pre-drive menu-skip lost every cycle today, so CSP
-  never exposes `Car0` (`stage=hijack`, 3/3 probes). **Operator confirmed CM's "start race
-  immediately" was always enabled — do NOT re-diagnose it as a CM setting.** Documented recovery is
-  the fast-fail relaunch recycle (~4/20 historical stall rate); if invocations exhaust, the runbook
-  and the launcher both point at a reboot to reset the per-boot accumulator. A 6-invocation budget
-  run was in flight at session end — check `.scratch/harness-evidence/issue627-budget-*/`.
+- **Autonomous drive is blocked** by #466: the pre-drive menu-skip lost **every** cycle, so CSP
+  never exposes `Car0` (`stage=hijack`, 3/3 probes each time). Measured denominator: **0 landed
+  drives / 6 `auto_drive` invocations** (~10-14 launch cycles; 5× `stage=hijack`, 1×
+  `stage=launch, sim never reached LIVE`) — bundles under
+  `.scratch/harness-evidence/issue627-budget-*/`. This matches the 2026-07-28 session's 3/3
+  identical failures, so it is a **persistent condition spanning at least two boots**, not the
+  historical ~4/20 variance.
+
+  **Two refutations — do NOT re-chase either:**
+  1. **CM's "start race immediately"** — operator confirmed it was always enabled.
+  2. **CSP `[TWEAKS] USE_THROTTLE_TO_START`** (user `cfg/extension/gui.ini`; rig has `1`, CSP's
+     documented default is `0`, and CSP describes it as *"Use throttle pedal to start the race"*).
+     This looked decisive — it explains a pre-drive hold, why a human can just press the throttle,
+     and the historical "hijack lands on probe 2 or 3" flakiness. **Measured: flipping it to `0`
+     still gave 3/3 no-`Car0`.** Refuted on n=1 invocation against a 0/6 baseline. The setting was
+     **restored to `1`** (byte-identical to pre-session).
+
+  **Also established:** nothing changed in the AC install `extension/`, the user `cfg/`, the CM
+  install, or `%LOCALAPPDATA%\AcTools Content Manager` between the last completed drive
+  (**2026-07-27 10:56**, per `cfg/extension/state/odometers.ini` + `consumption.ini`, which only
+  write when a car actually drives) and the failures — so this is not a config regression.
+
+  **Remaining lever:** a **reboot**, per the launcher's own remediation text, the runbook's
+  troubleshooting table, and #627's per-boot accumulator model (cold boot ≈ 9 clean cycles; this
+  boot was at 23.4-24.5 h). Not done this session: it would kill this session plus peer agent
+  sessions, so it is the operator's call. The self-hosted CI job that was in flight earlier has
+  since finished, so that cost is gone.
+
+  Note for the accumulator hunt: `cfg/extension/state/` **does** exist on this rig (under the
+  OneDrive-redirected AC user data) and `imgui_settings.ini` there is written every cycle. #627
+  recorded "no `extension/state` on this install" because it looked in the install tree only.
 - **Corpse lifetime**: one probe read `status=LIVE` with both packets frozen for **74 s** with no
   `acs.exe` at all. #628 records ~14 s. Widen your distrust window accordingly.
 
