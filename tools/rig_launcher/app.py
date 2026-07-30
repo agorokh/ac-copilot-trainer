@@ -139,6 +139,7 @@ def config_from_args(args: argparse.Namespace) -> GamePointConfig:
         if args.resilient_layout is not None
         else config.resilient_layout,
         resilient_cm_exe=args.resilient_cm_exe or config.resilient_cm_exe,
+        ac_user_dir=config.ac_user_dir,
         manage_tablet_tunnel=config.manage_tablet_tunnel,
         adb_path=config.adb_path,
         adb_serial=config.adb_serial,

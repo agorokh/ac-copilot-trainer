@@ -164,6 +164,38 @@ def test_make_token_check_returns_none_without_token() -> None:
     assert make_token_check("") is None
 
 
+def test_upgrade_client_header_counts_only_actual_rig_screen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server
+
+    class _Metrics:
+        def __init__(self) -> None:
+            self.screen_sightings = 0
+
+        def note_screen_seen(self) -> None:
+            self.screen_sightings += 1
+
+    class _Connection:
+        remote_address = ("127.0.0.1", 12345)
+
+    class _Request:
+        path = "/"
+
+        def __init__(self, client_id: str) -> None:
+            self.headers = {ep.CLIENT_HEADER: client_id}
+
+    metrics = _Metrics()
+    monkeypatch.setattr(server.observability, "METRICS", metrics)
+    process_request = make_process_request(None)
+
+    assert process_request(_Connection(), _Request(ep.LUA_CLIENT_ID)) is None
+    assert process_request(_Connection(), _Request(ep.SESSION_START_CLIENT_ID)) is None
+    assert metrics.screen_sightings == 0
+    assert process_request(_Connection(), _Request("ac-copilot-screen-v1")) is None
+    assert metrics.screen_sightings == 1
+
+
 def test_is_loopback_classification() -> None:
     assert _is_loopback("127.0.0.1")
     assert _is_loopback("localhost")

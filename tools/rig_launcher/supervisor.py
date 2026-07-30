@@ -76,6 +76,20 @@ _MME_NAME_MAX_LEN = 31
 _WINDOWS_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 
+def _discover_ac_user_dir(home: Path | None = None) -> Path:
+    """Choose the standard AC user-data root that actually contains CSP's ``gui.ini``."""
+
+    base = home if home is not None else Path.home()
+    candidates = (
+        base / "Documents" / "Assetto Corsa",
+        base / "OneDrive" / "Documents" / "Assetto Corsa",
+    )
+    for candidate in candidates:
+        if (candidate / "cfg" / "extension" / "gui.ini").is_file():
+            return candidate
+    return next((candidate for candidate in candidates if candidate.is_dir()), candidates[0])
+
+
 class _CaseInsensitiveEnv(Mapping[str, str]):
     """Mapping view that preserves original keys but reads env names like Windows."""
 
@@ -827,11 +841,7 @@ class GamePointSupervisor:
         if explicit is not None:
             ac_user_dir = explicit
         else:
-            candidates = (
-                Path.home() / "Documents" / "Assetto Corsa",
-                Path.home() / "OneDrive" / "Documents" / "Assetto Corsa",
-            )
-            ac_user_dir = next((path for path in candidates if path.is_dir()), candidates[0])
+            ac_user_dir = _discover_ac_user_dir()
         gui_ini = ac_user_dir / "cfg" / "extension" / "gui.ini"
         try:
             raw = gui_ini.read_bytes()

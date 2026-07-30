@@ -1477,11 +1477,13 @@ def make_process_request(token: str | None):
             tail = path[len(route.path) :] if route.prefix else ""
             return route.handler(connection, request, tail)
         # A rig-screen sighting rides on the WS upgrade (the client header is on
-        # the upgrade request), then the token gate applies if one is configured.
-        if request.headers.get(CLIENT_HEADER):
+        # the upgrade request), then the token gate applies if one is configured. Other trusted
+        # clients now carry the same header too; only the actual screen identity updates this
+        # metric or Lua reconnects would manufacture a 120-second screen all-clear (#726).
+        client_id = request.headers.get(CLIENT_HEADER)
+        if isinstance(client_id, str) and client_id.startswith(LEGACY_SCREEN_CLIENT_PREFIXES):
             observability.METRICS.note_screen_seen()
         supplied = request.headers.get(AUTH_HEADER)
-        client_id = request.headers.get(CLIENT_HEADER)
         token_authorized = token is None or (
             supplied is not None and secrets.compare_digest(supplied, token)
         )

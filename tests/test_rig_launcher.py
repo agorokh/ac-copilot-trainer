@@ -369,6 +369,17 @@ def test_stable_ac_accepts_legacy_menu_config(tmp_path: Path) -> None:
     assert sup.start_resilient_session().state == "starting"
 
 
+def test_ac_user_dir_discovery_prefers_candidate_with_gui_ini(tmp_path: Path) -> None:
+    local = tmp_path / "Documents" / "Assetto Corsa"
+    local.mkdir(parents=True)
+    onedrive = tmp_path / "OneDrive" / "Documents" / "Assetto Corsa"
+    gui_ini = onedrive / "cfg" / "extension" / "gui.ini"
+    gui_ini.parent.mkdir(parents=True)
+    gui_ini.write_text("[NEW_UI]\nREPLACE_MAIN_MENU=0\n", encoding="utf-8")
+
+    assert supervisor_module._discover_ac_user_dir(tmp_path) == onedrive
+
+
 @pytest.mark.parametrize("state", ["starting", "stabilizing", "running"])
 def test_resilient_start_acceptance_is_distinct_from_readiness(state: str) -> None:
     result = ProbeResult("ac_session", False, state, "phase is not stable yet")
@@ -2130,6 +2141,19 @@ def test_config_from_args_propagates_adb_overrides(tmp_path: Path, monkeypatch) 
     cfg = config_from_args(build_arg_parser().parse_args(["--log-dir", str(tmp_path)]))
     assert cfg.adb_path == "/opt/adb"
     assert cfg.adb_serial == "SER9"
+
+
+def test_config_from_args_propagates_ac_user_dir(tmp_path: Path, monkeypatch) -> None:
+    """Stable AC must retain the settings/env path through the CLI/packaged reconstruction."""
+    from tools.rig_launcher.app import build_arg_parser, config_from_args
+
+    ac_user_dir = tmp_path / "OneDrive" / "Documents" / "Assetto Corsa"
+    monkeypatch.setenv("AC_COPILOT_GAME_POINT_DIR", str(tmp_path / "game-point"))
+    monkeypatch.setenv("AC_COPILOT_AC_USER_DIR", str(ac_user_dir))
+
+    cfg = config_from_args(build_arg_parser().parse_args([]))
+
+    assert cfg.ac_user_dir == str(ac_user_dir)
 
 
 def test_self_test_sends_token_header_for_authenticated_bind(tmp_path: Path) -> None:

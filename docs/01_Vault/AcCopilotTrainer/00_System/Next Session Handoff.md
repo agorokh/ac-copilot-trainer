@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-30T00:27:00-07:00
+last_updated: 2026-07-30T00:41:00-07:00
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
@@ -269,8 +269,12 @@ resolved AC user-data `gui.ini` before Stable AC launch and reports `menu_config
 the exact path/remediation; configure `ac_user_dir` or `AC_COPILOT_AC_USER_DIR` when discovery is
 insufficient. The CSP `onOpen` send and frame-paced hello fallback now call one canonical
 classified-hello helper; a retry can no longer overwrite a valid Lua registration with the
-default `external` class. The retry regression inspects the actual serialized hello fields.
-Focused result: 103 passed. Final `make ci-fast`: 3,875 passed, 89 skipped, 83.61% coverage.
+default `external` class. The retry regression inspects the actual serialized hello fields. Lua
+and resilient-control upgrade identities no longer update the rig-screen recency metric; only
+the real `ac-copilot-screen*` identity does. Game Point's CLI/GUI reconstruction now preserves
+`ac_user_dir`, and standard discovery selects the Documents/OneDrive candidate containing
+`cfg/extension/gui.ini` rather than the first merely existing directory. Focused result: 195
+passed. Final `make ci-fast`: 3,878 passed, 89 skipped, 83.61% coverage.
 
 **Mechanism correction (static analysis, no rig time)** —
 [issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).
