@@ -828,6 +828,64 @@ if wsBridge.registerRequestHandler then
     return ack
   end)
 
+  -- #627/#466: press AC's Start button from INSIDE the sim.
+  --
+  -- AC parks at its pre-drive session screen, so CSP never exposes `Car0`, so the harness's
+  -- carcsw hijack can never land. That is a chicken-and-egg the harness cannot break from
+  -- outside: the hijack is how it would supply input, but the hijack needs the session started.
+  -- Measured 2026-07-29: 0 landed drives / 6 `auto_drive` invocations.
+  --
+  -- Content Manager's "Start race immediately" cannot help, and this is not a misconfiguration.
+  -- CM's own source disables it whenever CSP is present:
+  --     if (!SettingsHolder.Drive.ImmediateStart || PatchHelper.IsActive()) return;
+  -- (AcManager.Tools/SemiGui/GameWrapper.cs). On this rig the setting IS enabled
+  -- (`Settings.DriveSettings.ImmediateStart = 1`) and is a designed no-op. Its mechanism was a
+  -- synthetic mouse click at hardcoded coordinates on AC's ORIGINAL Drive button, which CSP's
+  -- New UI relocates anyway. CSP's `[BASIC] FORCE_START` is an undocumented `;; hidden` dev flag
+  -- and was measured failing 0/8+ (#466) — it is not the lever either.
+  --
+  -- The supported path is CSP's own `ac.tryToStart(instant)`, documented as "just to press Start
+  -- button in pits menu". CSP binds it to the `__CM_START_SESSION` control; nothing in CSP calls
+  -- it directly, because it exists for third-party scripts. This app is already loaded in the
+  -- sim, so it can press it — no synthetic input, no hardcoded coordinates, no Car0 required.
+  wsBridge.registerRequestHandler("session.start", "session.start.ack", function(payload)
+    -- `instant` skips the fade-in transition. Default true: an autonomous run wants the sim
+    -- driving now, and the transition only delays the first usable telemetry.
+    local instant = true
+    if type(payload) == "table" and payload.instant == false then instant = false end
+
+    -- Idempotent: report the already-started case as success rather than pressing again, so a
+    -- harness that retries cannot restart a session that is already under way.
+    local started = nil
+    if ac and type(ac.getSim) == "function" then
+      local okSim, sim = pcall(ac.getSim)
+      if okSim and type(sim) == "table" then started = sim.isSessionStarted end
+    end
+    if started == true then
+      return { ok = true, started = true, already_started = true }
+    end
+
+    -- Fail closed and NAME the reason: an older CSP build without the API must not read as a
+    -- silent no-op, or the harness would burn its whole launch budget against a dead call.
+    if not (ac and type(ac.tryToStart) == "function") then
+      return { ok = false, started = false, error = "ac.tryToStart unavailable on this CSP build" }
+    end
+
+    local okCall, pressed = pcall(ac.tryToStart, instant)
+    if not okCall then
+      return { ok = false, started = false, error = "ac.tryToStart raised" }
+    end
+    -- CSP returns false when it could not start (e.g. not at the pits menu). Surface that
+    -- verbatim rather than claiming success — a false green here would send the harness on to
+    -- a hijack that cannot land, which is exactly the failure this handler exists to end.
+    return {
+      ok = pressed == true,
+      started = pressed == true,
+      already_started = false,
+      instant = instant,
+    }
+  end)
+
   wsBridge.registerRequestHandler("setup.spinner.list", "setup.spinner.list.result", function(payload)
     local result = setupLibrary.listSpinners(payload)
     if type(result) ~= "table" then
