@@ -232,9 +232,11 @@ def test_one_hitch_on_the_threshold_sample_does_not_flip_a_menu_to_froze():
     """The split reads the not-ready RUN's history, not just its final sample (Codex P1 on #726).
 
     A rendering menu whose graphics packet happens to repeat on exactly the sample that trips the
-    not-ready threshold has still proven it renders three times over; only one interval stalled,
-    so `stall_run` alone would also be 1. Labelling that FROZE re-contaminates the #627 bucket
-    through the back door.
+    not-ready threshold must not be labelled FROZE off that ONE stalled interval — `stall_run`
+    would also be only 1. The classifier resolves it by declining to decide on the hitch and
+    letting the next advancing sample settle it; `FROZE` stays owned by the independent
+    `stall_run >= stall_samples` threshold, which a genuinely pinned stream reaches and an
+    intermittently-hitching menu never does.
     """
     samples = steady(0.0, 10.0, first_packet=100)
     samples += [
@@ -243,10 +245,33 @@ def test_one_hitch_on_the_threshold_sample_does_not_flip_a_menu_to_froze():
     ]
     # 4th not-ready sample repeats the 3rd's packet — a single stalled interval at the boundary.
     samples.append(Sample(t=14.0, gfx_packet=802, acs_alive=True, entry_ready=False))
+    # 5th advances again: the renderer was alive all along, so this is the menu, not a wedge.
+    samples.append(Sample(t=15.0, gfx_packet=803, acs_alive=True, entry_ready=False))
 
     assert (
         classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
         is LaunchVerdict.NOT_DRIVABLE
+    )
+
+
+def test_a_menu_that_pins_after_one_advance_still_reaches_froze():
+    """The inverse transition: one early advance must not latch a delayed wedge out of FROZE.
+
+    Readiness goes false on an advancing sample and the stream then pins. A latched
+    "advanced at some point" flag would return NOT_DRIVABLE forever and undercount #627
+    (Codex P1 on #726); the stall threshold must still be able to resolve.
+    """
+    samples = steady(0.0, 10.0, first_packet=100)
+    advancing = samples[-1].gfx_packet + 60
+    samples.append(Sample(t=11.0, gfx_packet=advancing, acs_alive=True, entry_ready=False))
+    samples += [
+        Sample(t=12.0 + index, gfx_packet=advancing, acs_alive=True, entry_ready=False)
+        for index in range(5)
+    ]
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.FROZE
     )
 
 

@@ -1044,15 +1044,23 @@ def _parse_report(
             "the operator's assertion and cannot be cross-checked against what was actually "
             "injected into acs.exe. Re-run the boot on the current launcher"
         )
-    # v3 is SUPERSEDED, not withdrawn: v4 only ADDED the ``not_drivable`` counts bucket, so a v3
-    # boot carries every field this analyzer reads and stays scoreable (the counts check below
-    # defaults an absent bucket to zero). Withdrawn schemas above are rejected because they lack
-    # evidence this analyzer requires; a purely additive bump must not invalidate recorded boots.
-    if report.get("schema") not in (REPORT_SCHEMA, *SUPERSEDED_REPORT_SCHEMAS):
+    # v3 is REJECTED for experiment analysis, and the reason is not a missing field — it is a
+    # contaminated one. Every v3 producer mapped the rendering-but-not-drivable pre-drive menu
+    # (#466) to ``froze``; four such false freezes were measured on AG_PC 2026-07-29. Admitting a
+    # v3 row by defaulting the absent ``not_drivable`` bucket to zero would feed those false
+    # freezes straight into ``FREEZE_VERDICTS`` and bias onset + burst-rate, and the per-attempt
+    # log carries NO packet evidence from which they could be reclassified. So the bump is NOT
+    # merely additive for this consumer: an unscoreable boot must fail loudly rather than be
+    # silently scored wrong (Codex P1 on #726). Re-run the boot on the current launcher.
+    if report.get("schema") in SUPERSEDED_REPORT_SCHEMAS:
         raise ValueError(
-            f"report {path} schema must be {REPORT_SCHEMA!r} "
-            f"(or one of the superseded-but-readable {SUPERSEDED_REPORT_SCHEMAS!r})"
+            f"report {path} uses {report.get('schema')!r}, whose `froze` rows conflate the #627 "
+            "render wedge with the #466 pre-drive menu (fixed in resilient-launch-report/v4). "
+            "Its freeze counts cannot be reclassified from the recorded evidence, so it is not "
+            "scoreable — re-run the boot on the current launcher"
         )
+    if report.get("schema") != REPORT_SCHEMA:
+        raise ValueError(f"report {path} schema must be {REPORT_SCHEMA!r}")
     attempts = report.get("attempts")
     attempts_log = report.get("attempts_log")
     arm_contradicted = report.get("arm_contradicted") is True

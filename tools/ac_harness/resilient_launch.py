@@ -130,9 +130,10 @@ class AttemptOutcome:
     perturbers: dict[str, str] | None = None
 
 
-#: v4 adds the ``not_drivable`` bucket to ``counts`` (2026-07-29). The addition is backward
-#: compatible on the READ side: ``load_observations`` treats a bucket absent from an older report
-#: as zero, so v3 boots stay loadable rather than failing on a schema addition.
+#: v4 adds the ``not_drivable`` bucket to ``counts`` (2026-07-29). The field addition is additive,
+#: but the MEANING of ``froze`` changed: every v3 producer scored the rendering-but-not-drivable
+#: pre-drive menu (#466) as a freeze. So v3 is listed as SUPERSEDED and the #625/#719 experiment
+#: analyzer REFUSES it — its freeze rows cannot be reclassified from the recorded evidence.
 REPORT_SCHEMA = "resilient-launch-report/v4"
 SUPERSEDED_REPORT_SCHEMAS = ("resilient-launch-report/v3",)
 WITHDRAWN_REPORT_SCHEMAS = ("resilient-launch-report/v1", "resilient-launch-report/v2")
@@ -302,11 +303,6 @@ def classify(
     prev_t: float | None = None
     stall_run = 0
     not_ready_run = 0
-    #: advancing-stream samples seen INSIDE the current not-ready run. A wedge cannot produce
-    #: any (it pins the packet), so >0 is sustained proof of a rendering-but-not-drivable
-    #: session. Basing the split on the FINAL sample alone let one hitch at the threshold
-    #: mislabel a healthy menu as FROZE (Codex P1 on #726).
-    not_ready_advances = 0
     paused_total = 0.0
     seen_acs_alive = False
     seen_stream_advance = False
@@ -399,31 +395,29 @@ def classify(
                 # sample falls through to the ordinary stall/not-ready paths and the attempt still
                 # fails (#637 daemon MEDIUM).
                 not_ready_run = 0
-                not_ready_advances = 0
                 stall_run = 0
             else:
                 if not_ready:
                     not_ready_run += 1
-                    if advanced:
-                        not_ready_advances += 1
-                    if not_ready_run >= stall_samples:
-                        # A render wedge REQUIRES a pinned graphics packet (#627 §2). If the
-                        # stream ADVANCED at any point during this not-ready run, the session is
-                        # demonstrably rendering and merely not drivable — AC's pre-drive menu
-                        # (#466), which the pre-go-live branch above already refuses to call a
-                        # wedge. Report it as its own verdict so it never pollutes the #627 rate.
-                        # The test is the RUN's history, not the final sample: a menu that hitches
-                        # on exactly the threshold sample has still proven it renders.
-                        if not_ready_advances:
-                            return LaunchVerdict.NOT_DRIVABLE
-                        return LaunchVerdict.FROZE
+                    # A render wedge REQUIRES a pinned graphics packet (#627 §2), so a session
+                    # that is not ready WHILE STILL ADVANCING is a rendering-but-not-drivable
+                    # pre-drive menu (#466) — the pre-go-live branch above already refuses to
+                    # call that a wedge.
+                    #
+                    # This deliberately does NOT return FROZE on the else. Two rejected designs:
+                    # a latched "advanced at some point in the run" flag let a session that
+                    # advanced once and then pinned escape FROZE forever (undercounting #627);
+                    # keying on the final sample alone let one hitch at the threshold mislabel a
+                    # healthy menu. So FROZE stays owned by the independent ``stall_run``
+                    # threshold below — a genuinely pinned stream reaches it, and an
+                    # intermittently-hitching menu never does. Both Codex P1s on #726.
+                    if not_ready_run >= stall_samples and advanced:
+                        return LaunchVerdict.NOT_DRIVABLE
                 elif ready:
                     not_ready_run = 0
-                    not_ready_advances = 0
                 else:
                     # An unavailable graphics observation cannot extend a consecutive run.
                     not_ready_run = 0
-                    not_ready_advances = 0
                 if advanced:
                     stall_run = 0
                 elif sample.gfx_packet is not None and sample.gfx_packet == prev_packet:
@@ -2668,7 +2662,20 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # A FROZE terminal verdict deliberately leaves acs.exe alive so the watcher can
             # diagnose it. Once the attempt budget is exhausted, kill that corpse while the
             # machine-wide lock is still held; peers must never inherit a wedged sim.
-            _make_rig_safe(acs_present, release_requested=release_requested)
+            #
+            # A NOT_DRIVABLE final verdict is NOT a corpse: the session renders and pumps
+            # messages, so it gets the same #668 WM_CLOSE grace as STABLE. Without this, the
+            # ordinary (non-``--trials``) exhaustion path hard-killed a healthy menu session and
+            # accelerated the very per-boot accumulator #668 exists to preserve (Codex P1 on #726).
+            _make_rig_safe(
+                acs_present,
+                release_requested=release_requested,
+                graceful_grace=(
+                    DEFAULT_GRACEFUL_EXIT_GRACE
+                    if report.verdict is LaunchVerdict.NOT_DRIVABLE
+                    else 0.0
+                ),
+            )
             return 1
 
         phase_published = _publish_stable_phase(rig_lock.set_phase)

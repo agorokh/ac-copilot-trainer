@@ -494,6 +494,32 @@ def test_delivery_flags_survive_the_report_round_trip(tmp_path: Path) -> None:
     assert summary.onset_ambiguous is False
 
 
+def test_v3_reports_are_refused_because_their_froze_rows_are_contaminated(tmp_path: Path) -> None:
+    """v3 conflated the #466 pre-drive menu with the #627 wedge, so its freeze counts are unusable.
+
+    The schema bump LOOKS additive (v4 only adds a `not_drivable` bucket), which invites a lenient
+    "absent bucket = 0" reader. That would admit v3's false freezes straight into FREEZE_VERDICTS
+    and bias onset + burst rate, with nothing in the per-attempt log to reclassify them from
+    (Codex P1 on #726). An unscoreable boot must fail loudly.
+    """
+    plan = _two_boot_plan()
+    report_path = tmp_path / plan["boots"][0]["report"]
+    _write_boot_report(
+        report_path,
+        condition=plan["boots"][0]["condition"],
+        verdicts=["stable"] * 19 + ["froze"],
+        start_minute=0,
+        uptime_start=0.5,
+    )
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload["schema"] = "resilient-launch-report/v3"
+    payload["counts"].pop("not_drivable", None)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not scoreable"):
+        load_observations(plan, tmp_path, require_complete=False)
+
+
 def test_incomplete_experiment_is_refused(tmp_path: Path) -> None:
     plan = _two_boot_plan()
     _write_boot_report(
