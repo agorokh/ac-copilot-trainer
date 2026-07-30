@@ -943,6 +943,19 @@ class TestRetryLoop:
         assert report.verdict is LaunchVerdict.FROZE
         assert "reboot" in report.summary()
 
+    def test_never_live_dominance_keeps_launch_delivery_remediation(self):
+        """One menu park must not hide a run dominated by launches that never reached AC."""
+        seq = [
+            LaunchVerdict.NOT_DRIVABLE,
+            LaunchVerdict.NEVER_LIVE,
+            LaunchVerdict.NEVER_LIVE,
+            LaunchVerdict.NEVER_LIVE,
+        ]
+        report = run_retry_loop(lambda i: seq[i - 1], max_attempts=len(seq))
+
+        assert "AC rendered but never became drivable" not in report.summary()
+        assert "cold-restart Content Manager" in report.summary()
+
     def test_cold_restarts_cm_after_consecutive_never_live(self):
         """Repeated never_live means a stale CM ignoring the preset URL (#537/#558) — restart it."""
         calls: list[int] = []
@@ -1874,11 +1887,24 @@ def test_car0_probe_performs_final_read_at_timeout_boundary(monkeypatch) -> None
     )
 
 
-def test_car0_probe_mapping_failure_is_retryable() -> None:
+def test_car0_probe_mapping_failure_waits_out_the_injection_race(monkeypatch) -> None:
+    now = 0.0
+
     def fail_controller() -> object:
         raise SharedMemoryUnavailable("mapping unavailable")
 
-    assert _probe_car0_drivable(controller_factory=fail_controller) is False
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch.time.monotonic",
+        lambda: now,
+    )
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+
+    assert _probe_car0_drivable(timeout=5.0, controller_factory=fail_controller) is False
+    assert now == pytest.approx(5.0)
 
 
 def test_car0_probe_honors_release_during_handshake(monkeypatch) -> None:

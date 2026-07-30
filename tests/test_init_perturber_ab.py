@@ -76,7 +76,13 @@ def _write_boot_report(
     condition: str | None = None,
 ) -> None:
     """Emit one ``resilient_launch --trials N`` style report for a whole boot."""
-    counts = {"stable": 0, "froze": 0, "wedged_init": 0, "never_live": 0}
+    counts = {
+        "stable": 0,
+        "froze": 0,
+        "wedged_init": 0,
+        "not_drivable": 0,
+        "never_live": 0,
+    }
     flags = _default_delivery(verdicts) if delivered is None else delivered
     # Prefer arm-matching evidence so analysis fixtures are not silently `unverified` under the
     # receipt gate (#721). Explicit `perturbers=` still wins; unavailable is the pre-receipt default
@@ -551,6 +557,48 @@ def test_off_arm_receipt_is_verified_by_not_drivable_attempts() -> None:
     )
 
     assert verdict != "unverified"
+
+
+def test_early_not_drivable_absence_stays_unverified() -> None:
+    """A Car0/open failure inside the injection window cannot certify overlays_off."""
+    launch = LaunchObservation(
+        launch=1,
+        verdict="not_drivable",
+        started_at_utc="2026-07-29T00:01:00Z",
+        elapsed_s=2.0,
+        uptime_h=1.0,
+        cycle_delivered=True,
+        perturbers=(("nvidia_capture", "not_observed"), ("steam_overlay", "not_observed")),
+    )
+
+    from tools.ac_harness.init_perturber_ab import treatment_receipt
+
+    verdict, detail = treatment_receipt(
+        "overlays_off",
+        {"steam_overlay": "not_observed", "nvidia_capture": "not_observed"},
+        launches=[launch],
+    )
+
+    assert verdict == "unverified"
+    assert detail is not None and "early" in detail
+
+
+def test_v4_report_requires_the_complete_v4_counts_block(tmp_path: Path) -> None:
+    plan = _two_boot_plan()
+    report_path = tmp_path / plan["boots"][0]["report"]
+    _write_boot_report(
+        report_path,
+        condition=plan["boots"][0]["condition"],
+        verdicts=["stable"] * _LAUNCHES,
+        start_minute=0,
+        uptime_start=0.5,
+    )
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload["counts"].pop("not_drivable")
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="counts do not match"):
+        load_observations(plan, tmp_path, require_complete=False)
 
 
 def test_incomplete_experiment_is_refused(tmp_path: Path) -> None:

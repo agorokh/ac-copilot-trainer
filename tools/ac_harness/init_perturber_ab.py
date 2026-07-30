@@ -112,11 +112,10 @@ PRE_TREATMENT_PLAN_SCHEMA = "init-perturber-ab-plan/v3"
 #:
 #: Codex has repeatedly re-litigated freze-as-absence; the contract is: freze is post-go-live
 #: absence-OK for off-arm confirmation of every delivered launch; on-arm miss stays STABLE-only.
-#: ``not_drivable`` joins them (2026-07-29): it is a DELIVERED, rendering, physics-ticking
-#: session parked at AC's pre-drive menu, so it is at least as live as ``froze`` for
-#: off-arm absence purposes. Omitting it made every menu-park boot report
-#: ``treatment_receipt_unverified`` — which forces the whole experiment conclusion — even
-#: when each attempt cleanly observed both perturbers as ``not_observed`` (Codex P1 on #726).
+#: ``not_drivable`` can join them only after its recorded duration clears the plan's 5 s
+#: post-race floor. The verdict also covers an unavailable Car0 mapping; the production probe now
+#: waits out its bounded handshake window on that failure, while this consumer independently
+#: refuses short/historical rows (Codex P1 follow-up on #726).
 _LIVE_SESSION_VERDICTS = frozenset({"stable", "froze", "not_drivable"})
 #: Measured injection race on the rig (~3 s). Plans must not set timeouts below this plus margin.
 INJECTION_RACE_S = 3.0
@@ -340,14 +339,16 @@ def _launch_evidence(launch: LaunchObservation) -> dict[str, str]:
 def _is_live_session(launch: LaunchObservation) -> bool:
     """Whether this attempt's absence evidence is informative (post injection race).
 
-    Only a delivered ``stable`` attempt is dispositive for *absence*: the stability window is
-    known to exceed the measured ~3 s injection race. ``froze`` is not — it can fire on the
-    first post-go-live sample (process exit / packet regression), and ``_Car0NotDrivable`` is
-    also mapped to ``NOT_DRIVABLE`` without a proven late sample (#726). Presence
-    (``injected``) remains dispositive on any attempt via the off-arm path.
+    ``stable`` and ``froze`` retain the established post-race contract from #721. A
+    ``not_drivable`` row is informative only when its recorded duration reaches the plan's 5 s
+    post-race floor: the verdict can also represent an unavailable Car0 mapping, so accepting an
+    earlier row would turn a successful startup-race miss into false overlays-off confirmation.
+    Presence (``injected``) remains dispositive on any attempt via the off-arm path.
     """
 
-    return launch.cycle_delivered is True and launch.verdict in _LIVE_SESSION_VERDICTS
+    if launch.cycle_delivered is not True or launch.verdict not in _LIVE_SESSION_VERDICTS:
+        return False
+    return launch.verdict != "not_drivable" or launch.elapsed_s >= MIN_GO_LIVE_TIMEOUT_S
 
 
 def treatment_receipt(
@@ -1246,14 +1247,10 @@ def _parse_report(
     reported_counts = report.get("counts")
     if not isinstance(reported_counts, dict):
         raise ValueError(f"report {path} has no counts block")
-    # A boot recorded before a verdict bucket existed (e.g. ``not_drivable``, added with
-    # resilient-launch-report/v4) simply omits that key. A missing bucket is ZERO, not a
-    # mismatch — normalizing keeps historical boots loadable instead of failing the whole
-    # experiment on a schema addition. An UNKNOWN key is still a mismatch: it means the writer
-    # produced a verdict this analyzer cannot score.
-    normalized_counts = {name: reported_counts.get(name, 0) for name in TERMINAL_VERDICTS}
-    unknown = set(reported_counts) - set(TERMINAL_VERDICTS)
-    if unknown or normalized_counts != expected_counts:
+    # The strict v4 schema gate above is intentional: v3's ``froze`` meaning is contaminated and
+    # cannot be normalized. A v4 report must therefore carry the exact v4 histogram; accepting a
+    # missing/unknown bucket here would only hide a malformed current producer.
+    if reported_counts != expected_counts:
         raise ValueError(f"report {path} counts do not match its attempts_log")
     expected_cycles = {
         "delivered": sum(item.cycle_delivered is True for item in observations),

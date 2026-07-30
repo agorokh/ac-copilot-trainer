@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-29T18:30:00Z
+last_updated: 2026-07-29T20:59:00-07:00
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
@@ -163,6 +163,15 @@ checks green. Also corrected the runbook's stale *"only `FORCE_START` skips it"*
 measured it failing **0/8+**) and added troubleshooting rows for the menu-park shape and for CM
 silently ignoring `acmanager://`.
 
+**Resolve-pr follow-up (2026-07-29):** the remaining review round now makes an unavailable Car0
+probe wait out the same bounded five-second handshake window as a normal miss, and the analyzer
+independently refuses short `not_drivable` absence rows. Mixed runs no longer let one menu park hide
+a dominant `never_live` launch-delivery failure. The strict v4 gate now requires the exact v4
+histogram (and the tests emit it), the two contradictory reboot instructions are reconciled around
+bounded relaunch + #627 evidence, and the static-analysis node carries complete hash-gated
+disassembly steps instead of naming a missing `.scratch` script. Focused result: 314 passed. Full
+isolated-venv result before the final reviewer round: 3,841 passed, 89 skipped, 83.58% coverage.
+
 **Mechanism correction (static analysis, no rig time)** —
 [issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).
 The wedge loop in CSP `accRenderingAdv.dll` (SHA256 `6546FDF7…`, **verified identical** to the one
@@ -200,11 +209,11 @@ is **plausible, untested** (the packer never validates that a byte is a digit).
   (**2026-07-27 10:56**, per `cfg/extension/state/odometers.ini` + `consumption.ini`, which only
   write when a car actually drives) and the failures — so this is not a config regression.
 
-  **Remaining lever:** a **reboot**, per the launcher's own remediation text, the runbook's
-  troubleshooting table, and #627's per-boot accumulator model (cold boot ≈ 9 clean cycles; this
-  boot was at 23.4-24.5 h). Not done this session: it would kill this session plus peer agent
-  sessions, so it is the operator's call. The self-hosted CI job that was in flight earlier has
-  since finished, so that cost is gone.
+  **Recovery:** re-run and let the bounded fast-fail relaunch recycle try to land the hijack; that
+  is the only mechanism with recorded successes. If it remains at 0/N, record the denominator on
+  #627 and hand over the open menu-skip condition. **Do not reboot for this shape**: the #627
+  per-boot accumulator applies to pinned-packet freezes, and there is no measured evidence that a
+  reboot makes this healthy rendering session expose `Car0`.
 
   Note for the accumulator hunt: `cfg/extension/state/` **does** exist on this rig (under the
   OneDrive-redirected AC user data) and `imgui_settings.ini` there is written every cycle. #627

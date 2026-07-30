@@ -787,11 +787,16 @@ class LaunchReport:
         # Remediation must match the failure. A run dominated by NOT_DRIVABLE saw AC render
         # perfectly and merely never leave the pre-drive menu (#466), so "reboot to lower the
         # freeze rate" is the wrong advice — there was no freeze to lower.
-        if self.not_drivable > self.froze + self.wedged_init:
+        if self.not_drivable > self.froze + self.wedged_init + self.never_live:
             return (
                 f"no stable session in {self.attempts} attempt(s) ({self._counts()}); "
                 "AC rendered but never became drivable — the pre-drive menu-skip never landed "
                 "(#466), NOT the #627 wedge; a reboot does not address this"
+            )
+        if self.never_live > self.froze + self.wedged_init:
+            return (
+                f"no stable session in {self.attempts} attempt(s) ({self._counts()}); "
+                "most launches never reached AC — cold-restart Content Manager and rerun"
             )
         return (
             f"no stable session in {self.attempts} attempt(s) ({self._counts()}); "
@@ -1888,6 +1893,12 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
 
     controller: object | None = None
     drivable = False
+    # Start the negative-evidence clock before controller construction. A mapping/open failure is
+    # not evidence that Car0 is absent, and returning immediately would let an early successful
+    # Toolhelp miss confirm overlays_off inside the measured ~3 s injection race. Every False
+    # result therefore consumes this same bounded handshake window, including probe-unavailable
+    # failures (Codex P1 on #726).
+    deadline = time.monotonic() + timeout
     try:
         if release_requested is not None and release_requested():
             raise _OperatorRelease
@@ -1897,7 +1908,6 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
             controller = CustomAIController(0)
         else:
             controller = controller_factory()
-        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if release_requested is not None and release_requested():
                 raise _OperatorRelease
@@ -1915,6 +1925,14 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
             drivable = controller.read_car_data() is not None  # type: ignore[attr-defined]
     except (SharedMemoryUnavailable, OSError) as exc:
         _log(f"Car0 drivability probe unavailable: {exc}")
+        while time.monotonic() < deadline:
+            if release_requested is not None and release_requested():
+                raise _OperatorRelease from None
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(poll, remaining))
+        if release_requested is not None and release_requested():
+            raise _OperatorRelease from None
         drivable = False
     finally:
         if controller is not None:

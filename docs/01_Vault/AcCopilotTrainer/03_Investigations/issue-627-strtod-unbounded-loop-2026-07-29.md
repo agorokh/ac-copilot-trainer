@@ -130,6 +130,34 @@ their side (cap the iteration count, or validate the limb domain).
 
 ## Reproduce the analysis
 
-```bash
-python .scratch/issue627/disas627.py   # capstone + pefile; maps the PE and disassembles 0x14E6DB0-0x14E7355
+The analyzed DLL is operator-owned game content and is not redistributable, so the checked-in
+procedure verifies its recorded hash before disassembling the exact RVA range. Run this on the rig
+after installing the two analysis-only packages (`py -m pip install capstone pefile`):
+
+```powershell
+@'
+from hashlib import sha256
+from pathlib import Path
+
+from capstone import CS_ARCH_X86, CS_MODE_64, Cs
+import pefile
+
+module = Path(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\dwrite.dll")
+expected = "".join(
+    ("6546FDF7", "854213DC", "C87A0B2B", "CB68155B", "EBCC0D78", "92D3BECB", "5795F310", "CBF24C6E")
+).lower()
+actual = sha256(module.read_bytes()).hexdigest()
+if actual != expected:
+    raise SystemExit(f"refusing a different module: expected {expected}, got {actual}")
+
+start_rva, stop_rva = 0x14E6DB0, 0x14E7355
+pe = pefile.PE(str(module), fast_load=True)
+code = pe.get_data(start_rva, stop_rva - start_rva)
+decoder = Cs(CS_ARCH_X86, CS_MODE_64)
+for instruction in decoder.disasm(code, start_rva):
+    print(f"0x{instruction.address:08X}  {instruction.mnemonic:<8} {instruction.op_str}")
+'@ | py -
 ```
+
+The output must cover `0x14E70E0…0x14E71C5` and show the conditional `inc r11d` /
+`cmp r11d, 9` / backward `jl` sequence reproduced above.
