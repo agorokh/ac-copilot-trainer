@@ -50,6 +50,36 @@ from tools.rig_launcher.supervisor import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_ac_user_dir(tmp_path_factory, monkeypatch):
+    """Never let these tests read the DEVELOPER'S live Assetto Corsa config.
+
+    ``GamePointSupervisor._stable_ac_menu_config`` falls back to ``_discover_ac_user_dir()``
+    whenever a config carries no explicit ``ac_user_dir``. On Windows that resolves the REAL
+    install, so six unrelated launcher tests silently depended on the operator's own
+    ``[NEW_UI] REPLACE_MAIN_MENU`` value — flipping it back to their preferred ``1`` turned
+    ``main`` red on the rig while Linux CI stayed green (the probe short-circuits to
+    ``menu_config_skipped`` off-Windows, so CI could never have caught it).
+
+    This isolates the ENVIRONMENT the discovery reads (``Path.home()``), not the discovery
+    function itself: the real ``_discover_ac_user_dir`` logic still runs, just against a
+    temporary filesystem, so the integration boundary is preserved (self-hosted reviewer,
+    antigravity MEDIUM on #728).
+
+    Autouse rather than a per-test argument on purpose: the failure mode is a test *forgetting*
+    to isolate, so the default has to be safe. Tests that pass an explicit ``ac_user_dir`` never
+    reach discovery at all, and ``test_ac_user_dir_discovery_prefers_candidate_with_gui_ini``
+    passes its own ``home`` argument, so neither is affected by this.
+    """
+    home = tmp_path_factory.mktemp("ac-home")
+    gui_ini = home / "Documents" / "Assetto Corsa" / "cfg" / "extension" / "gui.ini"
+    gui_ini.parent.mkdir(parents=True, exist_ok=True)
+    # Legacy menu: the configuration Stable AC requires on CSP 0.2.11.
+    gui_ini.write_text("[NEW_UI]\nREPLACE_MAIN_MENU=0\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    return home
+
+
 class _Response:
     def __init__(self, payload: dict[str, object]) -> None:
         self._payload = json.dumps(payload).encode("utf-8")
@@ -396,6 +426,8 @@ def test_stable_ac_accepts_legacy_menu_config(tmp_path: Path) -> None:
 
 
 def test_ac_user_dir_discovery_prefers_candidate_with_gui_ini(tmp_path: Path) -> None:
+    # Unaffected by the autouse isolation: this passes its own ``home``, so it never reads
+    # the patched ``Path.home()`` — and it exercises the REAL discovery function either way.
     local = tmp_path / "Documents" / "Assetto Corsa"
     local.mkdir(parents=True)
     onedrive = tmp_path / "OneDrive" / "Documents" / "Assetto Corsa"
