@@ -59,6 +59,7 @@ from tools.ac_harness.auto_drive import (
     rig_force_safe_after_cleanup_failure,
     rig_hijack,
     rig_launch,
+    rig_press_session_start,
     run_auto_drive,
     run_auto_drive_with_sim_retries,
     should_try_line_teleport_on_recovery,
@@ -244,6 +245,77 @@ def test_launch_failure_retries_until_later_launch_reaches_live():
     assert report.launched is True
     assert report.hijacked is True
     assert ctrl.closed is True
+
+
+def test_session_start_ack_logging_reads_flat_protocol_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ac_harness import auto_drive
+
+    messages: list[str] = []
+
+    async def _press_start() -> dict[str, object]:
+        return {
+            "type": "session.start.ack",
+            "ok": True,
+            "started": True,
+            "already_started": False,
+        }
+
+    monkeypatch.setattr(auto_drive, "_log", messages.append)
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda _config: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            press_start=_press_start,
+        )
+    )
+
+    assert report.ok is True
+    assert "session.start: ok=True started=True already_started=False" in messages
+
+
+def test_rig_session_start_uses_authorized_client_and_shared_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import harness_client
+    from tools.ai_sidecar.external_protocol import SESSION_START_CLIENT_ID
+
+    observed: dict[str, object] = {}
+    expected = {"type": "session.start.ack", "ok": True, "started": True}
+
+    class _FakeHarnessClient:
+        def __init__(self, url: str, **kwargs: object) -> None:
+            observed.update(url=url, **kwargs)
+
+        async def __aenter__(self) -> _FakeHarnessClient:
+            return self
+
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+        async def hello(self) -> dict[str, object]:
+            return {"type": "hello_ack"}
+
+        async def request_session_start(self, **kwargs: object) -> dict[str, object]:
+            observed["request"] = kwargs
+            return expected
+
+    monkeypatch.setattr(harness_client, "HarnessClient", _FakeHarnessClient)
+    monkeypatch.setenv("AC_COPILOT_SIDECAR_TOKEN", "secret")
+
+    assert (
+        asyncio.run(rig_press_session_start(_cfg(), instant=False, ack_timeout_s=2.5)) == expected
+    )
+    assert observed == {
+        "url": "ws://127.0.0.1:8765",
+        "token": "secret",
+        "client_id": SESSION_START_CLIENT_ID,
+        "request": {"instant": False, "timeout": 2.5},
+    }
 
 
 def test_hijack_failure_reports_stage_hijack():

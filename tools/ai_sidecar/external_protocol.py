@@ -104,6 +104,9 @@ TYPE_SESSION_REVIEW_GENERATE = "session.review.generate"
 # Issue #726: resilient-launch harness → trainer Lua request that presses CSP's supported
 # in-sim Start control while AC is rendering at the pre-drive menu but Car0 does not exist yet.
 TYPE_SESSION_START = "session.start"
+# Upgrade identity authorized to send the physical-rig control above. Keep the server and every
+# supported sender on one constant so an otherwise valid request cannot drift out of authority.
+SESSION_START_CLIENT_ID = "resilient-launch"
 # Issue #511 Part D: a remote voice endpoint (tablet page) reports per-cue client-side
 # timestamps back to the sidecar so the audible-latency harness can decompose network-hop
 # vs audio-stack delay. Accepted from any authenticated peer; never relayed.

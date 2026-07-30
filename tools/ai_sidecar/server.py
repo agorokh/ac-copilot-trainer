@@ -45,6 +45,7 @@ from tools.ai_sidecar.external_protocol import (
     ENVELOPE_VERSION,
     HAPTIC_CLIENT_CLASSES,
     IDENTITY_REPLAY_TOPICS,
+    SESSION_START_CLIENT_ID,
     SIDECAR_PRODUCED_TOPICS,
     TELEMETRY_TICK_CLIENT_CLASSES,
     TOPIC_SESSION_REVIEW,
@@ -167,7 +168,6 @@ _external_peers: set[Any] = set()
 # Browser WebSocket APIs cannot set that header; peer IP alone is insufficient because adb
 # reverse presents tablet traffic as loopback (#726).
 _session_start_authorized_peers: set[Any] = set()
-SESSION_START_CLIENT_ID = "resilient-launch"
 _setup_experiment_store_path: Path | None = None
 _setup_experiment_store_seeded = False
 _setup_exchange_endpoint: str | None = None

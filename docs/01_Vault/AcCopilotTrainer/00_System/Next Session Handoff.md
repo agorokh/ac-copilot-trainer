@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-29T23:46:00-07:00
+last_updated: 2026-07-29T23:50:00-07:00
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
@@ -243,6 +243,16 @@ a fast synchronous `session.start` failure now waits up to one bounded second fo
 graphics-packet change; a same-frame reread can no longer turn a still-rendering menu into a false
 `FROZE`, while a pinned renderer still fails closed. Focused result: 361 passed. Final
 `make ci-fast`: 3,868 passed, 89 skipped, 83.61% coverage.
+
+**Live-autostart integration follow-up:** a concurrent operator commit verified
+`ac.tryToStart(true)` on AG_PC with `[NEW_UI] REPLACE_MAIN_MENU=0`: the second bounded Lua press
+left the menu, Car0 landed on probe 3/3, and auto-drive reached 133.5 km/h / fourth gear / 450 m
+with a real coaching cue. Its additional explicit auto-drive sender initially used an upgrade
+identity the authenticated sidecar rejects and read the flat Lua ack as a nested payload. The
+server, resilient launcher, and auto-drive sender now share one authorized client-id constant; the
+auto-drive path uses `HarnessClient.request_session_start()` and logs the flat ack fields. A
+correlated sidecar error returns immediately instead of waiting out the ack timeout. Focused result:
+640 passed. Final `make ci-fast`: 3,871 passed, 89 skipped, 83.61% coverage.
 
 **Mechanism correction (static analysis, no rig time)** —
 [issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).

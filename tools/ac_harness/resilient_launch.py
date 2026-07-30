@@ -2162,6 +2162,7 @@ def request_session_start(*, timeout: float = 5.0) -> bool:
     try:
         from websockets.exceptions import WebSocketException
 
+        from tools.ai_sidecar.external_protocol import SESSION_START_CLIENT_ID
         from tools.ai_sidecar.harness_client import HarnessClient
     except ImportError as exc:
         _log(f"session.start unavailable: install the coaching WebSocket extra ({exc})")
@@ -2180,7 +2181,7 @@ def request_session_start(*, timeout: float = 5.0) -> bool:
     token = os.environ.get("AC_COPILOT_SIDECAR_TOKEN") or None
 
     async def _request() -> bool:
-        client = HarnessClient(url, token=token, client_id="resilient-launch")
+        client = HarnessClient(url, token=token, client_id=SESSION_START_CLIENT_ID)
         try:
             await client.connect(retries=2, retry_delay=0.25)
             hello_ack = await client.hello(timeout=timeout)

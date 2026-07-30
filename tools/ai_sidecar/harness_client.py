@@ -33,6 +33,7 @@ from tools.ai_sidecar.external_protocol import (
     ENVELOPE_KEY,
     ENVELOPE_VERSION,
     KNOWN_CLIENT_CLASSES,
+    TYPE_ERROR,
     TYPE_HELLO,
     TYPE_HELLO_ACK,
     TYPE_KEY,
@@ -215,7 +216,10 @@ class HarnessClient:
             }
         )
         return await self.wait_for(
-            lambda f: f.get(TYPE_KEY) == TYPE_SESSION_START_ACK,
+            lambda f: (
+                f.get(TYPE_KEY) == TYPE_SESSION_START_ACK
+                or (f.get(TYPE_KEY) == TYPE_ERROR and f.get("ref_type") == TYPE_SESSION_START)
+            ),
             timeout=timeout,
         )
 

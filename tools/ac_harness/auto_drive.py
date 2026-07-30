@@ -1058,16 +1058,15 @@ async def run_auto_drive(
                     if ack.get("type") == "error":
                         _log(
                             "session.start: sidecar REJECTED the relay: "
-                            f"{ack.get('error') or ack.get('message') or ack}"
+                            f"{ack.get('message') or ack}"
                         )
-                    payload = ack.get("payload") if isinstance(ack, dict) else None
-                    payload = payload if isinstance(payload, dict) else {}
-                    _log(
-                        "session.start: "
-                        f"ok={payload.get('ok')} started={payload.get('started')} "
-                        f"already_started={payload.get('already_started')}"
-                        + (f" error={payload.get('error')!r}" if payload.get("error") else "")
-                    )
+                    else:
+                        _log(
+                            "session.start: "
+                            f"ok={ack.get('ok')} started={ack.get('started')} "
+                            f"already_started={ack.get('already_started')}"
+                            + (f" error={ack.get('error')!r}" if ack.get("error") else "")
+                        )
         try:
             controller = hijack(config)
         except ControllerCleanupAbort as exc:
@@ -2872,29 +2871,22 @@ async def rig_press_session_start(
 
     Joins the sidecar as an ordinary external peer and sends one ``session.start``; the sidecar
     relays it to the loopback Lua peer, whose handler calls ``ac.tryToStart`` and answers
-    ``session.start.ack``. Returns the ack frame, or ``None`` when no ack arrived in
-    ``ack_timeout_s``
-    (no Lua peer connected yet, sidecar down, older app build without the handler).
+    ``session.start.ack``. Returns the ack or correlated sidecar error frame, or ``None`` when
+    neither arrived within ``ack_timeout_s`` (sidecar down or an older app without the handler).
 
     Deliberately tolerant: the caller treats every failure as "probe anyway", because the Car0
     handshake remains the authoritative drivability oracle. A press that silently did nothing must
     never read as a drivable session — that is exactly the false green #627 was full of.
     """
+    from tools.ai_sidecar.external_protocol import SESSION_START_CLIENT_ID
     from tools.ai_sidecar.harness_client import HarnessClient
 
     token = os.environ.get("AC_COPILOT_SIDECAR_TOKEN") or None
     async with HarnessClient(
-        config.sidecar_url, token=token, client_id="ac-harness-session-start"
+        config.sidecar_url, token=token, client_id=SESSION_START_CLIENT_ID
     ) as hc:
         await hc.hello()
-        await hc.send({"v": 1, "type": "session.start", "payload": {"instant": bool(instant)}})
-        # Match the sidecar's `error` envelope too. Waiting only for the ack made a rejected
-        # relay ("no loopback Lua peer connected") indistinguishable from silence, which cost a
-        # debugging cycle: the caller logged "no ack" while the sidecar had in fact answered.
-        return await hc.wait_for(
-            lambda frame: frame.get("type") in ("session.start.ack", "error"),
-            timeout=ack_timeout_s,
-        )
+        return await hc.request_session_start(instant=instant, timeout=ack_timeout_s)
 
 
 def rig_hijack(

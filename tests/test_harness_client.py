@@ -245,6 +245,30 @@ def test_harness_send_without_connect_raises() -> None:
     asyncio.run(_run())
 
 
+def test_session_start_request_returns_correlated_error_without_waiting_for_timeout() -> None:
+    async def _run() -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+        hc = HarnessClient("ws://127.0.0.1:1/")
+        sent: list[dict[str, Any]] = []
+
+        async def _send(frame: dict[str, Any]) -> None:
+            sent.append(frame)
+
+        hc.send = _send  # type: ignore[method-assign]
+        await hc._queue.put(
+            {
+                "v": 1,
+                "type": "error",
+                "ref_type": "session.start",
+                "message": "no loopback Lua peer connected",
+            }
+        )
+        return await hc.request_session_start(instant=False, timeout=1.0), sent
+
+    response, sent = asyncio.run(_run())
+    assert response is not None and response["type"] == "error"
+    assert sent == [{"v": 1, "type": "session.start", "instant": False}]
+
+
 def test_connect_retries_then_raises_on_dead_port() -> None:
     async def _run() -> None:
         hc = HarnessClient("ws://127.0.0.1:1/")
