@@ -73,7 +73,11 @@ def _runtime() -> lupa.LuaRuntime:
 
     def _stringify(t, pretty=False):
         # Content is irrelevant to these tests (we assert on state + return
-        # values, not wire bytes); just hand sendJson a non-empty string.
+        # values, not wire bytes); retain the registration fields so the hello
+        # retry's authenticated class cannot drift from onOpen.
+        g["_last_json_type"] = t["type"]
+        g["_last_json_client"] = t["client"]
+        g["_last_json_client_class"] = t["client_class"]
         return "{}"
 
     g["JSON"] = rt.table_from({"parse": _parse, "stringify": _stringify})
@@ -133,6 +137,9 @@ def test_hello_retry_is_frame_paced_under_frozen_sim_clock():
     # fire once; the frame-paced retry (fix #3) fires repeatedly.
     rt.execute('local wb = require("ws_bridge"); for _ = 1, 30 do wb.tick(0) end')
     assert int(rt.eval("_ws_sent")) > sent_before
+    assert rt.eval("_last_json_type") == "hello"
+    assert rt.eval("_last_json_client") == "ac-copilot-trainer-lua"
+    assert rt.eval("_last_json_client_class") == "lua"
 
 
 def test_sidecar_spawn_retry_uses_elapsed_time_under_frozen_sim_clock():

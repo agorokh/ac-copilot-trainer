@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-30T00:14:00-07:00
+last_updated: 2026-07-30T00:27:00-07:00
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
@@ -267,8 +267,10 @@ unacknowledged request still gets the authoritative bounded Car0 re-probe, cover
 side effect whose ack was lost. Finally, Game Point reads `[NEW_UI] REPLACE_MAIN_MENU=0` from the
 resolved AC user-data `gui.ini` before Stable AC launch and reports `menu_config_required` with
 the exact path/remediation; configure `ac_user_dir` or `AC_COPILOT_AC_USER_DIR` when discovery is
-insufficient. Focused result: 655 passed. Final `make ci-fast`: 3,875 passed, 89 skipped, 83.61%
-coverage.
+insufficient. The CSP `onOpen` send and frame-paced hello fallback now call one canonical
+classified-hello helper; a retry can no longer overwrite a valid Lua registration with the
+default `external` class. The retry regression inspects the actual serialized hello fields.
+Focused result: 103 passed. Final `make ci-fast`: 3,875 passed, 89 skipped, 83.61% coverage.
 
 **Mechanism correction (static analysis, no rig time)** —
 [issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).

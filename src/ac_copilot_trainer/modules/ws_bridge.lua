@@ -133,6 +133,18 @@ local setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
 --- Forward declaration — assigned where `tryOpen` is defined (used before spawn).
 local tryOpen
 
+--- Send the one canonical v1 registration shape from both onOpen and the frame-paced fallback.
+--- Keeping this shared is security-sensitive: a retry without `client_class="lua"` would
+--- overwrite the sidecar's authenticated Lua classification with `external` (#726).
+local function announceExternalHello()
+  return M.sendJson({
+    v = PROTOCOL_VERSION,
+    type = "hello",
+    client = LUA_CLIENT_ID,
+    client_class = "lua",
+  })
+end
+
 local function close_socket_if_any(s)
   if s == nil then
     return
@@ -620,14 +632,6 @@ tryOpen = function()
   externalHelloAcked = false
   helloRetryFrames = 0
   helloSendCount = 0
-  local function announceExternalHello()
-    M.sendJson({
-      v = PROTOCOL_VERSION,
-      type = "hello",
-      client = LUA_CLIENT_ID,
-      client_class = "lua",
-    })
-  end
   local opened = nil
   local params = {
     onOpen = function()
@@ -1101,11 +1105,7 @@ function M.tick(simTime, dt)
       helloRetryFrames = helloRetryFrames + 1
       if helloRetryFrames >= EXTERNAL_HELLO_RETRY_FRAMES then
         helloRetryFrames = 0
-        local sent = M.sendJson({
-          v = PROTOCOL_VERSION,
-          type = "hello",
-          client = "ac-copilot-trainer-lua",
-        })
+        local sent = announceExternalHello()
         helloSendCount = helloSendCount + 1
         -- Log the first send and then every EXTERNAL_HELLO_LOG_EVERY_SENDS so a
         -- (briefly) unresponsive sidecar cannot spam the CSP console.
