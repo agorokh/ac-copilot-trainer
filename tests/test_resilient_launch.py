@@ -213,18 +213,38 @@ def test_sustained_not_ready_with_a_pinned_stream_is_still_a_freeze():
     )
 
 
-def test_car0_handshake_failure_is_not_drivable_not_a_freeze():
+def test_car0_handshake_failure_is_not_drivable_when_render_still_advances():
     """The PRODUCTION route for a rendered-but-not-drivable session must match the classifier.
 
     `main` catches `_Car0NotDrivable` and previously mapped it to FROZE, so real menu-park
     attempts kept landing in FREEZE_VERDICTS even after the pure classifier was fixed
     (Codex P1 on #726). `main` is `pragma: no cover`, so the mapping lives in this helper.
     """
-    outcome = car0_handshake_failure_outcome()
+    outcome = car0_handshake_failure_outcome(100, 200)
 
     assert outcome.verdict is LaunchVerdict.NOT_DRIVABLE
     assert str(outcome.verdict) not in FREEZE_VERDICTS
     # The session WAS rendering, so CM really started an acs.exe and a cycle was consumed (#710).
+    assert outcome.cycle_delivered is True
+
+
+@pytest.mark.parametrize(
+    ("packet_before", "packet_after"),
+    [
+        (100, 100),  # pinned while the probe blocked
+        (100, 10),  # a replacement generation
+        (100, None),  # renderer exited or shared memory became unreadable
+        (None, 100),  # no comparable pre-probe observation
+    ],
+)
+def test_car0_handshake_failure_stays_froze_without_fresh_render_advance(
+    packet_before: int | None,
+    packet_after: int | None,
+) -> None:
+    outcome = car0_handshake_failure_outcome(packet_before, packet_after)
+
+    assert outcome.verdict is LaunchVerdict.FROZE
+    assert str(outcome.verdict) in FREEZE_VERDICTS
     assert outcome.cycle_delivered is True
 
 

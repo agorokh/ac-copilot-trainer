@@ -2053,18 +2053,31 @@ def _watch_live(  # pragma: no cover - rig-only
     return AttemptOutcome(LaunchVerdict.FROZE, _watched_delivery(delivery_trace(samples)))
 
 
-def car0_handshake_failure_outcome() -> AttemptOutcome:
-    """Outcome for a RENDERED session whose Car0 handshake failed — AC's pre-drive menu (#466).
+def car0_handshake_failure_outcome(
+    packet_before_probe: int | None,
+    packet_after_probe: int | None,
+) -> AttemptOutcome:
+    """Outcome for a failed Car0 handshake, confirmed against the render stream (#466).
 
     Extracted from ``main`` so the production route is unit-testable: ``main`` is a rig-only
     entrypoint marked ``pragma: no cover``, and the previous inline mapping sent this exact
     condition to ``FROZE``. That kept the #627 contamination flowing through production while the
     pure classifier looked correct (Codex P1 on #726).
 
-    ``cycle_delivered`` is ``True``: the session was rendering, so Content Manager really did
-    start an ``acs.exe`` and the launch cycle was consumed (#710).
+    The blocking probe can consume five seconds after the packet advance that triggered it. A
+    renderer that wedges or exits during that window must stay ``FROZE``; only a fresh post-probe
+    advance proves this is still a rendering pre-drive menu and may select ``NOT_DRIVABLE``.
+
+    ``cycle_delivered`` is ``True`` either way: earning section ownership before the probe proved
+    that Content Manager started an ``acs.exe`` and consumed the launch cycle (#710).
     """
-    return AttemptOutcome(LaunchVerdict.NOT_DRIVABLE, cycle_delivered=True)
+    render_advanced = (
+        packet_before_probe is not None
+        and packet_after_probe is not None
+        and packet_after_probe > packet_before_probe
+    )
+    verdict = LaunchVerdict.NOT_DRIVABLE if render_advanced else LaunchVerdict.FROZE
+    return AttemptOutcome(verdict, cycle_delivered=True)
 
 
 def _positive_float(value: str) -> float:
@@ -2386,6 +2399,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             latched_injected: set[str] = set()
             # Toolhelp saw acs.exe this attempt — promote undetermined delivery (Codex P2 on #721).
             acs_pid_observed: list[bool] = [False]
+            # Packet that triggered the (blocking) Car0 probe. If the probe fails, a fresh raw
+            # sample must advance beyond this value before the attempt may be called a rendering
+            # pre-drive menu; otherwise the renderer could have wedged during the probe.
+            packet_before_car0_probe: list[int | None] = [None]
 
             def sample_perturbers(*, soft_fail: bool = False) -> None:
                 """Fold one module snapshot of the live acs.exe into this attempt's evidence.
@@ -2469,6 +2486,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 if args.expect_perturbers is not None:
                     sample_perturbers()
                 packet, entry_ready, phys_packet = read_state()
+                packet_before_car0_probe[0] = packet
                 ready, drivable = readiness.observe(packet=packet, entry_ready=entry_ready)
                 return packet, ready, drivable, phys_packet
 
@@ -2481,17 +2499,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     delivery_baseline=delivery_baseline,
                 )
             except _Car0NotDrivable:
-                # CM did start a LIVE session; only the Car0 handoff failed. Treat this as a bad
-                # rendered attempt so it cannot advance the stale-CM/never-live restart streak.
-                # The session was rendering, so the launch cycle WAS delivered (#710).
-                #
-                # NOT_DRIVABLE, not FROZE: this exception fires when shared memory reports
-                # entry_ready but the RENDERED session has no usable Car0 — the pre-drive menu
-                # (#466), which is exactly what the classifier's not-ready branch now excludes
-                # from FREEZE_VERDICTS. Leaving this path on FROZE would keep the same
-                # contamination flowing through the production route while the pure classifier
-                # looked correct (Codex P1 on #726).
-                outcome = car0_handshake_failure_outcome()
+                # The handshake can block for five seconds after the advance that triggered it.
+                # Re-sample raw graphics after failure: only another advance proves the renderer
+                # remained alive throughout that window. A pinned/regressed/unreadable packet is
+                # still a possible #627 wedge and must remain FROZE (Codex P1 on #726).
+                post_probe_packet, _post_probe_ready, _post_probe_phys = read_state()
+                outcome = car0_handshake_failure_outcome(
+                    packet_before_car0_probe[0],
+                    post_probe_packet,
+                )
             # One last look before the process is torn down: the perturbers inject late, so the
             # final sample is the most informative one in the attempt (#719). soft_fail: a
             # transient Toolhelp error must not erase a successful post-race miss already on

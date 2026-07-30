@@ -171,6 +171,11 @@ histogram (and the tests emit it), the two contradictory reboot instructions are
 bounded relaunch + #627 evidence, and the static-analysis node carries complete hash-gated
 disassembly steps instead of naming a missing `.scratch` script. Focused result: 314 passed. Full
 isolated-venv result before the final reviewer round: 3,841 passed, 89 skipped, 83.58% coverage.
+The final Codex P1 is also closed: after a failed blocking Car0 probe, `NOT_DRIVABLE` now requires
+a fresh post-probe graphics-packet advance; a pinned, regressed, unreadable, or exited stream stays
+`FROZE`. The guide retains its pre-existing CRLF convention. Final local evidence on the combined
+head (including the peer `session.start` Lua commit): 318 focused tests and `make ci-fast` with
+3,845 passed, 89 skipped, 83.58% coverage.
 
 **Mechanism correction (static analysis, no rig time)** —
 [issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).
