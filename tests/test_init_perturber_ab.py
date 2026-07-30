@@ -118,6 +118,7 @@ def _write_boot_report(
                 "started_at_utc": f"2026-07-28T{minute // 60:02d}:{minute % 60:02d}:00Z",
                 "elapsed_s": 12.5,
                 "live_observation_s": 12.5,
+                "perturber_snapshot_age_s": 12.5,
                 "uptime_h": round(uptime_start + index * 0.05, 4),
             }
         )
@@ -545,6 +546,7 @@ def test_off_arm_receipt_is_verified_by_not_drivable_attempts() -> None:
             uptime_h=1.0 + index,
             cycle_delivered=True,
             live_observation_s=15.0,
+            perturber_snapshot_age_s=15.0,
             perturbers=(("nvidia_capture", "not_observed"), ("steam_overlay", "not_observed")),
         )
         for index in range(3)
@@ -571,6 +573,7 @@ def test_early_not_drivable_absence_stays_unverified() -> None:
         uptime_h=1.0,
         cycle_delivered=True,
         live_observation_s=2.0,
+        perturber_snapshot_age_s=2.0,
         perturbers=(("nvidia_capture", "not_observed"), ("steam_overlay", "not_observed")),
     )
 
@@ -596,6 +599,33 @@ def test_not_drivable_total_elapsed_cannot_replace_live_observation_window() -> 
         uptime_h=1.0,
         cycle_delivered=True,
         live_observation_s=None,
+        perturber_snapshot_age_s=None,
+        perturbers=(("nvidia_capture", "not_observed"), ("steam_overlay", "not_observed")),
+    )
+
+    from tools.ac_harness.init_perturber_ab import treatment_receipt
+
+    verdict, detail = treatment_receipt(
+        "overlays_off",
+        {"steam_overlay": "not_observed", "nvidia_capture": "not_observed"},
+        launches=[launch],
+    )
+
+    assert verdict == "unverified"
+    assert detail is not None and "early" in detail
+
+
+def test_not_drivable_requires_a_post_race_full_snapshot() -> None:
+    """A five-second probe cannot age an early module miss into valid absence evidence."""
+    launch = LaunchObservation(
+        launch=1,
+        verdict="not_drivable",
+        started_at_utc="2026-07-29T00:01:00Z",
+        elapsed_s=60.0,
+        uptime_h=1.0,
+        cycle_delivered=True,
+        live_observation_s=6.0,
+        perturber_snapshot_age_s=0.1,
         perturbers=(("nvidia_capture", "not_observed"), ("steam_overlay", "not_observed")),
     )
 

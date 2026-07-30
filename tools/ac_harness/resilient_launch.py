@@ -131,6 +131,9 @@ class AttemptOutcome:
     #: Seconds since the CURRENT pinned acs.exe first entered the perturber observation window.
     #: ``None`` means that window was never established or was not measured.
     live_observation_s: float | None = None
+    #: Age of the latest successful full module snapshot relative to that process window. This,
+    #: not process age alone, proves an absence observation happened after the injection race.
+    perturber_snapshot_age_s: float | None = None
 
 
 #: v4 adds the ``not_drivable`` bucket to ``counts`` (2026-07-29). The field addition is additive,
@@ -416,6 +419,12 @@ def classify(
                     # intermittently-hitching menu never does. Both Codex P1s on #726.
                     if not_ready_run >= stall_samples and advanced:
                         return LaunchVerdict.NOT_DRIVABLE
+                    if not_ready_run >= stall_samples and sample.gfx_packet is None:
+                        # Sustained not-readiness plus an unreadable graphics page cannot prove a
+                        # rendering menu and otherwise resets stall_run forever. Fail closed at
+                        # the same bounded threshold instead of waiting out _watch_live's whole
+                        # wall budget (self-hosted reviewer on #726).
+                        return LaunchVerdict.FROZE
                 elif ready:
                     not_ready_run = 0
                 else:
@@ -726,6 +735,7 @@ class AttemptRecord:
     uptime_h: float | None
     cycle_delivered: bool | None = None
     live_observation_s: float | None = None
+    perturber_snapshot_age_s: float | None = None
     #: Per-perturber evidence for this attempt (#719). Always present and always complete — every
     #: key in ``PERTURBER_MODULES`` carries a :class:`PerturberEvidence` value, defaulting to
     #: ``unavailable`` so a producer that never looked cannot be mistaken for one that looked and
@@ -742,6 +752,11 @@ class AttemptRecord:
             "elapsed_s": round(self.elapsed_s, 3),
             "live_observation_s": (
                 None if self.live_observation_s is None else round(self.live_observation_s, 3)
+            ),
+            "perturber_snapshot_age_s": (
+                None
+                if self.perturber_snapshot_age_s is None
+                else round(self.perturber_snapshot_age_s, 3)
             ),
             "uptime_h": None if self.uptime_h is None else round(self.uptime_h, 4),
         }
@@ -794,7 +809,12 @@ class LaunchReport:
         # Remediation must match the failure. A run dominated by NOT_DRIVABLE saw AC render
         # perfectly and merely never leave the pre-drive menu (#466), so "reboot to lower the
         # freeze rate" is the wrong advice — there was no freeze to lower.
-        if self.not_drivable > self.froze + self.wedged_init + self.never_live:
+        freeze_failures = self.froze + self.wedged_init
+        if (
+            self.not_drivable > 0
+            and self.not_drivable >= freeze_failures
+            and self.not_drivable >= self.never_live
+        ):
             return (
                 f"no stable session in {self.attempts} attempt(s) ({self._counts()}); "
                 "AC rendered but never became drivable — the pre-drive menu-skip never landed "
@@ -1121,6 +1141,13 @@ def _normalize_attempt_result(result: LaunchVerdict | AttemptOutcome) -> Attempt
             "live_observation_s must be finite and non-negative when present, got "
             f"{outcome.live_observation_s!r}"
         )
+    if outcome.perturber_snapshot_age_s is not None and (
+        not math.isfinite(outcome.perturber_snapshot_age_s) or outcome.perturber_snapshot_age_s < 0
+    ):
+        raise ValueError(
+            "perturber_snapshot_age_s must be finite and non-negative when present, got "
+            f"{outcome.perturber_snapshot_age_s!r}"
+        )
     return outcome
 
 
@@ -1199,6 +1226,7 @@ def run_retry_loop(
                 uptime_h=uptime,
                 cycle_delivered=outcome.cycle_delivered,
                 live_observation_s=outcome.live_observation_s,
+                perturber_snapshot_age_s=outcome.perturber_snapshot_age_s,
                 perturbers=evidence,
             )
         )
@@ -2418,6 +2446,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # time includes cleanup, CM startup, and AC loading, so it cannot certify that a
             # not_drivable module miss happened after the injection race (Codex P1 on #726).
             acs_pid_observed_since: list[float | None] = [None]
+            # Age of the latest SUCCESSFUL exhaustive module snapshot for the current pinned PID.
+            # A soft-failed final look preserves the prior age, which may still be too early and
+            # therefore fail closed in the analyzer.
+            perturber_snapshot_age_s: list[float | None] = [None]
             # Packet that triggered the (blocking) Car0 probe. If the probe fails, a fresh raw
             # sample must advance beyond this value before the attempt may be called a rendering
             # pre-drive menu; otherwise the renderer could have wedged during the probe.
@@ -2476,6 +2508,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     primary_pid = max(pids)
                     pinned_acs_pid[0] = primary_pid
                     acs_pid_observed_since[0] = time.monotonic()
+                    perturber_snapshot_age_s[0] = None
                 try:
                     # retries=1: do not sleep inside the go-live poll path; BAD_LENGTH during
                     # module load is retried by the next poll tick instead (cursor HIGH #721).
@@ -2486,6 +2519,12 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     fold_perturber_snapshots(perturbers, enum_failed=True)
                     return
                 fold_perturber_snapshots(perturbers, successes=[names])
+                observed_since = acs_pid_observed_since[0]
+                if observed_since is not None:
+                    perturber_snapshot_age_s[0] = max(
+                        0.0,
+                        time.monotonic() - observed_since,
+                    )
 
             def read_attempt_state() -> tuple[int | None, bool | None, bool | None, int | None]:
                 """Report shared memory; trust readiness only once the packet proves a live owner.
@@ -2555,6 +2594,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 perturbers=evidence,
                 cycle_delivered=delivered,
                 live_observation_s=live_observation_s,
+                perturber_snapshot_age_s=perturber_snapshot_age_s[0],
             )
             delivery = _delivery_label(outcome.cycle_delivered)
             injected = sorted(

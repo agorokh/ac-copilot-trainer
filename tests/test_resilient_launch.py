@@ -295,6 +295,20 @@ def test_a_menu_that_pins_after_one_advance_still_reaches_froze():
     )
 
 
+def test_sustained_not_ready_with_unreadable_graphics_fails_closed_promptly():
+    """Missing graphics cannot prove a menu and must not wait for the whole wall budget."""
+    samples = steady(0.0, 10.0, first_packet=100)
+    samples += [
+        Sample(t=11.0 + index, gfx_packet=None, acs_alive=True, entry_ready=False)
+        for index in range(4)
+    ]
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.FROZE
+    )
+
+
 def steady_phys(
     start_t: float, end_t: float, *, first_packet: int, first_phys: int, step: float = 1.0
 ) -> list[Sample]:
@@ -976,6 +990,18 @@ class TestRetryLoop:
         assert "AC rendered but never became drivable" not in report.summary()
         assert "cold-restart Content Manager" in report.summary()
 
+    def test_menu_park_tied_with_freezes_does_not_recommend_reboot(self):
+        seq = [
+            LaunchVerdict.NOT_DRIVABLE,
+            LaunchVerdict.FROZE,
+            LaunchVerdict.NOT_DRIVABLE,
+            LaunchVerdict.FROZE,
+        ]
+        report = run_retry_loop(lambda i: seq[i - 1], max_attempts=len(seq))
+
+        assert "AC rendered but never became drivable" in report.summary()
+        assert "a reboot lowers the per-launch freeze rate" not in report.summary()
+
     def test_cold_restarts_cm_after_consecutive_never_live(self):
         """Repeated never_live means a stale CM ignoring the preset URL (#537/#558) — restart it."""
         calls: list[int] = []
@@ -1116,6 +1142,7 @@ class TestRetryLoop:
                 LaunchVerdict.NOT_DRIVABLE,
                 cycle_delivered=True,
                 live_observation_s=6.25,
+                perturber_snapshot_age_s=6.0,
             ),
             max_attempts=1,
             uptime_hours=lambda: None,
@@ -1123,6 +1150,8 @@ class TestRetryLoop:
 
         assert report.attempts_log[0].live_observation_s == 6.25
         assert report.as_dict()["attempts_log"][0]["live_observation_s"] == 6.25
+        assert report.attempts_log[0].perturber_snapshot_age_s == 6.0
+        assert report.as_dict()["attempts_log"][0]["perturber_snapshot_age_s"] == 6.0
 
     def test_invalid_process_observation_window_is_rejected(self):
         with pytest.raises(ValueError, match="live_observation_s"):
@@ -1131,6 +1160,15 @@ class TestRetryLoop:
                     LaunchVerdict.NOT_DRIVABLE,
                     cycle_delivered=True,
                     live_observation_s=-0.1,
+                ),
+                max_attempts=1,
+            )
+        with pytest.raises(ValueError, match="perturber_snapshot_age_s"):
+            run_retry_loop(
+                lambda _attempt: AttemptOutcome(
+                    LaunchVerdict.NOT_DRIVABLE,
+                    cycle_delivered=True,
+                    perturber_snapshot_age_s=-0.1,
                 ),
                 max_attempts=1,
             )

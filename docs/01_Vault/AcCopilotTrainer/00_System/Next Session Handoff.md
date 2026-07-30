@@ -190,6 +190,14 @@ live-window evidence keeps `not_drivable` absence unverified. Menu frames also r
 prevent an existing socket from draining `session.start`. Focused result: 349 passed; final
 `make ci-fast`: 3,850 passed, 89 skipped, 83.58% coverage.
 
+**Independent-review follow-up:** sidecar launch/reconnect backoff is now frame-paced rather than
+sim-time-paced, because the pre-drive menu freezes `currentSimT`. `not_drivable` absence requires
+the latest successful full module snapshot itself to be at least five seconds into the current
+pinned process (a blocked Car0 probe cannot age one early miss into proof). Sustained not-ready
+samples with an unreadable graphics page fail closed at `stall_samples`, and a menu-park/freeze
+tie no longer recommends a reboot. Final focused result: 369 passed; final `make ci-fast`: 3,854
+passed, 89 skipped, 83.58% coverage.
+
 **Mechanism correction (static analysis, no rig time)** —
 [issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).
 The wedge loop in CSP `accRenderingAdv.dll` (SHA256 `6546FDF7…`, **verified identical** to the one

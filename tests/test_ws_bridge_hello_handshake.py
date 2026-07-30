@@ -135,6 +135,27 @@ def test_hello_retry_is_frame_paced_under_frozen_sim_clock():
     assert int(rt.eval("_ws_sent")) > sent_before
 
 
+def test_sidecar_spawn_retry_is_frame_paced_under_frozen_sim_clock():
+    """#726: a failed child must retry while the pre-drive menu freezes sim time."""
+    rt = _runtime()
+    rt.execute(
+        """
+        _spawn_calls = 0
+        web.socket = nil
+        os.runConsoleProcess = function(_params, _callback)
+          _spawn_calls = _spawn_calls + 1
+          return false, "spawn failed"
+        end
+        local wb = require("ws_bridge")
+        wb.configure("ws://127.0.0.1:8765")
+        wb.startSidecarIfNeeded("C:/app")
+        for _ = 1, 300 do wb.startSidecarIfNeeded("C:/app") end
+        """
+    )
+
+    assert int(rt.eval("_spawn_calls")) >= 2
+
+
 def test_hello_ack_registers_and_unblocks_publish():
     rt = _runtime()
     _open(rt)

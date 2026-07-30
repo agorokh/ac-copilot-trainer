@@ -289,6 +289,8 @@ class LaunchObservation:
     #: Time the current acs.exe spent inside the perturber observation window. Unlike elapsed_s,
     #: excludes retry cleanup, Content Manager startup, and pre-process AC loading.
     live_observation_s: float | None = None
+    #: Current-process age when its latest successful full module snapshot was taken.
+    perturber_snapshot_age_s: float | None = None
     #: #719 per-perturber evidence for this launch, keyed as in ``PERTURBER_MODULES``. Values are
     #: :class:`PerturberEvidence` strings; only ``injected`` establishes anything.
     perturbers: tuple[tuple[str, str], ...] = ()
@@ -343,17 +345,18 @@ def _is_live_session(launch: LaunchObservation) -> bool:
     """Whether this attempt's absence evidence is informative (post injection race).
 
     ``stable`` and ``froze`` retain the established post-race contract from #721. A
-    ``not_drivable`` row is informative only when the current process's recorded observation
-    window reaches the plan's 5 s post-race floor. Total attempt elapsed time is not usable here:
-    cleanup, Content Manager startup, and AC loading can consume that budget before module
-    snapshots see the process. Missing/short live-window evidence therefore fails closed.
+    ``not_drivable`` row is informative only when its latest successful full module snapshot was
+    taken at least 5 s into the current process's observation window. Total attempt/process age is
+    not enough: cleanup/loading can consume the former, and a blocking Car0 probe can age the
+    latter after one early snapshot. Missing/early snapshot evidence therefore fails closed.
     Presence (``injected``) remains dispositive on any attempt via the off-arm path.
     """
 
     if launch.cycle_delivered is not True or launch.verdict not in _LIVE_SESSION_VERDICTS:
         return False
     return launch.verdict != "not_drivable" or (
-        launch.live_observation_s is not None and launch.live_observation_s >= MIN_GO_LIVE_TIMEOUT_S
+        launch.perturber_snapshot_age_s is not None
+        and launch.perturber_snapshot_age_s >= MIN_GO_LIVE_TIMEOUT_S
     )
 
 
@@ -1182,6 +1185,7 @@ def _parse_report(
         started_at_utc = record.get("started_at_utc")
         elapsed_s = record.get("elapsed_s")
         live_observation_s = record.get("live_observation_s")
+        perturber_snapshot_age_s = record.get("perturber_snapshot_age_s")
         uptime_h = record.get("uptime_h")
         if record.get("attempt") != index:
             raise ValueError(f"report {path} attempt numbers must be contiguous and ordered from 1")
@@ -1217,6 +1221,12 @@ def _parse_report(
             or live_observation_s < 0
         ):
             raise ValueError(f"report {path} launch {index} has invalid live_observation_s")
+        if perturber_snapshot_age_s is not None and (
+            not isinstance(perturber_snapshot_age_s, (int, float))
+            or not math.isfinite(perturber_snapshot_age_s)
+            or perturber_snapshot_age_s < 0
+        ):
+            raise ValueError(f"report {path} launch {index} has invalid perturber_snapshot_age_s")
         if not isinstance(uptime_h, (int, float)) or not math.isfinite(uptime_h) or uptime_h < 0:
             raise ValueError(
                 f"report {path} launch {index} must record finite non-negative uptime_h "
@@ -1253,6 +1263,9 @@ def _parse_report(
                 cycle_delivered=delivered,
                 live_observation_s=(
                     None if live_observation_s is None else float(live_observation_s)
+                ),
+                perturber_snapshot_age_s=(
+                    None if perturber_snapshot_age_s is None else float(perturber_snapshot_age_s)
                 ),
                 perturbers=tuple(sorted(perturbers.items())),
             )
