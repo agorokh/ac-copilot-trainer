@@ -130,6 +130,59 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-07-30) — autonomous drive RESTORED; the post-lap freeze IS #627
+
+**Autonomous testing works again.** `main` @ `c586893`, `REPLACE_MAIN_MENU=0`, shipped path:
+
+```
+session.start: ok=True started=True already_started=False
+hijack landed (Car0) on probe 1/3
+PASS - drove=True laps=1 max_speed=210.7km/h top_gear=6 dist=2766m recoveries=0
+```
+
+Mechanism is the merged **authenticated `session.start` relay**, not an auto-press. PR #727 (in-sim
+auto-press) was live-verified to work but **violated SC-03** ("human app loads never auto-press
+Start") and is CLOSED; the relay lands the hijack on probe 1/3 vs the auto-press's 3/3.
+
+**The long-standing post-lap video freeze is the SAME BUG as the #627 init wedge.** Captured on
+demand with `freeze_forensics`: RIPs at `DWrite+0x14e7169` and `+0x14e7162` - both inside the
+divide-by-100 loop `0x14E70E0-0x14E71C5` - with physics advancing throughout. One loop, two
+regimes: `r11d` never advancing = the non-terminating init wedge; advancing slowly = the finite
+5-20 s post-lap grind (`long_computation`). **It reproduces after every lap**, making it a far
+better instrument than the stochastic init wedge. Full node:
+[issue-627-postlap-freeze-same-loop-2026-07-30.md](../03_Investigations/issue-627-postlap-freeze-same-loop-2026-07-30.md).
+
+**PR #728 MERGED** - `main` was RED on Windows: six `tests/test_rig_launcher.py` tests read the
+developer's live `gui.ini` via `_discover_ac_user_dir()`, so their result depended on the operator's
+own `REPLACE_MAIN_MENU`. Linux CI could never catch it (the probe short-circuits off-Windows). Fixed
+by isolating `Path.home()` - the environment - so the real discovery logic still runs (self-hosted
+reviewer's MEDIUM: do not mock the system under test).
+
+### Rig state left behind
+
+- `REPLACE_MAIN_MENU=0` - **required** by CSP 0.2.11 (`ac.tryToStart` is ignored under the New UI:
+  measured 0/12 presses with `=1`, success on attempt 2 with `=0`) and by the launcher's
+  `menu_config_required` gate. Cost: the operator loses CSP's New UI menu. This was their explicit
+  choice ("unblock autonomous first").
+- Primary checkout on `main` @ `c586893`; junction serves it. **Merging a PR does not deploy** -
+  the checkout must be pulled. That mistake cost a day.
+- No `acs.exe` running; no rig lock held.
+
+### Next, in order
+
+1. **Test whether OUR lap-archive encoding feeds the slow loop.** Lap completion serialises
+   `samples=2000` of float fields - a huge number of decimal/binary conversions in one window.
+   **Plausible, untested**, and cheap now that the repro is on demand.
+2. **Pit-start stall (intermittent).** One run capped at `recovery cap (6) exceeded at 488m`; the
+   next two drove 650 m and 2766 m with `recoveries=0`. When it fires, every recovery logs
+   `teleport_to_pits`, never `line_teleport` - `_teleport_onto_line`'s 25 m read-back fails. Its
+   custom-teleport offsets are doc-extracted and flagged `VERIFY LIVE` in `custom_ai.py`. The trace
+   shows the car stationary at ~8600 rpm in gear 2 - blocked, not idle.
+3. **`menu_config_required` ergonomics** - it hard-blocks Stable AC rather than warning, forcing a
+   choice between the New UI menu and a working harness. The fact is correct; the ergonomics are a
+   design question.
+4. **Lap-archive retention** - 419 files / 455 MB, unbounded, in a OneDrive-synced folder.
+
 ## Delivered (2026-07-29 PM) — #627: the freeze instrument was scoring AC's pre-drive MENU as a wedge (PR #726 OPEN `72c9853`)
 
 **Read this before believing any recorded #627 freeze rate.**
