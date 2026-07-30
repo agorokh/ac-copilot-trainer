@@ -175,7 +175,12 @@ The final Codex P1 is also closed: after a failed blocking Car0 probe, `NOT_DRIV
 a fresh post-probe graphics-packet advance; a pinned, regressed, unreadable, or exited stream stays
 `FROZE`. The guide retains its pre-existing CRLF convention. Final local evidence on the combined
 head (including the peer `session.start` Lua commit): 318 focused tests and `make ci-fast` with
-3,845 passed, 89 skipped, 83.58% coverage.
+3,845 passed, 89 skipped, 83.58% coverage. Review of that peer commit then found two real delivery
+gaps: `StateSim` is userdata, so the idempotency read now has its own `pcall` (including callable
+API variance), and the pre-drive menu now ticks/polls the request bridge without depending on a
+pending post-session review. The structural contracts cover both paths and preserve the existing
+lap-archive flush ordering. Final combined-head evidence after those fixes: 44 focused checks plus
+`make ci-fast` with 3,847 passed, 89 skipped, 83.58% coverage.
 
 **Mechanism correction (static analysis, no rig time)** —
 [issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).

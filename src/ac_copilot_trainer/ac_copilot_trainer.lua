@@ -858,8 +858,22 @@ if wsBridge.registerRequestHandler then
     -- harness that retries cannot restart a session that is already under way.
     local started = nil
     if ac and type(ac.getSim) == "function" then
-      local okSim, sim = pcall(ac.getSim)
-      if okSim and type(sim) == "table" then started = sim.isSessionStarted end
+      local okSim, simState = pcall(ac.getSim)
+      if okSim and simState ~= nil then
+        -- StateSim is CSP userdata, not a Lua table, and unknown field reads can throw. Keep the
+        -- access under its own pcall so supported builds remain idempotent while older builds
+        -- fail closed. Accept a callable variant defensively for CSP API drift.
+        local okField, startedValue = pcall(function()
+          return simState.isSessionStarted
+        end)
+        if okField and type(startedValue) == "function" then
+          local okStarted, calledValue = pcall(startedValue, simState)
+          if not okStarted then okStarted, calledValue = pcall(startedValue) end
+          if okStarted then started = calledValue end
+        elseif okField then
+          started = startedValue
+        end
+      end
     end
     if started == true then
       return { ok = true, started = true, already_started = true }
@@ -2367,7 +2381,10 @@ function script.update(dt)
   end
 
   if sim.isInMainMenu then
-    if pendingSessionReview ~= nil and wsBridge then
+    -- The #466 pre-drive menu is exactly where `session.start` must arrive. Keep the bridge
+    -- alive independently of the post-session review queue; gating this tick on
+    -- pendingSessionReview leaves a fresh launch unable to receive the request that exits it.
+    if wsBridge then
       pcall(function()
         wsBridge.tick(ch.simSeconds(sim))
         wsBridge.pollInbound(8)

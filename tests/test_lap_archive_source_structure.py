@@ -39,7 +39,10 @@ def test_session_end_flushes_pending_lap_archive() -> None:
     menu_kw = src.rindex("if sim.isInMainMenu then", 0, anchor)
     branch_body = src[menu_kw:anchor]
     menu_prefix = branch_body.split("if state.wasDriving then", maxsplit=1)[0]
-    assert "pendingSessionReview ~= nil" in menu_prefix
+    # #627/#466: menu polling must not depend on a post-session review already being queued.
+    # A fresh launch needs this same bridge to receive session.start and leave the pre-drive menu.
+    assert "pendingSessionReview ~= nil and wsBridge" not in menu_prefix
+    assert "if wsBridge then" in menu_prefix
     assert "wsBridge.tick(ch.simSeconds(sim))" in menu_prefix
     assert "wsBridge.pollInbound(8)" in menu_prefix
     assert menu_prefix.index("wsBridge.tick(ch.simSeconds(sim))") < menu_prefix.index(
