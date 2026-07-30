@@ -163,8 +163,9 @@ _ollama_followup_sem: asyncio.Semaphore | None = None
 # frame, including the Lua loopback client). Used for hub-style fan-out.
 _external_peers: set[Any] = set()
 # `session.start` controls the physical rig. Authorization is earned only during a loopback
-# upgrade carrying both the configured token and the dedicated harness client header. Peer IP
-# alone is insufficient because adb reverse presents tablet traffic as loopback (#726).
+# upgrade carrying the dedicated harness client header and, when configured, the exact token.
+# Browser WebSocket APIs cannot set that header; peer IP alone is insufficient because adb
+# reverse presents tablet traffic as loopback (#726).
 _session_start_authorized_peers: set[Any] = set()
 SESSION_START_CLIENT_ID = "resilient-launch"
 _setup_experiment_store_path: Path | None = None
@@ -1475,12 +1476,13 @@ def make_process_request(token: str | None):
             observability.METRICS.note_screen_seen()
         supplied = request.headers.get(AUTH_HEADER)
         client_id = request.headers.get(CLIENT_HEADER)
+        token_authorized = token is None or (
+            supplied is not None and secrets.compare_digest(supplied, token)
+        )
         if (
-            token
-            and _is_loopback_peer(connection)
+            _is_loopback_peer(connection)
             and client_id == SESSION_START_CLIENT_ID
-            and supplied is not None
-            and secrets.compare_digest(supplied, token)
+            and token_authorized
         ):
             _session_start_authorized_peers.add(connection)
         else:

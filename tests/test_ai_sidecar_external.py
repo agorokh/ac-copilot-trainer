@@ -2017,18 +2017,38 @@ def test_config_set_round_trip_via_hub() -> None:
     assert ack_back["applied"] is True
 
 
-def test_session_start_round_trip_via_hub() -> None:
+@pytest.mark.parametrize(
+    ("token", "headers"),
+    [
+        (
+            "s3cret",
+            {
+                ep.AUTH_HEADER: "s3cret",
+                ep.CLIENT_HEADER: "resilient-launch",
+            },
+        ),
+        (
+            None,
+            {
+                # Browser WebSocket APIs (including the adb-reversed tablet dashboard) cannot
+                # set custom upgrade headers; this is the dedicated tokenless local channel.
+                ep.CLIENT_HEADER: "resilient-launch",
+            },
+        ),
+    ],
+)
+def test_session_start_round_trip_via_hub(
+    token: str | None,
+    headers: dict[str, str],
+) -> None:
     """The resilient harness request reaches Lua and its positive ack returns."""
 
     async def _run() -> tuple[dict, dict]:
-        async with _running_sidecar(token="s3cret") as port:
+        async with _running_sidecar(token=token) as port:
             async with (
                 ws_connect(
                     f"ws://127.0.0.1:{port}/",
-                    additional_headers={
-                        ep.AUTH_HEADER: "s3cret",
-                        ep.CLIENT_HEADER: "resilient-launch",
-                    },
+                    additional_headers=headers,
                 ) as harness,
                 ws_connect(f"ws://127.0.0.1:{port}/") as lua,
             ):
@@ -2073,12 +2093,31 @@ def test_session_start_round_trip_via_hub() -> None:
     assert ack["started"] is True
 
 
-def test_untokened_loopback_peer_cannot_start_session() -> None:
+@pytest.mark.parametrize(
+    ("token", "headers"),
+    [
+        (None, None),
+        (
+            "s3cret",
+            {
+                ep.AUTH_HEADER: "wrong",
+                ep.CLIENT_HEADER: "resilient-launch",
+            },
+        ),
+    ],
+)
+def test_unauthorized_loopback_peer_cannot_start_session(
+    token: str | None,
+    headers: dict[str, str] | None,
+) -> None:
     """adb reverse also looks loopback; it must not inherit physical-rig control."""
 
     async def _run() -> tuple[dict, dict]:
-        async with _running_sidecar(token="s3cret") as port:
-            async with ws_connect(f"ws://127.0.0.1:{port}/") as tablet:
+        async with _running_sidecar(token=token) as port:
+            async with ws_connect(
+                f"ws://127.0.0.1:{port}/",
+                additional_headers=headers,
+            ) as tablet:
                 await tablet.send(json.dumps({"v": 1, "type": "hello", "client": "tablet"}))
                 hello_ack = json.loads(await asyncio.wait_for(tablet.recv(), timeout=2.0))
                 await tablet.send(json.dumps({"v": 1, "type": ep.TYPE_SESSION_START}))

@@ -2640,6 +2640,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                                 )
                             )
                             continue
+                        # The WS hello/request/ack wait is another blocking interval after the
+                        # post-probe advance. If the renderer wedges during it, preserving the
+                        # earlier NOT_DRIVABLE outcome would again contaminate the #627 bucket.
+                        # Require one more fresh advance before retaining the menu verdict.
+                        post_request_packet, _post_request_ready, _post_request_phys = read_state()
+                        menu_outcome = car0_handshake_failure_outcome(
+                            post_probe_packet,
+                            post_request_packet,
+                        )
                     outcome = menu_outcome
                     break
             # One last look before the process is torn down: the perturbers inject late, so the
