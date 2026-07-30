@@ -149,9 +149,16 @@ AC/CSP logs were clean (`TIME TO INIT: 2888 ms`, app loaded `windows: 3`, `[COPI
 ticking). **There was no wedge on this rig today.**
 
 Shipped in PR #726: `LaunchVerdict.NOT_DRIVABLE`, terminal but **outside `FREEZE_VERDICTS`**;
-`counts.not_drivable`; schema → `resilient-launch-report/v4`, additive so v3 boots stay readable
-(analyzer accepts the superseded schema, absent bucket = 0, unknown bucket still a mismatch);
-remediation no longer says "reboot" when nothing froze. `make ci-fast` OK, 306 tests pass, all PR
+`counts.not_drivable`; schema → `resilient-launch-report/v4`; remediation no longer says "reboot"
+when nothing froze.
+
+**v3 experiment reports are REFUSED, not read leniently.** The field addition is additive but the
+MEANING of `froze` changed — every v3 producer scored the #466 pre-drive menu as a freeze, and the
+per-attempt log carries no packet evidence to reclassify those rows. A lenient "absent bucket = 0"
+reader (which this PR shipped first, then reverted on review) would have fed false freezes into
+`FREEZE_VERDICTS` and biased onset/burst rate. `load_observations` now fails loudly on a v3 boot
+with a re-run instruction. Practical consequence: **any #625/#627 boot recorded before 2026-07-29
+is unscoreable and must be re-run on the current launcher** if it is ever needed for the A/B. `make ci-fast` OK, 306 tests pass, all PR
 checks green. Also corrected the runbook's stale *"only `FORCE_START` skips it"* line (#466
 measured it failing **0/8+**) and added troubleshooting rows for the menu-park shape and for CM
 silently ignoring `acmanager://`.
