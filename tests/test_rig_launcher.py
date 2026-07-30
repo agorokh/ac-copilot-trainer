@@ -49,6 +49,36 @@ from tools.rig_launcher.supervisor import (
     render_status_lines,
 )
 
+#: Captured before the autouse isolation fixture patches it, so the discovery function's own
+#: test can opt back in to the real implementation without weakening isolation for the rest.
+_REAL_DISCOVER_AC_USER_DIR = supervisor_module._discover_ac_user_dir
+
+
+@pytest.fixture(autouse=True)
+def _isolate_ac_user_dir(tmp_path_factory, monkeypatch):
+    """Never let these tests read the DEVELOPER'S live Assetto Corsa config.
+
+    ``_stable_ac_menu_config`` falls back to :func:`_discover_ac_user_dir` whenever a config
+    carries no explicit ``ac_user_dir``. On Windows that resolves the real install, so the
+    outcome of six unrelated launcher tests depended on the operator's own
+    ``[NEW_UI] REPLACE_MAIN_MENU`` setting — flipping it back to their preferred ``1`` turned
+    ``main`` red on the rig while Linux CI stayed green (the probe short-circuits to
+    ``menu_config_skipped`` off-Windows, so CI could never have caught it).
+
+    Autouse rather than a per-test argument on purpose: the failure mode is a test *forgetting*
+    to isolate, so the default has to be safe. Tests that pass an explicit ``ac_user_dir`` are
+    unaffected — the probe prefers the explicit value and never reaches this stub.
+    """
+    ac_user_dir = tmp_path_factory.mktemp("ac-user-dir")
+    gui_ini = ac_user_dir / "cfg" / "extension" / "gui.ini"
+    gui_ini.parent.mkdir(parents=True, exist_ok=True)
+    # Legacy menu: the configuration Stable AC requires on CSP 0.2.11.
+    gui_ini.write_text("[NEW_UI]\nREPLACE_MAIN_MENU=0\n", encoding="utf-8")
+    monkeypatch.setattr(
+        supervisor_module, "_discover_ac_user_dir", lambda *args, **kwargs: ac_user_dir
+    )
+    return ac_user_dir
+
 
 class _Response:
     def __init__(self, payload: dict[str, object]) -> None:
@@ -395,7 +425,9 @@ def test_stable_ac_accepts_legacy_menu_config(tmp_path: Path) -> None:
     assert sup.start_resilient_session().state == "starting"
 
 
-def test_ac_user_dir_discovery_prefers_candidate_with_gui_ini(tmp_path: Path) -> None:
+def test_ac_user_dir_discovery_prefers_candidate_with_gui_ini(tmp_path: Path, monkeypatch) -> None:
+    # This test exercises the discovery function itself, so undo the autouse stub.
+    monkeypatch.setattr(supervisor_module, "_discover_ac_user_dir", _REAL_DISCOVER_AC_USER_DIR)
     local = tmp_path / "Documents" / "Assetto Corsa"
     local.mkdir(parents=True)
     onedrive = tmp_path / "OneDrive" / "Documents" / "Assetto Corsa"
