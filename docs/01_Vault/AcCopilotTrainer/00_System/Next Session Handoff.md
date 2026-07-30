@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-30T00:54:39-07:00
+last_updated: 2026-07-30T01:21:43-07:00
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
@@ -283,6 +283,11 @@ leave the authenticated `session.start` route without a Lua recipient. The AC Se
 `sidecar_port_unsupported` with both configured and required ports, while custom ports remain
 available for sidecar-only operation. Focused launcher result: 125 passed. Final `make ci-fast`:
 3,879 passed, 89 skipped, 83.61% coverage.
+
+The final runbook review also removed two obsolete claims that fast-fail relaunch was the only
+pre-drive-menu recovery. `docs/10_Development/18_Autonomous_Harness.md` now routes operators through
+the authenticated `session.start` relay, bounded Car0 receipt probe, legacy-menu/default-port
+preflight, and specific Lua-peer/ack/WebSocket failure signals before another launch cycle.
 
 **Mechanism correction (static analysis, no rig time)** —
 [issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).
