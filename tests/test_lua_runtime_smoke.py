@@ -165,7 +165,7 @@ def test_ws_bridge_corner_advisory_staleness_wall_clock(lua):
         r"""
         web = {}
         _ws_on_recv = nil
-        function web.socket(_u, cb, _p)
+            function web.socket(_u, _headers, cb, _p)
           _ws_on_recv = cb
           return { close = function() end }
         end

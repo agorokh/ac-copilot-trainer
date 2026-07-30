@@ -36,6 +36,7 @@ class LauncherSettings:
     resilient_track: str | None = None
     resilient_layout: str | None = None
     resilient_cm_exe: str | None = None
+    ac_user_dir: str | None = None
 
     @classmethod
     def load(cls, path: Path) -> LauncherSettings:
@@ -62,6 +63,7 @@ class LauncherSettings:
             resilient_track=_optional_text(payload.get("resilient_track")),
             resilient_layout=_optional_text(payload.get("resilient_layout")),
             resilient_cm_exe=_optional_text(payload.get("resilient_cm_exe")),
+            ac_user_dir=_optional_text(payload.get("ac_user_dir")),
         )
 
 
@@ -146,6 +148,7 @@ def default_settings_payload() -> dict[str, object]:
     return {
         "_schema": SETTINGS_SCHEMA,
         "ac_audio_device": "",
+        "ac_user_dir": "",
         "external_bind": "",
         "alien_line": "",
         "reference_archive": "",

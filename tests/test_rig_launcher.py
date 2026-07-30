@@ -315,6 +315,60 @@ def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> N
     assert proc.terminated is False
 
 
+def test_stable_ac_blocks_new_ui_with_actionable_path(tmp_path: Path) -> None:
+    ac_user_dir = tmp_path / "Assetto Corsa"
+    gui_ini = ac_user_dir / "cfg" / "extension" / "gui.ini"
+    gui_ini.parent.mkdir(parents=True)
+    gui_ini.write_text("[NEW_UI]\nREPLACE_MAIN_MENU=1\n", encoding="utf-8")
+    spawned: list[list[str]] = []
+    cfg = GamePointConfig(
+        resilient_car="car",
+        resilient_track="track",
+        ac_user_dir=str(ac_user_dir),
+        rig_lock_path=tmp_path / "rig-session.lock",
+        paths=LauncherPaths(tmp_path / "game-point"),
+    )
+    sup = GamePointSupervisor(
+        cfg,
+        environ={},
+        popen=lambda command, **_kwargs: spawned.append(command),
+        python_executable="python",
+    )
+
+    result = sup.start_resilient_session()
+    status = sup._resilient_process_status()
+
+    assert result.ok is False
+    assert result.state == "menu_config_required"
+    assert "REPLACE_MAIN_MENU=0" in result.detail
+    assert str(gui_ini) in result.detail
+    assert status == result
+    assert spawned == []
+
+
+def test_stable_ac_accepts_legacy_menu_config(tmp_path: Path) -> None:
+    ac_user_dir = tmp_path / "Assetto Corsa"
+    gui_ini = ac_user_dir / "cfg" / "extension" / "gui.ini"
+    gui_ini.parent.mkdir(parents=True)
+    gui_ini.write_text("[NEW_UI]\nREPLACE_MAIN_MENU=0\n", encoding="utf-8")
+    proc = _Proc()
+    cfg = GamePointConfig(
+        resilient_car="car",
+        resilient_track="track",
+        ac_user_dir=str(ac_user_dir),
+        rig_lock_path=tmp_path / "rig-session.lock",
+        paths=LauncherPaths(tmp_path / "game-point"),
+    )
+    sup = GamePointSupervisor(
+        cfg,
+        environ={},
+        popen=lambda _command, **_kwargs: proc,
+        python_executable="python",
+    )
+
+    assert sup.start_resilient_session().state == "starting"
+
+
 @pytest.mark.parametrize("state", ["starting", "stabilizing", "running"])
 def test_resilient_start_acceptance_is_distinct_from_readiness(state: str) -> None:
     result = ProbeResult("ac_session", False, state, "phase is not stable yet")
@@ -1313,6 +1367,7 @@ def test_config_from_settings_file_supplies_non_secret_defaults(tmp_path: Path) 
         json.dumps(
             {
                 "external_bind": "127.0.0.1",
+                "ac_user_dir": r"C:\Users\driver\Documents\Assetto Corsa",
                 "reference_archive": "ref.json",
                 "alien_line": "alien.json",
                 "setup_store": "setup.jsonl",
@@ -1334,6 +1389,7 @@ def test_config_from_settings_file_supplies_non_secret_defaults(tmp_path: Path) 
 
     assert cfg.port == 9999
     assert cfg.external_bind == "127.0.0.1"
+    assert cfg.ac_user_dir == r"C:\Users\driver\Documents\Assetto Corsa"
     assert cfg.reference_archive == "ref.json"
     assert cfg.alien_line == "alien.json"
     assert cfg.voice_bank == "bank"
@@ -1359,6 +1415,7 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
                 "resilient_track": "settings-track",
                 "resilient_layout": "settings-layout",
                 "resilient_cm_exe": "settings-cm.exe",
+                "ac_user_dir": "settings-ac-user",
             }
         ),
         encoding="utf-8",
@@ -1373,6 +1430,7 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
             "AC_COPILOT_RESILIENT_TRACK": "env-track",
             "AC_COPILOT_RESILIENT_LAYOUT": "env-layout",
             "AC_COPILOT_RESILIENT_CM_EXE": "env-cm.exe",
+            "AC_COPILOT_AC_USER_DIR": "env-ac-user",
         },
         paths=LauncherPaths(tmp_path),
     )
@@ -1384,6 +1442,7 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
     assert cfg.resilient_track == "env-track"
     assert cfg.resilient_layout == "env-layout"
     assert cfg.resilient_cm_exe == "env-cm.exe"
+    assert cfg.ac_user_dir == "env-ac-user"
 
 
 def test_ensure_settings_file_writes_non_secret_template(tmp_path: Path) -> None:
@@ -1394,6 +1453,7 @@ def test_ensure_settings_file_writes_non_secret_template(tmp_path: Path) -> None
     assert path == tmp_path / "settings.json"
     assert payload["sidecar_port"] == 8765
     assert payload["external_bind"] == ""
+    assert payload["ac_user_dir"] == ""
     assert payload["resilient_car"] == ""
     assert payload["resilient_track"] == ""
     assert payload["resilient_layout"] == ""

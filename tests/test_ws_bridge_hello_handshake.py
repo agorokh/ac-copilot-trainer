@@ -41,7 +41,7 @@ _ws_on_recv = nil
 _ws_on_open = nil
 _ws_on_opens = {}
 _ws_sent = 0
-function web.socket(_u, cb, _p)
+function web.socket(_u, _headers, cb, _p)
   _ws_on_recv = cb
   _ws_on_open = _p and _p.onOpen or nil
   _ws_on_opens[#_ws_on_opens + 1] = _ws_on_open
@@ -165,7 +165,7 @@ def test_socket_reconnect_uses_elapsed_time_under_frozen_sim_clock():
     rt.execute(
         """
         _dial_calls = 0
-        web.socket = function(_u, cb, _p)
+        web.socket = function(_u, _headers, cb, _p)
           _dial_calls = _dial_calls + 1
           if _dial_calls == 1 then return nil end
           _ws_on_recv = cb

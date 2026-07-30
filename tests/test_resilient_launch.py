@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import builtins
+import inspect
 import json
 import os
 import subprocess
@@ -17,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from tools.ac_harness import resilient_launch as resilient_launch_module
 from tools.ac_harness.resilient_launch import (
     FREEZE_VERDICTS,
     AttemptOutcome,
@@ -43,7 +45,6 @@ from tools.ac_harness.resilient_launch import (
     _retry_telemetry_cleanup_holds,
     _run_with_safe_release,
     _sample_now,
-    _wait_for_graphics_change,
     _wait_process_exit,
     _watch_live,
     _watched_delivery,
@@ -280,6 +281,19 @@ def test_session_start_sender_requires_positive_lua_ack(
     assert request_session_start(timeout=0.1) is True
 
 
+def test_unacknowledged_session_start_still_reprobes_car0() -> None:
+    """Ack loss cannot tear down a Start side effect that actually made Car0 available."""
+    source = inspect.getsource(resilient_launch_module.main)
+    start = source.index("acknowledged = request_session_start()")
+    end = source.index("outcome = menu_outcome", start)
+    recovery = source[start:end]
+
+    assert "else:" in recovery
+    assert "re-probing Car0 in case the side effect landed" in recovery
+    assert "readiness = AttemptReadiness(" in recovery
+    assert recovery.rstrip().endswith("continue")
+
+
 def test_session_start_sender_rejects_invalid_port(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AC_COPILOT_SIDECAR_PORT", "not-a-port")
 
@@ -327,40 +341,6 @@ def test_session_start_sender_fails_closed_without_websocket_extra(
     monkeypatch.setattr(builtins, "__import__", _without_websockets)
 
     assert request_session_start(timeout=0.1) is False
-
-
-def test_fast_recovery_failure_waits_for_next_render_frame(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    packets = iter([100, 100, 101])
-    clock = [0.0]
-
-    def read_state() -> tuple[int | None, bool | None, int | None]:
-        return next(packets), None, None
-
-    def sleep(seconds: float) -> None:
-        clock[0] += seconds
-
-    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", lambda: clock[0])
-    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
-
-    assert _wait_for_graphics_change(read_state, 100) == 101
-    assert clock[0] == pytest.approx(0.1)
-
-
-def test_fast_recovery_failure_times_out_on_a_pinned_renderer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    clock = [0.0]
-
-    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.monotonic", lambda: clock[0])
-    monkeypatch.setattr(
-        "tools.ac_harness.resilient_launch.time.sleep",
-        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
-    )
-
-    assert _wait_for_graphics_change(lambda: (100, None, None), 100, timeout=0.2) == 100
-    assert clock[0] == pytest.approx(0.2)
 
 
 @pytest.mark.parametrize(

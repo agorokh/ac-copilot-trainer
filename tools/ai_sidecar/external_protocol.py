@@ -107,6 +107,9 @@ TYPE_SESSION_START = "session.start"
 # Upgrade identity authorized to send the physical-rig control above. Keep the server and every
 # supported sender on one constant so an otherwise valid request cannot drift out of authority.
 SESSION_START_CLIENT_ID = "resilient-launch"
+# Dedicated CSP Lua upgrade identity. Like the control identity above, this is an HTTP upgrade
+# header that browser WebSocket APIs cannot spoof through the supported adb-reverse tunnel.
+LUA_CLIENT_ID = "ac-copilot-trainer-lua"
 # Issue #511 Part D: a remote voice endpoint (tablet page) reports per-cue client-side
 # timestamps back to the sidecar so the audible-latency harness can decompose network-hop
 # vs audio-stack delay. Accepted from any authenticated peer; never relayed.

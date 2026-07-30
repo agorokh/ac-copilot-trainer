@@ -184,11 +184,12 @@ class TestSessionControl:
 
         assert 'type(simState) == "table"' not in handler
         assert re.search(
-            r"pcall\(function\(\)\s*return simState\.isSessionStarted\s*end\)",
+            r"pcall\(function\(\)\s*return simState\.isInMainMenu\s*end\)",
             handler,
         )
-        assert "pcall(startedValue, simState)" in handler
-        assert "pcall(startedValue)" in handler
+        assert "pcall(menuValue, simState)" in handler
+        assert "pcall(menuValue)" in handler
+        assert "simState.isSessionStarted" not in handler
 
     def test_main_menu_polls_session_start_bridge_without_review_queue(self) -> None:
         """SC-02: the pre-drive menu can receive session.start on a fresh launch."""
@@ -204,6 +205,15 @@ class TestSessionControl:
         assert "wsBridge.pollInbound(8)" in menu_branch
         assert "wsBridge.startSidecarIfNeeded(appDir, dt)" in menu_branch
         assert "pendingSessionReview ~= nil and wsBridge" not in menu_branch
+
+    def test_session_start_is_explicitly_armed_and_lua_identified(self) -> None:
+        """SC-03: human app loads never auto-press Start; the relay targets authenticated Lua."""
+        entry = _entry_text()
+        bridge = (MODULES / "ws_bridge.lua").read_text(encoding="utf-8")
+
+        assert "pressStartIfWaiting" not in entry
+        assert 'client_class = "lua"' in bridge
+        assert "{ [CLIENT_HEADER] = LUA_CLIENT_ID }" in bridge
 
 
 # ---------------------------------------------------------------------------

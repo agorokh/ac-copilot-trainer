@@ -7,6 +7,7 @@ injectable; tests exercise the behavior without requiring the physical rig.
 
 from __future__ import annotations
 
+import configparser
 import json
 import os
 import re
@@ -214,6 +215,9 @@ class GamePointConfig:
     resilient_track: str | None = None
     resilient_layout: str | None = None
     resilient_cm_exe: str | None = None
+    #: Assetto Corsa user-data root containing cfg/extension/gui.ini. Used to verify the
+    #: CSP 0.2.11 legacy-menu prerequisite before Stable AC starts.
+    ac_user_dir: str | None = None
     #: Manage the tablet dashboard's ``adb reverse`` USB tunnel (issue #567). Opt-in
     #: (house pattern, cf. ``start_simhub``): off by default so CI / non-rig hosts never
     #: shell out to adb; the rig sets ``AC_COPILOT_MANAGE_TABLET_TUNNEL=1``.
@@ -305,6 +309,10 @@ class GamePointConfig:
             resilient_cm_exe=_configured_text(
                 env_map.get("AC_COPILOT_RESILIENT_CM_EXE"),
                 settings.resilient_cm_exe,
+            ),
+            ac_user_dir=_configured_text(
+                env_map.get("AC_COPILOT_AC_USER_DIR"),
+                settings.ac_user_dir,
             ),
             manage_tablet_tunnel=manage_tablet_tunnel,
             paths=resolved_paths,
@@ -622,6 +630,9 @@ class GamePointSupervisor:
                 "unconfigured",
                 f"set {', '.join(missing)} in settings.json or the matching environment variables",
             )
+        menu_config = self._stable_ac_menu_config()
+        if not menu_config.ok:
+            return menu_config
         if (
             self.config.resilient_cm_exe
             and _resolve_launcher_path(
@@ -791,6 +802,9 @@ class GamePointSupervisor:
                     "unconfigured",
                     "resilient_cm_exe must be absolute or stay within the Game Point folder",
                 )
+            menu_config = self._stable_ac_menu_config()
+            if not menu_config.ok:
+                return menu_config
             return ProbeResult(
                 "ac_session",
                 True,
@@ -802,6 +816,66 @@ class GamePointSupervisor:
             rc == 0,
             "exited",
             f"exit={rc}; log={self.paths.resilient_log_path}",
+        )
+
+    def _stable_ac_menu_config(self) -> ProbeResult:
+        """Verify CSP 0.2.11 can honor ``ac.tryToStart`` before launching Stable AC."""
+
+        explicit = Path(self.config.ac_user_dir) if self.config.ac_user_dir else None
+        if explicit is None and sys.platform != "win32":
+            return ProbeResult("ac_session", True, "menu_config_skipped")
+        if explicit is not None:
+            ac_user_dir = explicit
+        else:
+            candidates = (
+                Path.home() / "Documents" / "Assetto Corsa",
+                Path.home() / "OneDrive" / "Documents" / "Assetto Corsa",
+            )
+            ac_user_dir = next((path for path in candidates if path.is_dir()), candidates[0])
+        gui_ini = ac_user_dir / "cfg" / "extension" / "gui.ini"
+        try:
+            raw = gui_ini.read_bytes()
+        except OSError as exc:
+            return ProbeResult(
+                "ac_session",
+                False,
+                "menu_config_required",
+                "Stable AC on CSP 0.2.11 requires [NEW_UI] REPLACE_MAIN_MENU=0; "
+                f"cannot read {gui_ini}: {exc}",
+            )
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw.decode("cp1252")
+        parser = configparser.ConfigParser(
+            interpolation=None,
+            strict=False,
+            inline_comment_prefixes=(";", "#"),
+        )
+        try:
+            parser.read_string(text)
+            replace_main_menu = parser.get("NEW_UI", "REPLACE_MAIN_MENU")
+        except (configparser.Error, KeyError) as exc:
+            return ProbeResult(
+                "ac_session",
+                False,
+                "menu_config_required",
+                "Stable AC on CSP 0.2.11 requires [NEW_UI] REPLACE_MAIN_MENU=0 in "
+                f"{gui_ini}: {exc}",
+            )
+        if replace_main_menu.strip().lower() not in {"0", "false", "off", "no"}:
+            return ProbeResult(
+                "ac_session",
+                False,
+                "menu_config_required",
+                "Set [NEW_UI] REPLACE_MAIN_MENU=0 in "
+                f"{gui_ini}; CSP 0.2.11 New UI ignores ac.tryToStart.",
+            )
+        return ProbeResult(
+            "ac_session",
+            True,
+            "menu_configured",
+            f"legacy menu enabled in {gui_ini}",
         )
 
     @staticmethod

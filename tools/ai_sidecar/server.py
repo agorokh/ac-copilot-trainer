@@ -39,12 +39,14 @@ from tools.ai_sidecar.external_protocol import (
     CLIENT_CLASS_BROWSER,
     CLIENT_CLASS_EXTERNAL,
     CLIENT_CLASS_KEY,
+    CLIENT_CLASS_LUA,
     CLIENT_CLASS_SCREEN,
     CLIENT_HEADER,
     ENVELOPE_KEY,
     ENVELOPE_VERSION,
     HAPTIC_CLIENT_CLASSES,
     IDENTITY_REPLAY_TOPICS,
+    LUA_CLIENT_ID,
     SESSION_START_CLIENT_ID,
     SIDECAR_PRODUCED_TOPICS,
     TELEMETRY_TICK_CLIENT_CLASSES,
@@ -168,6 +170,9 @@ _external_peers: set[Any] = set()
 # Browser WebSocket APIs cannot set that header; peer IP alone is insufficient because adb
 # reverse presents tablet traffic as loopback (#726).
 _session_start_authorized_peers: set[Any] = set()
+# CSP Lua peers earn their class from a dedicated loopback upgrade header. A browser can claim
+# `client_class="lua"` in JSON, but browser WebSocket APIs cannot set this header (#726).
+_lua_authorized_peers: set[Any] = set()
 _setup_experiment_store_path: Path | None = None
 _setup_experiment_store_seeded = False
 _setup_exchange_endpoint: str | None = None
@@ -521,6 +526,7 @@ def _reset_external_state() -> None:
     global _observer_feed_peer, _observer_feed_warned
     _external_peers.clear()
     _session_start_authorized_peers.clear()
+    _lua_authorized_peers.clear()
     _external_peer_classes.clear()
     _sidecar_state_cache.clear()
     _identity_cache_producers.clear()
@@ -1487,6 +1493,10 @@ def make_process_request(token: str | None):
             _session_start_authorized_peers.add(connection)
         else:
             _session_start_authorized_peers.discard(connection)
+        if _is_loopback_peer(connection) and client_id == LUA_CLIENT_ID:
+            _lua_authorized_peers.add(connection)
+        else:
+            _lua_authorized_peers.discard(connection)
         if token_check is not None:
             return token_check(connection, request)
         return None
@@ -1556,6 +1566,7 @@ def _drop_external_peer(peer: Any) -> None:
     """
     _external_peers.discard(peer)
     _session_start_authorized_peers.discard(peer)
+    _lua_authorized_peers.discard(peer)
     _external_peer_classes.pop(peer, None)
     _release_observer_feed(peer)
 
@@ -1573,6 +1584,7 @@ async def _broadcast_targets(frame: dict[str, Any], *, targets: list[Any]) -> No
             )
             _external_peers.discard(p)
             _session_start_authorized_peers.discard(p)
+            _lua_authorized_peers.discard(p)
             _external_peer_classes.pop(p, None)
 
 
@@ -2397,6 +2409,13 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
         # Track this peer for fan-out and acknowledge directly.
         _external_peers.add(websocket)
         client_class = _client_class_from_hello(data)
+        if client_class == CLIENT_CLASS_LUA and websocket not in _lua_authorized_peers:
+            logger.warning(
+                "downgrading unauthenticated lua class peer=%s client=%s",
+                peer,
+                data.get("client", "?"),
+            )
+            client_class = CLIENT_CLASS_EXTERNAL
         _external_peer_classes[websocket] = client_class
         logger.info(
             "external hello accepted peer=%s client=%s class=%s peers=%d",
@@ -2428,6 +2447,37 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
                 ref_type=t,
             ),
         )
+        return
+    if t == TYPE_SESSION_START:
+        targets = _targets_for_classes(
+            exclude=websocket,
+            classes=frozenset({CLIENT_CLASS_LUA}),
+        )
+        targets = [peer for peer in targets if peer in _lua_authorized_peers]
+        if not targets:
+            await _safe_send(
+                websocket,
+                make_error("no authenticated loopback Lua peer connected", ref_type=t),
+            )
+            return
+        await _broadcast_targets(data, targets=targets)
+        return
+    if t == TYPE_SESSION_START_ACK:
+        if websocket not in _lua_authorized_peers or _peer_class(websocket) != CLIENT_CLASS_LUA:
+            await _safe_send(
+                websocket,
+                make_error(
+                    "session.start.ack is accepted only from authenticated trainer Lua",
+                    ref_type=t,
+                ),
+            )
+            return
+        targets = [
+            peer
+            for peer in _session_start_authorized_peers
+            if peer in _external_peers and peer is not websocket
+        ]
+        await _broadcast_targets(data, targets=targets)
         return
     if t in (TYPE_SETUP_EXCHANGE_SEARCH, TYPE_SETUP_EXCHANGE_DOWNLOAD):
         await _handle_setup_exchange_frame(websocket, data)
@@ -2825,6 +2875,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
     finally:
         _external_peers.discard(websocket)
         _session_start_authorized_peers.discard(websocket)
+        _lua_authorized_peers.discard(websocket)
         _external_peer_classes.pop(websocket, None)
         # Identity snapshots cached for late-subscriber replay die with their producer:
         # replaying a disconnected trainer's setup/session to a fresh tablet would render

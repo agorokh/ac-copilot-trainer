@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-29T23:50:00-07:00
+last_updated: 2026-07-30T00:14:00-07:00
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
@@ -253,6 +253,22 @@ server, resilient launcher, and auto-drive sender now share one authorized clien
 auto-drive path uses `HarnessClient.request_session_start()` and logs the flat ack fields. A
 correlated sidecar error returns immediately instead of waiting out the ack timeout. Focused result:
 640 passed. Final `make ci-fast`: 3,871 passed, 89 skipped, 83.61% coverage.
+
+**Current-SHA control-safety follow-up:** the live measurement that CSP 0.2.11 may return false
+on the first `ac.tryToStart` call is retained, but unconditional app-load retries are not: they
+would force an ordinary human waiting at the Drive/setup screen into a session. Only the
+authenticated resilient/auto-drive harness now arms Start, and `HarnessClient` performs the
+bounded one-second-spaced retries. Lua idempotency uses `isInMainMenu == false`, never
+`isSessionStarted` (measured true while still parked). Both sides of the physical-control relay
+carry dedicated loopback upgrade identities that browser WebSocket APIs cannot set; the sidecar
+routes `session.start` only to authenticated `CLIENT_CLASS_LUA` and accepts/returns its ack only
+on that channel, so the adb-reversed tablet neither receives nor forges control traffic. An
+unacknowledged request still gets the authoritative bounded Car0 re-probe, covering a delivered
+side effect whose ack was lost. Finally, Game Point reads `[NEW_UI] REPLACE_MAIN_MENU=0` from the
+resolved AC user-data `gui.ini` before Stable AC launch and reports `menu_config_required` with
+the exact path/remediation; configure `ac_user_dir` or `AC_COPILOT_AC_USER_DIR` when discovery is
+insufficient. Focused result: 655 passed. Final `make ci-fast`: 3,875 passed, 89 skipped, 83.61%
+coverage.
 
 **Mechanism correction (static analysis, no rig time)** —
 [issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).

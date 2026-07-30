@@ -2050,7 +2050,11 @@ def test_session_start_round_trip_via_hub(
                     f"ws://127.0.0.1:{port}/",
                     additional_headers=headers,
                 ) as harness,
-                ws_connect(f"ws://127.0.0.1:{port}/") as lua,
+                ws_connect(
+                    f"ws://127.0.0.1:{port}/",
+                    additional_headers={ep.CLIENT_HEADER: ep.LUA_CLIENT_ID},
+                ) as lua,
+                ws_connect(f"ws://127.0.0.1:{port}/") as tablet,
             ):
                 await harness.send(
                     json.dumps({"v": 1, "type": "hello", "client": "resilient-launch"})
@@ -2068,11 +2072,24 @@ def test_session_start_round_trip_via_hub(
                     )
                 )
                 await asyncio.wait_for(lua.recv(), timeout=2.0)
+                await tablet.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "hello",
+                            "client": "tablet",
+                            "client_class": ep.CLIENT_CLASS_BROWSER,
+                        }
+                    )
+                )
+                await asyncio.wait_for(tablet.recv(), timeout=2.0)
 
                 await harness.send(
                     json.dumps({"v": 1, "type": ep.TYPE_SESSION_START, "instant": True})
                 )
                 forwarded = json.loads(await asyncio.wait_for(lua.recv(), timeout=2.0))
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(tablet.recv(), timeout=0.05)
                 await lua.send(
                     json.dumps(
                         {
@@ -2084,6 +2101,8 @@ def test_session_start_round_trip_via_hub(
                     )
                 )
                 ack = json.loads(await asyncio.wait_for(harness.recv(), timeout=2.0))
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(tablet.recv(), timeout=0.05)
                 return forwarded, ack
 
     forwarded, ack = asyncio.run(_run())
@@ -2091,6 +2110,59 @@ def test_session_start_round_trip_via_hub(
     assert ack["type"] == ep.TYPE_SESSION_START_ACK
     assert ack["ok"] is True
     assert ack["started"] is True
+
+
+def test_browser_cannot_forge_session_start_ack() -> None:
+    """An adb-reversed browser looks loopback but lacks the trainer-Lua upgrade identity."""
+
+    async def _run() -> tuple[dict, bool]:
+        async with _running_sidecar(token=None) as port:
+            async with (
+                ws_connect(
+                    f"ws://127.0.0.1:{port}/",
+                    additional_headers={ep.CLIENT_HEADER: ep.SESSION_START_CLIENT_ID},
+                ) as harness,
+                ws_connect(f"ws://127.0.0.1:{port}/") as tablet,
+            ):
+                await harness.send(
+                    json.dumps({"v": 1, "type": "hello", "client": "resilient-launch"})
+                )
+                await asyncio.wait_for(harness.recv(), timeout=2.0)
+                await tablet.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "hello",
+                            "client": "tablet",
+                            "client_class": ep.CLIENT_CLASS_BROWSER,
+                        }
+                    )
+                )
+                await asyncio.wait_for(tablet.recv(), timeout=2.0)
+                await tablet.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": ep.TYPE_SESSION_START_ACK,
+                            "ok": True,
+                            "started": True,
+                        }
+                    )
+                )
+                error = json.loads(await asyncio.wait_for(tablet.recv(), timeout=2.0))
+                try:
+                    await asyncio.wait_for(harness.recv(), timeout=0.05)
+                except TimeoutError:
+                    harness_received_forgery = False
+                else:
+                    harness_received_forgery = True
+                return error, harness_received_forgery
+
+    error, harness_received_forgery = asyncio.run(_run())
+    assert error["type"] == ep.TYPE_ERROR
+    assert error["ref_type"] == ep.TYPE_SESSION_START_ACK
+    assert "authenticated trainer Lua" in error["message"]
+    assert harness_received_forgery is False
 
 
 @pytest.mark.parametrize(

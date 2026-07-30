@@ -269,6 +269,33 @@ def test_session_start_request_returns_correlated_error_without_waiting_for_time
     assert sent == [{"v": 1, "type": "session.start", "instant": False}]
 
 
+def test_session_start_request_retries_negative_lua_ack() -> None:
+    async def _run() -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+        hc = HarnessClient("ws://127.0.0.1:1/")
+        sent: list[dict[str, Any]] = []
+
+        async def _send(frame: dict[str, Any]) -> None:
+            sent.append(frame)
+
+        hc.send = _send  # type: ignore[method-assign]
+        await hc._queue.put({"v": 1, "type": "session.start.ack", "ok": False, "started": False})
+        await hc._queue.put({"v": 1, "type": "session.start.ack", "ok": True, "started": True})
+        response = await hc.request_session_start(
+            instant=True,
+            timeout=1.0,
+            attempts=3,
+            retry_delay=0.0,
+        )
+        return response, sent
+
+    response, sent = asyncio.run(_run())
+    assert response is not None and response["started"] is True
+    assert sent == [
+        {"v": 1, "type": "session.start", "instant": True},
+        {"v": 1, "type": "session.start", "instant": True},
+    ]
+
+
 def test_connect_retries_then_raises_on_dead_port() -> None:
     async def _run() -> None:
         hc = HarnessClient("ws://127.0.0.1:1/")

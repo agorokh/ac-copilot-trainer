@@ -14,6 +14,8 @@ local MAX_RECV_PER_TICK = 8
 --- Sidecar WebSocket protocol version (must match Python `tools/ai_sidecar` v1 schema).
 local PROTOCOL_VERSION = 1
 M.PROTOCOL_VERSION = PROTOCOL_VERSION
+local CLIENT_HEADER = "X-AC-Copilot-Client"
+local LUA_CLIENT_ID = "ac-copilot-trainer-lua"
 
 --- Issue #81: external-client `{v:1,type:...}` envelope. Handlers registered by
 --- the main script; absent handlers reply with `{type="action.ack", applied=false}`.
@@ -622,7 +624,8 @@ tryOpen = function()
     M.sendJson({
       v = PROTOCOL_VERSION,
       type = "hello",
-      client = "ac-copilot-trainer-lua",
+      client = LUA_CLIENT_ID,
+      client_class = "lua",
     })
   end
   local opened = nil
@@ -681,8 +684,10 @@ tryOpen = function()
     reconnect = true,
   }
   local ok, s = pcall(function()
-    -- 3-arg overload: (url, callback, params)
-    return web.socket(url, _onRecv, params)
+    -- 4-arg overload: (url, headers, callback, params). The dedicated upgrade identity lets
+    -- the sidecar distinguish CSP Lua from an adb-reversed browser, even though both appear
+    -- loopback at the TCP layer.
+    return web.socket(url, { [CLIENT_HEADER] = LUA_CLIENT_ID }, _onRecv, params)
   end)
   if ok and s ~= nil then
     opened = s
