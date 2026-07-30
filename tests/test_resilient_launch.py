@@ -9,6 +9,8 @@ semantics against synthetic traces — no Assetto Corsa, no Windows shared memor
 from __future__ import annotations
 
 import argparse
+import builtins
+import inspect
 import json
 import os
 import subprocess
@@ -16,7 +18,9 @@ from pathlib import Path
 
 import pytest
 
+from tools.ac_harness import resilient_launch as resilient_launch_module
 from tools.ac_harness.resilient_launch import (
+    FREEZE_VERDICTS,
     AttemptOutcome,
     AttemptReadiness,
     LaunchVerdict,
@@ -44,8 +48,10 @@ from tools.ac_harness.resilient_launch import (
     _wait_process_exit,
     _watch_live,
     _watched_delivery,
+    car0_handshake_failure_outcome,
     classify,
     cycle_delivered,
+    request_session_start,
     run_retry_loop,
 )
 from tools.ac_harness.shared_memory import SharedMemoryUnavailable
@@ -142,6 +148,25 @@ def test_unknown_graphics_sample_breaks_the_consecutive_stall_run():
     )
 
 
+def test_sustained_unreadable_graphics_fails_with_unknown_readiness():
+    samples = steady(0.0, 10.0, first_packet=100)
+    samples += [
+        Sample(
+            t=float(t),
+            gfx_packet=None,
+            acs_alive=True,
+            entry_ready=None,
+            drivable=None,
+        )
+        for t in range(11, 15)
+    ]
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.FROZE
+    )
+
+
 def test_single_not_ready_flicker_does_not_abort_stability_window():
     samples = steady(0.0, 10.0, first_packet=100)
     samples.append(Sample(t=11.0, gfx_packet=800, acs_alive=True, entry_ready=False))
@@ -170,10 +195,226 @@ def test_unknown_readiness_breaks_the_consecutive_not_ready_run():
     )
 
 
-def test_sustained_not_ready_state_fails_the_attempt():
+def test_sustained_not_ready_with_an_advancing_stream_is_not_drivable_not_a_freeze():
+    """A rendering session that never becomes drivable is AC's pre-drive menu (#466), not a wedge.
+
+    Measured on AG_PC 2026-07-29 at 23.4 h uptime: four consecutive attempts scored ``froze`` at
+    14.38/14.40/15.41/14.39 s while the graphics packet advanced ~114/s and physics ~374/s, and a
+    screenshot showed AC parked at the Drive/Setup/Exit menu. The #627 wedge REQUIRES a pinned
+    graphics packet (§2), so an advancing stream must not land in the freeze bucket.
+    """
     samples = steady(0.0, 10.0, first_packet=100)
     samples += [
         Sample(t=11.0 + index, gfx_packet=800 + index, acs_alive=True, entry_ready=False)
+        for index in range(4)
+    ]
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.NOT_DRIVABLE
+    )
+    assert LaunchVerdict.NOT_DRIVABLE.value not in FREEZE_VERDICTS
+
+
+def test_sustained_not_ready_with_a_pinned_stream_is_still_a_freeze():
+    """Readiness lost AND the render stream pinned is a genuine wedge — keep it in FROZE.
+
+    The pinned packet must equal the LAST live packet: a real wedge freezes the stream where it
+    stood, so there is no advance anywhere inside the not-ready run. (Jumping to a fresh higher
+    packet would itself be an advance, i.e. evidence the renderer was still running.)
+    """
+    samples = steady(0.0, 10.0, first_packet=100)
+    pinned = samples[-1].gfx_packet
+    samples += [
+        Sample(t=11.0 + index, gfx_packet=pinned, acs_alive=True, entry_ready=False)
+        for index in range(4)
+    ]
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.FROZE
+    )
+
+
+def test_car0_handshake_failure_is_not_drivable_when_render_still_advances():
+    """The PRODUCTION route for a rendered-but-not-drivable session must match the classifier.
+
+    `main` catches `_Car0NotDrivable` and previously mapped it to FROZE, so real menu-park
+    attempts kept landing in FREEZE_VERDICTS even after the pure classifier was fixed
+    (Codex P1 on #726). `main` is `pragma: no cover`, so the mapping lives in this helper.
+    """
+    outcome = car0_handshake_failure_outcome(100, 200)
+
+    assert outcome.verdict is LaunchVerdict.NOT_DRIVABLE
+    assert str(outcome.verdict) not in FREEZE_VERDICTS
+    # The session WAS rendering, so CM really started an acs.exe and a cycle was consumed (#710).
+    assert outcome.cycle_delivered is True
+
+
+def test_session_start_sender_requires_positive_lua_ack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import harness_client
+
+    class _FakeHarnessClient:
+        def __init__(self, url: str, **kwargs: object) -> None:
+            assert url == "ws://127.0.0.1:9876"
+            assert kwargs["token"] == "secret"
+            self.closed = False
+
+        async def connect(self, **_kwargs: object) -> None:
+            return None
+
+        async def hello(self, **_kwargs: object) -> dict[str, object]:
+            return {"type": "hello_ack"}
+
+        async def request_session_start(self, **_kwargs: object) -> dict[str, object]:
+            return {"type": "session.start.ack", "ok": True, "started": True}
+
+        async def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setenv("AC_COPILOT_SIDECAR_PORT", "9876")
+    monkeypatch.setenv("AC_COPILOT_SIDECAR_TOKEN", "secret")
+    monkeypatch.setattr(harness_client, "HarnessClient", _FakeHarnessClient)
+
+    assert request_session_start(timeout=0.1) is True
+
+
+def test_unacknowledged_session_start_still_reprobes_car0() -> None:
+    """Ack loss cannot tear down a Start side effect that actually made Car0 available."""
+    source = inspect.getsource(resilient_launch_module.main)
+    start = source.index("acknowledged = request_session_start()")
+    end = source.index("outcome = menu_outcome", start)
+    recovery = source[start:end]
+
+    assert "else:" in recovery
+    assert "re-probing Car0 in case the side effect landed" in recovery
+    assert "readiness = AttemptReadiness(" in recovery
+    assert recovery.rstrip().endswith("continue")
+
+
+def test_session_start_sender_rejects_invalid_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AC_COPILOT_SIDECAR_PORT", "not-a-port")
+
+    assert request_session_start(timeout=0.1) is False
+
+
+def test_session_start_sender_fails_closed_on_websocket_handshake_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from websockets.exceptions import WebSocketException
+
+    from tools.ai_sidecar import harness_client
+
+    class _RejectedHarnessClient:
+        def __init__(self, _url: str, **_kwargs: object) -> None:
+            pass
+
+        async def connect(self, **_kwargs: object) -> None:
+            raise WebSocketException("upgrade rejected")
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(harness_client, "HarnessClient", _RejectedHarnessClient)
+
+    assert request_session_start(timeout=0.1) is False
+
+
+def test_session_start_sender_fails_closed_without_websocket_extra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_import = builtins.__import__
+
+    def _without_websockets(
+        name: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name == "websockets.exceptions":
+            raise ModuleNotFoundError("No module named 'websockets'")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _without_websockets)
+
+    assert request_session_start(timeout=0.1) is False
+
+
+@pytest.mark.parametrize(
+    ("packet_before", "packet_after"),
+    [
+        (100, 100),  # pinned while the probe blocked
+        (100, 10),  # a replacement generation
+        (100, None),  # renderer exited or shared memory became unreadable
+        (None, 100),  # no comparable pre-probe observation
+    ],
+)
+def test_car0_handshake_failure_stays_froze_without_fresh_render_advance(
+    packet_before: int | None,
+    packet_after: int | None,
+) -> None:
+    outcome = car0_handshake_failure_outcome(packet_before, packet_after)
+
+    assert outcome.verdict is LaunchVerdict.FROZE
+    assert str(outcome.verdict) in FREEZE_VERDICTS
+    assert outcome.cycle_delivered is True
+
+
+def test_one_hitch_on_the_threshold_sample_does_not_flip_a_menu_to_froze():
+    """The split reads the not-ready RUN's history, not just its final sample (Codex P1 on #726).
+
+    A rendering menu whose graphics packet happens to repeat on exactly the sample that trips the
+    not-ready threshold must not be labelled FROZE off that ONE stalled interval — `stall_run`
+    would also be only 1. The classifier resolves it by declining to decide on the hitch and
+    letting the next advancing sample settle it; `FROZE` stays owned by the independent
+    `stall_run >= stall_samples` threshold, which a genuinely pinned stream reaches and an
+    intermittently-hitching menu never does.
+    """
+    samples = steady(0.0, 10.0, first_packet=100)
+    samples += [
+        Sample(t=11.0 + index, gfx_packet=800 + index, acs_alive=True, entry_ready=False)
+        for index in range(3)
+    ]
+    # 4th not-ready sample repeats the 3rd's packet — a single stalled interval at the boundary.
+    samples.append(Sample(t=14.0, gfx_packet=802, acs_alive=True, entry_ready=False))
+    # 5th advances again: the renderer was alive all along, so this is the menu, not a wedge.
+    samples.append(Sample(t=15.0, gfx_packet=803, acs_alive=True, entry_ready=False))
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.NOT_DRIVABLE
+    )
+
+
+def test_a_menu_that_pins_after_one_advance_still_reaches_froze():
+    """The inverse transition: one early advance must not latch a delayed wedge out of FROZE.
+
+    Readiness goes false on an advancing sample and the stream then pins. A latched
+    "advanced at some point" flag would return NOT_DRIVABLE forever and undercount #627
+    (Codex P1 on #726); the stall threshold must still be able to resolve.
+    """
+    samples = steady(0.0, 10.0, first_packet=100)
+    advancing = samples[-1].gfx_packet + 60
+    samples.append(Sample(t=11.0, gfx_packet=advancing, acs_alive=True, entry_ready=False))
+    samples += [
+        Sample(t=12.0 + index, gfx_packet=advancing, acs_alive=True, entry_ready=False)
+        for index in range(5)
+    ]
+
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=45.0, stall_samples=4)
+        is LaunchVerdict.FROZE
+    )
+
+
+def test_sustained_not_ready_with_unreadable_graphics_fails_closed_promptly():
+    """Missing graphics cannot prove a menu and must not wait for the whole wall budget."""
+    samples = steady(0.0, 10.0, first_packet=100)
+    samples += [
+        Sample(t=11.0 + index, gfx_packet=None, acs_alive=True, entry_ready=False)
         for index in range(4)
     ]
 
@@ -851,6 +1092,31 @@ class TestRetryLoop:
         assert report.verdict is LaunchVerdict.FROZE
         assert "reboot" in report.summary()
 
+    def test_never_live_dominance_keeps_launch_delivery_remediation(self):
+        """One menu park must not hide a run dominated by launches that never reached AC."""
+        seq = [
+            LaunchVerdict.NOT_DRIVABLE,
+            LaunchVerdict.NEVER_LIVE,
+            LaunchVerdict.NEVER_LIVE,
+            LaunchVerdict.NEVER_LIVE,
+        ]
+        report = run_retry_loop(lambda i: seq[i - 1], max_attempts=len(seq))
+
+        assert "AC rendered but never became drivable" not in report.summary()
+        assert "cold-restart Content Manager" in report.summary()
+
+    def test_menu_park_tied_with_freezes_does_not_recommend_reboot(self):
+        seq = [
+            LaunchVerdict.NOT_DRIVABLE,
+            LaunchVerdict.FROZE,
+            LaunchVerdict.NOT_DRIVABLE,
+            LaunchVerdict.FROZE,
+        ]
+        report = run_retry_loop(lambda i: seq[i - 1], max_attempts=len(seq))
+
+        assert "AC rendered but never became drivable" in report.summary()
+        assert "a reboot lowers the per-launch freeze rate" not in report.summary()
+
     def test_cold_restarts_cm_after_consecutive_never_live(self):
         """Repeated never_live means a stale CM ignoring the preset URL (#537/#558) — restart it."""
         calls: list[int] = []
@@ -937,12 +1203,13 @@ class TestRetryLoop:
             lambda i: LaunchVerdict.STABLE, max_attempts=1, uptime_hours=lambda: None
         )
         payload = json_module.loads(json_module.dumps(report.as_dict()))
-        assert payload["schema"] == "resilient-launch-report/v3"
+        assert payload["schema"] == "resilient-launch-report/v4"
         assert payload["verdict"] == "stable"
         assert payload["counts"] == {
             "stable": 1,
             "froze": 0,
             "wedged_init": 0,
+            "not_drivable": 0,
             "never_live": 0,
         }
         assert payload["cycles"] == {"delivered": 1, "undelivered": 0, "undetermined": 0}
@@ -982,6 +1249,44 @@ class TestRetryLoop:
                 stable=1,
             ).as_dict()
         )
+
+    def test_report_preserves_current_process_observation_window(self):
+        """#726: analyzer timing excludes cleanup/CM startup before acs.exe was observable."""
+        report = run_retry_loop(
+            lambda _attempt: AttemptOutcome(
+                LaunchVerdict.NOT_DRIVABLE,
+                cycle_delivered=True,
+                live_observation_s=6.25,
+                perturber_snapshot_age_s=6.0,
+            ),
+            max_attempts=1,
+            uptime_hours=lambda: None,
+        )
+
+        assert report.attempts_log[0].live_observation_s == 6.25
+        assert report.as_dict()["attempts_log"][0]["live_observation_s"] == 6.25
+        assert report.attempts_log[0].perturber_snapshot_age_s == 6.0
+        assert report.as_dict()["attempts_log"][0]["perturber_snapshot_age_s"] == 6.0
+
+    def test_invalid_process_observation_window_is_rejected(self):
+        with pytest.raises(ValueError, match="live_observation_s"):
+            run_retry_loop(
+                lambda _attempt: AttemptOutcome(
+                    LaunchVerdict.NOT_DRIVABLE,
+                    cycle_delivered=True,
+                    live_observation_s=-0.1,
+                ),
+                max_attempts=1,
+            )
+        with pytest.raises(ValueError, match="perturber_snapshot_age_s"):
+            run_retry_loop(
+                lambda _attempt: AttemptOutcome(
+                    LaunchVerdict.NOT_DRIVABLE,
+                    cycle_delivered=True,
+                    perturber_snapshot_age_s=-0.1,
+                ),
+                max_attempts=1,
+            )
 
     def test_bare_verdict_leaves_never_live_delivery_undetermined(self):
         """#710 — a caller returning a bare verdict supplies no delivery evidence.
@@ -1781,11 +2086,24 @@ def test_car0_probe_performs_final_read_at_timeout_boundary(monkeypatch) -> None
     )
 
 
-def test_car0_probe_mapping_failure_is_retryable() -> None:
+def test_car0_probe_mapping_failure_waits_out_the_injection_race(monkeypatch) -> None:
+    now = 0.0
+
     def fail_controller() -> object:
         raise SharedMemoryUnavailable("mapping unavailable")
 
-    assert _probe_car0_drivable(controller_factory=fail_controller) is False
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr(
+        "tools.ac_harness.resilient_launch.time.monotonic",
+        lambda: now,
+    )
+    monkeypatch.setattr("tools.ac_harness.resilient_launch.time.sleep", sleep)
+
+    assert _probe_car0_drivable(timeout=5.0, controller_factory=fail_controller) is False
+    assert now == pytest.approx(5.0)
 
 
 def test_car0_probe_honors_release_during_handshake(monkeypatch) -> None:
@@ -2402,6 +2720,7 @@ class TestPerturberTreatmentReceipt:
             "stable": 0,
             "froze": 1,
             "wedged_init": 0,
+            "not_drivable": 0,
             "never_live": 0,
         }
         assert payload["arm_contradicted"] is True
@@ -2449,7 +2768,13 @@ class TestPerturberTreatmentReceipt:
         }
         assert payload["perturbers"]["steam_overlay"] == str(PerturberEvidence.UNAVAILABLE)
         # Perturbers ride OUTSIDE `counts`, which stays the verdict histogram consumers compare.
-        assert set(payload["counts"]) == {"stable", "froze", "wedged_init", "never_live"}
+        assert set(payload["counts"]) == {
+            "stable",
+            "froze",
+            "wedged_init",
+            "not_drivable",
+            "never_live",
+        }
         # No declared arm -> the experiment-only fields stay absent entirely.
         assert "expect_perturbers" not in payload
         assert "arm_contradicted" not in payload

@@ -39,10 +39,14 @@ def test_session_end_flushes_pending_lap_archive() -> None:
     menu_kw = src.rindex("if sim.isInMainMenu then", 0, anchor)
     branch_body = src[menu_kw:anchor]
     menu_prefix = branch_body.split("if state.wasDriving then", maxsplit=1)[0]
-    assert "pendingSessionReview ~= nil" in menu_prefix
-    assert "wsBridge.tick(ch.simSeconds(sim))" in menu_prefix
+    # #627/#466: menu polling must not depend on a post-session review already being queued.
+    # A fresh launch needs this same bridge to receive session.start and leave the pre-drive menu.
+    assert "pendingSessionReview ~= nil and wsBridge" not in menu_prefix
+    assert "if wsBridge then" in menu_prefix
+    assert "wsBridge.startSidecarIfNeeded(appDir, dt)" in menu_prefix
+    assert "wsBridge.tick(ch.simSeconds(sim), dt)" in menu_prefix
     assert "wsBridge.pollInbound(8)" in menu_prefix
-    assert menu_prefix.index("wsBridge.tick(ch.simSeconds(sim))") < menu_prefix.index(
+    assert menu_prefix.index("wsBridge.tick(ch.simSeconds(sim), dt)") < menu_prefix.index(
         "pumpSessionReviewRequest()"
     )
     assert "flushPendingLapArchiveJobs(" in branch_body, (
@@ -106,7 +110,7 @@ def test_lap_boundary_queues_archive_instead_of_sync_write() -> None:
     drive_start = src.index("lastDriveCar = car")
     marker = src.index("-- Issue #180 Part D step 2", drive_start)
     ws_block = src[drive_start:marker]
-    assert "wsBridge.tick(ch.simSeconds(sim))" in ws_block
+    assert "wsBridge.tick(ch.simSeconds(sim), dt)" in ws_block
     assert ws_block.index("wsBridge.pollInbound(8)") < ws_block.index("pumpLapArchiveJobs()")
     assert ws_block.index("pumpLapArchiveJobs()") < ws_block.index("pumpLapArchiveNotifications()")
     assert "pendingLapArchiveRecordPaths" in src

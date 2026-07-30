@@ -9,10 +9,13 @@ local sock ---@type any
 local url ---@type string|nil
 local RECONNECT_SEC = 5
 local lastTry = -RECONNECT_SEC
+local reconnectElapsed = 0
 local MAX_RECV_PER_TICK = 8
 --- Sidecar WebSocket protocol version (must match Python `tools/ai_sidecar` v1 schema).
 local PROTOCOL_VERSION = 1
 M.PROTOCOL_VERSION = PROTOCOL_VERSION
+local CLIENT_HEADER = "X-AC-Copilot-Client"
+local LUA_CLIENT_ID = "ac-copilot-trainer-lua"
 
 --- Issue #81: external-client `{v:1,type:...}` envelope. Handlers registered by
 --- the main script; absent handlers reply with `{type="action.ack", applied=false}`.
@@ -61,22 +64,23 @@ local currentSimT = 0
 --- Issue #77 Part A: sidecar auto-launch state.
 --- spawnedAlive: true while CSP believes the console child is running; cleared
 ---               from os.runConsoleProcess exit callback so we can relaunch.
---- lastLaunchAttemptT: sim-time seconds of the last spawn attempt (gate against
----                     double-launch + crash-loop restart).
---- LAUNCH_RETRY_SEC: minimum gap between launch attempts (also our
----                   "settling time" before we stop retrying transparently).
+--- Spawn/backoff pacing accumulates script.update's real frame delta, not sim time: the pre-drive
+--- menu freezes currentSimT but update(dt) continues and must recover a failed child before it can
+--- receive session.start (#726). Do not count frames here: the rig renders at ~114 Hz.
 local spawnedAlive = false
 --- True after this bridge successfully started a console child (used to drop only *our* stale sockets).
 local sidecarChildEverLaunched = false
-local lastLaunchAttemptT = -1e9
-local LAUNCH_RETRY_SEC = 5.0
+local sidecarMaintenanceElapsed = 0
+local lastLaunchAttemptElapsed = -1e9
+local LAUNCH_RETRY_SECONDS = 5
 --- Back off `runConsoleProcess` after streak failures or bat exit 2 (missing repo/tools — Copilot #78).
 local spawnFailStreak = 0
 --- Count rapid nonzero child exits (bat starts then dies — Codex #78); not the same as spawn pcall failures.
 local nonzeroExitStreak = 0
-local spawnAbandonUntilT = -1e9
+local spawnAbandonUntilElapsed = -1e9
+local SPAWN_BACKOFF_SECONDS = 120
 --- Throttle `tryOpen` during spawn backoff so we do not allocate a socket every frame (Cursor Bugbot #78).
-local lastBackoffTryOpenT = -1e9
+local lastBackoffTryOpenElapsed = -1e9
 local SIDECAR_BAT_RELATIVE = "start_sidecar.bat"  -- next to ws_bridge.lua's app dir
 --- Per-corner last-query timestamp (unused after round 10c moved the
 --- debounce to realtime_coaching; kept for backward compat with M.reset).
@@ -129,6 +133,18 @@ local setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
 --- Forward declaration — assigned where `tryOpen` is defined (used before spawn).
 local tryOpen
 
+--- Send the one canonical v1 registration shape from both onOpen and the frame-paced fallback.
+--- Keeping this shared is security-sensitive: a retry without `client_class="lua"` would
+--- overwrite the sidecar's authenticated Lua classification with `external` (#726).
+local function announceExternalHello()
+  return M.sendJson({
+    v = PROTOCOL_VERSION,
+    type = "hello",
+    client = LUA_CLIENT_ID,
+    client_class = "lua",
+  })
+end
+
 local function close_socket_if_any(s)
   if s == nil then
     return
@@ -144,7 +160,10 @@ function M.configure(u)
   close_socket_if_any(sock)
   url = u
   sock = nil
+  reconnectElapsed = 0
   lastTry = -RECONNECT_SEC
+  sidecarMaintenanceElapsed = 0
+  lastLaunchAttemptElapsed = -1e9
   pendingCoaching = nil
   _recvQueue = {}
   sidecarProtocolReady = false
@@ -152,8 +171,8 @@ function M.configure(u)
   sidecarChildEverLaunched = false
   spawnFailStreak = 0
   nonzeroExitStreak = 0
-  spawnAbandonUntilT = -1e9
-  lastBackoffTryOpenT = -1e9
+  spawnAbandonUntilElapsed = -1e9
+  lastBackoffTryOpenElapsed = -1e9
   setupExperimentStoreSent = false
   setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
 end
@@ -167,17 +186,19 @@ end
 --- Behaviour:
 ---   1. If we already have a live socket, noop.
 ---   2. If we already spawned a child this session and it's still alive, noop.
----   3. If we tried to launch within LAUNCH_RETRY_SEC, noop (avoid crash-loop).
+---   3. If we tried to launch within LAUNCH_RETRY_SECONDS, noop (avoid crash-loop).
 ---   4. Otherwise launch start_sidecar.bat (sibling of this Lua module's app dir).
 ---      The .bat handles Python discovery + env vars.
 ---
 --- Stdout from the child streams into ac.log prefixed `[SIDECAR]`.
 --- On unexpected child exit, we log the exit code; the next M.tick() will
---- naturally re-attempt the launch via this function once LAUNCH_RETRY_SEC has
+--- naturally re-attempt the launch via this function once LAUNCH_RETRY_SECONDS have
 --- elapsed.
 ---
 ---@param appDir string|nil  absolute path to the deployed app dir (where the .bat lives)
-function M.startSidecarIfNeeded(appDir)
+function M.startSidecarIfNeeded(appDir, dt)
+  local elapsed = (type(dt) == "number" and dt == dt and dt >= 0) and dt or 0
+  sidecarMaintenanceElapsed = sidecarMaintenanceElapsed + elapsed
   -- Child we spawned died but CSP kept a stale socket handle (reconnect=true); do not tear down
   -- sockets opened for a manually started sidecar (spawnedAlive was never true).
   if not spawnedAlive and sock ~= nil and sidecarChildEverLaunched then
@@ -193,19 +214,20 @@ function M.startSidecarIfNeeded(appDir)
   if sock then return end
   if spawnedAlive then return end
 
-  -- During backoff, only dial occasionally — `lastLaunchAttemptT` is not advanced on this path (Cursor Bugbot #78).
-  if currentSimT < spawnAbandonUntilT then
-    if currentSimT - lastBackoffTryOpenT < LAUNCH_RETRY_SEC then
+  -- During backoff, only dial occasionally. update(dt) pacing is load-bearing: currentSimT is
+  -- frozen at the pre-drive menu where the child must recover to receive session.start (#726).
+  if sidecarMaintenanceElapsed < spawnAbandonUntilElapsed then
+    if sidecarMaintenanceElapsed - lastBackoffTryOpenElapsed < LAUNCH_RETRY_SECONDS then
       return
     end
-    lastBackoffTryOpenT = currentSimT
+    lastBackoffTryOpenElapsed = sidecarMaintenanceElapsed
     if tryOpen() then
       nonzeroExitStreak = 0
     end
     return
   end
 
-  if currentSimT - lastLaunchAttemptT < LAUNCH_RETRY_SEC then return end
+  if sidecarMaintenanceElapsed - lastLaunchAttemptElapsed < LAUNCH_RETRY_SECONDS then return end
 
   -- WebSocket dial first: if a sidecar is already listening, connect instead of spawning a second copy (CodeRabbit #78).
   if tryOpen() then
@@ -213,7 +235,7 @@ function M.startSidecarIfNeeded(appDir)
     return
   end
 
-  lastLaunchAttemptT = currentSimT
+  lastLaunchAttemptElapsed = sidecarMaintenanceElapsed
 
   if type(os) ~= "table" or type(os.runConsoleProcess) ~= "function" then
     if ac and type(ac.log) == "function" then
@@ -260,7 +282,7 @@ function M.startSidecarIfNeeded(appDir)
       -- `start_sidecar.bat` uses `exit /b 2` when `tools/ai_sidecar` cannot be resolved (Copilot #78).
       -- Must not depend on `ac.log` (Cursor #78 / Bugbot).
       if codeNum == 2 then
-        spawnAbandonUntilT = 1e12
+        spawnAbandonUntilElapsed = 1e12
         spawnFailStreak = 0
         nonzeroExitStreak = 0
       elseif codeNum == 0 then
@@ -269,7 +291,10 @@ function M.startSidecarIfNeeded(appDir)
         -- Includes missing/unparseable exit metadata (`codeNum == nil`, Bugbot #78): do not treat as clean.
         nonzeroExitStreak = nonzeroExitStreak + 1
         if nonzeroExitStreak >= 8 then
-          spawnAbandonUntilT = math.max(spawnAbandonUntilT, currentSimT + 120)
+          spawnAbandonUntilElapsed = math.max(
+            spawnAbandonUntilElapsed,
+            sidecarMaintenanceElapsed + SPAWN_BACKOFF_SECONDS
+          )
           nonzeroExitStreak = 0
           if ac and type(ac.log) == "function" then
             ac.log("[COPILOT][SIDECAR] auto-launch backing off 120s after repeated nonzero child exits (Codex #78)")
@@ -296,7 +321,10 @@ function M.startSidecarIfNeeded(appDir)
   if not okSpawn then
     spawnFailStreak = spawnFailStreak + 1
     if spawnFailStreak >= 10 then
-      spawnAbandonUntilT = math.max(spawnAbandonUntilT, currentSimT + 120)
+      spawnAbandonUntilElapsed = math.max(
+        spawnAbandonUntilElapsed,
+        sidecarMaintenanceElapsed + SPAWN_BACKOFF_SECONDS
+      )
       spawnFailStreak = 0
       if ac and type(ac.log) == "function" then
         ac.log("[COPILOT][SIDECAR] auto-launch backing off 120s after repeated spawn failures (Copilot #78)")
@@ -345,7 +373,9 @@ function M.reset()
   cornerAdvisories = {}
   lastCornerQueryAt = {}
   currentSimT = 0
-  lastLaunchAttemptT = -1e9
+  reconnectElapsed = 0
+  sidecarMaintenanceElapsed = 0
+  lastLaunchAttemptElapsed = -1e9
   _recvQueue = {}
   sidecarProtocolReady = false
   sessionReplayRequested = false
@@ -353,8 +383,8 @@ function M.reset()
   sidecarChildEverLaunched = false
   spawnFailStreak = 0
   nonzeroExitStreak = 0
-  spawnAbandonUntilT = -1e9
-  lastBackoffTryOpenT = -1e9
+  spawnAbandonUntilElapsed = -1e9
+  lastBackoffTryOpenElapsed = -1e9
   setupExperimentStoreSent = false
   setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
 end
@@ -602,13 +632,6 @@ tryOpen = function()
   externalHelloAcked = false
   helloRetryFrames = 0
   helloSendCount = 0
-  local function announceExternalHello()
-    M.sendJson({
-      v = PROTOCOL_VERSION,
-      type = "hello",
-      client = "ac-copilot-trainer-lua",
-    })
-  end
   local opened = nil
   local params = {
     onOpen = function()
@@ -665,8 +688,10 @@ tryOpen = function()
     reconnect = true,
   }
   local ok, s = pcall(function()
-    -- 3-arg overload: (url, callback, params)
-    return web.socket(url, _onRecv, params)
+    -- 4-arg overload: (url, headers, callback, params). The dedicated upgrade identity lets
+    -- the sidecar distinguish CSP Lua from an adb-reversed browser, even though both appear
+    -- loopback at the TCP layer.
+    return web.socket(url, { [CLIENT_HEADER] = LUA_CLIENT_ID }, _onRecv, params)
   end)
   if ok and s ~= nil then
     opened = s
@@ -1044,12 +1069,22 @@ function M.takeCoachingForLap(currentLapCompleted)
 end
 
 ---@param simTime number|nil
-function M.tick(simTime)
+---@param dt number|nil real script.update delta; continues while simTime is frozen in menus
+function M.tick(simTime, dt)
   -- Round 10d: record the wall-clock sim time BEFORE any early return so
   -- pollInbound (called by the entry script right after tick) has a fresh
   -- reference for stamping inbound corner_advice entries, and
   -- takeCornerAdvisory has a fresh reference for its 6s staleness check.
+  local previousSimT = currentSimT
   currentSimT = tonumber(simTime) or currentSimT
+  local elapsed = (type(dt) == "number" and dt == dt and dt >= 0) and dt or nil
+  if elapsed ~= nil then
+    reconnectElapsed = reconnectElapsed + elapsed
+  elseif currentSimT > previousSimT then
+    -- Backward-compatible fallback for callers outside script.update (tests/tools): an advancing
+    -- sim clock still paces reconnects, while production passes dt for frozen menu clocks.
+    reconnectElapsed = reconnectElapsed + (currentSimT - previousSimT)
+  end
   if not url or url == "" then
     return
   end
@@ -1070,11 +1105,7 @@ function M.tick(simTime)
       helloRetryFrames = helloRetryFrames + 1
       if helloRetryFrames >= EXTERNAL_HELLO_RETRY_FRAMES then
         helloRetryFrames = 0
-        local sent = M.sendJson({
-          v = PROTOCOL_VERSION,
-          type = "hello",
-          client = "ac-copilot-trainer-lua",
-        })
+        local sent = announceExternalHello()
         helloSendCount = helloSendCount + 1
         -- Log the first send and then every EXTERNAL_HELLO_LOG_EVERY_SENDS so a
         -- (briefly) unresponsive sidecar cannot spam the CSP console.
@@ -1090,10 +1121,10 @@ function M.tick(simTime)
     end
     return
   end
-  if currentSimT - lastTry < RECONNECT_SEC then
+  if reconnectElapsed - lastTry < RECONNECT_SEC then
     return
   end
-  lastTry = currentSimT
+  lastTry = reconnectElapsed
   tryOpen()
 end
 

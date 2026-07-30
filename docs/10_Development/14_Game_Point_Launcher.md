@@ -140,6 +140,7 @@ Configure the non-secret car and circuit identifiers in the per-user
 
 ```json
 {
+  "ac_user_dir": "C:\\Users\\driver\\Documents\\Assetto Corsa",
   "resilient_car": "ks_porsche_911_gt3_r_2016",
   "resilient_track": "spa",
   "resilient_layout": "",
@@ -147,9 +148,25 @@ Configure the non-secret car and circuit identifiers in the per-user
 }
 ```
 
+Stable AC on the supported CSP 0.2.11 runtime also requires
+`[NEW_UI] REPLACE_MAIN_MENU=0` in `cfg\extension\gui.ini` under that AC
+user-data directory. CSP 0.2.11's New UI ignores `ac.tryToStart`; Game Point
+therefore reads this setting before launch and reports `menu_config_required`
+with the exact remediation path instead of exhausting the launch budget at the
+pre-drive screen. `ac_user_dir` is optional when the standard Documents or
+OneDrive Documents path can be discovered.
+
+Stable AC currently requires the default `sidecar_port` of `8765`. Game Point
+can pass another port to its Python children, but it cannot safely rewrite the
+CSP app's persisted `wsSidecarUrl` before AC starts. It therefore reports
+`sidecar_port_unsupported` and refuses to launch when these endpoints could
+diverge, instead of claiming that the authenticated Lua start-control path is
+armed. Custom ports remain supported for sidecar-only operation.
+
 Environment variables `AC_COPILOT_RESILIENT_CAR`,
 `AC_COPILOT_RESILIENT_TRACK`, `AC_COPILOT_RESILIENT_LAYOUT`, and
-`AC_COPILOT_RESILIENT_CM_EXE` override those values. Leave `resilient_cm_exe`
+`AC_COPILOT_RESILIENT_CM_EXE` override those values;
+`AC_COPILOT_AC_USER_DIR` overrides `ac_user_dir`. Leave `resilient_cm_exe`
 blank for the standard Program Files install. For a one-shot command, use
 `--resilient-launch` with optional `--resilient-car`, `--resilient-track`,
 `--resilient-layout`, and `--resilient-cm-exe` CLI overrides.

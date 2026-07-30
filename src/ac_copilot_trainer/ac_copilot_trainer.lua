@@ -828,6 +828,79 @@ if wsBridge.registerRequestHandler then
     return ack
   end)
 
+  -- #627/#466: press AC's Start button from INSIDE the sim.
+  --
+  -- AC parks at its pre-drive session screen, so CSP never exposes `Car0`, so the harness's
+  -- carcsw hijack can never land. That is a chicken-and-egg the harness cannot break from
+  -- outside: the hijack is how it would supply input, but the hijack needs the session started.
+  -- Measured 2026-07-29: 0 landed drives / 6 `auto_drive` invocations.
+  --
+  -- Content Manager's "Start race immediately" cannot help, and this is not a misconfiguration.
+  -- CM's own source disables it whenever CSP is present:
+  --     if (!SettingsHolder.Drive.ImmediateStart || PatchHelper.IsActive()) return;
+  -- (AcManager.Tools/SemiGui/GameWrapper.cs). On this rig the setting IS enabled
+  -- (`Settings.DriveSettings.ImmediateStart = 1`) and is a designed no-op. Its mechanism was a
+  -- synthetic mouse click at hardcoded coordinates on AC's ORIGINAL Drive button, which CSP's
+  -- New UI relocates anyway. CSP's `[BASIC] FORCE_START` is an undocumented `;; hidden` dev flag
+  -- and was measured failing 0/8+ (#466) — it is not the lever either.
+  --
+  -- The supported path is CSP's own `ac.tryToStart(instant)`, documented as "just to press Start
+  -- button in pits menu". CSP binds it to the `__CM_START_SESSION` control; nothing in CSP calls
+  -- it directly, because it exists for third-party scripts. This app is already loaded in the
+  -- sim, so it can press it — no synthetic input, no hardcoded coordinates, no Car0 required.
+  wsBridge.registerRequestHandler("session.start", "session.start.ack", function(payload)
+    -- `instant` skips the fade-in transition. Default true: an autonomous run wants the sim
+    -- driving now, and the transition only delays the first usable telemetry.
+    local instant = true
+    if type(payload) == "table" and payload.instant == false then instant = false end
+
+    -- Idempotent: leaving the pre-drive menu is the proof that the session already started.
+    -- `isSessionStarted` is unusable here: measured CSP 0.2.11 reports it TRUE while the legacy
+    -- Drive screen is still visible, which would acknowledge a false start and strand Car0.
+    local inMainMenu = nil
+    if ac and type(ac.getSim) == "function" then
+      local okSim, simState = pcall(ac.getSim)
+      if okSim and simState ~= nil then
+        -- StateSim is CSP userdata, not a Lua table, and unknown field reads can throw. Keep the
+        -- access under its own pcall so supported builds remain idempotent while older builds
+        -- fail closed. Accept a callable variant defensively for CSP API drift.
+        local okField, menuValue = pcall(function()
+          return simState.isInMainMenu
+        end)
+        if okField and type(menuValue) == "function" then
+          local okMenu, calledValue = pcall(menuValue, simState)
+          if not okMenu then okMenu, calledValue = pcall(menuValue) end
+          if okMenu then inMainMenu = calledValue end
+        elseif okField then
+          inMainMenu = menuValue
+        end
+      end
+    end
+    if inMainMenu == false then
+      return { ok = true, started = true, already_started = true }
+    end
+
+    -- Fail closed and NAME the reason: an older CSP build without the API must not read as a
+    -- silent no-op, or the harness would burn its whole launch budget against a dead call.
+    if not (ac and type(ac.tryToStart) == "function") then
+      return { ok = false, started = false, error = "ac.tryToStart unavailable on this CSP build" }
+    end
+
+    local okCall, pressed = pcall(ac.tryToStart, instant)
+    if not okCall then
+      return { ok = false, started = false, error = "ac.tryToStart raised" }
+    end
+    -- CSP returns false when it could not start (e.g. not at the pits menu). Surface that
+    -- verbatim rather than claiming success — a false green here would send the harness on to
+    -- a hijack that cannot land, which is exactly the failure this handler exists to end.
+    return {
+      ok = pressed == true,
+      started = pressed == true,
+      already_started = false,
+      instant = instant,
+    }
+  end)
+
   wsBridge.registerRequestHandler("setup.spinner.list", "setup.spinner.list.result", function(payload)
     local result = setupLibrary.listSpinners(payload)
     if type(result) ~= "table" then
@@ -985,9 +1058,9 @@ if not appDir or appDir == "" then
   appDir = "."  -- fallback; .bat will fail and log clearly
 end
 
--- Kick off sidecar spawn at script load. Subsequent wsBridge.tick calls also
--- invoke startSidecarIfNeeded so a crashed child gets relaunched after the
--- LAUNCH_RETRY_SEC gap.
+-- Kick off sidecar spawn at script load. script.update explicitly retries this maintenance in
+-- both menu and driving branches so a crashed child gets relaunched after the LAUNCH_RETRY_SEC
+-- gap; wsBridge.tick itself only maintains the socket.
 pcall(function() wsBridge.startSidecarIfNeeded(appDir) end)
 
 local lastDriveCar ---@type ac.StateCar|nil
@@ -2308,10 +2381,23 @@ function script.update(dt)
     state.realtimeActiveHint = nil
   end
 
+  -- Apply a deferred config.set URL on the frame AFTER its ack was sent, before either branch can
+  -- return. Keeping this below the menu return strands runtime reconfiguration while parked.
+  if pendingWsSidecarUrl ~= nil then
+    wsBridge.configure(pendingWsSidecarUrl)
+    pendingWsSidecarUrl = nil
+  end
+
   if sim.isInMainMenu then
-    if pendingSessionReview ~= nil and wsBridge then
+    -- The #466 pre-drive menu is exactly where `session.start` must arrive. Keep the bridge
+    -- alive independently of the post-session review queue; gating this tick on
+    -- pendingSessionReview leaves a fresh launch unable to receive the request that exits it.
+    if wsBridge then
+      -- Child maintenance is isolated from socket maintenance: a spawn/retry failure must not
+      -- prevent an already-running sidecar connection from draining session.start this frame.
+      pcall(function() wsBridge.startSidecarIfNeeded(appDir, dt) end)
       pcall(function()
-        wsBridge.tick(ch.simSeconds(sim))
+        wsBridge.tick(ch.simSeconds(sim), dt)
         wsBridge.pollInbound(8)
       end)
     end
@@ -2399,13 +2485,9 @@ function script.update(dt)
   end
 
   -- Issue #77 Part A: start sidecar before tick so we do not duplicate tryOpen() in the same frame.
-  pcall(function() wsBridge.startSidecarIfNeeded(appDir) end)
-  wsBridge.tick(ch.simSeconds(sim))
+  pcall(function() wsBridge.startSidecarIfNeeded(appDir, dt) end)
+  wsBridge.tick(ch.simSeconds(sim), dt)
   wsBridge.pollInbound(8)
-  if pendingWsSidecarUrl ~= nil then
-    wsBridge.configure(pendingWsSidecarUrl)
-    pendingWsSidecarUrl = nil
-  end
   pumpLapArchiveJobs()
   pumpLapArchiveNotifications()
 

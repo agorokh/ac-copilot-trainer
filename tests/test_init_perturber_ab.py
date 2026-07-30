@@ -76,7 +76,13 @@ def _write_boot_report(
     condition: str | None = None,
 ) -> None:
     """Emit one ``resilient_launch --trials N`` style report for a whole boot."""
-    counts = {"stable": 0, "froze": 0, "wedged_init": 0, "never_live": 0}
+    counts = {
+        "stable": 0,
+        "froze": 0,
+        "wedged_init": 0,
+        "not_drivable": 0,
+        "never_live": 0,
+    }
     flags = _default_delivery(verdicts) if delivered is None else delivered
     # Prefer arm-matching evidence so analysis fixtures are not silently `unverified` under the
     # receipt gate (#721). Explicit `perturbers=` still wins; unavailable is the pre-receipt default
@@ -111,6 +117,8 @@ def _write_boot_report(
                 "perturbers": row_evidence,
                 "started_at_utc": f"2026-07-28T{minute // 60:02d}:{minute % 60:02d}:00Z",
                 "elapsed_s": 12.5,
+                "live_observation_s": 12.5,
+                "perturber_snapshot_age_s": 12.5,
                 "uptime_h": round(uptime_start + index * 0.05, 4),
             }
         )
@@ -492,6 +500,163 @@ def test_delivery_flags_survive_the_report_round_trip(tmp_path: Path) -> None:
     )
     assert (summary.onset_index, summary.onset_cycle) == (11, 10)
     assert summary.onset_ambiguous is False
+
+
+def test_v3_reports_are_refused_because_their_froze_rows_are_contaminated(tmp_path: Path) -> None:
+    """v3 conflated the #466 pre-drive menu with the #627 wedge, so its freeze counts are unusable.
+
+    The schema bump LOOKS additive (v4 only adds a `not_drivable` bucket), which invites a lenient
+    "absent bucket = 0" reader. That would admit v3's false freezes straight into FREEZE_VERDICTS
+    and bias onset + burst rate, with nothing in the per-attempt log to reclassify them from
+    (Codex P1 on #726). An unscoreable boot must fail loudly.
+    """
+    plan = _two_boot_plan()
+    report_path = tmp_path / plan["boots"][0]["report"]
+    _write_boot_report(
+        report_path,
+        condition=plan["boots"][0]["condition"],
+        verdicts=["stable"] * 19 + ["froze"],
+        start_minute=0,
+        uptime_start=0.5,
+    )
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload["schema"] = "resilient-launch-report/v3"
+    payload["counts"].pop("not_drivable", None)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not scoreable"):
+        load_observations(plan, tmp_path, require_complete=False)
+
+
+def test_off_arm_receipt_is_verified_by_not_drivable_attempts() -> None:
+    """A menu-park boot must still be able to VERIFY an overlays_off arm (Codex P1 on #726).
+
+    `not_drivable` is a delivered, rendering, physics-ticking session — at least as live as
+    `froze` for off-arm absence. While it was missing from the analyzer's live-session allowlist,
+    every such boot reported `treatment_receipt_unverified`, and any unverified boot forces the
+    whole experiment conclusion. So the verdict split intended to CLEAN the experiment would
+    instead have invalidated otherwise usable boots.
+    """
+    launches = [
+        LaunchObservation(
+            launch=index,
+            verdict="not_drivable",
+            started_at_utc=f"2026-07-29T00:{index:02d}:00Z",
+            elapsed_s=15.0,
+            uptime_h=1.0 + index,
+            cycle_delivered=True,
+            live_observation_s=15.0,
+            perturber_snapshot_age_s=15.0,
+            perturbers=(("nvidia_capture", "not_observed"), ("steam_overlay", "not_observed")),
+        )
+        for index in range(3)
+    ]
+
+    from tools.ac_harness.init_perturber_ab import treatment_receipt
+
+    verdict, _ = treatment_receipt(
+        "overlays_off",
+        {"steam_overlay": "not_observed", "nvidia_capture": "not_observed"},
+        launches=launches,
+    )
+
+    assert verdict != "unverified"
+
+
+def test_early_not_drivable_absence_stays_unverified() -> None:
+    """A Car0/open failure inside the injection window cannot certify overlays_off."""
+    launch = LaunchObservation(
+        launch=1,
+        verdict="not_drivable",
+        started_at_utc="2026-07-29T00:01:00Z",
+        elapsed_s=2.0,
+        uptime_h=1.0,
+        cycle_delivered=True,
+        live_observation_s=2.0,
+        perturber_snapshot_age_s=2.0,
+        perturbers=(("nvidia_capture", "not_observed"), ("steam_overlay", "not_observed")),
+    )
+
+    from tools.ac_harness.init_perturber_ab import treatment_receipt
+
+    verdict, detail = treatment_receipt(
+        "overlays_off",
+        {"steam_overlay": "not_observed", "nvidia_capture": "not_observed"},
+        launches=[launch],
+    )
+
+    assert verdict == "unverified"
+    assert detail is not None and "early" in detail
+
+
+def test_not_drivable_total_elapsed_cannot_replace_live_observation_window() -> None:
+    """Pre-launch work may be long, but missing process-age evidence must stay unverified."""
+    launch = LaunchObservation(
+        launch=1,
+        verdict="not_drivable",
+        started_at_utc="2026-07-29T00:01:00Z",
+        elapsed_s=60.0,
+        uptime_h=1.0,
+        cycle_delivered=True,
+        live_observation_s=None,
+        perturber_snapshot_age_s=None,
+        perturbers=(("nvidia_capture", "not_observed"), ("steam_overlay", "not_observed")),
+    )
+
+    from tools.ac_harness.init_perturber_ab import treatment_receipt
+
+    verdict, detail = treatment_receipt(
+        "overlays_off",
+        {"steam_overlay": "not_observed", "nvidia_capture": "not_observed"},
+        launches=[launch],
+    )
+
+    assert verdict == "unverified"
+    assert detail is not None and "early" in detail
+
+
+def test_not_drivable_requires_a_post_race_full_snapshot() -> None:
+    """A five-second probe cannot age an early module miss into valid absence evidence."""
+    launch = LaunchObservation(
+        launch=1,
+        verdict="not_drivable",
+        started_at_utc="2026-07-29T00:01:00Z",
+        elapsed_s=60.0,
+        uptime_h=1.0,
+        cycle_delivered=True,
+        live_observation_s=6.0,
+        perturber_snapshot_age_s=0.1,
+        perturbers=(("nvidia_capture", "not_observed"), ("steam_overlay", "not_observed")),
+    )
+
+    from tools.ac_harness.init_perturber_ab import treatment_receipt
+
+    verdict, detail = treatment_receipt(
+        "overlays_off",
+        {"steam_overlay": "not_observed", "nvidia_capture": "not_observed"},
+        launches=[launch],
+    )
+
+    assert verdict == "unverified"
+    assert detail is not None and "early" in detail
+
+
+def test_v4_report_requires_the_complete_v4_counts_block(tmp_path: Path) -> None:
+    plan = _two_boot_plan()
+    report_path = tmp_path / plan["boots"][0]["report"]
+    _write_boot_report(
+        report_path,
+        condition=plan["boots"][0]["condition"],
+        verdicts=["stable"] * _LAUNCHES,
+        start_minute=0,
+        uptime_start=0.5,
+    )
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload["counts"].pop("not_drivable")
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="counts do not match"):
+        load_observations(plan, tmp_path, require_complete=False)
 
 
 def test_incomplete_experiment_is_refused(tmp_path: Path) -> None:

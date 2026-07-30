@@ -37,6 +37,7 @@ from tools.ai_sidecar.server import (  # noqa: E402
     _RateLimiter,
     _reset_external_state,
     _with_snapshot_age,
+    make_process_request,
     make_token_check,
 )
 from tools.ai_sidecar.setup_optimizer import rebuild_experiments  # noqa: E402
@@ -106,7 +107,7 @@ def _write_setup_lap(
 @asynccontextmanager
 async def _running_sidecar(token: str | None = None) -> AsyncIterator[int]:
     port = _free_port()
-    process_request = make_token_check(token)
+    process_request = make_process_request(token)
     _reset_external_state()
     try:
         async with ws_serve(
@@ -163,6 +164,38 @@ def test_make_token_check_returns_none_without_token() -> None:
     assert make_token_check("") is None
 
 
+def test_upgrade_client_header_counts_only_actual_rig_screen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server
+
+    class _Metrics:
+        def __init__(self) -> None:
+            self.screen_sightings = 0
+
+        def note_screen_seen(self) -> None:
+            self.screen_sightings += 1
+
+    class _Connection:
+        remote_address = ("127.0.0.1", 12345)
+
+    class _Request:
+        path = "/"
+
+        def __init__(self, client_id: str) -> None:
+            self.headers = {ep.CLIENT_HEADER: client_id}
+
+    metrics = _Metrics()
+    monkeypatch.setattr(server.observability, "METRICS", metrics)
+    process_request = make_process_request(None)
+
+    assert process_request(_Connection(), _Request(ep.LUA_CLIENT_ID)) is None
+    assert process_request(_Connection(), _Request(ep.SESSION_START_CLIENT_ID)) is None
+    assert metrics.screen_sightings == 0
+    assert process_request(_Connection(), _Request("ac-copilot-screen-v1")) is None
+    assert metrics.screen_sightings == 1
+
+
 def test_is_loopback_classification() -> None:
     assert _is_loopback("127.0.0.1")
     assert _is_loopback("localhost")
@@ -190,6 +223,7 @@ def test_validate_inbound_accepts_known_types() -> None:
         is None
     )
     assert ep.validate_inbound({"v": 1, "type": "action", "name": "toggleFocusPractice"}) is None
+    assert ep.validate_inbound({"v": 1, "type": "session.start", "instant": True}) is None
     assert ep.validate_inbound({"v": 1, "type": "state.subscribe", "topics": ["lap"]}) is None
     assert (
         ep.validate_inbound(
@@ -655,6 +689,30 @@ def test_remote_hello_hides_loopback_only_capabilities() -> None:
     assert ack["type"] == ep.TYPE_HELLO_ACK
     assert ep.TYPE_SETUP_DIFF in ack["capabilities"]
     assert ep.TYPE_SETUP_CLOSED_LOOP not in ack["capabilities"]
+    assert ep.TYPE_SESSION_START not in ack["capabilities"]
+
+
+def test_remote_session_start_is_rejected() -> None:
+    class _RemoteWebsocket:
+        remote_address = ("192.168.1.50", 49152)
+
+        def __init__(self) -> None:
+            self.sent: list[dict[str, object]] = []
+
+        async def send(self, payload: str) -> None:
+            self.sent.append(json.loads(payload))
+
+    async def _run() -> dict[str, object]:
+        _reset_external_state()
+        ws = _RemoteWebsocket()
+        await _handle_external_frame(ws, {"v": 1, "type": "hello", "client": "screen"})
+        await _handle_external_frame(ws, {"v": 1, "type": ep.TYPE_SESSION_START})
+        return ws.sent[-1]
+
+    error = asyncio.run(_run())
+    assert error["type"] == ep.TYPE_ERROR
+    assert error["ref_type"] == ep.TYPE_SESSION_START
+    assert "authenticated resilient-launch" in str(error["message"])
 
 
 def test_upgrade_accepted_with_token_for_non_loopback_peer() -> None:
@@ -1989,6 +2047,192 @@ def test_config_set_round_trip_via_hub() -> None:
     assert forwarded["value"] is False
     assert ack_back["type"] == "config.ack"
     assert ack_back["applied"] is True
+
+
+@pytest.mark.parametrize(
+    ("token", "headers"),
+    [
+        (
+            "s3cret",
+            {
+                ep.AUTH_HEADER: "s3cret",
+                ep.CLIENT_HEADER: "resilient-launch",
+            },
+        ),
+        (
+            None,
+            {
+                # Browser WebSocket APIs (including the adb-reversed tablet dashboard) cannot
+                # set custom upgrade headers; this is the dedicated tokenless local channel.
+                ep.CLIENT_HEADER: "resilient-launch",
+            },
+        ),
+    ],
+)
+def test_session_start_round_trip_via_hub(
+    token: str | None,
+    headers: dict[str, str],
+) -> None:
+    """The resilient harness request reaches Lua and its positive ack returns."""
+
+    async def _run() -> tuple[dict, dict]:
+        async with _running_sidecar(token=token) as port:
+            async with (
+                ws_connect(
+                    f"ws://127.0.0.1:{port}/",
+                    additional_headers=headers,
+                ) as harness,
+                ws_connect(
+                    f"ws://127.0.0.1:{port}/",
+                    additional_headers={ep.CLIENT_HEADER: ep.LUA_CLIENT_ID},
+                ) as lua,
+                ws_connect(f"ws://127.0.0.1:{port}/") as tablet,
+            ):
+                await harness.send(
+                    json.dumps({"v": 1, "type": "hello", "client": "resilient-launch"})
+                )
+                hello_ack = json.loads(await asyncio.wait_for(harness.recv(), timeout=2.0))
+                assert ep.TYPE_SESSION_START in hello_ack["capabilities"]
+                await lua.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "hello",
+                            "client": "trainer-lua",
+                            "client_class": ep.CLIENT_CLASS_LUA,
+                        }
+                    )
+                )
+                await asyncio.wait_for(lua.recv(), timeout=2.0)
+                await tablet.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "hello",
+                            "client": "tablet",
+                            "client_class": ep.CLIENT_CLASS_BROWSER,
+                        }
+                    )
+                )
+                await asyncio.wait_for(tablet.recv(), timeout=2.0)
+
+                await harness.send(
+                    json.dumps({"v": 1, "type": ep.TYPE_SESSION_START, "instant": True})
+                )
+                forwarded = json.loads(await asyncio.wait_for(lua.recv(), timeout=2.0))
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(tablet.recv(), timeout=0.05)
+                await lua.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": ep.TYPE_SESSION_START_ACK,
+                            "ok": True,
+                            "started": True,
+                        }
+                    )
+                )
+                ack = json.loads(await asyncio.wait_for(harness.recv(), timeout=2.0))
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(tablet.recv(), timeout=0.05)
+                return forwarded, ack
+
+    forwarded, ack = asyncio.run(_run())
+    assert forwarded == {"v": 1, "type": ep.TYPE_SESSION_START, "instant": True}
+    assert ack["type"] == ep.TYPE_SESSION_START_ACK
+    assert ack["ok"] is True
+    assert ack["started"] is True
+
+
+def test_browser_cannot_forge_session_start_ack() -> None:
+    """An adb-reversed browser looks loopback but lacks the trainer-Lua upgrade identity."""
+
+    async def _run() -> tuple[dict, bool]:
+        async with _running_sidecar(token=None) as port:
+            async with (
+                ws_connect(
+                    f"ws://127.0.0.1:{port}/",
+                    additional_headers={ep.CLIENT_HEADER: ep.SESSION_START_CLIENT_ID},
+                ) as harness,
+                ws_connect(f"ws://127.0.0.1:{port}/") as tablet,
+            ):
+                await harness.send(
+                    json.dumps({"v": 1, "type": "hello", "client": "resilient-launch"})
+                )
+                await asyncio.wait_for(harness.recv(), timeout=2.0)
+                await tablet.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "hello",
+                            "client": "tablet",
+                            "client_class": ep.CLIENT_CLASS_BROWSER,
+                        }
+                    )
+                )
+                await asyncio.wait_for(tablet.recv(), timeout=2.0)
+                await tablet.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": ep.TYPE_SESSION_START_ACK,
+                            "ok": True,
+                            "started": True,
+                        }
+                    )
+                )
+                error = json.loads(await asyncio.wait_for(tablet.recv(), timeout=2.0))
+                try:
+                    await asyncio.wait_for(harness.recv(), timeout=0.05)
+                except TimeoutError:
+                    harness_received_forgery = False
+                else:
+                    harness_received_forgery = True
+                return error, harness_received_forgery
+
+    error, harness_received_forgery = asyncio.run(_run())
+    assert error["type"] == ep.TYPE_ERROR
+    assert error["ref_type"] == ep.TYPE_SESSION_START_ACK
+    assert "authenticated trainer Lua" in error["message"]
+    assert harness_received_forgery is False
+
+
+@pytest.mark.parametrize(
+    ("token", "headers"),
+    [
+        (None, None),
+        (
+            "s3cret",
+            {
+                ep.AUTH_HEADER: "wrong",
+                ep.CLIENT_HEADER: "resilient-launch",
+            },
+        ),
+    ],
+)
+def test_unauthorized_loopback_peer_cannot_start_session(
+    token: str | None,
+    headers: dict[str, str] | None,
+) -> None:
+    """adb reverse also looks loopback; it must not inherit physical-rig control."""
+
+    async def _run() -> tuple[dict, dict]:
+        async with _running_sidecar(token=token) as port:
+            async with ws_connect(
+                f"ws://127.0.0.1:{port}/",
+                additional_headers=headers,
+            ) as tablet:
+                await tablet.send(json.dumps({"v": 1, "type": "hello", "client": "tablet"}))
+                hello_ack = json.loads(await asyncio.wait_for(tablet.recv(), timeout=2.0))
+                await tablet.send(json.dumps({"v": 1, "type": ep.TYPE_SESSION_START}))
+                error = json.loads(await asyncio.wait_for(tablet.recv(), timeout=2.0))
+                return hello_ack, error
+
+    hello_ack, error = asyncio.run(_run())
+    assert ep.TYPE_SESSION_START not in hello_ack["capabilities"]
+    assert error["type"] == ep.TYPE_ERROR
+    assert error["ref_type"] == ep.TYPE_SESSION_START
+    assert "authenticated resilient-launch" in error["message"]
 
 
 def test_telemetry_tick_routes_to_physical_clients_and_generates_haptic_event() -> None:

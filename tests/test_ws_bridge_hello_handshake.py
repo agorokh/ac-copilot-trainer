@@ -41,7 +41,7 @@ _ws_on_recv = nil
 _ws_on_open = nil
 _ws_on_opens = {}
 _ws_sent = 0
-function web.socket(_u, cb, _p)
+function web.socket(_u, _headers, cb, _p)
   _ws_on_recv = cb
   _ws_on_open = _p and _p.onOpen or nil
   _ws_on_opens[#_ws_on_opens + 1] = _ws_on_open
@@ -73,7 +73,11 @@ def _runtime() -> lupa.LuaRuntime:
 
     def _stringify(t, pretty=False):
         # Content is irrelevant to these tests (we assert on state + return
-        # values, not wire bytes); just hand sendJson a non-empty string.
+        # values, not wire bytes); retain the registration fields so the hello
+        # retry's authenticated class cannot drift from onOpen.
+        g["_last_json_type"] = t["type"]
+        g["_last_json_client"] = t["client"]
+        g["_last_json_client_class"] = t["client_class"]
         return "{}"
 
     g["JSON"] = rt.table_from({"parse": _parse, "stringify": _stringify})
@@ -133,6 +137,85 @@ def test_hello_retry_is_frame_paced_under_frozen_sim_clock():
     # fire once; the frame-paced retry (fix #3) fires repeatedly.
     rt.execute('local wb = require("ws_bridge"); for _ = 1, 30 do wb.tick(0) end')
     assert int(rt.eval("_ws_sent")) > sent_before
+    assert rt.eval("_last_json_type") == "hello"
+    assert rt.eval("_last_json_client") == "ac-copilot-trainer-lua"
+    assert rt.eval("_last_json_client_class") == "lua"
+
+
+def test_sidecar_spawn_retry_uses_elapsed_time_under_frozen_sim_clock():
+    """#726: retry follows real update time, not frozen sim time or display refresh rate."""
+    rt = _runtime()
+    rt.execute(
+        """
+        _spawn_calls = 0
+        web.socket = nil
+        os.runConsoleProcess = function(_params, _callback)
+          _spawn_calls = _spawn_calls + 1
+          return false, "spawn failed"
+        end
+        local wb = require("ws_bridge")
+        wb.configure("ws://127.0.0.1:8765")
+        wb.startSidecarIfNeeded("C:/app", 0)
+        for _ = 1, 49 do wb.startSidecarIfNeeded("C:/app", 0.1) end
+        _spawn_calls_before_five_seconds = _spawn_calls
+        wb.startSidecarIfNeeded("C:/app", 0.2)
+        """
+    )
+
+    assert int(rt.eval("_spawn_calls_before_five_seconds")) == 1
+    assert int(rt.eval("_spawn_calls")) >= 2
+
+
+def test_socket_reconnect_uses_elapsed_time_under_frozen_sim_clock():
+    """#726: an async sidecar start can recover its first failed menu-frame dial."""
+    rt = _runtime()
+    rt.execute(
+        """
+        _dial_calls = 0
+        web.socket = function(_u, _headers, cb, _p)
+          _dial_calls = _dial_calls + 1
+          if _dial_calls == 1 then return nil end
+          _ws_on_recv = cb
+          local s = { close = function() end }
+          setmetatable(s, { __call = function(_, _data) _ws_sent = _ws_sent + 1 end })
+          return s
+        end
+        local wb = require("ws_bridge")
+        wb.configure("ws://127.0.0.1:8765")
+        wb.tick(0, 0)
+        for _ = 1, 49 do wb.tick(0, 0.1) end
+        _dial_calls_before_five_seconds = _dial_calls
+        wb.tick(0, 0.2)
+        """
+    )
+
+    assert int(rt.eval("_dial_calls_before_five_seconds")) == 1
+    assert int(rt.eval("_dial_calls")) == 2
+
+
+def test_configure_resets_elapsed_spawn_backoff():
+    """Changing sidecar configuration clears the real renamed backoff locals."""
+    rt = _runtime()
+    rt.execute(
+        """
+        _spawn_calls = 0
+        _spawn_callback = nil
+        web.socket = nil
+        os.runConsoleProcess = function(_params, callback)
+          _spawn_calls = _spawn_calls + 1
+          _spawn_callback = callback
+          return true
+        end
+        local wb = require("ws_bridge")
+        wb.configure("ws://127.0.0.1:8765")
+        wb.startSidecarIfNeeded("C:/app", 0)
+        _spawn_callback(nil, { exitCode = 2 })
+        wb.configure("ws://127.0.0.1:9876")
+        wb.startSidecarIfNeeded("C:/app", 0)
+        """
+    )
+
+    assert int(rt.eval("_spawn_calls")) == 2
 
 
 def test_hello_ack_registers_and_unblocks_publish():

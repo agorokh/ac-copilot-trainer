@@ -30,6 +30,7 @@ is unit-tested off-rig with no Assetto Corsa present.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import math
 import os
@@ -78,6 +79,19 @@ class LaunchVerdict(StrEnum):
     ``NEVER_LIVE`` alone still cannot say whether an AC launch *cycle* happened — "appeared and
     exited" and "was never spawned" share the bucket. That axis is recorded separately as
     :class:`AttemptOutcome.cycle_delivered` (#710); do not infer it from the verdict.
+
+    ``NOT_DRIVABLE`` splits the **post**-go-live pre-drive menu out of ``FROZE`` (2026-07-29).
+    The pre-go-live branch already refuses to call a menu a wedge — "a stream that ADVANCED but
+    never reached readiness is a stuck pre-drive menu — rendering, therefore not wedged" — but the
+    post-go-live readiness path returned ``FROZE`` for exactly that shape, so a session that was
+    **LIVE, rendering, and ticking physics** while merely parked at AC's pre-drive session menu
+    (no ``Car0``, #466) landed in the #627 wedge bucket. Measured on AG_PC at 23.4 h uptime:
+    4 consecutive attempts scored ``froze`` at 14.38/14.40/15.41/14.39 s — a ±0.5 s spread that a
+    stochastic livelock does not produce — while the graphics packet was advancing ~114/s and
+    physics ~374/s, and a screenshot showed AC sitting at the Drive/Setup/Exit menu. A render
+    wedge REQUIRES a pinned graphics packet (#627 §2), so an advancing stream is dispositive that
+    this is launch plumbing, not the livelock. Keeping it in ``FROZE`` inflated the #627 rate from
+    the one side the ``NEVER_LIVE`` docstring above promises to protect.
     """
 
     PENDING = "pending"
@@ -85,6 +99,7 @@ class LaunchVerdict(StrEnum):
     FROZE = "froze"
     NEVER_LIVE = "never_live"
     WEDGED_INIT = "wedged_init"
+    NOT_DRIVABLE = "not_drivable"
 
 
 @dataclass(frozen=True)
@@ -114,9 +129,20 @@ class AttemptOutcome:
     #: Per-perturber evidence gathered while this attempt's ``acs.exe`` was alive (#719). Defaults
     #: to "we could not look", which is the only honest value for a producer that never sampled.
     perturbers: dict[str, str] | None = None
+    #: Seconds since the CURRENT pinned acs.exe first entered the perturber observation window.
+    #: ``None`` means that window was never established or was not measured.
+    live_observation_s: float | None = None
+    #: Age of the latest successful full module snapshot relative to that process window. This,
+    #: not process age alone, proves an absence observation happened after the injection race.
+    perturber_snapshot_age_s: float | None = None
 
 
-REPORT_SCHEMA = "resilient-launch-report/v3"
+#: v4 adds the ``not_drivable`` bucket to ``counts`` (2026-07-29). The field addition is additive,
+#: but the MEANING of ``froze`` changed: every v3 producer scored the rendering-but-not-drivable
+#: pre-drive menu (#466) as a freeze. So v3 is listed as SUPERSEDED and the #625/#719 experiment
+#: analyzer REFUSES it — its freeze rows cannot be reclassified from the recorded evidence.
+REPORT_SCHEMA = "resilient-launch-report/v4"
+SUPERSEDED_REPORT_SCHEMAS = ("resilient-launch-report/v3",)
 WITHDRAWN_REPORT_SCHEMAS = ("resilient-launch-report/v1", "resilient-launch-report/v2")
 
 
@@ -163,8 +189,12 @@ TERMINAL_VERDICTS = frozenset(
         LaunchVerdict.FROZE.value,
         LaunchVerdict.NEVER_LIVE.value,
         LaunchVerdict.WEDGED_INIT.value,
+        LaunchVerdict.NOT_DRIVABLE.value,
     }
 )
+#: The #627 render-wedge bucket. ``NOT_DRIVABLE`` is deliberately EXCLUDED: it is a rendering,
+#: physics-advancing session parked at the pre-drive menu (#466 launch plumbing), and counting it
+#: here is what let four sessions chase a livelock that was not occurring.
 FREEZE_VERDICTS = frozenset({LaunchVerdict.FROZE.value, LaunchVerdict.WEDGED_INIT.value})
 
 
@@ -280,6 +310,7 @@ def classify(
     prev_t: float | None = None
     stall_run = 0
     not_ready_run = 0
+    unreadable_run = 0
     paused_total = 0.0
     seen_acs_alive = False
     seen_stream_advance = False
@@ -356,6 +387,15 @@ def classify(
                 # packetId reset means the render stream/session was replaced; never let a new
                 # acs.exe inherit stability time accumulated by its predecessor.
                 return LaunchVerdict.FROZE
+            if sample.gfx_packet is None:
+                unreadable_run += 1
+                if unreadable_run >= stall_samples:
+                    # Production shared-memory failures arrive with readiness unknown, not false.
+                    # Count the unreadable graphics page independently so a sustained loss cannot
+                    # evade both the not-ready and pinned-packet thresholds until wall timeout.
+                    return LaunchVerdict.FROZE
+            else:
+                unreadable_run = 0
             if phys_stagnant and prev_t is not None:
                 # Physics pinned: this interval is NEVER credited as proven-live time, whatever
                 # the budget — STABLE must be earned with physics RUNNING, so a pause that
@@ -376,8 +416,20 @@ def classify(
             else:
                 if not_ready:
                     not_ready_run += 1
-                    if not_ready_run >= stall_samples:
-                        return LaunchVerdict.FROZE
+                    # A render wedge REQUIRES a pinned graphics packet (#627 §2), so a session
+                    # that is not ready WHILE STILL ADVANCING is a rendering-but-not-drivable
+                    # pre-drive menu (#466) — the pre-go-live branch above already refuses to
+                    # call that a wedge.
+                    #
+                    # This deliberately does NOT return FROZE on the else. Two rejected designs:
+                    # a latched "advanced at some point in the run" flag let a session that
+                    # advanced once and then pinned escape FROZE forever (undercounting #627);
+                    # keying on the final sample alone let one hitch at the threshold mislabel a
+                    # healthy menu. So FROZE stays owned by the independent ``stall_run``
+                    # threshold below — a genuinely pinned stream reaches it, and an
+                    # intermittently-hitching menu never does. Both Codex P1s on #726.
+                    if not_ready_run >= stall_samples and advanced:
+                        return LaunchVerdict.NOT_DRIVABLE
                 elif ready:
                     not_ready_run = 0
                 else:
@@ -687,6 +739,8 @@ class AttemptRecord:
     elapsed_s: float
     uptime_h: float | None
     cycle_delivered: bool | None = None
+    live_observation_s: float | None = None
+    perturber_snapshot_age_s: float | None = None
     #: Per-perturber evidence for this attempt (#719). Always present and always complete — every
     #: key in ``PERTURBER_MODULES`` carries a :class:`PerturberEvidence` value, defaulting to
     #: ``unavailable`` so a producer that never looked cannot be mistaken for one that looked and
@@ -701,6 +755,14 @@ class AttemptRecord:
             "perturbers": dict(self.perturbers),
             "started_at_utc": self.started_at_utc,
             "elapsed_s": round(self.elapsed_s, 3),
+            "live_observation_s": (
+                None if self.live_observation_s is None else round(self.live_observation_s, 3)
+            ),
+            "perturber_snapshot_age_s": (
+                None
+                if self.perturber_snapshot_age_s is None
+                else round(self.perturber_snapshot_age_s, 3)
+            ),
             "uptime_h": None if self.uptime_h is None else round(self.uptime_h, 4),
         }
 
@@ -715,6 +777,9 @@ class LaunchReport:
     never_live: int
     wedged_init: int = 0
     stable: int = 0
+    #: Rendering, physics-advancing sessions parked at AC's pre-drive menu (#466). Counted apart
+    #: from ``froze``/``wedged_init`` so the #627 wedge rate keeps a clean denominator.
+    not_drivable: int = 0
     #: attempts that actually started an ``acs.exe`` — the #625 accumulator's own denominator
     #: (#710). ``cycles_undetermined`` counts attempts whose producer did not report delivery.
     cycles_delivered: int = 0
@@ -735,7 +800,8 @@ class LaunchReport:
 
     def _counts(self) -> str:
         return (
-            f"froze {self.froze}, wedged_init {self.wedged_init}, never_live {self.never_live}"
+            f"froze {self.froze}, wedged_init {self.wedged_init}, "
+            f"not_drivable {self.not_drivable}, never_live {self.never_live}"
             f"; cycles delivered {self.cycles_delivered}/{self.attempts}"
         )
 
@@ -744,6 +810,25 @@ class LaunchReport:
             return (
                 f"stable drivable session held on attempt {self.attempts} "
                 f"({self._counts()}) — AC left LIVE"
+            )
+        # Remediation must match the failure. A run dominated by NOT_DRIVABLE saw AC render
+        # perfectly and merely never leave the pre-drive menu (#466), so "reboot to lower the
+        # freeze rate" is the wrong advice — there was no freeze to lower.
+        freeze_failures = self.froze + self.wedged_init
+        if (
+            self.not_drivable > 0
+            and self.not_drivable >= freeze_failures
+            and self.not_drivable >= self.never_live
+        ):
+            return (
+                f"no stable session in {self.attempts} attempt(s) ({self._counts()}); "
+                "AC rendered but never became drivable — the pre-drive menu-skip never landed "
+                "(#466), NOT the #627 wedge; a reboot does not address this"
+            )
+        if self.never_live > self.froze + self.wedged_init:
+            return (
+                f"no stable session in {self.attempts} attempt(s) ({self._counts()}); "
+                "most launches never reached AC — cold-restart Content Manager and rerun"
             )
         return (
             f"no stable session in {self.attempts} attempt(s) ({self._counts()}); "
@@ -760,6 +845,7 @@ class LaunchReport:
                 "stable": self.stable,
                 "froze": self.froze,
                 "wedged_init": self.wedged_init,
+                "not_drivable": self.not_drivable,
                 "never_live": self.never_live,
             },
             # Kept OUT of ``counts`` on purpose: ``counts`` is the verdict histogram and
@@ -1053,6 +1139,20 @@ def _normalize_attempt_result(result: LaunchVerdict | AttemptOutcome) -> Attempt
             f"verdict {outcome.verdict} requires a live acs.exe but was reported with "
             f"cycle_delivered={outcome.cycle_delivered!r}"
         )
+    if outcome.live_observation_s is not None and (
+        not math.isfinite(outcome.live_observation_s) or outcome.live_observation_s < 0
+    ):
+        raise ValueError(
+            "live_observation_s must be finite and non-negative when present, got "
+            f"{outcome.live_observation_s!r}"
+        )
+    if outcome.perturber_snapshot_age_s is not None and (
+        not math.isfinite(outcome.perturber_snapshot_age_s) or outcome.perturber_snapshot_age_s < 0
+    ):
+        raise ValueError(
+            "perturber_snapshot_age_s must be finite and non-negative when present, got "
+            f"{outcome.perturber_snapshot_age_s!r}"
+        )
     return outcome
 
 
@@ -1105,7 +1205,7 @@ def run_retry_loop(
             return None
 
     records: list[AttemptRecord] = []
-    stable = froze = never_live = wedged_init = 0
+    stable = froze = never_live = wedged_init = not_drivable = 0
     delivered = undelivered = undetermined = 0
     never_live_run = 0
     last_verdict = LaunchVerdict.NEVER_LIVE
@@ -1130,6 +1230,8 @@ def run_retry_loop(
                 elapsed_s=clock() - started,
                 uptime_h=uptime,
                 cycle_delivered=outcome.cycle_delivered,
+                live_observation_s=outcome.live_observation_s,
+                perturber_snapshot_age_s=outcome.perturber_snapshot_age_s,
                 perturbers=evidence,
             )
         )
@@ -1162,9 +1264,11 @@ def run_retry_loop(
                 on_never_live_streak()
                 never_live_run = 0
         else:
-            # FROZE and WEDGED_INIT both prove CM delivered a real acs.exe.
+            # FROZE, WEDGED_INIT and NOT_DRIVABLE all prove CM delivered a real acs.exe.
             if verdict is LaunchVerdict.FROZE:
                 froze += 1
+            elif verdict is LaunchVerdict.NOT_DRIVABLE:
+                not_drivable += 1
             else:
                 wedged_init += 1
             never_live_run = 0
@@ -1182,6 +1286,7 @@ def run_retry_loop(
         froze,
         never_live,
         wedged_init=wedged_init,
+        not_drivable=not_drivable,
         stable=stable,
         cycles_delivered=delivered,
         cycles_undelivered=undelivered,
@@ -1836,6 +1941,12 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
 
     controller: object | None = None
     drivable = False
+    # Start the negative-evidence clock before controller construction. A mapping/open failure is
+    # not evidence that Car0 is absent, and returning immediately would let an early successful
+    # Toolhelp miss confirm overlays_off inside the measured ~3 s injection race. Every False
+    # result therefore consumes this same bounded handshake window, including probe-unavailable
+    # failures (Codex P1 on #726).
+    deadline = time.monotonic() + timeout
     try:
         if release_requested is not None and release_requested():
             raise _OperatorRelease
@@ -1845,7 +1956,6 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
             controller = CustomAIController(0)
         else:
             controller = controller_factory()
-        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if release_requested is not None and release_requested():
                 raise _OperatorRelease
@@ -1863,6 +1973,14 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
             drivable = controller.read_car_data() is not None  # type: ignore[attr-defined]
     except (SharedMemoryUnavailable, OSError) as exc:
         _log(f"Car0 drivability probe unavailable: {exc}")
+        while time.monotonic() < deadline:
+            if release_requested is not None and release_requested():
+                raise _OperatorRelease from None
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(poll, remaining))
+        if release_requested is not None and release_requested():
+            raise _OperatorRelease from None
         drivable = False
     finally:
         if controller is not None:
@@ -1981,6 +2099,82 @@ def _watch_live(  # pragma: no cover - rig-only
             paused = sink[-1]
         time.sleep(poll_interval)
     return AttemptOutcome(LaunchVerdict.FROZE, _watched_delivery(delivery_trace(samples)))
+
+
+def car0_handshake_failure_outcome(
+    packet_before_probe: int | None,
+    packet_after_probe: int | None,
+) -> AttemptOutcome:
+    """Outcome for a failed Car0 handshake, confirmed against the render stream (#466).
+
+    Extracted from ``main`` so the production route is unit-testable: ``main`` is a rig-only
+    entrypoint marked ``pragma: no cover``, and the previous inline mapping sent this exact
+    condition to ``FROZE``. That kept the #627 contamination flowing through production while the
+    pure classifier looked correct (Codex P1 on #726).
+
+    The blocking probe can consume five seconds after the packet advance that triggered it. A
+    renderer that wedges or exits during that window must stay ``FROZE``; only a fresh post-probe
+    advance proves this is still a rendering pre-drive menu and may select ``NOT_DRIVABLE``.
+
+    ``cycle_delivered`` is ``True`` either way: earning section ownership before the probe proved
+    that Content Manager started an ``acs.exe`` and consumed the launch cycle (#710).
+    """
+    render_advanced = (
+        packet_before_probe is not None
+        and packet_after_probe is not None
+        and packet_after_probe > packet_before_probe
+    )
+    verdict = LaunchVerdict.NOT_DRIVABLE if render_advanced else LaunchVerdict.FROZE
+    return AttemptOutcome(verdict, cycle_delivered=True)
+
+
+def request_session_start(*, timeout: float = 5.0) -> bool:
+    """Press AC's in-sim Start control through the sidecar/Lua bridge (#726).
+
+    The request is attempted only after section ownership and a fresh post-Car0 render advance
+    prove the current process is alive. A true result requires the Lua handler's positive ack;
+    connection errors and negative/time-out acks fail closed so the caller retains the original
+    not-drivable/freeze classification.
+    """
+
+    try:
+        from websockets.exceptions import WebSocketException
+
+        from tools.ai_sidecar.external_protocol import SESSION_START_CLIENT_ID
+        from tools.ai_sidecar.harness_client import HarnessClient
+    except ImportError as exc:
+        _log(f"session.start unavailable: install the coaching WebSocket extra ({exc})")
+        return False
+
+    raw_port = os.environ.get("AC_COPILOT_SIDECAR_PORT", "8765")
+    try:
+        port = int(raw_port)
+    except ValueError:
+        _log(f"session.start skipped: invalid AC_COPILOT_SIDECAR_PORT={raw_port!r}")
+        return False
+    if not (1 <= port <= 65535):
+        _log(f"session.start skipped: invalid AC_COPILOT_SIDECAR_PORT={raw_port!r}")
+        return False
+    url = f"ws://127.0.0.1:{port}"
+    token = os.environ.get("AC_COPILOT_SIDECAR_TOKEN") or None
+
+    async def _request() -> bool:
+        client = HarnessClient(url, token=token, client_id=SESSION_START_CLIENT_ID)
+        try:
+            await client.connect(retries=2, retry_delay=0.25)
+            hello_ack = await client.hello(timeout=timeout)
+            if hello_ack is None:
+                return False
+            ack = await client.request_session_start(timeout=timeout)
+            return bool(ack and ack.get("ok") is True and ack.get("started") is True)
+        finally:
+            await client.close()
+
+    try:
+        return asyncio.run(_request())
+    except (OSError, RuntimeError, TimeoutError, ValueError, WebSocketException) as exc:
+        _log(f"session.start request failed: {exc}")
+        return False
 
 
 def _positive_float(value: str) -> float:
@@ -2236,9 +2430,14 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # previous session (STABLE verdict — trials mode continues past those) gets the #668
             # WM_CLOSE grace first: hard kills accelerate the freeze-accumulator's onset, and a
             # wedge cannot pump WM_CLOSE anyway, so grace is verdict-gated rather than blanket.
+            # NOT_DRIVABLE joins STABLE as pump-capable: a menu-parked session is
+            # demonstrably RENDERING, so it can process WM_CLOSE, and #668 measured that hard
+            # kills move accumulator onset from ~launch 14 to ~8. Hard-killing menu-park
+            # attempts would change the very exposure the #625/#627 experiment measures
+            # (Codex P1 on #726). A wedge still gets no grace — it cannot pump.
             grace = (
                 DEFAULT_GRACEFUL_EXIT_GRACE
-                if last_attempt_verdict[0] is LaunchVerdict.STABLE
+                if last_attempt_verdict[0] in (LaunchVerdict.STABLE, LaunchVerdict.NOT_DRIVABLE)
                 else 0.0
             )
             if not _ensure_acs_gone(
@@ -2297,6 +2496,18 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             latched_injected: set[str] = set()
             # Toolhelp saw acs.exe this attempt — promote undetermined delivery (Codex P2 on #721).
             acs_pid_observed: list[bool] = [False]
+            # Start of the CURRENT pinned process's treatment-observation window. Attempt elapsed
+            # time includes cleanup, CM startup, and AC loading, so it cannot certify that a
+            # not_drivable module miss happened after the injection race (Codex P1 on #726).
+            acs_pid_observed_since: list[float | None] = [None]
+            # Age of the latest SUCCESSFUL exhaustive module snapshot for the current pinned PID.
+            # A soft-failed final look preserves the prior age, which may still be too early and
+            # therefore fail closed in the analyzer.
+            perturber_snapshot_age_s: list[float | None] = [None]
+            # Packet that triggered the (blocking) Car0 probe. If the probe fails, a fresh raw
+            # sample must advance beyond this value before the attempt may be called a rendering
+            # pre-drive menu; otherwise the renderer could have wedged during the probe.
+            packet_before_car0_probe: list[int | None] = [None]
 
             def sample_perturbers(*, soft_fail: bool = False) -> None:
                 """Fold one module snapshot of the live acs.exe into this attempt's evidence.
@@ -2350,6 +2561,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                         perturbers.reset()
                     primary_pid = max(pids)
                     pinned_acs_pid[0] = primary_pid
+                    acs_pid_observed_since[0] = time.monotonic()
+                    perturber_snapshot_age_s[0] = None
                 try:
                     # retries=1: do not sleep inside the go-live poll path; BAD_LENGTH during
                     # module load is retried by the next poll tick instead (cursor HIGH #721).
@@ -2360,6 +2573,12 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                     fold_perturber_snapshots(perturbers, enum_failed=True)
                     return
                 fold_perturber_snapshots(perturbers, successes=[names])
+                observed_since = acs_pid_observed_since[0]
+                if observed_since is not None:
+                    perturber_snapshot_age_s[0] = max(
+                        0.0,
+                        time.monotonic() - observed_since,
+                    )
 
             def read_attempt_state() -> tuple[int | None, bool | None, bool | None, int | None]:
                 """Report shared memory; trust readiness only once the packet proves a live owner.
@@ -2380,22 +2599,60 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 if args.expect_perturbers is not None:
                     sample_perturbers()
                 packet, entry_ready, phys_packet = read_state()
+                packet_before_car0_probe[0] = packet
                 ready, drivable = readiness.observe(packet=packet, entry_ready=entry_ready)
                 return packet, ready, drivable, phys_packet
 
-            try:
-                outcome = _watch_live(
-                    read_attempt_state,
-                    acs_alive,
-                    go_live_timeout=args.go_live_timeout,
-                    stability_window=args.stability_window,
-                    delivery_baseline=delivery_baseline,
-                )
-            except _Car0NotDrivable:
-                # CM did start a LIVE session; only the Car0 handoff failed. Treat this as a bad
-                # rendered attempt so it cannot advance the stale-CM/never-live restart streak.
-                # The session was rendering, so the launch cycle WAS delivered (#710).
-                outcome = AttemptOutcome(LaunchVerdict.FROZE, cycle_delivered=True)
+            session_start_attempted = False
+            while True:
+                try:
+                    outcome = _watch_live(
+                        read_attempt_state,
+                        acs_alive,
+                        go_live_timeout=args.go_live_timeout,
+                        stability_window=args.stability_window,
+                        delivery_baseline=delivery_baseline,
+                    )
+                    break
+                except _Car0NotDrivable:
+                    # The handshake can block for five seconds after the advance that triggered
+                    # it. Re-sample raw graphics: only another advance proves the renderer stayed
+                    # alive long enough to accept session.start. A pinned/regressed/unreadable
+                    # packet remains FROZE (Codex P1 on #726).
+                    post_probe_packet, _post_probe_ready, _post_probe_phys = read_state()
+                    menu_outcome = car0_handshake_failure_outcome(
+                        packet_before_car0_probe[0],
+                        post_probe_packet,
+                    )
+                    if (
+                        menu_outcome.verdict is LaunchVerdict.NOT_DRIVABLE
+                        and not session_start_attempted
+                    ):
+                        session_start_attempted = True
+                        acknowledged = request_session_start()
+                        if acknowledged:
+                            _log(
+                                f"attempt {attempt}: session.start acknowledged; "
+                                "retrying Car0 readiness"
+                            )
+                        else:
+                            _log(
+                                f"attempt {attempt}: session.start unacknowledged; "
+                                "re-probing Car0 in case the side effect landed"
+                            )
+                        # The Start side effect can succeed even if the WebSocket drops before
+                        # Python receives the ack. Always re-probe the authoritative Car0
+                        # handshake; on another miss the outer catch re-samples graphics after
+                        # this bounded interval before retaining NOT_DRIVABLE.
+                        readiness = AttemptReadiness(
+                            lambda: _probe_car0_drivable(
+                                release_requested=release_requested,
+                                retain_telemetry_controller=telemetry_cleanup_holds.append,
+                            )
+                        )
+                        continue
+                    outcome = menu_outcome
+                    break
             # One last look before the process is torn down: the perturbers inject late, so the
             # final sample is the most informative one in the attempt (#719). soft_fail: a
             # transient Toolhelp error must not erase a successful post-race miss already on
@@ -2414,7 +2671,17 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             delivered = outcome.cycle_delivered
             if delivered is None and acs_pid_observed[0]:
                 delivered = True
-            outcome = replace(outcome, perturbers=evidence, cycle_delivered=delivered)
+            observed_since = acs_pid_observed_since[0]
+            live_observation_s = (
+                None if observed_since is None else max(0.0, time.monotonic() - observed_since)
+            )
+            outcome = replace(
+                outcome,
+                perturbers=evidence,
+                cycle_delivered=delivered,
+                live_observation_s=live_observation_s,
+                perturber_snapshot_age_s=perturber_snapshot_age_s[0],
+            )
             delivery = _delivery_label(outcome.cycle_delivered)
             injected = sorted(
                 name
@@ -2542,7 +2809,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 # A stable FINAL trial left a healthy session — it gets the WM_CLOSE grace
                 # (#668); any other final verdict left a corpse/wedge and stays forced-only.
                 graceful_grace=(
-                    DEFAULT_GRACEFUL_EXIT_GRACE if report.verdict is LaunchVerdict.STABLE else 0.0
+                    DEFAULT_GRACEFUL_EXIT_GRACE
+                    if report.verdict in (LaunchVerdict.STABLE, LaunchVerdict.NOT_DRIVABLE)
+                    else 0.0
                 ),
             )
             if not rig_safe:
@@ -2582,7 +2851,20 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             # A FROZE terminal verdict deliberately leaves acs.exe alive so the watcher can
             # diagnose it. Once the attempt budget is exhausted, kill that corpse while the
             # machine-wide lock is still held; peers must never inherit a wedged sim.
-            _make_rig_safe(acs_present, release_requested=release_requested)
+            #
+            # A NOT_DRIVABLE final verdict is NOT a corpse: the session renders and pumps
+            # messages, so it gets the same #668 WM_CLOSE grace as STABLE. Without this, the
+            # ordinary (non-``--trials``) exhaustion path hard-killed a healthy menu session and
+            # accelerated the very per-boot accumulator #668 exists to preserve (Codex P1 on #726).
+            _make_rig_safe(
+                acs_present,
+                release_requested=release_requested,
+                graceful_grace=(
+                    DEFAULT_GRACEFUL_EXIT_GRACE
+                    if report.verdict is LaunchVerdict.NOT_DRIVABLE
+                    else 0.0
+                ),
+            )
             return 1
 
         phase_published = _publish_stable_phase(rig_lock.set_phase)

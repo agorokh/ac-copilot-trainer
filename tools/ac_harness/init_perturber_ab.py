@@ -84,6 +84,7 @@ from tools.ac_harness.resilient_launch import (
     FREEZE_VERDICTS,
     PERTURBER_MODULES,
     REPORT_SCHEMA,
+    SUPERSEDED_REPORT_SCHEMAS,
     TERMINAL_VERDICTS,
     repo_checkout_root,
     resolve_report_path,
@@ -111,7 +112,11 @@ PRE_TREATMENT_PLAN_SCHEMA = "init-perturber-ab-plan/v3"
 #:
 #: Codex has repeatedly re-litigated freze-as-absence; the contract is: freze is post-go-live
 #: absence-OK for off-arm confirmation of every delivered launch; on-arm miss stays STABLE-only.
-_LIVE_SESSION_VERDICTS = frozenset({"stable", "froze"})
+#: ``not_drivable`` can join them only after its recorded duration clears the plan's 5 s
+#: post-race floor. The verdict also covers an unavailable Car0 mapping; the production probe now
+#: waits out its bounded handshake window on that failure, while this consumer independently
+#: refuses short/historical rows (Codex P1 follow-up on #726).
+_LIVE_SESSION_VERDICTS = frozenset({"stable", "froze", "not_drivable"})
 #: Measured injection race on the rig (~3 s). Plans must not set timeouts below this plus margin.
 INJECTION_RACE_S = 3.0
 #: Plan floor for ``--go-live-timeout`` / ``--stability-window`` so post-race absence claims
@@ -281,6 +286,11 @@ class LaunchObservation:
     elapsed_s: float
     uptime_h: float
     cycle_delivered: bool | None = None
+    #: Time the current acs.exe spent inside the perturber observation window. Unlike elapsed_s,
+    #: excludes retry cleanup, Content Manager startup, and pre-process AC loading.
+    live_observation_s: float | None = None
+    #: Current-process age when its latest successful full module snapshot was taken.
+    perturber_snapshot_age_s: float | None = None
     #: #719 per-perturber evidence for this launch, keyed as in ``PERTURBER_MODULES``. Values are
     #: :class:`PerturberEvidence` strings; only ``injected`` establishes anything.
     perturbers: tuple[tuple[str, str], ...] = ()
@@ -334,14 +344,20 @@ def _launch_evidence(launch: LaunchObservation) -> dict[str, str]:
 def _is_live_session(launch: LaunchObservation) -> bool:
     """Whether this attempt's absence evidence is informative (post injection race).
 
-    Only a delivered ``stable`` attempt is dispositive for *absence*: the stability window is
-    known to exceed the measured ~3 s injection race. ``froze`` is not — it can fire on the
-    first post-go-live sample (process exit / packet regression), and ``_Car0NotDrivable`` is
-    also mapped to ``FROZE`` without a proven late sample (Codex P1 on #721). Presence
-    (``injected``) remains dispositive on any attempt via the off-arm path.
+    ``stable`` and ``froze`` retain the established post-race contract from #721. A
+    ``not_drivable`` row is informative only when its latest successful full module snapshot was
+    taken at least 5 s into the current process's observation window. Total attempt/process age is
+    not enough: cleanup/loading can consume the former, and a blocking Car0 probe can age the
+    latter after one early snapshot. Missing/early snapshot evidence therefore fails closed.
+    Presence (``injected``) remains dispositive on any attempt via the off-arm path.
     """
 
-    return launch.cycle_delivered is True and launch.verdict in _LIVE_SESSION_VERDICTS
+    if launch.cycle_delivered is not True or launch.verdict not in _LIVE_SESSION_VERDICTS:
+        return False
+    return launch.verdict != "not_drivable" or (
+        launch.perturber_snapshot_age_s is not None
+        and launch.perturber_snapshot_age_s >= MIN_GO_LIVE_TIMEOUT_S
+    )
 
 
 def treatment_receipt(
@@ -1043,6 +1059,21 @@ def _parse_report(
             "the operator's assertion and cannot be cross-checked against what was actually "
             "injected into acs.exe. Re-run the boot on the current launcher"
         )
+    # v3 is REJECTED for experiment analysis, and the reason is not a missing field — it is a
+    # contaminated one. Every v3 producer mapped the rendering-but-not-drivable pre-drive menu
+    # (#466) to ``froze``; four such false freezes were measured on AG_PC 2026-07-29. Admitting a
+    # v3 row by defaulting the absent ``not_drivable`` bucket to zero would feed those false
+    # freezes straight into ``FREEZE_VERDICTS`` and bias onset + burst-rate, and the per-attempt
+    # log carries NO packet evidence from which they could be reclassified. So the bump is NOT
+    # merely additive for this consumer: an unscoreable boot must fail loudly rather than be
+    # silently scored wrong (Codex P1 on #726). Re-run the boot on the current launcher.
+    if report.get("schema") in SUPERSEDED_REPORT_SCHEMAS:
+        raise ValueError(
+            f"report {path} uses {report.get('schema')!r}, whose `froze` rows conflate the #627 "
+            "render wedge with the #466 pre-drive menu (fixed in resilient-launch-report/v4). "
+            "Its freeze counts cannot be reclassified from the recorded evidence, so it is not "
+            "scoreable — re-run the boot on the current launcher"
+        )
     if report.get("schema") != REPORT_SCHEMA:
         raise ValueError(f"report {path} schema must be {REPORT_SCHEMA!r}")
     attempts = report.get("attempts")
@@ -1153,6 +1184,8 @@ def _parse_report(
         delivered = record.get("cycle_delivered", _MISSING)
         started_at_utc = record.get("started_at_utc")
         elapsed_s = record.get("elapsed_s")
+        live_observation_s = record.get("live_observation_s")
+        perturber_snapshot_age_s = record.get("perturber_snapshot_age_s")
         uptime_h = record.get("uptime_h")
         if record.get("attempt") != index:
             raise ValueError(f"report {path} attempt numbers must be contiguous and ordered from 1")
@@ -1182,6 +1215,18 @@ def _parse_report(
             raise ValueError(f"report {path} launch {index} has invalid started_at_utc") from exc
         if not isinstance(elapsed_s, (int, float)) or not math.isfinite(elapsed_s) or elapsed_s < 0:
             raise ValueError(f"report {path} launch {index} has invalid elapsed_s")
+        if live_observation_s is not None and (
+            not isinstance(live_observation_s, (int, float))
+            or not math.isfinite(live_observation_s)
+            or live_observation_s < 0
+        ):
+            raise ValueError(f"report {path} launch {index} has invalid live_observation_s")
+        if perturber_snapshot_age_s is not None and (
+            not isinstance(perturber_snapshot_age_s, (int, float))
+            or not math.isfinite(perturber_snapshot_age_s)
+            or perturber_snapshot_age_s < 0
+        ):
+            raise ValueError(f"report {path} launch {index} has invalid perturber_snapshot_age_s")
         if not isinstance(uptime_h, (int, float)) or not math.isfinite(uptime_h) or uptime_h < 0:
             raise ValueError(
                 f"report {path} launch {index} must record finite non-negative uptime_h "
@@ -1216,13 +1261,25 @@ def _parse_report(
                 elapsed_s=float(elapsed_s),
                 uptime_h=float(uptime_h),
                 cycle_delivered=delivered,
+                live_observation_s=(
+                    None if live_observation_s is None else float(live_observation_s)
+                ),
+                perturber_snapshot_age_s=(
+                    None if perturber_snapshot_age_s is None else float(perturber_snapshot_age_s)
+                ),
                 perturbers=tuple(sorted(perturbers.items())),
             )
         )
     expected_counts = {
         name: sum(item.verdict == name for item in observations) for name in TERMINAL_VERDICTS
     }
-    if report.get("counts") != expected_counts:
+    reported_counts = report.get("counts")
+    if not isinstance(reported_counts, dict):
+        raise ValueError(f"report {path} has no counts block")
+    # The strict v4 schema gate above is intentional: v3's ``froze`` meaning is contaminated and
+    # cannot be normalized. A v4 report must therefore carry the exact v4 histogram; accepting a
+    # missing/unknown bucket here would only hide a malformed current producer.
+    if reported_counts != expected_counts:
         raise ValueError(f"report {path} counts do not match its attempts_log")
     expected_cycles = {
         "delivered": sum(item.cycle_delivered is True for item in observations),

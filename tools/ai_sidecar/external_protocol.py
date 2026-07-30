@@ -101,6 +101,15 @@ TYPE_SETUP_CLOSED_LOOP = "setup.closed_loop"
 TYPE_SETUP_EXCHANGE_SEARCH = "se.search"
 TYPE_SETUP_EXCHANGE_DOWNLOAD = "se.download"
 TYPE_SESSION_REVIEW_GENERATE = "session.review.generate"
+# Issue #726: resilient-launch harness → trainer Lua request that presses CSP's supported
+# in-sim Start control while AC is rendering at the pre-drive menu but Car0 does not exist yet.
+TYPE_SESSION_START = "session.start"
+# Upgrade identity authorized to send the physical-rig control above. Keep the server and every
+# supported sender on one constant so an otherwise valid request cannot drift out of authority.
+SESSION_START_CLIENT_ID = "resilient-launch"
+# Dedicated CSP Lua upgrade identity. Like the control identity above, this is an HTTP upgrade
+# header that browser WebSocket APIs cannot spoof through the supported adb-reverse tunnel.
+LUA_CLIENT_ID = "ac-copilot-trainer-lua"
 # Issue #511 Part D: a remote voice endpoint (tablet page) reports per-cue client-side
 # timestamps back to the sidecar so the audible-latency harness can decompose network-hop
 # vs audio-stack delay. Accepted from any authenticated peer; never relayed.
@@ -157,6 +166,7 @@ TYPE_SETUP_CLOSED_LOOP_RESULT = "setup.closed_loop.result"
 TYPE_SETUP_EXCHANGE_SEARCH_RESULT = "se.search.result"
 TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK = "se.download.ack"
 TYPE_SESSION_REVIEW_RESULT = "session.review.result"
+TYPE_SESSION_START_ACK = "session.start.ack"
 # Issue #118: high-rate physical-peripheral frames. `telemetry_tick` is sent
 # from the Lua loopback peer to physical clients; the sidecar can derive and
 # route `haptic_event` frames to haptic-class clients.
@@ -199,12 +209,13 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_SETUP_EXCHANGE_SEARCH,
     TYPE_SETUP_EXCHANGE_DOWNLOAD,
     TYPE_SESSION_REVIEW_GENERATE,
+    TYPE_SESSION_START,
     TYPE_SETUP_SPINNER_LIST,
     TYPE_SETUP_SPINNER_SET,
     TYPE_TELEMETRY_TICK,
     TYPE_HAPTIC_EVENT,
 )
-LOOPBACK_ONLY_CAPABILITIES: frozenset[str] = frozenset({TYPE_SETUP_CLOSED_LOOP})
+LOOPBACK_ONLY_CAPABILITIES: frozenset[str] = frozenset({TYPE_SETUP_CLOSED_LOOP, TYPE_SESSION_START})
 
 
 def server_capabilities(*, include_loopback_only: bool = True) -> list[str]:
@@ -836,11 +847,17 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
                     "generated, imported, none"
                 )
         return None
+    if t == TYPE_SESSION_START:
+        instant = frame.get("instant")
+        if instant is not None and not isinstance(instant, bool):
+            return "session.start optional 'instant' must be a boolean"
+        return None
     if t in (
         TYPE_SETUP_LIST_RESULT,
         TYPE_SETUP_LOAD_ACK,
         TYPE_SETUP_SPINNER_LIST_RESULT,
         TYPE_SETUP_SPINNER_SET_ACK,
+        TYPE_SESSION_START_ACK,
     ):
         # Server-to-client replies forwarded from the Lua peer — accept silently.
         return None

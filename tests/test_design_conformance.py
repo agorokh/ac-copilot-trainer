@@ -31,6 +31,11 @@ def _lua_text(name: str) -> str:
     return (MODULES / name).read_text(encoding="utf-8")
 
 
+def _entry_text() -> str:
+    """Return the CSP app entry script."""
+    return ENTRY.read_text(encoding="utf-8")
+
+
 def _manifest_text() -> str:
     return MANIFEST.read_text(encoding="utf-8")
 
@@ -162,6 +167,53 @@ class TestRealTimeCoaching:
         """RC-03: coaching_overlay exports drawMainWindowStrip."""
         src = _lua_text("coaching_overlay.lua")
         assert "function M.drawMainWindowStrip" in src
+
+
+# ---------------------------------------------------------------------------
+# SC: Session control
+# ---------------------------------------------------------------------------
+
+
+class TestSessionControl:
+    def test_session_start_reads_statesim_userdata_safely(self) -> None:
+        """SC-01: session.start stays idempotent for CSP's userdata-backed StateSim."""
+        src = _entry_text()
+        start = src.index('wsBridge.registerRequestHandler("session.start"')
+        end = src.index('wsBridge.registerRequestHandler("setup.spinner.list"', start)
+        handler = src[start:end]
+
+        assert 'type(simState) == "table"' not in handler
+        assert re.search(
+            r"pcall\(function\(\)\s*return simState\.isInMainMenu\s*end\)",
+            handler,
+        )
+        assert "pcall(menuValue, simState)" in handler
+        assert "pcall(menuValue)" in handler
+        assert "simState.isSessionStarted" not in handler
+
+    def test_main_menu_polls_session_start_bridge_without_review_queue(self) -> None:
+        """SC-02: the pre-drive menu can receive session.start on a fresh launch."""
+        src = _entry_text()
+        update = src[src.index("function script.update(dt)") :]
+        start = update.index("if sim.isInMainMenu then")
+        end = update.index("-- Tick coaching hold", start)
+        menu_branch = update[start:end]
+
+        configure = update.index("if pendingWsSidecarUrl ~= nil then")
+        assert configure < start
+        assert "wsBridge.tick(ch.simSeconds(sim), dt)" in menu_branch
+        assert "wsBridge.pollInbound(8)" in menu_branch
+        assert "wsBridge.startSidecarIfNeeded(appDir, dt)" in menu_branch
+        assert "pendingSessionReview ~= nil and wsBridge" not in menu_branch
+
+    def test_session_start_is_explicitly_armed_and_lua_identified(self) -> None:
+        """SC-03: human app loads never auto-press Start; the relay targets authenticated Lua."""
+        entry = _entry_text()
+        bridge = (MODULES / "ws_bridge.lua").read_text(encoding="utf-8")
+
+        assert "pressStartIfWaiting" not in entry
+        assert 'client_class = "lua"' in bridge
+        assert "{ [CLIENT_HEADER] = LUA_CLIENT_ID }" in bridge
 
 
 # ---------------------------------------------------------------------------

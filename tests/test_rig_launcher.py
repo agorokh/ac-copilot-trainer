@@ -271,6 +271,8 @@ def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> N
         return proc
 
     cfg = GamePointConfig(
+        port=8765,
+        token="sidecar-secret",
         resilient_car="car",
         resilient_track="track",
         rig_lock_path=tmp_path / "rig-session.lock",
@@ -307,8 +309,101 @@ def test_start_resilient_session_is_configured_and_detached(tmp_path: Path) -> N
     ]
     assert not release_path.exists()
     assert calls[0][1]["cwd"] == str(_repo_root())
+    assert calls[0][1]["env"]["AC_COPILOT_SIDECAR_PORT"] == "8765"
+    assert calls[0][1]["env"]["AC_COPILOT_SIDECAR_TOKEN"] == "sidecar-secret"
     assert (tmp_path / "logs" / "resilient-launch.log").exists()
     assert proc.terminated is False
+
+
+def test_stable_ac_rejects_custom_sidecar_port_before_spawn(tmp_path: Path) -> None:
+    spawned: list[list[str]] = []
+    cfg = GamePointConfig(
+        port=9999,
+        resilient_car="car",
+        resilient_track="track",
+        paths=LauncherPaths(tmp_path),
+    )
+    sup = GamePointSupervisor(
+        cfg,
+        environ={},
+        popen=lambda command, **_kwargs: spawned.append(command),
+        python_executable="python",
+    )
+
+    result = sup.start_resilient_session()
+    status = sup._resilient_process_status()
+
+    assert result.ok is False
+    assert result.state == "sidecar_port_unsupported"
+    assert "requires sidecar_port=8765" in result.detail
+    assert "configured sidecar_port=9999" in result.detail
+    assert status == result
+    assert spawned == []
+
+
+def test_stable_ac_blocks_new_ui_with_actionable_path(tmp_path: Path) -> None:
+    ac_user_dir = tmp_path / "Assetto Corsa"
+    gui_ini = ac_user_dir / "cfg" / "extension" / "gui.ini"
+    gui_ini.parent.mkdir(parents=True)
+    gui_ini.write_text("[NEW_UI]\nREPLACE_MAIN_MENU=1\n", encoding="utf-8")
+    spawned: list[list[str]] = []
+    cfg = GamePointConfig(
+        resilient_car="car",
+        resilient_track="track",
+        ac_user_dir=str(ac_user_dir),
+        rig_lock_path=tmp_path / "rig-session.lock",
+        paths=LauncherPaths(tmp_path / "game-point"),
+    )
+    sup = GamePointSupervisor(
+        cfg,
+        environ={},
+        popen=lambda command, **_kwargs: spawned.append(command),
+        python_executable="python",
+    )
+
+    result = sup.start_resilient_session()
+    status = sup._resilient_process_status()
+
+    assert result.ok is False
+    assert result.state == "menu_config_required"
+    assert "REPLACE_MAIN_MENU=0" in result.detail
+    assert str(gui_ini) in result.detail
+    assert status == result
+    assert spawned == []
+
+
+def test_stable_ac_accepts_legacy_menu_config(tmp_path: Path) -> None:
+    ac_user_dir = tmp_path / "Assetto Corsa"
+    gui_ini = ac_user_dir / "cfg" / "extension" / "gui.ini"
+    gui_ini.parent.mkdir(parents=True)
+    gui_ini.write_text("[NEW_UI]\nREPLACE_MAIN_MENU=0\n", encoding="utf-8")
+    proc = _Proc()
+    cfg = GamePointConfig(
+        resilient_car="car",
+        resilient_track="track",
+        ac_user_dir=str(ac_user_dir),
+        rig_lock_path=tmp_path / "rig-session.lock",
+        paths=LauncherPaths(tmp_path / "game-point"),
+    )
+    sup = GamePointSupervisor(
+        cfg,
+        environ={},
+        popen=lambda _command, **_kwargs: proc,
+        python_executable="python",
+    )
+
+    assert sup.start_resilient_session().state == "starting"
+
+
+def test_ac_user_dir_discovery_prefers_candidate_with_gui_ini(tmp_path: Path) -> None:
+    local = tmp_path / "Documents" / "Assetto Corsa"
+    local.mkdir(parents=True)
+    onedrive = tmp_path / "OneDrive" / "Documents" / "Assetto Corsa"
+    gui_ini = onedrive / "cfg" / "extension" / "gui.ini"
+    gui_ini.parent.mkdir(parents=True)
+    gui_ini.write_text("[NEW_UI]\nREPLACE_MAIN_MENU=0\n", encoding="utf-8")
+
+    assert supervisor_module._discover_ac_user_dir(tmp_path) == onedrive
 
 
 @pytest.mark.parametrize("state", ["starting", "stabilizing", "running"])
@@ -1309,6 +1404,7 @@ def test_config_from_settings_file_supplies_non_secret_defaults(tmp_path: Path) 
         json.dumps(
             {
                 "external_bind": "127.0.0.1",
+                "ac_user_dir": r"C:\Users\driver\Documents\Assetto Corsa",
                 "reference_archive": "ref.json",
                 "alien_line": "alien.json",
                 "setup_store": "setup.jsonl",
@@ -1330,6 +1426,7 @@ def test_config_from_settings_file_supplies_non_secret_defaults(tmp_path: Path) 
 
     assert cfg.port == 9999
     assert cfg.external_bind == "127.0.0.1"
+    assert cfg.ac_user_dir == r"C:\Users\driver\Documents\Assetto Corsa"
     assert cfg.reference_archive == "ref.json"
     assert cfg.alien_line == "alien.json"
     assert cfg.voice_bank == "bank"
@@ -1355,6 +1452,7 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
                 "resilient_track": "settings-track",
                 "resilient_layout": "settings-layout",
                 "resilient_cm_exe": "settings-cm.exe",
+                "ac_user_dir": "settings-ac-user",
             }
         ),
         encoding="utf-8",
@@ -1369,6 +1467,7 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
             "AC_COPILOT_RESILIENT_TRACK": "env-track",
             "AC_COPILOT_RESILIENT_LAYOUT": "env-layout",
             "AC_COPILOT_RESILIENT_CM_EXE": "env-cm.exe",
+            "AC_COPILOT_AC_USER_DIR": "env-ac-user",
         },
         paths=LauncherPaths(tmp_path),
     )
@@ -1380,6 +1479,7 @@ def test_env_overrides_settings_file(tmp_path: Path) -> None:
     assert cfg.resilient_track == "env-track"
     assert cfg.resilient_layout == "env-layout"
     assert cfg.resilient_cm_exe == "env-cm.exe"
+    assert cfg.ac_user_dir == "env-ac-user"
 
 
 def test_ensure_settings_file_writes_non_secret_template(tmp_path: Path) -> None:
@@ -1390,6 +1490,7 @@ def test_ensure_settings_file_writes_non_secret_template(tmp_path: Path) -> None
     assert path == tmp_path / "settings.json"
     assert payload["sidecar_port"] == 8765
     assert payload["external_bind"] == ""
+    assert payload["ac_user_dir"] == ""
     assert payload["resilient_car"] == ""
     assert payload["resilient_track"] == ""
     assert payload["resilient_layout"] == ""
@@ -2066,6 +2167,19 @@ def test_config_from_args_propagates_adb_overrides(tmp_path: Path, monkeypatch) 
     cfg = config_from_args(build_arg_parser().parse_args(["--log-dir", str(tmp_path)]))
     assert cfg.adb_path == "/opt/adb"
     assert cfg.adb_serial == "SER9"
+
+
+def test_config_from_args_propagates_ac_user_dir(tmp_path: Path, monkeypatch) -> None:
+    """Stable AC must retain the settings/env path through the CLI/packaged reconstruction."""
+    from tools.rig_launcher.app import build_arg_parser, config_from_args
+
+    ac_user_dir = tmp_path / "OneDrive" / "Documents" / "Assetto Corsa"
+    monkeypatch.setenv("AC_COPILOT_GAME_POINT_DIR", str(tmp_path / "game-point"))
+    monkeypatch.setenv("AC_COPILOT_AC_USER_DIR", str(ac_user_dir))
+
+    cfg = config_from_args(build_arg_parser().parse_args([]))
+
+    assert cfg.ac_user_dir == str(ac_user_dir)
 
 
 def test_self_test_sends_token_header_for_authenticated_bind(tmp_path: Path) -> None:

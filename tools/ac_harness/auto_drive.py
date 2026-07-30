@@ -878,6 +878,7 @@ async def run_auto_drive(
     verify_track: VerifyTrackFn | None = None,
     restart_launcher: RestartLauncherFn | None = None,
     cleanup_failure: CleanupFailureFn | None = None,
+    press_start: Callable[[], Awaitable[dict | None]] | None = None,
 ) -> AutoDriveReport:
     """Compose launch → setup → hijack → (background drive) → WS assert → teardown into one report.
 
@@ -1031,6 +1032,41 @@ async def run_auto_drive(
                         **identity,
                     )
                 )
+        # #627/#466: press AC's Start button from INSIDE the sim before probing for Car0.
+        #
+        # AC parks at its pre-drive screen; CSP therefore never exposes Car0 and the carcsw
+        # hijack below can never land. The harness cannot break that from outside — the hijack
+        # IS how it would supply input, but the hijack needs the session started. Measured
+        # 2026-07-29: 0 landed drives / 6 invocations. Content Manager's "Start race
+        # immediately" cannot help: CM's own source disables it whenever CSP is installed
+        # (`if (!...ImmediateStart || PatchHelper.IsActive()) return;`), so it is a designed
+        # no-op on this rig even though the checkbox is ticked.
+        #
+        # The supported lever is CSP's `ac.tryToStart`, reachable only from in-sim Lua — and our
+        # app is already loaded there. Best-effort by design: a failure here must NOT fail the
+        # run, because the hijack probes are still the authoritative drivability oracle and a
+        # session that was ALREADY driving needs no press at all.
+        if press_start is not None:
+            try:
+                ack = await press_start()
+            except Exception as exc:  # noqa: BLE001 - never let the press fail the run
+                _log(f"session.start: press failed ({type(exc).__name__}: {exc}); probing anyway")
+            else:
+                if ack is None:
+                    _log("session.start: no ack from the in-sim app; probing anyway")
+                else:
+                    if ack.get("type") == "error":
+                        _log(
+                            "session.start: sidecar REJECTED the relay: "
+                            f"{ack.get('message') or ack}"
+                        )
+                    else:
+                        _log(
+                            "session.start: "
+                            f"ok={ack.get('ok')} started={ack.get('started')} "
+                            f"already_started={ack.get('already_started')}"
+                            + (f" error={ack.get('error')!r}" if ack.get("error") else "")
+                        )
         try:
             controller = hijack(config)
         except ControllerCleanupAbort as exc:
@@ -1449,6 +1485,7 @@ async def run_auto_drive_with_sim_retries(
     verify_track: VerifyTrackFn | None = None,
     restart_launcher: RestartLauncherFn | None = None,
     cleanup_failure: CleanupFailureFn | None = None,
+    press_start: Callable[[], Awaitable[dict | None]] | None = None,
 ) -> AutoDriveReport:
     """Run the full attempt again after a detected ``acs.exe`` death, bounded and evidenced.
 
@@ -1480,6 +1517,7 @@ async def run_auto_drive_with_sim_retries(
                 verify_track=verify_track,
                 restart_launcher=restart_launcher,
                 cleanup_failure=cleanup_failure,
+                press_start=press_start,
             )
         except ControllerCleanupAbort as exc:
             for retained_controller in cleanup_holds:
@@ -2824,6 +2862,31 @@ def _wait_live(timeout: float) -> bool:  # pragma: no cover - rig-only
         if reader is not None:
             reader.close()
     return False
+
+
+async def rig_press_session_start(
+    config: AutoDriveConfig, *, instant: bool = True, ack_timeout_s: float = 10.0
+) -> dict | None:  # pragma: no cover - rig-only
+    """Ask the in-sim Lua app to press AC's Start button (CSP ``ac.tryToStart``) — #627/#466.
+
+    Joins the sidecar as an ordinary external peer and sends one ``session.start``; the sidecar
+    relays it to the loopback Lua peer, whose handler calls ``ac.tryToStart`` and answers
+    ``session.start.ack``. Returns the ack or correlated sidecar error frame, or ``None`` when
+    neither arrived within ``ack_timeout_s`` (sidecar down or an older app without the handler).
+
+    Deliberately tolerant: the caller treats every failure as "probe anyway", because the Car0
+    handshake remains the authoritative drivability oracle. A press that silently did nothing must
+    never read as a drivable session — that is exactly the false green #627 was full of.
+    """
+    from tools.ai_sidecar.external_protocol import SESSION_START_CLIENT_ID
+    from tools.ai_sidecar.harness_client import HarnessClient
+
+    token = os.environ.get("AC_COPILOT_SIDECAR_TOKEN") or None
+    async with HarnessClient(
+        config.sidecar_url, token=token, client_id=SESSION_START_CLIENT_ID
+    ) as hc:
+        await hc.hello()
+        return await hc.request_session_start(instant=instant, timeout=ack_timeout_s)
 
 
 def rig_hijack(
@@ -4515,6 +4578,7 @@ def _main_impl(
                         run_config,
                         retain_telemetry_controller=rig_telemetry_cleanup_holds.append,
                     ),
+                    press_start=lambda: rig_press_session_start(config),
                     drive=rig_drive,
                     tap=tap_frames,
                     apply_setup=rig_apply_setup,

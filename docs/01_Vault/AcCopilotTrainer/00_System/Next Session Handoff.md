@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-29T16:45:00Z
+last_updated: 2026-07-30T01:21:43-07:00
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/tier3-substrate-unreachable-rig-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-719-treatment-receipt-2026-07-28.md
@@ -128,6 +129,227 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-29 PM) — #627: the freeze instrument was scoring AC's pre-drive MENU as a wedge (PR #726 OPEN `72c9853`)
+
+**Read this before believing any recorded #627 freeze rate.**
+
+`resilient_launch` returned `FROZE` whenever post-go-live readiness stayed false for
+`stall_samples` — regardless of whether the render stream was still advancing. So a session that
+was **LIVE, rendering, physics ticking** but merely parked at AC's pre-drive session menu (no
+`Car0`, #466) landed in the **#627 wedge bucket**. The pre-go-live branch of the same function
+already refuses this ("a stream that ADVANCED but never reached readiness is a stuck pre-drive
+menu — rendering, therefore not wedged"); the post-go-live path contradicted its sibling.
+
+Measured on AG_PC at **23.4 h uptime** (boot 2026-07-28T18:27, ~22 h since prior AC activity):
+4/4 `froze` at **14.382 / 14.400 / 15.406 / 14.385 s**. A ±0.5 s spread is not a stochastic
+livelock — that was the tell. A screenshot showed the Drive/Setup/Exit sidebar; an independent
+packet trace on the same boot ran **66+ s at ~114 gfx/s and ~374 phys/s with zero stall**, and the
+AC/CSP logs were clean (`TIME TO INIT: 2888 ms`, app loaded `windows: 3`, `[COPILOT][RT-DIAG]`
+ticking). **There was no wedge on this rig today.**
+
+Shipped in PR #726: `LaunchVerdict.NOT_DRIVABLE`, terminal but **outside `FREEZE_VERDICTS`**;
+`counts.not_drivable`; schema → `resilient-launch-report/v4`; remediation no longer says "reboot"
+when nothing froze.
+
+**v3 experiment reports are REFUSED, not read leniently.** The field addition is additive but the
+MEANING of `froze` changed — every v3 producer scored the #466 pre-drive menu as a freeze, and the
+per-attempt log carries no packet evidence to reclassify those rows. A lenient "absent bucket = 0"
+reader (which this PR shipped first, then reverted on review) would have fed false freezes into
+`FREEZE_VERDICTS` and biased onset/burst rate. `load_observations` now fails loudly on a v3 boot
+with a re-run instruction. Practical consequence: **any #625/#627 boot recorded before 2026-07-29
+is unscoreable and must be re-run on the current launcher** if it is ever needed for the A/B. `make ci-fast` OK, 306 tests pass, all PR
+checks green. Also corrected the runbook's stale *"only `FORCE_START` skips it"* line (#466
+measured it failing **0/8+**) and added troubleshooting rows for the menu-park shape and for CM
+silently ignoring `acmanager://`.
+
+**Resolve-pr follow-up (2026-07-29):** the remaining review round now makes an unavailable Car0
+probe wait out the same bounded five-second handshake window as a normal miss, and the analyzer
+independently refuses short `not_drivable` absence rows. Mixed runs no longer let one menu park hide
+a dominant `never_live` launch-delivery failure. The strict v4 gate now requires the exact v4
+histogram (and the tests emit it), the two contradictory reboot instructions are reconciled around
+bounded relaunch + #627 evidence, and the static-analysis node carries complete hash-gated
+disassembly steps instead of naming a missing `.scratch` script. Focused result: 314 passed. Full
+isolated-venv result before the final reviewer round: 3,841 passed, 89 skipped, 83.58% coverage.
+The final Codex P1 is also closed: after a failed blocking Car0 probe, `NOT_DRIVABLE` now requires
+a fresh post-probe graphics-packet advance; a pinned, regressed, unreadable, or exited stream stays
+`FROZE`. The guide retains its pre-existing CRLF convention. Final local evidence on the combined
+head (including the peer `session.start` Lua commit): 318 focused tests and `make ci-fast` with
+3,845 passed, 89 skipped, 83.58% coverage. Review of that peer commit then found two real delivery
+gaps: `StateSim` is userdata, so the idempotency read now has its own `pcall` (including callable
+API variance), and the pre-drive menu now ticks/polls the request bridge without depending on a
+pending post-session review. The structural contracts cover both paths and preserve the existing
+lap-archive flush ordering. Final combined-head evidence after those fixes: 44 focused checks plus
+`make ci-fast` with 3,847 passed, 89 skipped, 83.58% coverage.
+
+**Final current-SHA follow-up:** treatment-receipt timing now records
+`attempts_log[].live_observation_s` from the current pinned `acs.exe` rather than using total
+attempt elapsed time (which includes cleanup, CM startup, and loading). Missing or sub-five-second
+live-window evidence keeps `not_drivable` absence unverified. Menu frames also retry
+`wsBridge.startSidecarIfNeeded(appDir)` in an isolated `pcall`, so a failed child spawn cannot
+prevent an existing socket from draining `session.start`. Focused result: 349 passed; final
+`make ci-fast`: 3,850 passed, 89 skipped, 83.58% coverage.
+
+**Independent-review follow-up:** `not_drivable` absence requires the latest successful full
+module snapshot itself to be at least five seconds into the current pinned process (a blocked Car0
+probe cannot age one early miss into proof), and a menu-park/freeze tie no longer recommends a
+reboot. The first retry implementation correctly stopped using frozen sim time but incorrectly
+counted frames as if the rig rendered at 60 Hz; the final path accumulates `script.update(dt)`, so
+the five-second retry and 120-second backoff remain wall-time-equivalent at the measured ~114 Hz.
+Sustained unreadable graphics samples are counted independently of readiness because production
+shared-memory failures report readiness as unknown, not false.
+
+The menu escape is now a complete protocol path rather than only a Lua handler:
+`session.start`/`session.start.ack` are validator-known, sidecar allow-listed, capability-advertised,
+round-trip-tested message types. After a failed Car0 probe, the launcher first requires a fresh
+render-packet advance, then sends `session.start` through an authenticated `HarnessClient`; it
+retries Car0 readiness only after Lua positively acks both `ok=true` and `started=true`, and sends
+at most once per launch attempt. Connection failures, invalid configured ports, negative acks, and
+timeouts fail closed to the original menu/freeze verdict. Final focused result: 422 passed. Final
+`make ci-fast`: 3,858 passed, 89 skipped, 83.59% coverage.
+
+**Fresh current-SHA review follow-up:** WebSocket reconnect pacing now uses the same menu-advancing
+`update(dt)` source as child maintenance (with advancing sim time retained as a compatibility
+fallback for non-entry-script callers), so an async sidecar start can recover its first failed
+dial while the menu clock is frozen. URL reconfiguration resets the actual renamed elapsed-time
+spawn/backoff locals. WebSocket upgrade/protocol exceptions fail closed to the original attempt
+verdict instead of unwinding rig ownership. Finally, `session.start` is loopback-only: remote hello
+capabilities omit it and non-loopback senders receive an error even if they hold the external-client
+token. Focused regression result: 431 passed. Final `make ci-fast`: 3,862 passed, 89 skipped,
+83.60% coverage.
+
+**Authenticated-control follow-up:** loopback address alone is not authority because the supported
+tablet `adb reverse` tunnel presents browser traffic as loopback. The sidecar now grants
+`session.start` only to a WebSocket upgrade that is loopback and carries the dedicated
+`X-AC-Copilot-Client: resilient-launch` header, which browser WebSocket APIs cannot set; when
+`AC_COPILOT_SIDECAR_TOKEN` is configured, the exact token is additionally required. Other
+loopback peers neither see the capability in `hello_ack` nor pass the request gate.
+If the optional WebSocket extra is absent, the launcher logs the unavailable recovery and retains
+the original menu/freeze verdict rather than unwinding rig ownership. Focused result: 296 passed.
+Final `make ci-fast`: 3,864 passed, 89 skipped, 83.61% coverage.
+
+**Tokenless/recheck follow-up:** both supported sidecar modes now have a working menu escape:
+tokened loopback requires header + exact token; default tokenless loopback requires the dedicated
+custom upgrade header, which keeps the adb-reversed browser outside the control channel. A failed
+or timed-out `session.start` is followed by another raw graphics read, and `NOT_DRIVABLE` survives
+only if the renderer advances again after that blocking interval. Focused result: 298 passed.
+Final `make ci-fast`: 3,866 passed, 89 skipped, 83.61% coverage.
+
+**Delivery-gap follow-up:** deferred sidecar-URL changes are now applied before the main-menu
+early return, so runtime reconfiguration cannot strand the recovery bridge while AC is parked.
+The Game Point launcher passes its resolved sidecar port (including the `settings.json` value) and
+configured token into the resilient child instead of letting the child fall back to 8765. Finally,
+a fast synchronous `session.start` failure now waits up to one bounded second for a subsequent
+graphics-packet change; a same-frame reread can no longer turn a still-rendering menu into a false
+`FROZE`, while a pinned renderer still fails closed. Focused result: 361 passed. Final
+`make ci-fast`: 3,868 passed, 89 skipped, 83.61% coverage.
+
+**Live-autostart integration follow-up:** a concurrent operator commit verified
+`ac.tryToStart(true)` on AG_PC with `[NEW_UI] REPLACE_MAIN_MENU=0`: the second bounded Lua press
+left the menu, Car0 landed on probe 3/3, and auto-drive reached 133.5 km/h / fourth gear / 450 m
+with a real coaching cue. Its additional explicit auto-drive sender initially used an upgrade
+identity the authenticated sidecar rejects and read the flat Lua ack as a nested payload. The
+server, resilient launcher, and auto-drive sender now share one authorized client-id constant; the
+auto-drive path uses `HarnessClient.request_session_start()` and logs the flat ack fields. A
+correlated sidecar error returns immediately instead of waiting out the ack timeout. Focused result:
+640 passed. Final `make ci-fast`: 3,871 passed, 89 skipped, 83.61% coverage.
+
+**Current-SHA control-safety follow-up:** the live measurement that CSP 0.2.11 may return false
+on the first `ac.tryToStart` call is retained, but unconditional app-load retries are not: they
+would force an ordinary human waiting at the Drive/setup screen into a session. Only the
+authenticated resilient/auto-drive harness now arms Start, and `HarnessClient` performs the
+bounded one-second-spaced retries. Lua idempotency uses `isInMainMenu == false`, never
+`isSessionStarted` (measured true while still parked). Both sides of the physical-control relay
+carry dedicated loopback upgrade identities that browser WebSocket APIs cannot set; the sidecar
+routes `session.start` only to authenticated `CLIENT_CLASS_LUA` and accepts/returns its ack only
+on that channel, so the adb-reversed tablet neither receives nor forges control traffic. An
+unacknowledged request still gets the authoritative bounded Car0 re-probe, covering a delivered
+side effect whose ack was lost. Finally, Game Point reads `[NEW_UI] REPLACE_MAIN_MENU=0` from the
+resolved AC user-data `gui.ini` before Stable AC launch and reports `menu_config_required` with
+the exact path/remediation; configure `ac_user_dir` or `AC_COPILOT_AC_USER_DIR` when discovery is
+insufficient. The CSP `onOpen` send and frame-paced hello fallback now call one canonical
+classified-hello helper; a retry can no longer overwrite a valid Lua registration with the
+default `external` class. The retry regression inspects the actual serialized hello fields. Lua
+and resilient-control upgrade identities no longer update the rig-screen recency metric; only
+the real `ac-copilot-screen*` identity does. Game Point's CLI/GUI reconstruction now preserves
+`ac_user_dir`, and standard discovery selects the Documents/OneDrive candidate containing
+`cfg/extension/gui.ini` rather than the first merely existing directory. Focused result: 195
+passed. Final `make ci-fast`: 3,878 passed, 89 skipped, 83.61% coverage.
+
+**Final endpoint-consistency follow-up:** Stable AC now fails closed when Game Point resolves a
+non-default sidecar port. Python children can inherit that port, but the launcher cannot safely
+rewrite CSP's persisted `wsSidecarUrl` before the Lua peer must connect, so a custom port could
+leave the authenticated `session.start` route without a Lua recipient. The AC Session row reports
+`sidecar_port_unsupported` with both configured and required ports, while custom ports remain
+available for sidecar-only operation. Focused launcher result: 125 passed. Final `make ci-fast`:
+3,879 passed, 89 skipped, 83.61% coverage.
+
+The final runbook review also removed two obsolete claims that fast-fail relaunch was the only
+pre-drive-menu recovery. `docs/10_Development/18_Autonomous_Harness.md` now routes operators through
+the authenticated `session.start` relay, bounded Car0 receipt probe, legacy-menu/default-port
+preflight, and specific Lua-peer/ack/WebSocket failure signals before another launch cycle.
+
+**Mechanism correction (static analysis, no rig time)** —
+[issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).
+The wedge loop in CSP `accRenderingAdv.dll` (SHA256 `6546FDF7…`, **verified identical** to the one
+filed upstream) is a **decimal→float `strtod` core, NOT a float→decimal printer** — v2's §3.5
+correction has the direction inverted, and so does upstream #622. Evidence: ASCII reads with
+`and al,0xF`, `d1*10+d2` packing, `cvtsi2sd` (`0x14E703C`), ±inf bit patterns on overflow
+(`0x14E707B`), 18/20-digit fast-path bounds. All three in-function RIP samples sit in ONE loop
+(`0x14E70E0…0x14E71C5`) whose progress variable `r11d` is incremented **only conditionally on
+data** with **no iteration cap** — structurally able to not terminate. Out-of-domain-limb trigger
+is **plausible, untested** (the packer never validates that a byte is a digit).
+
+### Rig state / what actually blocks the business goal
+
+- **Human coaching sessions work today**: AC live, trainer app loaded (3 windows), sidecar accepts
+  the app's WS peer (`sidecar client connected protocol=1`), ESP32 rig screen live on COM6.
+- **Autonomous drive is blocked** by the #466 *shape* (note: **#466 itself is CLOSED** — verified `gh issue view 466 --json state` → `CLOSED`; new evidence belongs on **#627**, the only open tracker): the pre-drive menu-skip lost **every** cycle, so CSP
+  never exposes `Car0` (`stage=hijack`, 3/3 probes each time). Measured denominator: **0 landed
+  drives / 6 `auto_drive` invocations** (~10-14 launch cycles; 5× `stage=hijack`, 1×
+  `stage=launch, sim never reached LIVE`) — bundles under
+  `.scratch/harness-evidence/issue627-budget-*/`. This matches the 2026-07-28 session's 3/3
+  identical failures, so it is a **persistent condition spanning at least two boots**, not the
+  historical ~4/20 variance.
+
+  **Two refutations — do NOT re-chase either:**
+  1. **CM's "start race immediately"** — operator confirmed it was always enabled.
+  2. **CSP `[TWEAKS] USE_THROTTLE_TO_START`** (user `cfg/extension/gui.ini`; rig has `1`, CSP's
+     documented default is `0`, and CSP describes it as *"Use throttle pedal to start the race"*).
+     This looked decisive — it explains a pre-drive hold, why a human can just press the throttle,
+     and the historical "hijack lands on probe 2 or 3" flakiness. **Measured: flipping it to `0`
+     still gave 3/3 no-`Car0`.** Refuted on n=1 invocation against a 0/6 baseline. The setting was
+     **restored to `1`** (byte-identical to pre-session).
+
+  **Also established:** nothing changed in the AC install `extension/`, the user `cfg/`, the CM
+  install, or `%LOCALAPPDATA%\AcTools Content Manager` between the last completed drive
+  (**2026-07-27 10:56**, per `cfg/extension/state/odometers.ini` + `consumption.ini`, which only
+  write when a car actually drives) and the failures — so this is not a config regression.
+
+  **Recovery:** re-run and let the bounded fast-fail relaunch recycle try to land the hijack; that
+  is the only mechanism with recorded successes. If it remains at 0/N, record the denominator on
+  #627 and hand over the open menu-skip condition. **Do not reboot for this shape**: the #627
+  per-boot accumulator applies to pinned-packet freezes, and there is no measured evidence that a
+  reboot makes this healthy rendering session expose `Car0`.
+
+  Note for the accumulator hunt: `cfg/extension/state/` **does** exist on this rig (under the
+  OneDrive-redirected AC user data) and `imgui_settings.ini` there is written every cycle. #627
+  recorded "no `extension/state` on this install" because it looked in the install tree only.
+- **Corpse lifetime**: one probe read `status=LIVE` with both packets frozen for **74 s** with no
+  `acs.exe` at all. #628 records ~14 s. Widen your distrust window accordingly.
+
+### Rig-config defects found (hub/machine, NOT this repo; not filed per operator directive)
+
+1. **SessionStart Tier-3 prefetch cannot reach the substrate from AG_PC.** Registry row
+   `ac_copilot → https://100.84.101.4:8045` with `tls_server_name = m4max-studio.tail31ce1b.ts.net`.
+   Measured: bare-IP `urlopen` → `SSL TLSV1_ALERT_INTERNAL_ERROR`; the ts.net name → read timeout at
+   8 s. The hook does not honour `tls_server_name` (SNI) and its timeout is too short; the MCP
+   bridge honours both, which is why the MCP tool works while the hook reports "substrate
+   unreachable". Gate stamp therefore never written → `CLAUDE_MEMORY_GATE=0` used with rationale in
+   `.scratch/.memory_bypass_rationale`. The substantive Tier-3 query DID run and was used.
+2. **`AGENTIC_MEMORY_BRIDGE_HOST` is `https://100.84.101.4`** — a URL where the resolver requires a
+   **bare** host (`_is_tailnet_shaped("https://100.84.101.4")` is False; bare `100.84.101.4` is
+   True), so the `env_bridge` candidate is never built. Fixing this alone does **not** fix (1).
 
 ## Delivered (2026-07-29) — #712 CLOSED via governance-hub #341
 

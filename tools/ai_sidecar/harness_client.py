@@ -33,9 +33,12 @@ from tools.ai_sidecar.external_protocol import (
     ENVELOPE_KEY,
     ENVELOPE_VERSION,
     KNOWN_CLIENT_CLASSES,
+    TYPE_ERROR,
     TYPE_HELLO,
     TYPE_HELLO_ACK,
     TYPE_KEY,
+    TYPE_SESSION_START,
+    TYPE_SESSION_START_ACK,
 )
 from tools.ai_sidecar.protocol import (
     EVENT_COACHING_RESPONSE,
@@ -200,6 +203,44 @@ class HarnessClient:
         await self.send(
             {ENVELOPE_KEY: ENVELOPE_VERSION, TYPE_KEY: "state.subscribe", "topics": topics}
         )
+
+    async def request_session_start(
+        self,
+        *,
+        instant: bool = True,
+        timeout: float = 5.0,
+        attempts: int = 3,
+        retry_delay: float = 1.0,
+    ) -> dict[str, Any] | None:
+        """Ask the loopback trainer app to leave AC's pre-drive menu (#726).
+
+        CSP 0.2.11's legacy menu can return ``started=false`` on its first supported
+        ``ac.tryToStart`` call and succeed about one second later. Retry only on a negative/missing
+        Lua acknowledgement; a sidecar authorization/routing error is terminal.
+        """
+        response: dict[str, Any] | None = None
+        for attempt in range(max(1, attempts)):
+            await self.send(
+                {
+                    ENVELOPE_KEY: ENVELOPE_VERSION,
+                    TYPE_KEY: TYPE_SESSION_START,
+                    "instant": instant,
+                }
+            )
+            response = await self.wait_for(
+                lambda f: (
+                    f.get(TYPE_KEY) == TYPE_SESSION_START_ACK
+                    or (f.get(TYPE_KEY) == TYPE_ERROR and f.get("ref_type") == TYPE_SESSION_START)
+                ),
+                timeout=timeout,
+            )
+            if response is not None and response.get(TYPE_KEY) == TYPE_ERROR:
+                return response
+            if response is not None and response.get("started") is True:
+                return response
+            if attempt + 1 < max(1, attempts):
+                await asyncio.sleep(max(0.0, retry_delay))
+        return response
 
     async def wait_for(
         self, predicate: Callable[[dict[str, Any]], bool], *, timeout: float = 5.0

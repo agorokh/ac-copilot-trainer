@@ -7,6 +7,7 @@ injectable; tests exercise the behavior without requiring the physical rig.
 
 from __future__ import annotations
 
+import configparser
 import json
 import os
 import re
@@ -73,6 +74,20 @@ _VOICE_ROW_WARN_STATES = {
 #: voice audio — the exact cry-wolf failure this check exists to avoid (PR #707 review).
 _MME_NAME_MAX_LEN = 31
 _WINDOWS_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+
+def _discover_ac_user_dir(home: Path | None = None) -> Path:
+    """Choose the standard AC user-data root that actually contains CSP's ``gui.ini``."""
+
+    base = home if home is not None else Path.home()
+    candidates = (
+        base / "Documents" / "Assetto Corsa",
+        base / "OneDrive" / "Documents" / "Assetto Corsa",
+    )
+    for candidate in candidates:
+        if (candidate / "cfg" / "extension" / "gui.ini").is_file():
+            return candidate
+    return next((candidate for candidate in candidates if candidate.is_dir()), candidates[0])
 
 
 class _CaseInsensitiveEnv(Mapping[str, str]):
@@ -214,6 +229,9 @@ class GamePointConfig:
     resilient_track: str | None = None
     resilient_layout: str | None = None
     resilient_cm_exe: str | None = None
+    #: Assetto Corsa user-data root containing cfg/extension/gui.ini. Used to verify the
+    #: CSP 0.2.11 legacy-menu prerequisite before Stable AC starts.
+    ac_user_dir: str | None = None
     #: Manage the tablet dashboard's ``adb reverse`` USB tunnel (issue #567). Opt-in
     #: (house pattern, cf. ``start_simhub``): off by default so CI / non-rig hosts never
     #: shell out to adb; the rig sets ``AC_COPILOT_MANAGE_TABLET_TUNNEL=1``.
@@ -305,6 +323,10 @@ class GamePointConfig:
             resilient_cm_exe=_configured_text(
                 env_map.get("AC_COPILOT_RESILIENT_CM_EXE"),
                 settings.resilient_cm_exe,
+            ),
+            ac_user_dir=_configured_text(
+                env_map.get("AC_COPILOT_AC_USER_DIR"),
+                settings.ac_user_dir,
             ),
             manage_tablet_tunnel=manage_tablet_tunnel,
             paths=resolved_paths,
@@ -622,6 +644,9 @@ class GamePointSupervisor:
                 "unconfigured",
                 f"set {', '.join(missing)} in settings.json or the matching environment variables",
             )
+        menu_config = self._stable_ac_menu_config()
+        if not menu_config.ok:
+            return menu_config
         if (
             self.config.resilient_cm_exe
             and _resolve_launcher_path(
@@ -676,11 +701,20 @@ class GamePointSupervisor:
                 self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
                 log = self.paths.resilient_log_path.open("a", encoding="utf-8")
                 self._resilient_log_handle = log
+                resilient_env = dict(self._environ)
+                # The resilient child must target the launcher's RESOLVED sidecar endpoint.
+                # settings.json can select a port without setting the raw environment variable.
+                resilient_env["AC_COPILOT_SIDECAR_PORT"] = str(self.config.port)
+                _put_if_present(
+                    resilient_env,
+                    "AC_COPILOT_SIDECAR_TOKEN",
+                    self.config.token,
+                )
                 self._resilient_process = self._popen(
                     self.resilient_command(),
                     **_subprocess_kwargs(
                         cwd=self._sidecar_working_directory(),
-                        env=dict(self._environ),
+                        env=resilient_env,
                         stdout=log,
                         stderr=subprocess.STDOUT,
                         text=True,
@@ -782,6 +816,9 @@ class GamePointSupervisor:
                     "unconfigured",
                     "resilient_cm_exe must be absolute or stay within the Game Point folder",
                 )
+            menu_config = self._stable_ac_menu_config()
+            if not menu_config.ok:
+                return menu_config
             return ProbeResult(
                 "ac_session",
                 True,
@@ -793,6 +830,75 @@ class GamePointSupervisor:
             rc == 0,
             "exited",
             f"exit={rc}; log={self.paths.resilient_log_path}",
+        )
+
+    def _stable_ac_menu_config(self) -> ProbeResult:
+        """Verify CSP 0.2.11 can honor ``ac.tryToStart`` before launching Stable AC."""
+
+        # Stable AC's authenticated session.start relay depends on the CSP Lua app already
+        # being connected to this sidecar. The launcher's port setting is available to its
+        # Python children, but CSP's per-app ``ac.storage`` WebSocket URL is not safely
+        # writable before AC starts. Fail closed instead of launching a recovery client on
+        # one port while the Lua control peer silently dials the built-in 8765 endpoint.
+        if self.config.port != DEFAULT_PORT:
+            return ProbeResult(
+                "ac_session",
+                False,
+                "sidecar_port_unsupported",
+                f"Stable AC requires sidecar_port={DEFAULT_PORT}; configured "
+                f"sidecar_port={self.config.port} cannot be propagated to the CSP Lua bridge.",
+            )
+        explicit = Path(self.config.ac_user_dir) if self.config.ac_user_dir else None
+        if explicit is None and sys.platform != "win32":
+            return ProbeResult("ac_session", True, "menu_config_skipped")
+        if explicit is not None:
+            ac_user_dir = explicit
+        else:
+            ac_user_dir = _discover_ac_user_dir()
+        gui_ini = ac_user_dir / "cfg" / "extension" / "gui.ini"
+        try:
+            raw = gui_ini.read_bytes()
+        except OSError as exc:
+            return ProbeResult(
+                "ac_session",
+                False,
+                "menu_config_required",
+                "Stable AC on CSP 0.2.11 requires [NEW_UI] REPLACE_MAIN_MENU=0; "
+                f"cannot read {gui_ini}: {exc}",
+            )
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw.decode("cp1252")
+        parser = configparser.ConfigParser(
+            interpolation=None,
+            strict=False,
+            inline_comment_prefixes=(";", "#"),
+        )
+        try:
+            parser.read_string(text)
+            replace_main_menu = parser.get("NEW_UI", "REPLACE_MAIN_MENU")
+        except (configparser.Error, KeyError) as exc:
+            return ProbeResult(
+                "ac_session",
+                False,
+                "menu_config_required",
+                "Stable AC on CSP 0.2.11 requires [NEW_UI] REPLACE_MAIN_MENU=0 in "
+                f"{gui_ini}: {exc}",
+            )
+        if replace_main_menu.strip().lower() not in {"0", "false", "off", "no"}:
+            return ProbeResult(
+                "ac_session",
+                False,
+                "menu_config_required",
+                "Set [NEW_UI] REPLACE_MAIN_MENU=0 in "
+                f"{gui_ini}; CSP 0.2.11 New UI ignores ac.tryToStart.",
+            )
+        return ProbeResult(
+            "ac_session",
+            True,
+            "menu_configured",
+            f"legacy menu enabled in {gui_ini}",
         )
 
     @staticmethod
