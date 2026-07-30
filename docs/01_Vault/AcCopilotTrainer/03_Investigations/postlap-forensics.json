@@ -1,0 +1,754 @@
+{
+  "schema": "freeze-forensics-capture/v1.1",
+  "started_at_utc": "2026-07-30T18:03:46Z",
+  "elapsed_s": 25.453,
+  "pid": 8676,
+  "selected_tid": 10200,
+  "tid_selection_reason": "render-stack hint(s) ['dwrite'] in sampled stack",
+  "selected_cycles_per_s": {
+    "s1": 2855160671.4,
+    "final": 2855618201.7
+  },
+  "cycles_top": [
+    {
+      "tid": 10200,
+      "cycles_per_s": 2855160671.4
+    },
+    {
+      "tid": 16984,
+      "cycles_per_s": 2751151565.3
+    },
+    {
+      "tid": 5436,
+      "cycles_per_s": 93526705.4
+    },
+    {
+      "tid": 18476,
+      "cycles_per_s": 55454939.5
+    },
+    {
+      "tid": 16632,
+      "cycles_per_s": 54231840.8
+    },
+    {
+      "tid": 16872,
+      "cycles_per_s": 9599149.8
+    },
+    {
+      "tid": 15160,
+      "cycles_per_s": 8697648.5
+    },
+    {
+      "tid": 17040,
+      "cycles_per_s": 8496351.0
+    },
+    {
+      "tid": 17824,
+      "cycles_per_s": 6503000.7
+    },
+    {
+      "tid": 21028,
+      "cycles_per_s": 1387940.2
+    }
+  ],
+  "candidate_stack_heads": [
+    {
+      "tid": 10200,
+      "stack_head": [
+        "Child-SP          RetAddr               Call Site",
+        "00000031`47cff010 00007ffb`198b6d54     DWrite!DWriteCreateFactory+0x7556b9",
+        "00000031`47cff260 00007ffb`198b664c     DWrite!DWriteCreateFactory+0x7552a4",
+        "00000031`47cff2e0 00007ffb`1c3eae75     DWrite!DWriteCreateFactory+0x754b9c",
+        "00000031`47cff310 00000137`f65213a0     0x00007ffb`1c3eae75",
+        "00000031`47cff318 00000137`f6523fd8     0x00000137`f65213a0"
+      ]
+    },
+    {
+      "tid": 16984,
+      "stack_head": [
+        "Child-SP          RetAddr               Call Site",
+        "00000031`4a54f7a0 00007ff6`f0068a48     ntdll!RtlQueryPerformanceCounter+0x65",
+        "00000031`4a54f7d0 00007ff6`eff53243     acs+0x238a48",
+        "00000031`4a54f800 00007ff6`eff53048     acs+0x123243",
+        "00000031`4a54f8c0 00007ffb`4051d24c     acs+0x123048",
+        "00000031`4a54f8f0 00007ffb`3bf84f7f     MSVCP120!_Call_func+0x14"
+      ]
+    },
+    {
+      "tid": 5436,
+      "stack_head": [
+        "Child-SP          RetAddr               Call Site",
+        "00000031`4a74f898 00007ffb`a882c11f     ntdll!NtWaitForSingleObject+0x14",
+        "00000031`4a74f8a0 00007ffb`18647313     KERNELBASE!WaitForSingleObjectEx+0xaf",
+        "00000031`4a74f940 00007ffb`18646cc9     DWrite+0x277313",
+        "00000031`4a74f9d0 00007ffb`aa50ccb7     DWrite+0x276cc9",
+        "00000031`4a74fa20 00007ffb`ab54ad6c     KERNEL32!BaseThreadInitThunk+0x17"
+      ]
+    }
+  ],
+  "rips_hex": [
+    "0x7ffb198b7169",
+    "0x7ffb1c3eafa3",
+    "0x7ffb198cfcc1",
+    "0x7ffb198b7162"
+  ],
+  "rips_rebased": [
+    "DWrite+0x14e7169",
+    "0x7ffb1c3eafa3",
+    "DWrite+0x14ffcc1",
+    "DWrite+0x14e7162"
+  ],
+  "modules": [
+    {
+      "module": "_socket",
+      "base": "0xc0000",
+      "end": "0xd0000"
+    },
+    {
+      "module": "_bz2",
+      "base": "0x1d170000",
+      "end": "0x1d183000"
+    },
+    {
+      "module": "_ctypes",
+      "base": "0x1d1a0000",
+      "end": "0x1d1be000"
+    },
+    {
+      "module": "python33",
+      "base": "0x1e000000",
+      "end": "0x1e3d1000"
+    },
+    {
+      "module": "MSVCR100",
+      "base": "0x5ef40000",
+      "end": "0x5f012000"
+    },
+    {
+      "module": "steam_api64",
+      "base": "0x5f020000",
+      "end": "0x5f05f000"
+    },
+    {
+      "module": "_hashlib",
+      "base": "0x180000000",
+      "end": "0x18010a000"
+    },
+    {
+      "module": "clbcatq",
+      "base": "0x136ad810000",
+      "end": "0x136ad8be000"
+    },
+    {
+      "module": "acs",
+      "base": "0x7ff6efe30000",
+      "end": "0x7ff6f1411000"
+    },
+    {
+      "module": "DWrite",
+      "base": "0x7ffb183d0000",
+      "end": "0x7ffb1a557000"
+    },
+    {
+      "module": "D3DCOMPILER_43",
+      "base": "0x7ffb1d6e0000",
+      "end": "0x7ffb1d94f000"
+    },
+    {
+      "module": "gameoverlayrenderer64",
+      "base": "0x7ffb282f0000",
+      "end": "0x7ffb284a7000"
+    },
+    {
+      "module": "fmodstudio64",
+      "base": "0x7ffb29ee0000",
+      "end": "0x7ffb2a0a6000"
+    },
+    {
+      "module": "fmod64",
+      "base": "0x7ffb2a0b0000",
+      "end": "0x7ffb2a295000"
+    },
+    {
+      "module": "steamclient64",
+      "base": "0x7ffb2a2a0000",
+      "end": "0x7ffb2bc04000"
+    },
+    {
+      "module": "MSVCR120",
+      "base": "0x7ffb3bf60000",
+      "end": "0x7ffb3c04f000"
+    },
+    {
+      "module": "pid",
+      "base": "0x7ffb3ddf0000",
+      "end": "0x7ffb3de02000"
+    },
+    {
+      "module": "DINPUT8",
+      "base": "0x7ffb3de10000",
+      "end": "0x7ffb3de5b000"
+    },
+    {
+      "module": "midimap",
+      "base": "0x7ffb3de60000",
+      "end": "0x7ffb3de6c000"
+    },
+    {
+      "module": "MSACM32",
+      "base": "0x7ffb3dec0000",
+      "end": "0x7ffb3dee1000"
+    },
+    {
+      "module": "msacm32_7ffb3def0000",
+      "base": "0x7ffb3def0000",
+      "end": "0x7ffb3deff000"
+    },
+    {
+      "module": "MSVCP120",
+      "base": "0x7ffb404e0000",
+      "end": "0x7ffb40586000"
+    },
+    {
+      "module": "wdmaud2",
+      "base": "0x7ffb41300000",
+      "end": "0x7ffb41326000"
+    },
+    {
+      "module": "nvppex",
+      "base": "0x7ffb44b80000",
+      "end": "0x7ffb44d37000"
+    },
+    {
+      "module": "wdmaud",
+      "base": "0x7ffb45800000",
+      "end": "0x7ffb4584c000"
+    },
+    {
+      "module": "winmmbase",
+      "base": "0x7ffb45860000",
+      "end": "0x7ffb45897000"
+    },
+    {
+      "module": "vstdlib_s64",
+      "base": "0x7ffb470e0000",
+      "end": "0x7ffb471a3000"
+    },
+    {
+      "module": "tier0_s64",
+      "base": "0x7ffb482f0000",
+      "end": "0x7ffb485fe000"
+    },
+    {
+      "module": "explorerframe",
+      "base": "0x7ffb705d0000",
+      "end": "0x7ffb708e1000"
+    },
+    {
+      "module": "nvspcap64",
+      "base": "0x7ffb70d40000",
+      "end": "0x7ffb70e87000"
+    },
+    {
+      "module": "AUDIOSES",
+      "base": "0x7ffb7fa50000",
+      "end": "0x7ffb7fc07000"
+    },
+    {
+      "module": "websocket",
+      "base": "0x7ffb809c0000",
+      "end": "0x7ffb809d1000"
+    },
+    {
+      "module": "openvr_api",
+      "base": "0x7ffb809e0000",
+      "end": "0x7ffb80a2f000"
+    },
+    {
+      "module": "COMCTL32",
+      "base": "0x7ffb80a70000",
+      "end": "0x7ffb80d01000"
+    },
+    {
+      "module": "Oleacc",
+      "base": "0x7ffb823c0000",
+      "end": "0x7ffb82435000"
+    },
+    {
+      "module": "inputhost",
+      "base": "0x7ffb87f50000",
+      "end": "0x7ffb88133000"
+    },
+    {
+      "module": "TextShaping",
+      "base": "0x7ffb88220000",
+      "end": "0x7ffb882d6000"
+    },
+    {
+      "module": "webio",
+      "base": "0x7ffb89010000",
+      "end": "0x7ffb890e6000"
+    },
+    {
+      "module": "textinputframework",
+      "base": "0x7ffb89580000",
+      "end": "0x7ffb896c6000"
+    },
+    {
+      "module": "Windows_UI",
+      "base": "0x7ffb8b610000",
+      "end": "0x7ffb8b769000"
+    },
+    {
+      "module": "XINPUT1_3",
+      "base": "0x7ffb8bb30000",
+      "end": "0x7ffb8bb60000"
+    },
+    {
+      "module": "d3dx11_43",
+      "base": "0x7ffb8bb60000",
+      "end": "0x7ffb8bba6000"
+    },
+    {
+      "module": "AcGenral",
+      "base": "0x7ffb8bbb0000",
+      "end": "0x7ffb8bc2d000"
+    },
+    {
+      "module": "MPR",
+      "base": "0x7ffb8dec0000",
+      "end": "0x7ffb8dee1000"
+    },
+    {
+      "module": "NvMessageBus",
+      "base": "0x7ffb90fd0000",
+      "end": "0x7ffb91333000"
+    },
+    {
+      "module": "nvapi64",
+      "base": "0x7ffb918a0000",
+      "end": "0x7ffb91e26000"
+    },
+    {
+      "module": "WSOCK32",
+      "base": "0x7ffb934d0000",
+      "end": "0x7ffb934da000"
+    },
+    {
+      "module": "OneCoreUAPCommonProxyStub",
+      "base": "0x7ffb95a90000",
+      "end": "0x7ffb960f1000"
+    },
+    {
+      "module": "nvwgf2umx",
+      "base": "0x7ffb966a0000",
+      "end": "0x7ffb9bed6000"
+    },
+    {
+      "module": "MMDevApi",
+      "base": "0x7ffb9c840000",
+      "end": "0x7ffb9c8e6000"
+    },
+    {
+      "module": "WINMM",
+      "base": "0x7ffb9d030000",
+      "end": "0x7ffb9d066000"
+    },
+    {
+      "module": "NvMemMapStoragex",
+      "base": "0x7ffb9d160000",
+      "end": "0x7ffb9d23e000"
+    },
+    {
+      "module": "nvgpucomp64",
+      "base": "0x7ffb9de30000",
+      "end": "0x7ffba1bc4000"
+    },
+    {
+      "module": "drvstore",
+      "base": "0x7ffba1e20000",
+      "end": "0x7ffba1f9a000"
+    },
+    {
+      "module": "cryptnet",
+      "base": "0x7ffba2000000",
+      "end": "0x7ffba203b000"
+    },
+    {
+      "module": "VERSION",
+      "base": "0x7ffba2110000",
+      "end": "0x7ffba211b000"
+    },
+    {
+      "module": "nvldumdx",
+      "base": "0x7ffba2120000",
+      "end": "0x7ffba21e5000"
+    },
+    {
+      "module": "WINHTTP",
+      "base": "0x7ffba2410000",
+      "end": "0x7ffba2537000"
+    },
+    {
+      "module": "AVRT",
+      "base": "0x7ffba2e10000",
+      "end": "0x7ffba2e1b000"
+    },
+    {
+      "module": "directxdatabasehelper",
+      "base": "0x7ffba3030000",
+      "end": "0x7ffba308e000"
+    },
+    {
+      "module": "D3DCOMPILER_47",
+      "base": "0x7ffba3800000",
+      "end": "0x7ffba3c7f000"
+    },
+    {
+      "module": "Microsoft_Internal_WarpPal",
+      "base": "0x7ffba3c90000",
+      "end": "0x7ffba3ca9000"
+    },
+    {
+      "module": "WindowsCodecs",
+      "base": "0x7ffba3cb0000",
+      "end": "0x7ffba3edd000"
+    },
+    {
+      "module": "dwrite_7ffba3fb0000",
+      "base": "0x7ffba3fb0000",
+      "end": "0x7ffba4217000"
+    },
+    {
+      "module": "d3d11",
+      "base": "0x7ffba4220000",
+      "end": "0x7ffba4480000"
+    },
+    {
+      "module": "dcomp",
+      "base": "0x7ffba4ad0000",
+      "end": "0x7ffba4cf5000"
+    },
+    {
+      "module": "CoreMessaging",
+      "base": "0x7ffba5140000",
+      "end": "0x7ffba526b000"
+    },
+    {
+      "module": "Secur32",
+      "base": "0x7ffba5540000",
+      "end": "0x7ffba554d000"
+    },
+    {
+      "module": "apphelp",
+      "base": "0x7ffba5590000",
+      "end": "0x7ffba5630000"
+    },
+    {
+      "module": "WINNSI",
+      "base": "0x7ffba5750000",
+      "end": "0x7ffba575e000"
+    },
+    {
+      "module": "uxtheme",
+      "base": "0x7ffba57c0000",
+      "end": "0x7ffba5868000"
+    },
+    {
+      "module": "dxcore",
+      "base": "0x7ffba58c0000",
+      "end": "0x7ffba5905000"
+    },
+    {
+      "module": "dxgi",
+      "base": "0x7ffba5910000",
+      "end": "0x7ffba5a4a000"
+    },
+    {
+      "module": "dwmapi",
+      "base": "0x7ffba5a70000",
+      "end": "0x7ffba5a9f000"
+    },
+    {
+      "module": "resourcepolicyclient",
+      "base": "0x7ffba5df0000",
+      "end": "0x7ffba5e04000"
+    },
+    {
+      "module": "windows_storage",
+      "base": "0x7ffba6140000",
+      "end": "0x7ffba69db000"
+    },
+    {
+      "module": "HID",
+      "base": "0x7ffba69e0000",
+      "end": "0x7ffba69ef000"
+    },
+    {
+      "module": "IPHLPAPI",
+      "base": "0x7ffba6d10000",
+      "end": "0x7ffba6d43000"
+    },
+    {
+      "module": "rsaenh",
+      "base": "0x7ffba72d0000",
+      "end": "0x7ffba7309000"
+    },
+    {
+      "module": "kernel_appcore",
+      "base": "0x7ffba7370000",
+      "end": "0x7ffba738b000"
+    },
+    {
+      "module": "ntmarta",
+      "base": "0x7ffba74b0000",
+      "end": "0x7ffba74e6000"
+    },
+    {
+      "module": "SspiCli",
+      "base": "0x7ffba7630000",
+      "end": "0x7ffba7679000"
+    },
+    {
+      "module": "MSWSOCK",
+      "base": "0x7ffba7950000",
+      "end": "0x7ffba79bc000"
+    },
+    {
+      "module": "USERENV",
+      "base": "0x7ffba7a00000",
+      "end": "0x7ffba7a32000"
+    },
+    {
+      "module": "CRYPTSP",
+      "base": "0x7ffba7c40000",
+      "end": "0x7ffba7c5b000"
+    },
+    {
+      "module": "CRYPTBASE",
+      "base": "0x7ffba7c60000",
+      "end": "0x7ffba7c6c000"
+    },
+    {
+      "module": "msasn1",
+      "base": "0x7ffba7cc0000",
+      "end": "0x7ffba7cd3000"
+    },
+    {
+      "module": "wldp",
+      "base": "0x7ffba7d40000",
+      "end": "0x7ffba7daa000"
+    },
+    {
+      "module": "cfgmgr32",
+      "base": "0x7ffba8240000",
+      "end": "0x7ffba8292000"
+    },
+    {
+      "module": "DEVOBJ",
+      "base": "0x7ffba82a0000",
+      "end": "0x7ffba82cf000"
+    },
+    {
+      "module": "UMPDC",
+      "base": "0x7ffba8330000",
+      "end": "0x7ffba8345000"
+    },
+    {
+      "module": "powrprof",
+      "base": "0x7ffba8350000",
+      "end": "0x7ffba83ae000"
+    },
+    {
+      "module": "bcrypt",
+      "base": "0x7ffba85a0000",
+      "end": "0x7ffba85ca000"
+    },
+    {
+      "module": "profapi",
+      "base": "0x7ffba85d0000",
+      "end": "0x7ffba85f9000"
+    },
+    {
+      "module": "ucrtbase",
+      "base": "0x7ffba86b0000",
+      "end": "0x7ffba87fc000"
+    },
+    {
+      "module": "KERNELBASE",
+      "base": "0x7ffba8810000",
+      "end": "0x7ffba8c0f000"
+    },
+    {
+      "module": "win32u",
+      "base": "0x7ffba8c20000",
+      "end": "0x7ffba8c47000"
+    },
+    {
+      "module": "gdi32full",
+      "base": "0x7ffba8c50000",
+      "end": "0x7ffba8d79000"
+    },
+    {
+      "module": "wintrust",
+      "base": "0x7ffba8d80000",
+      "end": "0x7ffba8e03000"
+    },
+    {
+      "module": "msvcp_win",
+      "base": "0x7ffba8e10000",
+      "end": "0x7ffba8eb3000"
+    },
+    {
+      "module": "bcryptPrimitives",
+      "base": "0x7ffba8ec0000",
+      "end": "0x7ffba8f6c000"
+    },
+    {
+      "module": "CRYPT32",
+      "base": "0x7ffba9040000",
+      "end": "0x7ffba91be000"
+    },
+    {
+      "module": "SHELL32",
+      "base": "0x7ffba91d0000",
+      "end": "0x7ffba9958000"
+    },
+    {
+      "module": "PSAPI",
+      "base": "0x7ffba9960000",
+      "end": "0x7ffba9968000"
+    },
+    {
+      "module": "WS2_32",
+      "base": "0x7ffba9970000",
+      "end": "0x7ffba99f2000"
+    },
+    {
+      "module": "sechost",
+      "base": "0x7ffba9a00000",
+      "end": "0x7ffba9aa9000"
+    },
+    {
+      "module": "SETUPAPI",
+      "base": "0x7ffba9b30000",
+      "end": "0x7ffba9fb7000"
+    },
+    {
+      "module": "imagehlp",
+      "base": "0x7ffba9fc0000",
+      "end": "0x7ffba9fe0000"
+    },
+    {
+      "module": "advapi32",
+      "base": "0x7ffbaa020000",
+      "end": "0x7ffbaa0dc000"
+    },
+    {
+      "module": "NSI",
+      "base": "0x7ffbaa0f0000",
+      "end": "0x7ffbaa0fa000"
+    },
+    {
+      "module": "OLEAUT32",
+      "base": "0x7ffbaa100000",
+      "end": "0x7ffbaa1d9000"
+    },
+    {
+      "module": "USER32",
+      "base": "0x7ffbaa2a0000",
+      "end": "0x7ffbaa466000"
+    },
+    {
+      "module": "SHLWAPI",
+      "base": "0x7ffbaa470000",
+      "end": "0x7ffbaa4d6000"
+    },
+    {
+      "module": "KERNEL32",
+      "base": "0x7ffbaa4e0000",
+      "end": "0x7ffbaa5a9000"
+    },
+    {
+      "module": "COMDLG32",
+      "base": "0x7ffbaa5b0000",
+      "end": "0x7ffbaa6a5000"
+    },
+    {
+      "module": "MSCTF",
+      "base": "0x7ffbaa6b0000",
+      "end": "0x7ffbaa80d000"
+    },
+    {
+      "module": "RPCRT4",
+      "base": "0x7ffbaa820000",
+      "end": "0x7ffbaa938000"
+    },
+    {
+      "module": "IMM32",
+      "base": "0x7ffbaac00000",
+      "end": "0x7ffbaac32000"
+    },
+    {
+      "module": "GDI32",
+      "base": "0x7ffbaac40000",
+      "end": "0x7ffbaac6b000"
+    },
+    {
+      "module": "msvcrt",
+      "base": "0x7ffbaac90000",
+      "end": "0x7ffbaad39000"
+    },
+    {
+      "module": "ole32",
+      "base": "0x7ffbaad40000",
+      "end": "0x7ffbaaed9000"
+    },
+    {
+      "module": "shcore",
+      "base": "0x7ffbaaf70000",
+      "end": "0x7ffbab069000"
+    },
+    {
+      "module": "combase",
+      "base": "0x7ffbab0d0000",
+      "end": "0x7ffbab455000"
+    },
+    {
+      "module": "ntdll",
+      "base": "0x7ffbab4a0000",
+      "end": "0x7ffbab706000"
+    }
+  ],
+  "rip_span_bytes": 45301313,
+  "s3": {
+    "gfx_static": true,
+    "phys_advancing": true,
+    "acs_alive_throughout": true,
+    "gfx_readings": [
+      9209,
+      9209,
+      9209,
+      9209,
+      9209,
+      9209,
+      9209,
+      9209,
+      9209
+    ],
+    "phys_readings": [
+      36307,
+      37662,
+      37997,
+      38120,
+      38242,
+      39443,
+      40784,
+      42046,
+      42737
+    ],
+    "sufficient": true
+  },
+  "verdict": "long_computation",
+  "rationale": "the selected render-stack thread (tid 10200, not necessarily the hottest) burns CPU but RIP wanders across 45301313 bytes \u2014 that thread is walking through code, so this is a long finite computation rather than a tight loop (same sampled-thread residual as LIVELOCK_CONFIRMED)."
+}
