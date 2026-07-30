@@ -209,7 +209,7 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_TELEMETRY_TICK,
     TYPE_HAPTIC_EVENT,
 )
-LOOPBACK_ONLY_CAPABILITIES: frozenset[str] = frozenset({TYPE_SETUP_CLOSED_LOOP})
+LOOPBACK_ONLY_CAPABILITIES: frozenset[str] = frozenset({TYPE_SETUP_CLOSED_LOOP, TYPE_SESSION_START})
 
 
 def server_capabilities(*, include_loopback_only: bool = True) -> list[str]:

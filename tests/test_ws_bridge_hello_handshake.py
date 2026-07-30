@@ -159,6 +159,58 @@ def test_sidecar_spawn_retry_uses_elapsed_time_under_frozen_sim_clock():
     assert int(rt.eval("_spawn_calls")) >= 2
 
 
+def test_socket_reconnect_uses_elapsed_time_under_frozen_sim_clock():
+    """#726: an async sidecar start can recover its first failed menu-frame dial."""
+    rt = _runtime()
+    rt.execute(
+        """
+        _dial_calls = 0
+        web.socket = function(_u, cb, _p)
+          _dial_calls = _dial_calls + 1
+          if _dial_calls == 1 then return nil end
+          _ws_on_recv = cb
+          local s = { close = function() end }
+          setmetatable(s, { __call = function(_, _data) _ws_sent = _ws_sent + 1 end })
+          return s
+        end
+        local wb = require("ws_bridge")
+        wb.configure("ws://127.0.0.1:8765")
+        wb.tick(0, 0)
+        for _ = 1, 49 do wb.tick(0, 0.1) end
+        _dial_calls_before_five_seconds = _dial_calls
+        wb.tick(0, 0.2)
+        """
+    )
+
+    assert int(rt.eval("_dial_calls_before_five_seconds")) == 1
+    assert int(rt.eval("_dial_calls")) == 2
+
+
+def test_configure_resets_elapsed_spawn_backoff():
+    """Changing sidecar configuration clears the real renamed backoff locals."""
+    rt = _runtime()
+    rt.execute(
+        """
+        _spawn_calls = 0
+        _spawn_callback = nil
+        web.socket = nil
+        os.runConsoleProcess = function(_params, callback)
+          _spawn_calls = _spawn_calls + 1
+          _spawn_callback = callback
+          return true
+        end
+        local wb = require("ws_bridge")
+        wb.configure("ws://127.0.0.1:8765")
+        wb.startSidecarIfNeeded("C:/app", 0)
+        _spawn_callback(nil, { exitCode = 2 })
+        wb.configure("ws://127.0.0.1:9876")
+        wb.startSidecarIfNeeded("C:/app", 0)
+        """
+    )
+
+    assert int(rt.eval("_spawn_calls")) == 2
+
+
 def test_hello_ack_registers_and_unblocks_publish():
     rt = _runtime()
     _open(rt)

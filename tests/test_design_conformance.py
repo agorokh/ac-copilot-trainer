@@ -198,7 +198,7 @@ class TestSessionControl:
         end = update.index("-- Tick coaching hold", start)
         menu_branch = update[start:end]
 
-        assert "wsBridge.tick(ch.simSeconds(sim))" in menu_branch
+        assert "wsBridge.tick(ch.simSeconds(sim), dt)" in menu_branch
         assert "wsBridge.pollInbound(8)" in menu_branch
         assert "wsBridge.startSidecarIfNeeded(appDir, dt)" in menu_branch
         assert "pendingSessionReview ~= nil and wsBridge" not in menu_branch

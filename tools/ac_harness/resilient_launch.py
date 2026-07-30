@@ -2137,6 +2137,8 @@ def request_session_start(*, timeout: float = 5.0) -> bool:
     not-drivable/freeze classification.
     """
 
+    from websockets.exceptions import WebSocketException
+
     from tools.ai_sidecar.harness_client import HarnessClient
 
     raw_port = os.environ.get("AC_COPILOT_SIDECAR_PORT", "8765")
@@ -2165,7 +2167,7 @@ def request_session_start(*, timeout: float = 5.0) -> bool:
 
     try:
         return asyncio.run(_request())
-    except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
+    except (OSError, RuntimeError, TimeoutError, ValueError, WebSocketException) as exc:
         _log(f"session.start request failed: {exc}")
         return False
 

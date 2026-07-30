@@ -284,6 +284,28 @@ def test_session_start_sender_rejects_invalid_port(monkeypatch: pytest.MonkeyPat
     assert request_session_start(timeout=0.1) is False
 
 
+def test_session_start_sender_fails_closed_on_websocket_handshake_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from websockets.exceptions import WebSocketException
+
+    from tools.ai_sidecar import harness_client
+
+    class _RejectedHarnessClient:
+        def __init__(self, _url: str, **_kwargs: object) -> None:
+            pass
+
+        async def connect(self, **_kwargs: object) -> None:
+            raise WebSocketException("upgrade rejected")
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(harness_client, "HarnessClient", _RejectedHarnessClient)
+
+    assert request_session_start(timeout=0.1) is False
+
+
 @pytest.mark.parametrize(
     ("packet_before", "packet_after"),
     [

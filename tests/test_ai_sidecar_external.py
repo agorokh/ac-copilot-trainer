@@ -656,6 +656,30 @@ def test_remote_hello_hides_loopback_only_capabilities() -> None:
     assert ack["type"] == ep.TYPE_HELLO_ACK
     assert ep.TYPE_SETUP_DIFF in ack["capabilities"]
     assert ep.TYPE_SETUP_CLOSED_LOOP not in ack["capabilities"]
+    assert ep.TYPE_SESSION_START not in ack["capabilities"]
+
+
+def test_remote_session_start_is_rejected() -> None:
+    class _RemoteWebsocket:
+        remote_address = ("192.168.1.50", 49152)
+
+        def __init__(self) -> None:
+            self.sent: list[dict[str, object]] = []
+
+        async def send(self, payload: str) -> None:
+            self.sent.append(json.loads(payload))
+
+    async def _run() -> dict[str, object]:
+        _reset_external_state()
+        ws = _RemoteWebsocket()
+        await _handle_external_frame(ws, {"v": 1, "type": "hello", "client": "screen"})
+        await _handle_external_frame(ws, {"v": 1, "type": ep.TYPE_SESSION_START})
+        return ws.sent[-1]
+
+    error = asyncio.run(_run())
+    assert error["type"] == ep.TYPE_ERROR
+    assert error["ref_type"] == ep.TYPE_SESSION_START
+    assert "loopback" in str(error["message"])
 
 
 def test_upgrade_accepted_with_token_for_non_loopback_peer() -> None:

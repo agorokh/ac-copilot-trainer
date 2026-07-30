@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-29T22:30:00-07:00
+last_updated: 2026-07-29T22:47:00-07:00
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
@@ -207,6 +207,16 @@ retries Car0 readiness only after Lua positively acks both `ok=true` and `starte
 at most once per launch attempt. Connection failures, invalid configured ports, negative acks, and
 timeouts fail closed to the original menu/freeze verdict. Final focused result: 422 passed. Final
 `make ci-fast`: 3,858 passed, 89 skipped, 83.59% coverage.
+
+**Fresh current-SHA review follow-up:** WebSocket reconnect pacing now uses the same menu-advancing
+`update(dt)` source as child maintenance (with advancing sim time retained as a compatibility
+fallback for non-entry-script callers), so an async sidecar start can recover its first failed
+dial while the menu clock is frozen. URL reconfiguration resets the actual renamed elapsed-time
+spawn/backoff locals. WebSocket upgrade/protocol exceptions fail closed to the original attempt
+verdict instead of unwinding rig ownership. Finally, `session.start` is loopback-only: remote hello
+capabilities omit it and non-loopback senders receive an error even if they hold the external-client
+token. Focused regression result: 431 passed. Final `make ci-fast`: 3,862 passed, 89 skipped,
+83.60% coverage.
 
 **Mechanism correction (static analysis, no rig time)** —
 [issue-627-strtod-unbounded-loop-2026-07-29.md](../03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md).

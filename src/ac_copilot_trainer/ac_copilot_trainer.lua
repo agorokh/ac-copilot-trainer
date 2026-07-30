@@ -2389,7 +2389,7 @@ function script.update(dt)
       -- prevent an already-running sidecar connection from draining session.start this frame.
       pcall(function() wsBridge.startSidecarIfNeeded(appDir, dt) end)
       pcall(function()
-        wsBridge.tick(ch.simSeconds(sim))
+        wsBridge.tick(ch.simSeconds(sim), dt)
         wsBridge.pollInbound(8)
       end)
     end
@@ -2478,7 +2478,7 @@ function script.update(dt)
 
   -- Issue #77 Part A: start sidecar before tick so we do not duplicate tryOpen() in the same frame.
   pcall(function() wsBridge.startSidecarIfNeeded(appDir, dt) end)
-  wsBridge.tick(ch.simSeconds(sim))
+  wsBridge.tick(ch.simSeconds(sim), dt)
   wsBridge.pollInbound(8)
   if pendingWsSidecarUrl ~= nil then
     wsBridge.configure(pendingWsSidecarUrl)

@@ -2394,6 +2394,12 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             make_error("peer must send hello before other frame types", ref_type=t),
         )
         return
+    if t == TYPE_SESSION_START and not _is_loopback_peer(websocket):
+        await _safe_send(
+            websocket,
+            make_error("session.start is accepted only from loopback peers", ref_type=t),
+        )
+        return
     if t in (TYPE_SETUP_EXCHANGE_SEARCH, TYPE_SETUP_EXCHANGE_DOWNLOAD):
         await _handle_setup_exchange_frame(websocket, data)
         return

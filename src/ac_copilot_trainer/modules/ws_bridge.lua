@@ -9,6 +9,7 @@ local sock ---@type any
 local url ---@type string|nil
 local RECONNECT_SEC = 5
 local lastTry = -RECONNECT_SEC
+local reconnectElapsed = 0
 local MAX_RECV_PER_TICK = 8
 --- Sidecar WebSocket protocol version (must match Python `tools/ai_sidecar` v1 schema).
 local PROTOCOL_VERSION = 1
@@ -145,7 +146,10 @@ function M.configure(u)
   close_socket_if_any(sock)
   url = u
   sock = nil
+  reconnectElapsed = 0
   lastTry = -RECONNECT_SEC
+  sidecarMaintenanceElapsed = 0
+  lastLaunchAttemptElapsed = -1e9
   pendingCoaching = nil
   _recvQueue = {}
   sidecarProtocolReady = false
@@ -153,8 +157,8 @@ function M.configure(u)
   sidecarChildEverLaunched = false
   spawnFailStreak = 0
   nonzeroExitStreak = 0
-  spawnAbandonUntilFrame = -1e9
-  lastBackoffTryOpenFrame = -1e9
+  spawnAbandonUntilElapsed = -1e9
+  lastBackoffTryOpenElapsed = -1e9
   setupExperimentStoreSent = false
   setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
 end
@@ -168,13 +172,13 @@ end
 --- Behaviour:
 ---   1. If we already have a live socket, noop.
 ---   2. If we already spawned a child this session and it's still alive, noop.
----   3. If we tried to launch within LAUNCH_RETRY_FRAMES, noop (avoid crash-loop).
+---   3. If we tried to launch within LAUNCH_RETRY_SECONDS, noop (avoid crash-loop).
 ---   4. Otherwise launch start_sidecar.bat (sibling of this Lua module's app dir).
 ---      The .bat handles Python discovery + env vars.
 ---
 --- Stdout from the child streams into ac.log prefixed `[SIDECAR]`.
 --- On unexpected child exit, we log the exit code; the next M.tick() will
---- naturally re-attempt the launch via this function once LAUNCH_RETRY_FRAMES have
+--- naturally re-attempt the launch via this function once LAUNCH_RETRY_SECONDS have
 --- elapsed.
 ---
 ---@param appDir string|nil  absolute path to the deployed app dir (where the .bat lives)
@@ -355,6 +359,7 @@ function M.reset()
   cornerAdvisories = {}
   lastCornerQueryAt = {}
   currentSimT = 0
+  reconnectElapsed = 0
   sidecarMaintenanceElapsed = 0
   lastLaunchAttemptElapsed = -1e9
   _recvQueue = {}
@@ -1055,12 +1060,22 @@ function M.takeCoachingForLap(currentLapCompleted)
 end
 
 ---@param simTime number|nil
-function M.tick(simTime)
+---@param dt number|nil real script.update delta; continues while simTime is frozen in menus
+function M.tick(simTime, dt)
   -- Round 10d: record the wall-clock sim time BEFORE any early return so
   -- pollInbound (called by the entry script right after tick) has a fresh
   -- reference for stamping inbound corner_advice entries, and
   -- takeCornerAdvisory has a fresh reference for its 6s staleness check.
+  local previousSimT = currentSimT
   currentSimT = tonumber(simTime) or currentSimT
+  local elapsed = (type(dt) == "number" and dt == dt and dt >= 0) and dt or nil
+  if elapsed ~= nil then
+    reconnectElapsed = reconnectElapsed + elapsed
+  elseif currentSimT > previousSimT then
+    -- Backward-compatible fallback for callers outside script.update (tests/tools): an advancing
+    -- sim clock still paces reconnects, while production passes dt for frozen menu clocks.
+    reconnectElapsed = reconnectElapsed + (currentSimT - previousSimT)
+  end
   if not url or url == "" then
     return
   end
@@ -1101,10 +1116,10 @@ function M.tick(simTime)
     end
     return
   end
-  if currentSimT - lastTry < RECONNECT_SEC then
+  if reconnectElapsed - lastTry < RECONNECT_SEC then
     return
   end
-  lastTry = currentSimT
+  lastTry = reconnectElapsed
   tryOpen()
 end
 
