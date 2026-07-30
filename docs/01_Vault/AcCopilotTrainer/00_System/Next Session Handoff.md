@@ -178,7 +178,7 @@ is **plausible, untested** (the packer never validates that a byte is a digit).
 
 - **Human coaching sessions work today**: AC live, trainer app loaded (3 windows), sidecar accepts
   the app's WS peer (`sidecar client connected protocol=1`), ESP32 rig screen live on COM6.
-- **Autonomous drive is blocked** by #466: the pre-drive menu-skip lost **every** cycle, so CSP
+- **Autonomous drive is blocked** by the #466 *shape* (note: **#466 itself is CLOSED** — verified `gh issue view 466 --json state` → `CLOSED`; new evidence belongs on **#627**, the only open tracker): the pre-drive menu-skip lost **every** cycle, so CSP
   never exposes `Car0` (`stage=hijack`, 3/3 probes each time). Measured denominator: **0 landed
   drives / 6 `auto_drive` invocations** (~10-14 launch cycles; 5× `stage=hijack`, 1×
   `stage=launch, sim never reached LIVE`) — bundles under
