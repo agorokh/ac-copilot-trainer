@@ -520,6 +520,39 @@ def test_v3_reports_are_refused_because_their_froze_rows_are_contaminated(tmp_pa
         load_observations(plan, tmp_path, require_complete=False)
 
 
+def test_off_arm_receipt_is_verified_by_not_drivable_attempts() -> None:
+    """A menu-park boot must still be able to VERIFY an overlays_off arm (Codex P1 on #726).
+
+    `not_drivable` is a delivered, rendering, physics-ticking session — at least as live as
+    `froze` for off-arm absence. While it was missing from the analyzer's live-session allowlist,
+    every such boot reported `treatment_receipt_unverified`, and any unverified boot forces the
+    whole experiment conclusion. So the verdict split intended to CLEAN the experiment would
+    instead have invalidated otherwise usable boots.
+    """
+    launches = [
+        LaunchObservation(
+            launch=index,
+            verdict="not_drivable",
+            started_at_utc=f"2026-07-29T00:{index:02d}:00Z",
+            elapsed_s=15.0,
+            uptime_h=1.0 + index,
+            cycle_delivered=True,
+            perturbers=(("nvidia_capture", "not_observed"), ("steam_overlay", "not_observed")),
+        )
+        for index in range(3)
+    ]
+
+    from tools.ac_harness.init_perturber_ab import treatment_receipt
+
+    verdict, _ = treatment_receipt(
+        "overlays_off",
+        {"steam_overlay": "not_observed", "nvidia_capture": "not_observed"},
+        launches=launches,
+    )
+
+    assert verdict != "unverified"
+
+
 def test_incomplete_experiment_is_refused(tmp_path: Path) -> None:
     plan = _two_boot_plan()
     _write_boot_report(

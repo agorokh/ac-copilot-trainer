@@ -112,7 +112,12 @@ PRE_TREATMENT_PLAN_SCHEMA = "init-perturber-ab-plan/v3"
 #:
 #: Codex has repeatedly re-litigated freze-as-absence; the contract is: freze is post-go-live
 #: absence-OK for off-arm confirmation of every delivered launch; on-arm miss stays STABLE-only.
-_LIVE_SESSION_VERDICTS = frozenset({"stable", "froze"})
+#: ``not_drivable`` joins them (2026-07-29): it is a DELIVERED, rendering, physics-ticking
+#: session parked at AC's pre-drive menu, so it is at least as live as ``froze`` for
+#: off-arm absence purposes. Omitting it made every menu-park boot report
+#: ``treatment_receipt_unverified`` — which forces the whole experiment conclusion — even
+#: when each attempt cleanly observed both perturbers as ``not_observed`` (Codex P1 on #726).
+_LIVE_SESSION_VERDICTS = frozenset({"stable", "froze", "not_drivable"})
 #: Measured injection race on the rig (~3 s). Plans must not set timeouts below this plus margin.
 INJECTION_RACE_S = 3.0
 #: Plan floor for ``--go-live-timeout`` / ``--stability-window`` so post-race absence claims
@@ -338,7 +343,7 @@ def _is_live_session(launch: LaunchObservation) -> bool:
     Only a delivered ``stable`` attempt is dispositive for *absence*: the stability window is
     known to exceed the measured ~3 s injection race. ``froze`` is not — it can fire on the
     first post-go-live sample (process exit / packet regression), and ``_Car0NotDrivable`` is
-    also mapped to ``FROZE`` without a proven late sample (Codex P1 on #721). Presence
+    also mapped to ``NOT_DRIVABLE`` without a proven late sample (#726). Presence
     (``injected``) remains dispositive on any attempt via the off-arm path.
     """
 
