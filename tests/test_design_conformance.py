@@ -206,6 +206,31 @@ class TestSessionControl:
         assert "wsBridge.startSidecarIfNeeded(appDir, dt)" in menu_branch
         assert "pendingSessionReview ~= nil and wsBridge" not in menu_branch
 
+    def test_imported_reference_scan_is_gated_on_its_feature_flag(self) -> None:
+        """SC-04: the whole-journal imported-reference scan never runs when the feature is off.
+
+        ``persistence.bestImportedReference`` scans and FULLY PARSES every ``lap_*.json`` in the
+        journal. Lua evaluates call arguments eagerly, so passing it inline to
+        ``chooseImportedReference`` ran that scan even though ``useImportedReference`` defaults to
+        false and the consumer discards the result on its first line.
+
+        Measured on the rig 2026-07-30: 401 archives / 480.5 MB, **0** of them ``imported`` — a
+        ~20 s main-thread stall per session load and per lap-end refresh, for a value thrown away,
+        growing without bound as archives accumulate.
+        """
+        src = _entry_text()
+        start = src.index("refreshActiveReference = function()")
+        body = src[start : src.index("\nlocal function ", start)]
+
+        # The scan must be behind the flag, never an inline argument.
+        assert "persistence.bestImportedReference(car, sim),\n" not in body, (
+            "bestImportedReference is passed as an eager argument again — the whole-journal scan "
+            "will run even with useImportedReference disabled"
+        )
+        guard = body.index("if config.useImportedReference == true then")
+        call = body.index("persistence.bestImportedReference(")
+        assert guard < call, "the journal scan must be guarded by the feature flag"
+
     def test_session_start_is_explicitly_armed_and_lua_identified(self) -> None:
         """SC-03: human app loads never auto-press Start; the relay targets authenticated Lua."""
         entry = _entry_text()

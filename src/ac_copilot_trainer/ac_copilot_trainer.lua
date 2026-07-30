@@ -1544,9 +1544,26 @@ refreshActiveReference = function()
     return
   end
   restoreLocalReferenceState()
+  -- #627: `bestImportedReference` SCANS AND FULLY PARSES every `lap_*.json` in the journal to
+  -- find an imported MoTeC reference. Lua evaluates call arguments eagerly, so passing it inline
+  -- ran that scan even when `useImportedReference` is false -- which is the DEFAULT, and which
+  -- makes `chooseImportedReference` discard the result unread on its very first line.
+  --
+  -- Measured on the rig 2026-07-30: 401 archives / 480.5 MB, of which **0** were `imported`. The
+  -- scan cost a ~20 s main-thread stall on every session load and every lap-end reference refresh,
+  -- to compute a value that was then thrown away. It also grew without bound as archives
+  -- accumulated, which is why this read as a slowly-worsening "long time problem".
+  --
+  -- Its RIPs land in CSP's number parser (`accRenderingAdv` divide-by-100 loop), so each archive's
+  -- float fields are parsed through the same slow path as the #627 wedge -- the scan is what feeds
+  -- it. Gate the scan on the flag instead of relying on the consumer to discard it.
+  local importedCandidate = nil
+  if config.useImportedReference == true then
+    importedCandidate = persistence.bestImportedReference(car, sim)
+  end
   local imported = persistence.chooseImportedReference(
     state.bestLapMs,
-    persistence.bestImportedReference(car, sim),
+    importedCandidate,
     config.useImportedReference == true
   )
   if imported then
