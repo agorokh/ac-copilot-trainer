@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-30T01:21:43-07:00
+last_updated: 2026-07-30T18:40:00-07:00
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-627-retention-duplicate-planner-2026-07-30.md
   - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/tier3-substrate-unreachable-rig-2026-07-28.md
@@ -129,6 +130,56 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-30, late) — #627 follow-ups: retention had three data-loss paths (PR #732 OPEN)
+
+Closing out the two items left after PR #730. The scan half went as planned; the retention half
+did not, and the correction is the useful part. Full write-up:
+[issue-627-retention-duplicate-planner-2026-07-30.md](../03_Investigations/issue-627-retention-duplicate-planner-2026-07-30.md).
+
+**1. Imported-reference scan is now cheap on the enabled path.** `bestImportedReference` decoded
+every `lap_*.json` to read one string. Now two `plain` substring scans first: **405 ms vs 9024 ms,
+403/403 excluded** on the rig's real journal. A tail-only window was implemented first and
+**rejected by measurement** — our encoder emits keys in hash order, so `"source"` sat a median
+**247,286 bytes from EOF** and 58 of 80 sampled archives had it outside an 8 KiB tail.
+
+**2. I built the wrong thing, twice over.** `tools/journal_prune.py` rested on a false premise —
+the journal is **not** unbounded, `lap_archive.rotate` caps it at 500 MB, and 403 files / 486 MB
+*is* that cap working — and duplicated `tools/coaching_lake/retention.py` (#402), which is
+strictly stronger (`is_pb`, profile PB uuids, `.pin`/`.keep`, `exported_at` ordering). **Tool
+deleted.** Both facts came from review, not from my own search.
+
+**3. The real bug was in the canonical planner.** Every protection there is *record-local*, so it
+cannot see that another file still points at an archive. On the rig `journal/reports/*.json` cites
+**187** archives it classified `eligible`:
+
+    before:  303 delete candidates,  97 protected, 403 scanned
+    after:   178 delete candidates, 225 protected, 403 scanned
+
+**125 archives the operator's own reports cite were one `--apply` from deletion**, shipped since
+#402. Fixed by `_cited_archive_names` — scans `*.jsonl` too (the setup-experiment store), requires
+the `.json` suffix so `lap_history`/`lap_ms` cannot masquerade, excludes `journal/laps`, and
+**fails closed** when a state file cannot be read.
+
+**Two more, same shape.** `lap_archive.rotate` had no source check — imported references survived
+only because `lap_<YYYYMMDD…>` alphabetically precedes `lap_imported_…`; now skipped explicitly.
+And the Lua prefilter's tolerant path took the *first* `source` match, so a pretty-printed archive
+with a nested `source` ahead of a top-level `"source": "imported"` was reported *proven not
+imported* and silently dropped; now scans every match.
+
+**Nothing was deleted from the operator's journal.** Every run was a dry run. The decision to
+actually prune (178 candidates) is the operator's.
+
+**Recurring lesson across all three:** a protection that cannot be *evaluated* must fail closed.
+Each defect encoded "I could not verify this" identically to "this does not apply".
+
+### Next
+- Land PR #732 (CI + bot reviews green; all 10 Codex threads answered).
+- Still open from before: the intermittent (~50%) pit-start stall — `_teleport_onto_line`'s 25 m
+  read-back always fails, offsets flagged `VERIFY LIVE` in `custom_ai.py`; and `menu_config_required`
+  hard-block ergonomics.
+- Optional, operator's call: run `python -m tools.coaching_lake.retention --lap-dir <journal/laps>
+  --max-lap-files 100 --apply` to reclaim space. **Not run.**
 
 ## Delivered (2026-07-30 PM) — the multi-second stall was OURS, and it is FIXED
 
