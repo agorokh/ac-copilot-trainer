@@ -352,3 +352,99 @@ def test_tt_retention_does_not_cascade_curriculum_for_last_session_only(tmp_path
     assert not source.exists()
     assert curriculum.exists()
     assert survivor.exists()
+
+
+# ---------------------------------------------------------------------------
+# #627: an archive another state file still cites must not be deleted
+# ---------------------------------------------------------------------------
+
+
+def _cited_journal(tmp_path: Path) -> tuple[Path, Path]:
+    """A state dir shaped like the rig's: `<state>/journal/laps` plus sibling stores."""
+    state = tmp_path / "ac_copilot_trainer"
+    laps = state / "journal" / "laps"
+    laps.mkdir(parents=True)
+    for i in range(6):
+        _write_lap(laps, f"c{i}", _archive(f"u{i}", exported_at=f"2026-07-0{i + 1}T00:00:00Z"))
+    return state, laps
+
+
+def test_lap_cited_by_a_session_report_is_protected(tmp_path: Path) -> None:
+    """Measured on the rig: `journal/reports/*.json` cites 187 archives this planner called
+    eligible. A record-local check cannot see that some OTHER file still points at the archive.
+    """
+    state, laps = _cited_journal(tmp_path)
+    reports = state / "journal" / "reports"
+    reports.mkdir(parents=True)
+    (reports / "session_abc.json").write_text(
+        json.dumps({"laps": [{"archive": "lap_c0.json"}]}), encoding="utf-8"
+    )
+
+    plan = plan_retention(lap_dir=laps, policy=RetentionPolicy(max_lap_files=1), profile_path=None)
+
+    cited = next(i for i in plan.items if i.path.name == "lap_c0.json")
+    assert cited.protected
+    assert "cited-by-state" in cited.reasons
+    assert "lap_c0.json" not in {i.path.name for i in plan.delete}
+
+
+def test_lap_cited_by_a_jsonl_store_is_protected(tmp_path: Path) -> None:
+    """The setup-experiment store is `experiments.jsonl`; a `*.json` glob misses it entirely."""
+    state, laps = _cited_journal(tmp_path)
+    experiments = state / "journal" / "setup_experiments"
+    experiments.mkdir(parents=True)
+    (experiments / "experiments.jsonl").write_text(
+        json.dumps({"archive_path": "journal/laps/lap_c1.json"}) + "\n", encoding="utf-8"
+    )
+
+    plan = plan_retention(lap_dir=laps, policy=RetentionPolicy(max_lap_files=1), profile_path=None)
+
+    assert "lap_c1.json" not in {i.path.name for i in plan.delete}
+
+
+def test_citation_matching_is_case_insensitive(tmp_path: Path) -> None:
+    state, laps = _cited_journal(tmp_path)
+    (state / "combo.json").write_text(json.dumps({"best": "LAP_C2.JSON"}), encoding="utf-8")
+
+    plan = plan_retention(lap_dir=laps, policy=RetentionPolicy(max_lap_files=1), profile_path=None)
+
+    assert "lap_c2.json" not in {i.path.name for i in plan.delete}
+
+
+def test_lap_shaped_keys_are_not_treated_as_citations(tmp_path: Path) -> None:
+    """`lap_history` and `lap_ms` appear in every session file and are not filenames."""
+    state, laps = _cited_journal(tmp_path)
+    (state / "journal" / "session_x.json").write_text(
+        json.dumps({"lap_history": [{"lap_ms": 90000}]}), encoding="utf-8"
+    )
+
+    plan = plan_retention(lap_dir=laps, policy=RetentionPolicy(max_lap_files=1), profile_path=None)
+
+    assert len(plan.delete) == 5, "a non-citation must not protect anything"
+
+
+def test_archives_do_not_cite_each_other(tmp_path: Path) -> None:
+    """The `journal/laps` tree is excluded, or one archive naming another keeps it alive forever."""
+    state, laps = _cited_journal(tmp_path)
+    payload = _archive("u9", exported_at="2026-07-09T00:00:00Z")
+    payload["previous"] = "lap_c0.json"
+    _write_lap(laps, "c9", payload)
+
+    plan = plan_retention(lap_dir=laps, policy=RetentionPolicy(max_lap_files=1), profile_path=None)
+
+    assert "lap_c0.json" in {i.path.name for i in plan.delete}
+
+
+def test_an_unreadable_state_file_vetoes_every_deletion(tmp_path: Path) -> None:
+    """An empty citation set is what makes an archive eligible, so failing to read a state file
+    must not look like "it cites nothing". AC holding it open, a dehydrated OneDrive placeholder,
+    or an antivirus lock would otherwise read as consent to delete.
+    """
+    state, laps = _cited_journal(tmp_path)
+    # A directory named `*.json`: `read_bytes` raises OSError on every platform.
+    (state / "unreadable.json").mkdir()
+
+    plan = plan_retention(lap_dir=laps, policy=RetentionPolicy(max_lap_files=1), profile_path=None)
+
+    assert list(plan.delete) == []
+    assert all("state-scan-incomplete" in i.reasons for i in plan.items)

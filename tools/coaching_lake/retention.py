@@ -9,6 +9,7 @@ reference, sidecar-pinned, and profile-ledger PB files.
 from __future__ import annotations
 
 import argparse
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -142,8 +143,62 @@ def _is_reference_archive(record: Mapping[str, Any]) -> bool:
     )
 
 
+#: An archive filename as it appears inside a state file. The ``.json`` suffix is required so it
+#: cannot match unrelated keys like ``lap_history`` or ``lap_ms``, which appear in every session
+#: file. Case-insensitive to match the filesystem this runs on.
+_ARCHIVE_CITATION = re.compile(rb"lap_[0-9A-Za-z._-]+\.json", re.IGNORECASE)
+
+#: Persisted stores that can cite an archive. ``.jsonl`` matters: the setup-experiment store
+#: (``journal/setup_experiments/experiments.jsonl``) records an ``archive_path`` per row.
+_STATE_SUFFIXES = ("*.json", "*.jsonl")
+
+
+def _cited_archive_names(lap_dir: Path) -> tuple[set[str], list[str]]:
+    """Archive names cited by any persisted state file, plus any file that could not be read.
+
+    A record-local check (:func:`_is_reference_archive`) cannot see that some *other* file still
+    points at an archive. Measured on the rig: ``journal/reports/*.json`` cites **162** archives
+    that this planner otherwise classified ``eligible`` — deleting them would have silently
+    orphaned the operator's own session reports.
+
+    Returns ``(names, unreadable)``. **The second element is a veto, not diagnostics.** An empty
+    citation set is what makes an archive eligible, so a state file we failed to read is
+    indistinguishable from one that cites nothing; AC holding it open, a dehydrated OneDrive
+    placeholder, or an antivirus lock would otherwise read as consent to delete. Callers must
+    protect everything while it is non-empty — the same fail-closed posture this module already
+    takes for an unreadable archive.
+
+    The ``journal/laps`` tree is excluded: archives must not keep each other alive, and reading
+    them here would duplicate the decode cost that made this subsystem slow (#627).
+    """
+    names: set[str] = set()
+    unreadable: list[str] = []
+    # `<state>/journal/laps` -> `<state>`. Anything shallower is a caller-supplied directory with
+    # no surrounding state to scan, which is not an error.
+    state_dir = lap_dir.parent.parent
+    if not state_dir.is_dir():
+        return names, unreadable
+    for pattern in _STATE_SUFFIXES:
+        for candidate in sorted(state_dir.rglob(pattern)):
+            try:
+                relative = candidate.relative_to(state_dir).parts
+            except ValueError:  # pragma: no cover - rglob results are always relative
+                continue
+            if relative[:2] == ("journal", "laps"):
+                continue
+            try:
+                raw = candidate.read_bytes()
+            except OSError as exc:
+                unreadable.append(f"{'/'.join(relative)}: {exc}")
+                continue
+            for match in _ARCHIVE_CITATION.finditer(raw):
+                names.add(match.group(0).decode("ascii").lower())
+    return names, unreadable
+
+
 def _lap_items(lap_dir: Path, profile: Mapping[str, Any] | None) -> list[RetentionItem]:
     pb_lap_uuids = _profile_pb_lap_uuids(profile)
+    cited, unreadable_state = _cited_archive_names(lap_dir)
     items: list[RetentionItem] = []
     for path in iter_lap_archive_paths([lap_dir]):
         reasons: list[str] = []
@@ -171,6 +226,14 @@ def _lap_items(lap_dir: Path, profile: Mapping[str, Any] | None) -> list[Retenti
         if _has_pin_marker(path):
             protected = True
             reasons.append("pinned")
+        if path.name.lower() in cited:
+            protected = True
+            reasons.append("cited-by-state")
+        if unreadable_state:
+            # Fail closed: we could not read every file that might cite an archive, so we cannot
+            # prove that any archive is uncited.
+            protected = True
+            reasons.append("state-scan-incomplete")
         try:
             size = path.stat().st_size
         except OSError:
