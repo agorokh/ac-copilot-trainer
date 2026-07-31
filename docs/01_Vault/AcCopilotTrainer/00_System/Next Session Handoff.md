@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-30T18:40:00-07:00
+last_updated: 2026-07-30T18:05:00-07:00
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-627-retention-duplicate-planner-2026-07-30.md
   - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
@@ -131,7 +131,7 @@ relates_to:
 
 # Next session handoff
 
-## Delivered (2026-07-30, late) — #627 follow-ups: retention had three data-loss paths (PR #732 OPEN)
+## Delivered (2026-07-30, late) — #627 follow-ups: retention had three data-loss paths (PR #732 MERGED `0b2e627`)
 
 Closing out the two items left after PR #730. The scan half went as planned; the retention half
 did not, and the correction is the useful part. Full write-up:
@@ -174,7 +174,10 @@ actually prune (178 candidates) is the operator's.
 Each defect encoded "I could not verify this" identically to "this does not apply".
 
 ### Next
-- Land PR #732 (CI + bot reviews green; all 10 Codex threads answered).
+- ~~Land PR #732~~ **DONE** — merged `0b2e627`, all 13 review threads answered, 3972 tests green.
+  **Deployed:** AC's `apps/lua/ac_copilot_trainer` is a symlink into the primary checkout, so
+  `git pull` on `main` there is the deploy step — verified the escape guard and the `rotate`
+  imported guard are live in the AC-visible files.
 - Still open from before: the intermittent (~50%) pit-start stall — `_teleport_onto_line`'s 25 m
   read-back always fails, offsets flagged `VERIFY LIVE` in `custom_ai.py`; and `menu_config_required`
   hard-block ergonomics.
