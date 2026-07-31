@@ -4,11 +4,17 @@ The raw lap and Track Titan lakes are immutable evidence until an explicit lifec
 policy prunes them. This module makes that pruning deterministic and auditable:
 planning is pure, dry-run is the CLI default, and deletion preserves PB, imported
 reference, sidecar-pinned, and profile-ledger PB files.
+
+It also preserves any archive **another persisted file still cites** (#627). Every other
+protection here is record-local — it reads the archive and decides from that archive's own
+contents — so none of them can see that a session report or the setup-experiment store still
+points at it. See :func:`_cited_archive_names`.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -63,6 +69,10 @@ class RetentionPlan:
     policy: RetentionPolicy
     items: tuple[RetentionItem, ...] = field(default_factory=tuple)
     delete: tuple[RetentionItem, ...] = field(default_factory=tuple)
+    #: State files the citation scan could not read. Non-empty means every archive was protected
+    #: regardless of policy, so it MUST be rendered — otherwise the operator sees a plan with zero
+    #: candidates and no way to tell a satisfied policy from a parked one.
+    unreadable_state: tuple[str, ...] = ()
 
     @property
     def protected(self) -> tuple[RetentionItem, ...]:
@@ -73,6 +83,15 @@ class RetentionPlan:
             f"retention plan: {len(self.delete)} delete candidate(s), "
             f"{len(self.protected)} protected, {len(self.items)} scanned"
         ]
+        if self.unreadable_state:
+            lines.append(
+                "  RETENTION PARKED: a state file could not be read, so no archive can be shown "
+                "to be uncited. Every archive is protected until this is resolved:"
+            )
+            for entry in self.unreadable_state[:10]:
+                lines.append(f"    {entry}")
+            if len(self.unreadable_state) > 10:
+                lines.append(f"    ... {len(self.unreadable_state) - 10} more")
         for item in self.delete[:20]:
             lines.append(f"  DELETE {item.domain} {item.path} ({', '.join(item.reasons)})")
         if len(self.delete) > 20:
@@ -142,8 +161,71 @@ def _is_reference_archive(record: Mapping[str, Any]) -> bool:
     )
 
 
-def _lap_items(lap_dir: Path, profile: Mapping[str, Any] | None) -> list[RetentionItem]:
+#: An archive filename as it appears inside a state file. The ``.json`` suffix is required so it
+#: cannot match unrelated keys like ``lap_history`` or ``lap_ms``, which appear in every session
+#: file. Case-insensitive to match the filesystem this runs on.
+_ARCHIVE_CITATION = re.compile(rb"lap_[0-9A-Za-z._-]+\.json", re.IGNORECASE)
+
+#: Persisted stores that can cite an archive. ``.jsonl`` matters: the setup-experiment store
+#: (``journal/setup_experiments/experiments.jsonl``) records an ``archive_path`` per row.
+_STATE_SUFFIXES = ("*.json", "*.jsonl")
+
+
+def _cited_archive_names(lap_dir: Path) -> tuple[set[str], list[str]]:
+    """Archive names cited by any persisted state file, plus any file that could not be read.
+
+    A record-local check (:func:`_is_reference_archive`) cannot see that some *other* file still
+    points at an archive. Measured on the rig: ``journal/reports/*.json`` cites **187** archives,
+    125 of which this planner otherwise classified ``eligible`` — deleting them would have
+    silently orphaned the operator's own session reports.
+
+    Returns ``(names, unreadable)``. **The second element is a veto, not diagnostics.** An empty
+    citation set is what makes an archive eligible, so a state file we failed to read is
+    indistinguishable from one that cites nothing; AC holding it open, a dehydrated OneDrive
+    placeholder, or an antivirus lock would otherwise read as consent to delete. Callers must
+    protect everything while it is non-empty — the same fail-closed posture this module already
+    takes for an unreadable archive.
+
+    The ``journal/laps`` tree is excluded: archives must not keep each other alive, and reading
+    them here would duplicate the decode cost that made this subsystem slow (#627).
+    """
+    names: set[str] = set()
+    unreadable: list[str] = []
+    # Only derive a state root from a directory that IS `<state>/journal/laps`. A bare
+    # `--lap-dir /data/laps` would otherwise take `parent.parent` to the volume root and recursively
+    # glob the entire filesystem — slow, and any unrelated unreadable JSON anywhere on the machine
+    # would trip the fail-closed veto and protect everything. A caller-supplied directory with no
+    # surrounding state simply has no citations, which is not an error.
+    parts = lap_dir.parts
+    if len(parts) < 3 or tuple(part.lower() for part in parts[-2:]) != ("journal", "laps"):
+        return names, unreadable
+    state_dir = lap_dir.parent.parent
+    if not state_dir.is_dir():
+        return names, unreadable
+    for pattern in _STATE_SUFFIXES:
+        for candidate in sorted(state_dir.rglob(pattern)):
+            try:
+                relative = candidate.relative_to(state_dir).parts
+            except ValueError:  # pragma: no cover - rglob results are always relative
+                continue
+            if relative[:2] == ("journal", "laps"):
+                continue
+            try:
+                raw = candidate.read_bytes()
+            except OSError as exc:
+                unreadable.append(f"{'/'.join(relative)}: {exc}")
+                continue
+            for match in _ARCHIVE_CITATION.finditer(raw):
+                names.add(match.group(0).decode("ascii").lower())
+    return names, unreadable
+
+
+def _lap_items(
+    lap_dir: Path, profile: Mapping[str, Any] | None
+) -> tuple[list[RetentionItem], list[str]]:
+    """Returns ``(items, unreadable_state)``; the veto list is surfaced in the rendered plan."""
     pb_lap_uuids = _profile_pb_lap_uuids(profile)
+    cited, unreadable_state = _cited_archive_names(lap_dir)
     items: list[RetentionItem] = []
     for path in iter_lap_archive_paths([lap_dir]):
         reasons: list[str] = []
@@ -171,6 +253,14 @@ def _lap_items(lap_dir: Path, profile: Mapping[str, Any] | None) -> list[Retenti
         if _has_pin_marker(path):
             protected = True
             reasons.append("pinned")
+        if path.name.lower() in cited:
+            protected = True
+            reasons.append("cited-by-state")
+        if unreadable_state:
+            # Fail closed: we could not read every file that might cite an archive, so we cannot
+            # prove that any archive is uncited.
+            protected = True
+            reasons.append("state-scan-incomplete")
         try:
             size = path.stat().st_size
         except OSError:
@@ -185,7 +275,8 @@ def _lap_items(lap_dir: Path, profile: Mapping[str, Any] | None) -> list[Retenti
                 bytes=size,
             )
         )
-    return sorted(items, key=lambda item: (item.sort_time, item.path.as_posix()))
+    ordered = sorted(items, key=lambda item: (item.sort_time, item.path.as_posix()))
+    return ordered, unreadable_state
 
 
 def _tt_raw_paths(tt_dir: Path) -> Iterable[Path]:
@@ -329,9 +420,10 @@ def plan_retention(
     profile = load_profile(profile_path, strict=True) if profile_path is not None else None
     items: list[RetentionItem] = []
     delete: list[RetentionItem] = []
+    unreadable_state: list[str] = []
 
     if lap_dir is not None:
-        lap_items = _lap_items(Path(lap_dir), profile)
+        lap_items, unreadable_state = _lap_items(Path(lap_dir), profile)
         items.extend(lap_items)
         delete.extend(
             _select_by_cap(
@@ -364,6 +456,7 @@ def plan_retention(
         delete=tuple(
             sorted(delete, key=lambda item: (item.domain, item.sort_time, item.path.as_posix()))
         ),
+        unreadable_state=tuple(unreadable_state),
     )
 
 

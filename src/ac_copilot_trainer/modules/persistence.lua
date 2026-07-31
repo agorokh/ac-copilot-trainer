@@ -411,6 +411,102 @@ local function readLapRecord(path)
   return jsonDecode(raw)
 end
 
+--- Compact form our JSON encoder emits for the discriminating key, e.g. `"source":"in_game"`.
+local SOURCE_KEY = '"source":"'
+local SOURCE_IMPORTED = '"source":"imported"'
+
+--- Cheap EXCLUSION test: can this archive possibly be an imported reference?
+---
+--- #627: `bestImportedReference` used to fully JSON-decode every `lap_*.json` just to read one
+--- string. Measured on the rig: 403 archives / 480 MB, of which ZERO were imported -- half a
+--- gigabyte decoded to find nothing, on every reference refresh, growing with every lap driven.
+--- Those decodes run through CSP's slow decimal->float loop (`accRenderingAdv`), which is what
+--- turned this into a multi-second main-thread stall.
+---
+--- This reads the same bytes but does NOT decode them: two `plain` substring scans (a C memchr in
+--- the Lua runtime) instead of allocating thousands of numbers. Measured over the rig's real
+--- journal: 405 ms vs 9024 ms even against Python's C-speed JSON, excluding 403 of 403.
+---
+--- A tail-only window was tried first and REJECTED by measurement: our encoder emits keys in hash
+--- order, so `"source"` sat a median of 247 KB from EOF and 58 of 80 sampled archives had it
+--- outside an 8 KiB tail. Scanning the whole buffer is key-order independent.
+---
+--- **Fails OPEN by design.** A `false` return must be PROOF, never a guess: an unopenable file, or
+--- one that does not contain the compact key form at all (a future format change), returns `true`
+--- and the caller decodes it. Being slow is recoverable; silently dropping a lap the user
+--- imported is not.
+---@param path string
+---@return boolean mayBeImported
+local function archiveMayBeImported(path)
+  local f = io.open(path, "rb")
+  if not f then
+    return true
+  end
+  local ok, raw = pcall(function()
+    return f:read("*a")
+  end)
+  f:close()
+  if not ok or type(raw) ~= "string" then
+    return true
+  end
+  -- Fast path: the exact compact form our encoder emits. One `plain` scan, no pattern engine.
+  if raw:find(SOURCE_IMPORTED, 1, true) then
+    return true
+  end
+  -- Compact key present but not that exact value. Read each value rather than concluding from the
+  -- key alone: a JSON escape makes the bytes on disk differ from the decoded string, so
+  -- `"source":"imported"` decodes to "imported" while matching none of our literals. Any
+  -- backslash means the byte form is not comparable, so we stop guessing and decode.
+  local pos = 1
+  local sawCompactKey = false
+  while true do
+    local _, keyEnd = raw:find(SOURCE_KEY, pos, true)
+    if not keyEnd then
+      break
+    end
+    local closing = raw:find('"', keyEnd + 1, true)
+    if not closing then
+      return true -- truncated value: unknown shape
+    end
+    local value = raw:sub(keyEnd + 1, closing - 1)
+    if value:find("\\", 1, true) or value == "imported" then
+      return true
+    end
+    sawCompactKey = true
+    pos = closing + 1
+  end
+  if sawCompactKey then
+    return false -- every compact value read literally, none of them "imported": proven
+  end
+  -- Tolerant path: a differently-spaced encoder (`"source": "in_game"`). Never taken for archives
+  -- this app wrote, so the pattern engine stays off the hot path, but it keeps the filter correct
+  -- for hand-edited or externally-produced files instead of forcing a full decode.
+  --
+  -- Scan EVERY match, not just the first. The fast path above is a whole-buffer OR; taking only
+  -- the first spaced match here would break that symmetry and violate this function's contract:
+  -- a pretty-printed archive with a nested `source` key ahead of a top-level `"source":
+  -- "imported"` would be reported as PROVEN not-imported and silently skipped.
+  local found = false
+  local pos = 1
+  while true do
+    local s, e, value = raw:find('"source"%s*:%s*"([^"]*)"', pos)
+    if not s then
+      break
+    end
+    if value == "imported" or value:find("\\", 1, true) then
+      return true -- imported, or escaped so the bytes are not comparable to a decoded string
+    end
+    found = true
+    pos = e + 1
+  end
+  if found then
+    return false -- key present in every occurrence and none said "imported": proven
+  end
+  return true -- key absent in any recognised form: unknown shape, decode it
+end
+
+M._archiveMayBeImported = archiveMayBeImported
+
 --- Find the fastest valid imported MoTeC reference lap for the current car/track.
 ---@param car ac.StateCar|nil
 ---@param sim ac.StateSim|nil
@@ -430,7 +526,8 @@ function M.bestImportedReference(car, sim)
       local name = files[i]
       if type(name) == "string" then
         local path = dir .. "/" .. name
-        local rec = readLapRecord(path)
+        -- Skip the 250 KB decode when a plain scan PROVES this is not imported (#627).
+        local rec = archiveMayBeImported(path) and readLapRecord(path) or nil
         local lap = rec and rec.lap
         local lapMs = lap and tonumber(lap.lap_ms)
         if rec

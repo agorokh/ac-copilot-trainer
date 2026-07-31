@@ -147,3 +147,220 @@ def test_settings_ui_exposes_reference_lap_controls() -> None:
     assert "useImportedReference" in src
     assert "Prefer imported reference over local PB" in src
     assert "Open reference laps folder" in src
+
+
+# ---------------------------------------------------------------------------
+# #627: the tail prefilter that stops the whole-journal parse
+# ---------------------------------------------------------------------------
+
+
+def _counting_runtime(tmp_path: Path, files: list[str]):
+    """A runtime whose ``JSON.parse`` counts calls, so "did it FULLY parse?" is observable."""
+    rt = _runtime(tmp_path, files)
+    calls = {"n": 0}
+
+    def counting_parse(raw: str) -> Any:
+        calls["n"] += 1
+        return _to_lua(rt, json.loads(str(raw)))
+
+    rt.globals()["JSON"] = rt.table_from({"parse": counting_parse})
+    return rt, calls
+
+
+def test_non_imported_archive_is_excluded_without_a_full_parse(tmp_path: Path) -> None:
+    """#627: the 250 KB parse must not happen for archives the tail proves are not imported.
+
+    This is the whole point: on the rig, 401 archives / 480.5 MB were parsed on every reference
+    refresh and ZERO were imported.
+    """
+    laps = tmp_path / "ac_copilot_trainer" / "journal" / "laps"
+    laps.mkdir(parents=True)
+    local_lap = _record(95_000)
+    local_lap["source"] = "in_game"
+    (laps / "lap_local.json").write_text(json.dumps(local_lap), encoding="utf-8")
+
+    rt, calls = _counting_runtime(tmp_path, ["lap_local.json"])
+    ref = rt.execute(
+        """
+        local p = require("persistence")
+        return p.bestImportedReference({ id = "car_a" }, { trackName = "track_a" })
+        """
+    )
+
+    assert ref is None
+    assert calls["n"] == 0, "an in_game archive was fully JSON-parsed; the prefilter did not fire"
+
+
+def test_prefilter_is_independent_of_json_key_order(tmp_path: Path) -> None:
+    """The encoder emits keys in hash order, so position must not matter.
+
+    A tail-only window was tried first and REJECTED by measurement: on the rig ``"source"`` sat a
+    median of 247 KB from EOF, and 58 of 80 sampled archives had it outside an 8 KiB tail. This
+    pins the whole-buffer scan so that regression cannot come back.
+    """
+    laps = tmp_path / "ac_copilot_trainer" / "journal" / "laps"
+    laps.mkdir(parents=True)
+    rec = _record(90_000)
+    raw = json.dumps(rec)
+    # Force "source" to the very front, then pad far past any plausible tail window.
+    assert raw.index('"source"') < 200
+    padded = raw[:-1] + ',"zz_pad":"' + ("x" * 400_000) + '"}'
+    # Past the measured median distance-from-EOF (247 KB), so reintroducing a tail window of any
+    # plausible size — 8 KiB, 64 KiB, 256 KiB — fails this test rather than sneaking through.
+    assert padded.index('"source"') < len(padded) - 262_144
+    (laps / "lap_front_source.json").write_text(padded, encoding="utf-8")
+
+    rt, calls = _counting_runtime(tmp_path, ["lap_front_source.json"])
+    ref = rt.execute(
+        """
+        local p = require("persistence")
+        return p.bestImportedReference({ id = "car_a" }, { trackName = "track_a" })
+        """
+    )
+
+    assert calls["n"] == 1, "an imported archive must still be decoded whatever the key order"
+    assert ref is not None and ref["lapMs"] == 90_000
+
+
+def test_prefilter_fails_open_on_an_unreadable_file(tmp_path: Path) -> None:
+    """A missing/unopenable archive must not be reported as "definitely not imported"."""
+    laps = tmp_path / "ac_copilot_trainer" / "journal" / "laps"
+    laps.mkdir(parents=True)
+    rt = _runtime(tmp_path, [])
+    verdict = rt.execute(
+        """
+        local p = require("persistence")
+        return p._archiveMayBeImported("does_not_exist_anywhere.json")
+        """
+    )
+    assert verdict is True
+
+
+def test_prefilter_handles_a_differently_spaced_encoder(tmp_path: Path) -> None:
+    """`"source": "in_game"` (spaced) is still PROOF of non-imported, so it must be excluded.
+
+    Our encoder emits the compact form, so this path never runs for archives this app wrote — but
+    a hand-edited or externally-produced file should not force a full decode either.
+    """
+    laps = tmp_path / "ac_copilot_trainer" / "journal" / "laps"
+    laps.mkdir(parents=True)
+    path = laps / "lap_spaced.json"
+    path.write_text('{"source": "in_game", "lap": {"lap_ms": 1}}', encoding="utf-8")
+    rt = _runtime(tmp_path, [])
+    verdict = rt.execute(
+        f"""
+        local p = require("persistence")
+        return p._archiveMayBeImported({str(path).replace(chr(92), "/")!r})
+        """
+    )
+    assert verdict is False
+
+
+def test_prefilter_spaced_path_scans_every_match_not_just_the_first(tmp_path: Path) -> None:
+    """A nested `source` key must not shadow a later top-level `"source": "imported"`.
+
+    The compact fast path is a whole-buffer OR. The tolerant path has to be one too: taking only
+    the first match reports a genuinely imported archive as PROVEN not-imported and silently drops
+    the user's lap. That is the one direction this filter is never allowed to be wrong in.
+    """
+    laps = tmp_path / "ac_copilot_trainer" / "journal" / "laps"
+    laps.mkdir(parents=True)
+    path = laps / "lap_nested_source.json"
+    # Pretty-printed (spaced), with a nested `source` ahead of the real one.
+    path.write_text(
+        json.dumps({"meta": {"source": "motec_export"}, "source": "imported"}, indent=2),
+        encoding="utf-8",
+    )
+    rt = _runtime(tmp_path, [])
+    verdict = rt.execute(
+        f"""
+        local p = require("persistence")
+        return p._archiveMayBeImported({str(path).replace(chr(92), "/")!r})
+        """
+    )
+    assert verdict is True
+
+
+def test_prefilter_fails_open_on_a_json_escaped_source_value(tmp_path: Path) -> None:
+    """`"source":"impor\\u0074ed"` decodes to "imported" but matches none of our byte literals.
+
+    Comparing raw bytes to a decoded string is only valid while nothing is escaped. Reporting
+    "proven not imported" here would silently disable a user-supplied reference — the one
+    direction this filter is never allowed to be wrong in.
+    """
+    laps = tmp_path / "ac_copilot_trainer" / "journal" / "laps"
+    laps.mkdir(parents=True)
+    path = laps / "lap_escaped.json"
+    backslash = chr(92)
+    raw = '{"source":"impor' + backslash + 'u0074ed","lap":{"lap_ms":1}}'
+    assert json.loads(raw)["source"] == "imported", "fixture must really decode to imported"
+    path.write_text(raw, encoding="utf-8")
+
+    rt = _runtime(tmp_path, [])
+    verdict = rt.execute(
+        f"""
+        local p = require("persistence")
+        return p._archiveMayBeImported({str(path).replace(chr(92), "/")!r})
+        """
+    )
+    assert verdict is True
+
+
+def test_prefilter_still_excludes_an_ordinary_escaped_free_archive(tmp_path: Path) -> None:
+    """The escape guard must not turn the fast path off for the files it exists to exclude."""
+    laps = tmp_path / "ac_copilot_trainer" / "journal" / "laps"
+    laps.mkdir(parents=True)
+    path = laps / "lap_plain.json"
+    path.write_text('{"source":"in_game","lap":{"lap_ms":1}}', encoding="utf-8")
+
+    rt = _runtime(tmp_path, [])
+    verdict = rt.execute(
+        f"""
+        local p = require("persistence")
+        return p._archiveMayBeImported({str(path).replace(chr(92), "/")!r})
+        """
+    )
+    assert verdict is False
+
+
+def test_prefilter_fails_open_when_the_read_itself_fails(tmp_path: Path) -> None:
+    """Opening succeeds but reading throws — distinct from the file simply not existing."""
+    laps = tmp_path / "ac_copilot_trainer" / "journal" / "laps"
+    laps.mkdir(parents=True)
+    path = laps / "lap_read_explodes.json"
+    path.write_text('{"source":"in_game"}', encoding="utf-8")
+    rt = _runtime(tmp_path, [])
+    verdict = rt.execute(
+        f"""
+        local p = require("persistence")
+        local realOpen = io.open
+        io.open = function(...)
+          local f = realOpen(...)
+          if f == nil then return nil end
+          return {{
+            read = function() error("simulated I/O failure") end,
+            close = function() return f:close() end,
+          }}
+        end
+        local v = p._archiveMayBeImported({str(path).replace(chr(92), "/")!r})
+        io.open = realOpen
+        return v
+        """
+    )
+    assert verdict is True, "a failed read must fall back to decoding, not to 'not imported'"
+
+
+def test_prefilter_fails_open_when_there_is_no_source_key_at_all(tmp_path: Path) -> None:
+    """No recognised key => unknown shape => decode it. A `false` verdict must always be proof."""
+    laps = tmp_path / "ac_copilot_trainer" / "journal" / "laps"
+    laps.mkdir(parents=True)
+    path = laps / "lap_no_source.json"
+    path.write_text('{"lap": {"lap_ms": 1}}', encoding="utf-8")
+    rt = _runtime(tmp_path, [])
+    verdict = rt.execute(
+        f"""
+        local p = require("persistence")
+        return p._archiveMayBeImported({str(path).replace(chr(92), "/")!r})
+        """
+    )
+    assert verdict is True
