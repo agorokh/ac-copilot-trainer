@@ -4,6 +4,11 @@ The raw lap and Track Titan lakes are immutable evidence until an explicit lifec
 policy prunes them. This module makes that pruning deterministic and auditable:
 planning is pure, dry-run is the CLI default, and deletion preserves PB, imported
 reference, sidecar-pinned, and profile-ledger PB files.
+
+It also preserves any archive **another persisted file still cites** (#627). Every other
+protection here is record-local — it reads the archive and decides from that archive's own
+contents — so none of them can see that a session report or the setup-experiment store still
+points at it. See :func:`_cited_archive_names`.
 """
 
 from __future__ import annotations
