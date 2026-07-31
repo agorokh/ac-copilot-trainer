@@ -449,12 +449,34 @@ local function archiveMayBeImported(path)
   if not ok or type(raw) ~= "string" then
     return true
   end
-  -- Fast path: the compact form our encoder actually emits. Two `plain` scans, no pattern engine.
+  -- Fast path: the exact compact form our encoder emits. One `plain` scan, no pattern engine.
   if raw:find(SOURCE_IMPORTED, 1, true) then
     return true
   end
-  if raw:find(SOURCE_KEY, 1, true) then
-    return false -- key present and it is not "imported": proven
+  -- Compact key present but not that exact value. Read each value rather than concluding from the
+  -- key alone: a JSON escape makes the bytes on disk differ from the decoded string, so
+  -- `"source":"imported"` decodes to "imported" while matching none of our literals. Any
+  -- backslash means the byte form is not comparable, so we stop guessing and decode.
+  local pos = 1
+  local sawCompactKey = false
+  while true do
+    local _, keyEnd = raw:find(SOURCE_KEY, pos, true)
+    if not keyEnd then
+      break
+    end
+    local closing = raw:find('"', keyEnd + 1, true)
+    if not closing then
+      return true -- truncated value: unknown shape
+    end
+    local value = raw:sub(keyEnd + 1, closing - 1)
+    if value:find("\\", 1, true) or value == "imported" then
+      return true
+    end
+    sawCompactKey = true
+    pos = closing + 1
+  end
+  if sawCompactKey then
+    return false -- every compact value read literally, none of them "imported": proven
   end
   -- Tolerant path: a differently-spaced encoder (`"source": "in_game"`). Never taken for archives
   -- this app wrote, so the pattern engine stays off the hot path, but it keeps the filter correct
@@ -471,8 +493,8 @@ local function archiveMayBeImported(path)
     if not s then
       break
     end
-    if value == "imported" then
-      return true
+    if value == "imported" or value:find("\\", 1, true) then
+      return true -- imported, or escaped so the bytes are not comparable to a decoded string
     end
     found = true
     pos = e + 1

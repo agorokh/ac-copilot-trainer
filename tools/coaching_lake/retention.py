@@ -69,6 +69,10 @@ class RetentionPlan:
     policy: RetentionPolicy
     items: tuple[RetentionItem, ...] = field(default_factory=tuple)
     delete: tuple[RetentionItem, ...] = field(default_factory=tuple)
+    #: State files the citation scan could not read. Non-empty means every archive was protected
+    #: regardless of policy, so it MUST be rendered — otherwise the operator sees a plan with zero
+    #: candidates and no way to tell a satisfied policy from a parked one.
+    unreadable_state: tuple[str, ...] = ()
 
     @property
     def protected(self) -> tuple[RetentionItem, ...]:
@@ -79,6 +83,15 @@ class RetentionPlan:
             f"retention plan: {len(self.delete)} delete candidate(s), "
             f"{len(self.protected)} protected, {len(self.items)} scanned"
         ]
+        if self.unreadable_state:
+            lines.append(
+                "  RETENTION PARKED: a state file could not be read, so no archive can be shown "
+                "to be uncited. Every archive is protected until this is resolved:"
+            )
+            for entry in self.unreadable_state[:10]:
+                lines.append(f"    {entry}")
+            if len(self.unreadable_state) > 10:
+                lines.append(f"    ... {len(self.unreadable_state) - 10} more")
         for item in self.delete[:20]:
             lines.append(f"  DELETE {item.domain} {item.path} ({', '.join(item.reasons)})")
         if len(self.delete) > 20:
@@ -162,9 +175,9 @@ def _cited_archive_names(lap_dir: Path) -> tuple[set[str], list[str]]:
     """Archive names cited by any persisted state file, plus any file that could not be read.
 
     A record-local check (:func:`_is_reference_archive`) cannot see that some *other* file still
-    points at an archive. Measured on the rig: ``journal/reports/*.json`` cites **162** archives
-    that this planner otherwise classified ``eligible`` — deleting them would have silently
-    orphaned the operator's own session reports.
+    points at an archive. Measured on the rig: ``journal/reports/*.json`` cites **187** archives,
+    125 of which this planner otherwise classified ``eligible`` — deleting them would have
+    silently orphaned the operator's own session reports.
 
     Returns ``(names, unreadable)``. **The second element is a veto, not diagnostics.** An empty
     citation set is what makes an archive eligible, so a state file we failed to read is
@@ -178,8 +191,14 @@ def _cited_archive_names(lap_dir: Path) -> tuple[set[str], list[str]]:
     """
     names: set[str] = set()
     unreadable: list[str] = []
-    # `<state>/journal/laps` -> `<state>`. Anything shallower is a caller-supplied directory with
-    # no surrounding state to scan, which is not an error.
+    # Only derive a state root from a directory that IS `<state>/journal/laps`. A bare
+    # `--lap-dir /data/laps` would otherwise take `parent.parent` to the volume root and recursively
+    # glob the entire filesystem — slow, and any unrelated unreadable JSON anywhere on the machine
+    # would trip the fail-closed veto and protect everything. A caller-supplied directory with no
+    # surrounding state simply has no citations, which is not an error.
+    parts = lap_dir.parts
+    if len(parts) < 3 or tuple(part.lower() for part in parts[-2:]) != ("journal", "laps"):
+        return names, unreadable
     state_dir = lap_dir.parent.parent
     if not state_dir.is_dir():
         return names, unreadable
@@ -201,7 +220,10 @@ def _cited_archive_names(lap_dir: Path) -> tuple[set[str], list[str]]:
     return names, unreadable
 
 
-def _lap_items(lap_dir: Path, profile: Mapping[str, Any] | None) -> list[RetentionItem]:
+def _lap_items(
+    lap_dir: Path, profile: Mapping[str, Any] | None
+) -> tuple[list[RetentionItem], list[str]]:
+    """Returns ``(items, unreadable_state)``; the veto list is surfaced in the rendered plan."""
     pb_lap_uuids = _profile_pb_lap_uuids(profile)
     cited, unreadable_state = _cited_archive_names(lap_dir)
     items: list[RetentionItem] = []
@@ -253,7 +275,8 @@ def _lap_items(lap_dir: Path, profile: Mapping[str, Any] | None) -> list[Retenti
                 bytes=size,
             )
         )
-    return sorted(items, key=lambda item: (item.sort_time, item.path.as_posix()))
+    ordered = sorted(items, key=lambda item: (item.sort_time, item.path.as_posix()))
+    return ordered, unreadable_state
 
 
 def _tt_raw_paths(tt_dir: Path) -> Iterable[Path]:
@@ -397,9 +420,10 @@ def plan_retention(
     profile = load_profile(profile_path, strict=True) if profile_path is not None else None
     items: list[RetentionItem] = []
     delete: list[RetentionItem] = []
+    unreadable_state: list[str] = []
 
     if lap_dir is not None:
-        lap_items = _lap_items(Path(lap_dir), profile)
+        lap_items, unreadable_state = _lap_items(Path(lap_dir), profile)
         items.extend(lap_items)
         delete.extend(
             _select_by_cap(
@@ -432,6 +456,7 @@ def plan_retention(
         delete=tuple(
             sorted(delete, key=lambda item: (item.domain, item.sort_time, item.path.as_posix()))
         ),
+        unreadable_state=tuple(unreadable_state),
     )
 
 

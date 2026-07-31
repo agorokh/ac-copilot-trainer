@@ -448,3 +448,35 @@ def test_an_unreadable_state_file_vetoes_every_deletion(tmp_path: Path) -> None:
 
     assert list(plan.delete) == []
     assert all("state-scan-incomplete" in i.reasons for i in plan.items)
+
+
+def test_a_non_journal_lap_dir_does_not_crawl_the_volume(tmp_path: Path) -> None:
+    """`--lap-dir /data/laps` must not take `parent.parent` to the volume root and rglob it.
+
+    Beyond being slow, any unrelated unreadable JSON anywhere on the machine would then trip the
+    fail-closed veto and protect every archive.
+    """
+    laps = tmp_path / "data" / "laps"
+    laps.mkdir(parents=True)
+    for i in range(4):
+        _write_lap(laps, f"d{i}", _archive(f"u{i}", exported_at=f"2026-07-0{i + 1}T00:00:00Z"))
+    # A sibling that WOULD veto if the scan wandered up out of the lap directory.
+    (tmp_path / "unreadable.json").mkdir()
+
+    plan = plan_retention(lap_dir=laps, policy=RetentionPolicy(max_lap_files=1), profile_path=None)
+
+    assert plan.unreadable_state == ()
+    assert len(plan.delete) == 3, "an unrelated directory must not park retention"
+
+
+def test_a_parked_plan_says_which_state_file_parked_it(tmp_path: Path) -> None:
+    """Zero candidates must be distinguishable from a satisfied policy."""
+    state, laps = _cited_journal(tmp_path)
+    (state / "unreadable.json").mkdir()
+
+    plan = plan_retention(lap_dir=laps, policy=RetentionPolicy(max_lap_files=1), profile_path=None)
+
+    rendered = plan.render()
+    assert "RETENTION PARKED" in rendered
+    assert "unreadable.json" in rendered
+    assert plan.unreadable_state

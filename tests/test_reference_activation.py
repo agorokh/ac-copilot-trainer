@@ -281,6 +281,48 @@ def test_prefilter_spaced_path_scans_every_match_not_just_the_first(tmp_path: Pa
     assert verdict is True
 
 
+def test_prefilter_fails_open_on_a_json_escaped_source_value(tmp_path: Path) -> None:
+    """`"source":"impor\\u0074ed"` decodes to "imported" but matches none of our byte literals.
+
+    Comparing raw bytes to a decoded string is only valid while nothing is escaped. Reporting
+    "proven not imported" here would silently disable a user-supplied reference — the one
+    direction this filter is never allowed to be wrong in.
+    """
+    laps = tmp_path / "ac_copilot_trainer" / "journal" / "laps"
+    laps.mkdir(parents=True)
+    path = laps / "lap_escaped.json"
+    backslash = chr(92)
+    raw = '{"source":"impor' + backslash + 'u0074ed","lap":{"lap_ms":1}}'
+    assert json.loads(raw)["source"] == "imported", "fixture must really decode to imported"
+    path.write_text(raw, encoding="utf-8")
+
+    rt = _runtime(tmp_path, [])
+    verdict = rt.execute(
+        f"""
+        local p = require("persistence")
+        return p._archiveMayBeImported({str(path).replace(chr(92), "/")!r})
+        """
+    )
+    assert verdict is True
+
+
+def test_prefilter_still_excludes_an_ordinary_escaped_free_archive(tmp_path: Path) -> None:
+    """The escape guard must not turn the fast path off for the files it exists to exclude."""
+    laps = tmp_path / "ac_copilot_trainer" / "journal" / "laps"
+    laps.mkdir(parents=True)
+    path = laps / "lap_plain.json"
+    path.write_text('{"source":"in_game","lap":{"lap_ms":1}}', encoding="utf-8")
+
+    rt = _runtime(tmp_path, [])
+    verdict = rt.execute(
+        f"""
+        local p = require("persistence")
+        return p._archiveMayBeImported({str(path).replace(chr(92), "/")!r})
+        """
+    )
+    assert verdict is False
+
+
 def test_prefilter_fails_open_when_the_read_itself_fails(tmp_path: Path) -> None:
     """Opening succeeds but reading throws — distinct from the file simply not existing."""
     laps = tmp_path / "ac_copilot_trainer" / "journal" / "laps"
