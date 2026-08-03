@@ -42,7 +42,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: agorokh/governance-hub
-          ref: 0db37554f20e8ddbbfdc6f8a622ce845faf4dd06  # pragma: allowlist secret (git SHA, not a secret)
+          ref: f5d9a873dfe1a0893ecc6d2b77935ca27a2c2d0f  # pragma: allowlist secret (git SHA, not a secret)
           token: ${{ steps.app-token.outputs.token }}
           path: .governance-hub
       - uses: ./.governance-hub/.github/actions/vault-automerge
