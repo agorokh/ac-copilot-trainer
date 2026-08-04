@@ -57,7 +57,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: agorokh/governance-hub
-          ref: e9e5f352d44bd802b3da1150b9ab6da517b3df1d  # pragma: allowlist secret (git SHA, not a secret)
+          ref: 71eaa6f435ebb1eb2d5f60d0566cd5f5d7cec03f  # pragma: allowlist secret (git SHA, not a secret)
           token: ${{ steps.app-token.outputs.token }}
           path: .governance-hub
       - name: Adjudicate the miner-rules PR
