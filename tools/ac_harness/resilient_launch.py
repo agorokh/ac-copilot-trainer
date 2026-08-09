@@ -2269,6 +2269,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         ),
     )
     parser.add_argument(
+        "--no-cm-dialog-skip",
+        action="store_true",
+        help="do not auto-skip CM's pre-drive 'Custom Shaders Patch data' dialog (#738)",
+    )
+    parser.add_argument(
         "--json",
         type=Path,
         default=None,
@@ -2279,6 +2284,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     parser.add_argument("--rig-release-path", type=Path, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
+    from tools.ac_harness.cm_dialog_watcher import CmSkipWatcher
     from tools.ac_harness.entry_launcher import (
         ContentManagerActuator,
         EntryLaunchUnsupported,
@@ -2709,6 +2715,24 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 )
 
         trials_mode = args.trials is not None
+        # #738: while launch attempts wait to go LIVE, auto-skip CM's "Custom Shaders Patch
+        # data" dialog — on a boot with a hanging patch-data fetch it blocks acs.exe from ever
+        # spawning, so every attempt (and every cold CM restart) would relaunch into the same
+        # dialog. One watcher spans the whole retry loop; stopped at every loop exit below
+        # (the os._exit fatal path tears the daemon thread down with the process).
+        csp_watcher: CmSkipWatcher | None = None
+        if not args.no_cm_dialog_skip:
+            csp_watcher = CmSkipWatcher(log=_log)
+            csp_watcher.start()
+
+        def stop_csp_watcher() -> None:
+            if csp_watcher is None:
+                return
+            csp_watcher.stop()
+            summary = csp_watcher.summary()
+            if summary:
+                _log(f"launch-phase dialog watcher: {summary}")
+
         try:
             report = _run_with_safe_release(
                 lambda: run_retry_loop(
@@ -2723,6 +2747,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 release_requested=release_requested,
             )
         except _OperatorRelease:
+            stop_csp_watcher()
             _log("Game Point release interrupted launch; AC was made safe before ownership release")
             return 1
         except _Car0ProbeCleanupError as exc:
@@ -2740,11 +2765,14 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             )
             os._exit(1)
         except _AcsCleanupTimeout as exc:
+            stop_csp_watcher()
             _log(f"launch aborted: {exc}")
             return 1
         except _ContentManagerRestartTimeout as exc:
+            stop_csp_watcher()
             _log(f"restart aborted: {exc}")
             return 1
+        stop_csp_watcher()
         report = replace(
             report,
             launch={
@@ -2754,6 +2782,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 "stability_window": args.stability_window,
                 "go_live_timeout": args.go_live_timeout,
                 "trials_per_invocation": int(args.trials) if args.trials is not None else 1,
+                # #738 forensic: Skip invokes delivered on CM's patch-data dialog during this
+                # run's launch phase (None = watcher disabled via --no-cm-dialog-skip).
+                "csp_dialog_skips": (csp_watcher.skips if csp_watcher is not None else None),
             },
         )
         report_written = True
