@@ -1481,7 +1481,15 @@ def run_scientist(
                 # #737: the candidate lost the #466 setup re-bake race — a confirmed
                 # intermittent rig condition, not a verdict about the setup.  One fresh
                 # pipeline cycle instead of discarding the completed baseline and any earlier
-                # candidates; a second miss still aborts the batch honestly below.
+                # candidates; a second pipeline-level miss still aborts the batch honestly
+                # below.  Two scopes on purpose (Codex P2, PR #740): auto_drive's
+                # setup_verify_retries is the CHEAP in-stage relaunch for one transient miss;
+                # this branch saves the whole batch when a stage exhausted that budget (both
+                # launches lost the race).  The budgets therefore compose: each pipeline
+                # attempt may burn 1 + setup_verify_retries launches, so a persistently
+                # mismatching candidate costs at most 2 * (1 + setup_verify_retries) launches
+                # (4 with defaults) before the abort — bounded, and far cheaper than
+                # discarding a completed baseline batch on an intermittent rig condition.
                 retry_root = evidence_root / "scientist" / f"candidate_{index:02d}_retry"
                 print(
                     f"auto-alien: scientist candidate {index} lost the setup re-bake race "

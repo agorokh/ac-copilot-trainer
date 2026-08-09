@@ -2448,6 +2448,68 @@ def test_scientist_candidate_retry_exhaustion_aborts_batch_honestly(monkeypatch,
     assert not (user_dir / "journal" / "alien_scientist" / "experiments.jsonl").exists()
 
 
+def test_scientist_setup_race_retry_composes_boundedly_with_real_pipeline(monkeypatch, tmp_path):
+    # Codex P2 (PR #740): the earlier retry tests mock run_pipeline, so they cannot see the
+    # composed budget. This drives the REAL run_pipeline (scripted run_stage) for a candidate
+    # whose identify stage persistently fails with the race signature: the scientist enters the
+    # pipeline exactly TWICE (initial + one retry) and then aborts — the pipeline-level bound is
+    # enforced; the per-stage launch bound is proven by the auto_drive wrapper tests, so the
+    # composed worst case is 2 * (1 + setup_verify_retries) launches.
+    user_dir, baseline_setup, base_outcome = _scientist_batch_env(monkeypatch, tmp_path)
+    _usable_plant(monkeypatch, False)  # every candidate pipeline requires identification
+    stage_calls: list[list[str]] = []
+
+    def run_stage(argv: list[str]) -> int:
+        stage_calls.append(list(argv))
+        evidence_dir = Path(argv[argv.index("--evidence-dir") + 1])
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        (evidence_dir / "report.json").write_text(
+            _json.dumps(
+                {
+                    "report": {
+                        "ok": False,
+                        "stage": "setup",
+                        "setup_race_suspected": True,
+                        "error": "setup not applied: fuel 30.0L != setup FUEL 40.0L (±2.5)",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        return 1
+
+    args = _args(
+        user_dir, "--setup", str(baseline_setup), "--laps", "2", "--iterations", "1", "--scientist"
+    )
+    result = run_scientist(
+        args,
+        run_stage=run_stage,
+        evidence_root=tmp_path / "evidence",
+        user_dir=user_dir,
+        setup_ini=baseline_setup,
+        selfplay={"base": {"valid": True}, "iterations": [], "stopped": "pace plateau"},
+        base_outcome=base_outcome,
+    )
+
+    assert result["ok"] is False
+    assert "scientist_candidate_batch_incomplete" in result["error"]
+    # The real pipeline ran exactly twice: identify failed in the initial attempt and in the one
+    # retry — no third pipeline entry, so the composed budget cannot grow beyond 2 attempts.
+    assert len(stage_calls) == 2
+    assert all("handshake" in call for call in stage_calls)  # both were identify stages
+    assert "candidate_01" in " ".join(stage_calls[0])
+    assert "candidate_01_retry" in " ".join(stage_calls[1])
+    assert result["setup_race_retries"] == [
+        {
+            "candidate": 1,
+            "stage": "identify",
+            "first_evidence_root": str(tmp_path / "evidence" / "scientist" / "candidate_01"),
+            "evidence_root": str(tmp_path / "evidence" / "scientist" / "candidate_01_retry"),
+            "recovered": False,
+        }
+    ]
+
+
 def test_scientist_candidate_non_race_failure_does_not_retry(monkeypatch, tmp_path):
     # Any other candidate failure keeps the pre-#737 contract: no retry, honest abort.
     nested_calls = []
