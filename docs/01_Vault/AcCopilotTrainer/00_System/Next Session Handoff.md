@@ -2,8 +2,10 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-30T18:05:00-07:00
+last_updated: 2026-08-09T14:35:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-737-setup-race-retry-2026-08-09.md
+  - AcCopilotTrainer/03_Investigations/issue-529-g1-cold-p4-scientist-2026-08-08.md
   - AcCopilotTrainer/03_Investigations/issue-627-retention-duplicate-planner-2026-07-30.md
   - AcCopilotTrainer/03_Investigations/issue-627-strtod-unbounded-loop-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
@@ -130,6 +132,28 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-08-09) — #737 CLOSED: scientist batches survive the setup re-bake race (PR #740 MERGED `0e2b6ac`)
+
+`/autonomous-deliver 737`, off-rig. Full write-up:
+[issue-737-setup-race-retry-2026-08-09.md](../03_Investigations/issue-737-setup-race-retry-2026-08-09.md).
+
+- **`auto_drive`:** new `setup_verify_retries` budget (default 1; `--setup-verify-retries`) in the
+  sim-death-style wrapper — a fuel-verify miss on the **correct combo** (the #466 race signature, now
+  machine-readable as `setup_race_suspected` in report.json) gets one fresh launch cycle; wiring
+  failures, #537 cached-session exhaustion, `--skip-launch`, and persistent mismatches stay terminal.
+- **`auto_alien.run_scientist`:** a candidate whose failed stage carries the marker retries its
+  pipeline ONCE (`candidate_NN_retry` evidence root, recorded under `setup_race_retries`) instead of
+  aborting the batch; a second pipeline-level miss still aborts honestly. Composed worst case
+  `2 × (1 + setup_verify_retries)` launches, pinned by a real-`run_pipeline` composition test.
+- **Verified:** full `make ci-fast`; 12 new tests; classifier chain executed against the REAL
+  2026-08-08 r2 (fires) / r3 (silent) evidence bundles. Review: Codex round 1 P2 (composition)
+  fixed + resolved, round 2 clean ("no major issues") on `987da60`; daemon advisory MEDIUM
+  answered, gone next round. Residual: live `setup_race_retries` evidence rides the next P4 batch.
+
+**Resume here (next autonomous lever):** #737 is landed — run the **larger scientist batch
+(batch-size 3) on a plateaued combo** (the #529 plan), which now survives transient setup misses.
+Then the G1-pace architectural work (cross-session plant compounding); G3 stays operator-gated.
 
 ## Delivered (2026-08-08) — #529 G1 cold-start (5th combo) + FIRST real P4 scientist batch + G1b (autonomous rig session)
 

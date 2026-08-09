@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-29T16:45:00Z
+last_updated: 2026-08-09T14:35:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-737-setup-race-retry-2026-08-09.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-719-treatment-receipt-2026-07-28.md
   - AcCopilotTrainer/03_Investigations/issue-625-boot-scoped-redesign-2026-07-28.md
@@ -60,6 +61,14 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-08-09):** `/autonomous-deliver 737` — **#737 CLOSED** by PR
+[#740](https://github.com/agorokh/ac-copilot-trainer/pull/740) (MERGED `0e2b6ac`): the #466 setup
+re-bake race no longer aborts scientist batches. `auto_drive` gains `setup_verify_retries`
+(default 1) with the race signature machine-readable as `setup_race_suspected`;
+`run_scientist` retries a marked candidate's pipeline once. Classifier chain reconciled against
+the real 2026-08-08 r2/r3 bundles. Node: [[issue-737-setup-race-retry-2026-08-09]]. **Next
+autonomous lever:** batch-size-3 scientist run on a plateaued combo (now race-resilient).
 
 **Delivered (2026-08-08, autonomous rig session):** `/autonomous-deliver 529` — **G1 cold-start on a 5th
 unseen combo** (huracan@spa: cold → identified plant → self-play ladder ~18 laps 185.5→**161.595 s**, 11-bin
