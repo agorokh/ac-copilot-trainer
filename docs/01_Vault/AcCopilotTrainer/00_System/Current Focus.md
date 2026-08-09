@@ -61,6 +61,18 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
+**Delivered (2026-08-08, autonomous rig session):** `/autonomous-deliver 529` — **G1 cold-start on a 5th
+unseen combo** (huracan@spa: cold → identified plant → self-play ladder ~18 laps 185.5→**161.595 s**, 11-bin
++ L3 breakthrough; **mechanics PASS**, **pace 17.4 % off TT P10 — not claimed**), **first real P4 scientist
+batch** (WING_2 16→15 → **`falsified`**, −5.2 %/p=0.73, persisted to the ledger's first entry), and **G1b
+novel-archetype honesty PASS** (bmw_m3_e30@magione: valid laps, 0 recoveries, safe-QSS reverts). TT public
+leaderboards confirmed as the reference source (no login). Two defects filed:
+[#737](https://github.com/agorokh/ac-copilot-trainer/issues/737) (scientist setup re-bake race),
+[#738](https://github.com/agorokh/ac-copilot-trainer/issues/738) (CM CSP-dialog relaunch-loop). **#529 stays
+OPEN** — remaining: G1-pace architectural work (cross-session compounding) + **G3 (operator-gated:** needs a
+human driving multiple sessions). Node: [[issue-529-g1-cold-p4-scientist-2026-08-08]]. Comment:
+[#529#issuecomment-5230120646](https://github.com/agorokh/ac-copilot-trainer/issues/529#issuecomment-5230120646).
+
 **Delivered (2026-07-29 evening):** governance-hub PR
 [#341](https://github.com/agorokh/governance-hub/pull/341) MERGED
 [`3757ec3`](https://github.com/agorokh/governance-hub/commit/3757ec3d37b3b65d765a40906607d3b3b07d970b)

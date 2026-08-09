@@ -131,6 +131,34 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-08-08) — #529 G1 cold-start (5th combo) + FIRST real P4 scientist batch + G1b (autonomous rig session)
+
+On-rig AG_PC, merged `main` @ `a5eb54b`. Full write-up:
+[issue-529-g1-cold-p4-scientist-2026-08-08.md](../03_Investigations/issue-529-g1-cold-p4-scientist-2026-08-08.md).
+Comment: [#529#issuecomment-5230120646](https://github.com/agorokh/ac-copilot-trainer/issues/529#issuecomment-5230120646).
+
+- **G1 cold-start on an UNSEEN combo — huracan@spa:** cold → schema-v3 plant (uncertainty fit promoted) →
+  line → self-play ladder ~18 laps (≤20), monotone 185.5 → 166.5 → **161.595 s**; it3 adopted **11 lateral
+  bins** and **L3 fired (5 corners, +812 ms)** — the 911's breakthrough shape, now on a brand-new combo.
+  Verified 3 ways (archive `is_valid:true` / iter03 recoveries=0 / **dash reads 2:41.595** in hud.png).
+  **G1 mechanics PASS (5th combo).** **G1 pace NOT met** — 161.6 s vs TT P10 137.7 s = **17.4 % off**;
+  architecturally out of reach in one cold ≤20-lap run (lever = cross-session plant compounding). Not claimed.
+- **P4 — FIRST real rig scientist batch:** WING_2 16→15, baseline 108.34 s vs candidate 113.97 s = −5.2 %,
+  z=−0.62, p=0.73 → **`falsified`** verdict persisted to `journal/alien_scientist/experiments.jsonl` (first
+  entry), constraint durably suppressed. Fail-closed worked — refused to promote a not-actually-faster change.
+- **G1b — novel archetype (bmw_m3_e30@magione): honesty PASS** — cold → 2 valid laps, 0 recoveries, all
+  corners reverted to safe-QSS, ~4 laps. Stayed drivable on a low-grip car instead of forcing GT3 pace.
+- **TT reference is SOLVED (data dep closed):** public `app.tracktitan.io/leaderboards/assettoCorsa/<track>/<car_id>`, no login.
+- **Two defects filed:** [#737](https://github.com/agorokh/ac-copilot-trainer/issues/737) (scientist candidate
+  setup re-bake race — no relaunch budget), [#738](https://github.com/agorokh/ac-copilot-trainer/issues/738)
+  (CM CSP-data dialog relaunch-loop). Live workaround: `.scratch/skip_watcher.ps1` UIA Skip-clicker.
+
+**#529 gate status:** G1 mechanics 5× / G1 pace unclaimed / G1b PASS / **G2 MET** / **G3 operator-gated**
+(needs a human across sessions) / P4 first batch DONE. **Keep #529 OPEN.** The only paths to close it are the
+G1-pace architectural work (cross-session compounding, or a less-conservative measured prior) and the
+operator-gated G3. Next autonomous lever: land **#737** so multi-candidate scientist batches survive a
+transient setup miss, then run a larger scientist batch (batch-size 3) on a plateaued combo.
+
 ## Delivered (2026-07-30, late) — #627 follow-ups: retention had three data-loss paths (PR #732 MERGED `0b2e627`)
 
 Closing out the two items left after PR #730. The scan half went as planned; the retention half
