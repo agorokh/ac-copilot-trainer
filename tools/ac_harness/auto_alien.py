@@ -1344,6 +1344,37 @@ def _load_scientist_proposals(path: Path | None) -> list[dict] | None:
     return payload
 
 
+def _candidate_setup_race_stage(candidate_report: dict) -> str | None:
+    """Failed stage name when a scientist candidate died on the transient setup re-bake race.
+
+    A candidate that lost the #466 CM race.ini regeneration race fails its identify/drive stage
+    at ``stage="setup"`` with ``setup_race_suspected`` set in the stage report (#737).  Exactly
+    that signature is worth ONE fresh pipeline cycle; every other failure keeps aborting the
+    batch honestly, so a persistent mismatch can never launder a half-run into the ledger.
+    """
+    stages = candidate_report.get("stages")
+    if not isinstance(stages, dict):
+        return None
+    for name, stage in stages.items():
+        if not isinstance(stage, dict):
+            continue
+        exit_code = stage.get("exit_code")
+        if not isinstance(exit_code, int) or exit_code == 0:
+            continue
+        evidence_dir = stage.get("evidence_dir")
+        if not evidence_dir:
+            continue
+        outcome = load_stage_outcome(Path(evidence_dir))
+        stage_report = (outcome or {}).get("report")
+        if (
+            isinstance(stage_report, dict)
+            and stage_report.get("stage") == "setup"
+            and stage_report.get("setup_race_suspected") is True
+        ):
+            return str(name)
+    return None
+
+
 def run_scientist(
     args: argparse.Namespace,
     *,
@@ -1446,6 +1477,41 @@ def run_scientist(
             (candidate_root / "alien_report.json").write_text(
                 json.dumps(candidate_report, indent=2), encoding="utf-8"
             )
+            if code != 0 and (race_stage := _candidate_setup_race_stage(candidate_report)):
+                # #737: the candidate lost the #466 setup re-bake race — a confirmed
+                # intermittent rig condition, not a verdict about the setup.  One fresh
+                # pipeline cycle instead of discarding the completed baseline and any earlier
+                # candidates; a second pipeline-level miss still aborts the batch honestly
+                # below.  Two scopes on purpose (Codex P2, PR #740): auto_drive's
+                # setup_verify_retries is the CHEAP in-stage relaunch for one transient miss;
+                # this branch saves the whole batch when a stage exhausted that budget (both
+                # launches lost the race).  The budgets therefore compose: each pipeline
+                # attempt may burn 1 + setup_verify_retries launches, so a persistently
+                # mismatching candidate costs at most 2 * (1 + setup_verify_retries) launches
+                # (4 with defaults) before the abort — bounded, and far cheaper than
+                # discarding a completed baseline batch on an intermittent rig condition.
+                retry_root = evidence_root / "scientist" / f"candidate_{index:02d}_retry"
+                print(
+                    f"auto-alien: scientist candidate {index} lost the setup re-bake race "
+                    f"at the {race_stage} stage — retrying one fresh launch cycle (#737)"
+                )
+                retry_args = argparse.Namespace(**vars(candidate_args))
+                retry_args.evidence_dir = retry_root
+                code, candidate_report = run_pipeline(retry_args, run_stage=run_stage)
+                retry_root.mkdir(parents=True, exist_ok=True)
+                (retry_root / "alien_report.json").write_text(
+                    json.dumps(candidate_report, indent=2), encoding="utf-8"
+                )
+                result.setdefault("setup_race_retries", []).append(
+                    {
+                        "candidate": index,
+                        "stage": race_stage,
+                        "first_evidence_root": str(candidate_root),
+                        "evidence_root": str(retry_root),
+                        "recovered": code == 0,
+                    }
+                )
+                candidate_root = retry_root
             drive_stage = candidate_report.get("stages", {}).get("drive", {})
             candidate_outcome = (
                 load_stage_outcome(Path(drive_stage["evidence_dir"]))

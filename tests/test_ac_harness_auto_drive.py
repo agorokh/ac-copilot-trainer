@@ -62,6 +62,7 @@ from tools.ac_harness.auto_drive import (
     rig_press_session_start,
     run_auto_drive,
     run_auto_drive_with_sim_retries,
+    setup_ack_fuel_mismatch,
     should_try_line_teleport_on_recovery,
     verify_setup_ack,
     write_evidence,
@@ -1102,6 +1103,242 @@ def test_programmatic_sim_death_retry_budget_rejects_negative_values():
                 tap=_tap_returning(CONTINUOUS),
             )
         )
+
+
+# --------------------------------------------------------------------- #737 setup re-bake race
+_RACE_MISS_ACK = {
+    "ok": False,
+    "name": "exp_fuel40",
+    "path": "x/exp_fuel40.ini",
+    "error": "fuel 30.0L != setup FUEL 40.0L (±2.5)",
+    "expected_fuel": 40.0,
+    "observed_fuel": 30.0,
+}
+_VERIFIED_ACK = {
+    "ok": True,
+    "name": "exp_fuel40",
+    "path": "x/exp_fuel40.ini",
+    "detail": "fuel 40.0L matches setup FUEL 40.0L",
+    "expected_fuel": 40.0,
+    "observed_fuel": 40.0,
+}
+
+
+def _race_cfg(**kw) -> AutoDriveConfig:
+    base = dict(setup="exp_fuel40", track_id="magione", car_id="ks_porsche_911_gt3_r_2016")
+    base.update(kw)
+    return _cfg(**base)
+
+
+def _correct_combo(config):  # noqa: ANN001
+    return ("magione", "ks_porsche_911_gt3_r_2016")
+
+
+def test_setup_race_miss_retries_full_launch_and_recovers():
+    # #737: the launch-bake lost CM's race.ini regeneration race (#466) — fuel verification
+    # honestly missed on the CORRECT combo. One fresh full launch re-bakes the setup and the run
+    # completes; the failed attempt stays in report.attempts as evidence.
+    launches: list[int] = []
+    acks = iter([dict(_RACE_MISS_ACK), dict(_VERIFIED_ACK)])
+
+    def _launch(config):  # noqa: ANN001
+        launches.append(1)
+        return True, "live"
+
+    async def _apply(config):  # noqa: ANN001
+        return next(acks)
+
+    report = asyncio.run(
+        run_auto_drive_with_sim_retries(
+            _race_cfg(setup_verify_retries=1),
+            launch=_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_apply,
+            verify_track=_correct_combo,
+        )
+    )
+
+    assert report.ok is True
+    assert report.setup_applied is True
+    assert len(launches) == 2  # one fresh relaunch, then verified
+    assert len(report.attempts) == 2
+    assert report.attempts[0]["ok"] is False
+    assert report.attempts[0]["stage"] == "setup"
+    assert report.attempts[0]["setup_race_suspected"] is True
+    assert report.attempts[1]["ok"] is True
+
+
+def test_setup_race_retry_budget_exhaustion_still_fails_the_verify_gate():
+    # #737 bound: a PERSISTENT fuel mismatch exhausts the budget and still FAILs at
+    # stage="setup" — the retry re-arms the verify gate on a fresh launch, never weakens it.
+    launches: list[int] = []
+
+    def _launch(config):  # noqa: ANN001
+        launches.append(1)
+        return True, "live"
+
+    async def _apply(config):  # noqa: ANN001
+        return dict(_RACE_MISS_ACK)
+
+    report = asyncio.run(
+        run_auto_drive_with_sim_retries(
+            _race_cfg(setup_verify_retries=1),
+            launch=_launch,
+            hijack=lambda c: pytest.fail("must not hijack an unverified setup"),
+            drive=lambda *a: pytest.fail("must not drive"),
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_apply,
+            verify_track=_correct_combo,
+        )
+    )
+
+    assert report.ok is False
+    assert report.stage == "setup"
+    assert report.setup_applied is False
+    assert len(launches) == 2  # bounded: initial + 1 setup retry
+    assert len(report.attempts) == 2
+    assert all(attempt["setup_race_suspected"] is True for attempt in report.attempts)
+
+
+@pytest.mark.parametrize(
+    "config_kwargs,ack",
+    [
+        # Deterministic wiring failure: no expected_fuel in the ack — not the re-bake race.
+        ({}, {"ok": False, "error": "setup ini unreadable: boom"}),
+        # skip_launch has no launch leg to repeat; re-verifying the same session reads the
+        # same fuel, so the wrapper must not burn cycles on it (mirrors the sim-death rule).
+        ({"skip_launch": True}, dict(_RACE_MISS_ACK)),
+    ],
+)
+def test_setup_race_retry_refuses_non_retryable_setup_failures(config_kwargs, ack):
+    applies: list[int] = []
+    launches: list[int] = []
+
+    def _launch(config):  # noqa: ANN001
+        launches.append(1)
+        return True, "live"
+
+    async def _apply(config):  # noqa: ANN001
+        applies.append(1)
+        return dict(ack)
+
+    report = asyncio.run(
+        run_auto_drive_with_sim_retries(
+            _race_cfg(setup_verify_retries=2, **config_kwargs),
+            launch=_launch,
+            hijack=lambda c: pytest.fail("must not hijack"),
+            drive=lambda *a: pytest.fail("must not drive"),
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_apply,
+            verify_track=_correct_combo,
+        )
+    )
+
+    assert report.ok is False
+    assert report.stage == "setup"
+    assert len(report.attempts) == 1  # no retry burned on a non-retryable failure
+    assert len(applies) == 1
+    assert len(launches) == (0 if config_kwargs.get("skip_launch") else 1)
+
+
+def test_setup_race_retry_not_spent_on_cached_session_mismatch():
+    # #537 exhaustion is a DIFFERENT failure class: the loaded combo positively mismatched and
+    # the in-loop relaunch budget already ran (with CM restarts). The wrapper must not extend
+    # it — #737 stays scoped to the correct-combo re-bake race.
+    launches: list[int] = []
+
+    def _launch(config):  # noqa: ANN001
+        launches.append(1)
+        return True, "live"
+
+    async def _apply(config):  # noqa: ANN001
+        return {**_RACE_MISS_ACK, "error": "fuel 60.0L != setup FUEL 40.0L (±2.5)"}
+
+    report = asyncio.run(
+        run_auto_drive_with_sim_retries(
+            _race_cfg(max_launches=2, setup_verify_retries=3),
+            launch=_launch,
+            hijack=lambda c: pytest.fail("must not hijack the wrong session"),
+            drive=lambda *a: pytest.fail("must not drive"),
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_apply,
+            verify_track=lambda c: ("spa", "ks_porsche_911_gt3_r_2016"),  # always cached spa
+        )
+    )
+
+    assert report.ok is False
+    assert report.stage == "setup"
+    assert "cached session" in (report.error or "")
+    assert len(report.attempts) == 1  # the wrapper did NOT extend the exhausted #537 budget
+    assert len(launches) == 2  # only the bounded in-loop relaunches ran
+    assert report.attempts[0]["setup_race_suspected"] is False
+
+
+def test_setup_race_and_sim_death_budgets_are_independent():
+    # One setup-race miss AND one sim death in the same run: each retries on its OWN budget of 1,
+    # so the run recovers twice and every attempt is retained.
+    launches: list[int] = []
+    acks = iter([dict(_RACE_MISS_ACK), dict(_VERIFIED_ACK), dict(_VERIFIED_ACK)])
+    outcomes = iter(
+        [
+            DriveStats(drove=True, sim_dead=True, reason="acs.exe died on packet 41"),
+            DriveStats(drove=True, laps=1, total_distance_m=900.0),
+        ]
+    )
+
+    def _launch(config):  # noqa: ANN001
+        launches.append(1)
+        return True, "live"
+
+    async def _apply(config):  # noqa: ANN001
+        return next(acks)
+
+    def _drive(controller, config, stop):  # noqa: ANN001
+        stop.wait(timeout=2.0)
+        return next(outcomes)
+
+    report = asyncio.run(
+        run_auto_drive_with_sim_retries(
+            _race_cfg(sim_death_retries=1, setup_verify_retries=1),
+            launch=_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive,
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_apply,
+            verify_track=_correct_combo,
+        )
+    )
+
+    assert report.ok is True
+    assert len(launches) == 3
+    assert len(report.attempts) == 3
+    assert report.attempts[0]["stage"] == "setup"
+    assert report.attempts[0]["setup_race_suspected"] is True
+    assert report.attempts[1]["drive"]["sim_dead"] is True
+    assert report.attempts[2]["ok"] is True
+
+
+def test_programmatic_setup_verify_retry_budget_rejects_negative_values():
+    with pytest.raises(ValueError, match="setup_verify_retries must be >= 0"):
+        asyncio.run(
+            run_auto_drive_with_sim_retries(
+                _cfg(setup_verify_retries=-1),
+                launch=_ok_launch,
+                hijack=lambda c: FakeController(),
+                drive=_drive_returning(DriveStats(drove=True), {}),
+                tap=_tap_returning(CONTINUOUS),
+            )
+        )
+
+
+def test_setup_ack_fuel_mismatch_classifier():
+    # Only a genuine failed fuel-verify (ok not true + parsed expected_fuel present) qualifies.
+    assert setup_ack_fuel_mismatch(dict(_RACE_MISS_ACK)) is True
+    assert setup_ack_fuel_mismatch(None) is False
+    assert setup_ack_fuel_mismatch({"ok": False, "error": "setup ini unreadable: x"}) is False
+    assert setup_ack_fuel_mismatch(dict(_VERIFIED_ACK)) is False  # verified — no miss
 
 
 def test_drive_exception_closes_controller_and_reports_drive_stage():
@@ -3992,6 +4229,8 @@ def test_cli_new_flags_map_to_config(tmp_path):
             "8",
             "--sim-death-retries",
             "2",
+            "--setup-verify-retries",
+            "3",
             "--no-spawn-line",
         ]
     )
@@ -4003,13 +4242,15 @@ def test_cli_new_flags_map_to_config(tmp_path):
     assert cfg.max_recoveries == 3
     assert cfg.progress_stall_seconds == 8.0
     assert cfg.sim_death_retries == 2
+    assert cfg.setup_verify_retries == 3
     assert cfg.spawn_to_line is False
 
 
+@pytest.mark.parametrize("flag", ["--sim-death-retries", "--setup-verify-retries"])
 @pytest.mark.parametrize("bad", ["-1", "1.5", "nan"])
-def test_cli_rejects_invalid_sim_death_retry_budgets(bad):
+def test_cli_rejects_invalid_retry_budgets(flag, bad):
     with pytest.raises(SystemExit):
-        _build_arg_parser().parse_args(["--track", "spa", "--sim-death-retries", bad])
+        _build_arg_parser().parse_args(["--track", "spa", flag, bad])
 
 
 # --------------------------------------------------------------------------- #577 flying-lap window

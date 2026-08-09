@@ -249,6 +249,11 @@ class AutoDriveConfig:
     # the entire launch->hijack->drive attempt once by default; the wrapper retains every attempt
     # in report.json so a recovered crash is measured rather than hidden.
     sim_death_retries: int = 1
+    # #737: the launch-time setup re-bake can lose CM's race.ini regeneration race (#466) even on
+    # the CORRECT combo — the car spawns on default fuel and setup verification honestly fails.
+    # That miss is confirmed intermittent, so it earns the same fresh-full-launch treatment as a
+    # sim death: bounded retries with every attempt retained in report.json.  0 disables.
+    setup_verify_retries: int = 1
     skip_launch: bool = False
 
 
@@ -445,6 +450,11 @@ class AutoDriveReport:
     setup_requested: str | None = None
     setup_applied: bool | None = None  # None = no setup requested
     setup_ack: dict | None = None  # the in-sim `setup.load.ack` (name/path/error)
+    # #737: True exactly when setup fuel-verification missed while the loaded combo was NOT
+    # positively mismatched — the #466 CM race.ini re-bake race signature.  The retry wrapper
+    # treats only this terminal state as worth a fresh launch cycle; wiring failures and
+    # exhausted cached-session mismatches (#537) stay non-retryable.
+    setup_race_suspected: bool = False
     # #596 Part B: complete per-attempt reports from the bounded sim-death retry wrapper.  The
     # final report stays at the top level for backward compatibility; this list makes a recovered
     # crash visible and preserves its control trace/checks instead of laundering it into PASS.
@@ -525,8 +535,12 @@ class AutoDriveReport:
                 if isinstance(attempt.get("drive"), dict)
                 and attempt["drive"].get("sim_dead") is True
             )
+            setup_races = sum(
+                1 for attempt in self.attempts if attempt.get("setup_race_suspected") is True
+            )
             lines.append(
                 f"  attempts: {len(self.attempts)} (detected sim deaths={sim_deaths}, "
+                f"setup races={setup_races}, "
                 f"retry budget={max(len(self.attempts) - 1, 0)} used)"
             )
         if self.lap_times_ms:
@@ -804,6 +818,18 @@ def verify_setup_ack(ack: dict | None, requested: str) -> tuple[bool, str]:
     return False, f"ack names a different setup: name={ack.get('name')!r} path={path!r}"
 
 
+def setup_ack_fuel_mismatch(ack: dict | None) -> bool:
+    """Pure check that a failed setup ack is a genuine fuel-verify miss (#737).
+
+    Only the rig leg's fuel verification failing qualifies: ``ok`` is not true AND the parsed
+    ``expected_fuel`` is present — the leg read the setup's ``[FUEL]`` and the live physics fuel
+    refused to match within the tolerance window.  Deterministic failures (no ack, unresolved or
+    unreadable setup ini, an ack naming a different setup) must NOT look like the transient
+    re-bake race: retrying them wastes a full launch cycle on a wiring bug.
+    """
+    return isinstance(ack, dict) and ack.get("ok") is not True and "expected_fuel" in ack
+
+
 class ProgressWatchdog:
     """No-forward-progress detector — driver-agnostic stall recovery trigger (#459 Part D).
 
@@ -1019,6 +1045,13 @@ async def run_auto_drive(
                         setup_requested=setup_requested,
                         setup_applied=False,
                         setup_ack=setup_ack,
+                        # #737: a fuel-verify miss WITHOUT a positive combo mismatch is the #466
+                        # re-bake race signature — the one setup failure the retry wrapper may
+                        # answer with a fresh launch cycle.  A cached-session mismatch already
+                        # consumed the in-loop relaunch budget above and stays terminal.
+                        setup_race_suspected=(
+                            combo_mismatch is None and setup_ack_fuel_mismatch(setup_ack)
+                        ),
                         error=(
                             f"setup not applied: {detail}"
                             + (
@@ -1487,25 +1520,40 @@ async def run_auto_drive_with_sim_retries(
     cleanup_failure: CleanupFailureFn | None = None,
     press_start: Callable[[], Awaitable[dict | None]] | None = None,
 ) -> AutoDriveReport:
-    """Run the full attempt again after a detected ``acs.exe`` death, bounded and evidenced.
+    """Run the full attempt again after a transient rig failure, bounded and evidenced.
 
-    A frozen main-physics packet is already the harness's authoritative death oracle.  Retrying
-    inside the drive loop would reuse a dead controller/shared-memory session and blur two runs;
-    instead, this coordinator lets :func:`run_auto_drive` finish its normal controller teardown and
-    starts the complete launch->hijack->drive->tap path again.  The caller holds the machine-global
-    rig lock across this wrapper, so no peer worktree can claim the rig between attempts.
+    Two intermittent, launch-curable failure classes are retryable, each on its own budget:
 
-    Only a pure sim death is retryable.  A session replacement means another launch took ownership;
-    a recovery cap is a controller/track failure; a pipeline failure is an assertion failure; and
-    ``--skip-launch`` has no launch leg to repeat.  Those remain honest terminal failures.
+    * **Sim death** (``sim_death_retries``, #596 Part B).  A frozen main-physics packet is already
+      the harness's authoritative death oracle.  Retrying inside the drive loop would reuse a dead
+      controller/shared-memory session and blur two runs; instead, this coordinator lets
+      :func:`run_auto_drive` finish its normal controller teardown and starts the complete
+      launch->hijack->drive->tap path again.
+    * **Setup re-bake race** (``setup_verify_retries``, #737).  The launch-time setup bake can lose
+      CM's race.ini regeneration race (#466) on the CORRECT combo; the car spawns on default fuel
+      and verification honestly FAILs at ``stage="setup"``.  Exactly that terminal state
+      (``setup_race_suspected``) earns a fresh launch cycle — the relaunch re-bakes the setup.
+
+    The caller holds the machine-global rig lock across this wrapper, so no peer worktree can
+    claim the rig between attempts.  Everything else remains an honest terminal failure: a session
+    replacement means another launch took ownership; a recovery cap is a controller/track failure;
+    a pipeline failure is an assertion failure; a wiring/cached-session setup failure is not the
+    race; and ``--skip-launch`` has no launch leg to repeat (a re-verify of the same session would
+    read the same fuel).  A persistent setup mismatch still FAILs after the budget — the verify
+    gate is never weakened, only re-armed on a fresh launch.
     """
 
-    retry_budget = int(config.sim_death_retries)
-    if retry_budget < 0:
+    sim_death_budget = int(config.sim_death_retries)
+    if sim_death_budget < 0:
         raise ValueError("sim_death_retries must be >= 0")
+    setup_retry_budget = int(config.setup_verify_retries)
+    if setup_retry_budget < 0:
+        raise ValueError("setup_verify_retries must be >= 0")
     attempt_reports: list[dict[str, Any]] = []
     cleanup_holds: list[Controller] = []
-    for attempt_idx in range(retry_budget + 1):
+    sim_deaths_used = 0
+    setup_retries_used = 0
+    while True:
         try:
             report = await run_auto_drive(
                 config,
@@ -1536,19 +1584,26 @@ async def run_auto_drive_with_sim_retries(
             and not report.drive.recovery_capped
             and report.error is None
         )
-        can_retry = sim_death and not config.skip_launch and attempt_idx < retry_budget
-        if can_retry:
+        if sim_death and not config.skip_launch and sim_deaths_used < sim_death_budget:
+            sim_deaths_used += 1
             _log(
                 "sim death: retrying a fresh full launch "
-                f"(attempt {attempt_idx + 2}/{retry_budget + 1})"
+                f"(sim-death retry {sim_deaths_used}/{sim_death_budget})"
+            )
+            continue
+        setup_race = bool(not report.ok and report.stage == "setup" and report.setup_race_suspected)
+        if setup_race and not config.skip_launch and setup_retries_used < setup_retry_budget:
+            setup_retries_used += 1
+            _log(
+                "setup verify: fuel mismatch on the requested combo (#466 re-bake race) — "
+                "retrying a fresh full launch cycle "
+                f"(setup retry {setup_retries_used}/{setup_retry_budget})"
             )
             continue
         for retained_controller in cleanup_holds:
             report.retain_cleanup_controller(retained_controller)
         report.attempts = attempt_reports
         return report
-
-    raise AssertionError("sim-death retry loop exhausted without returning a report")
 
 
 def _attempt_snapshot(report: AutoDriveReport) -> dict[str, Any]:
@@ -3927,6 +3982,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="fresh full-launch retries after acs.exe death (default: 1; 0 disables)",
     )
     p.add_argument(
+        "--setup-verify-retries",
+        type=_nonneg_int,
+        default=AutoDriveConfig.setup_verify_retries,
+        help="fresh full-launch retries after a setup fuel-verify miss on the correct combo "
+        "(the #466 race.ini re-bake race; default: 1; 0 disables)",
+    )
+    p.add_argument(
         "--no-spawn-line",
         action="store_true",
         help="do not teleport a pit-box spawn onto the racing line (use the OUT-phase pit exit)",
@@ -3989,6 +4051,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         max_recoveries=args.max_recoveries,
         progress_stall_seconds=args.progress_stall_seconds,
         sim_death_retries=args.sim_death_retries,
+        setup_verify_retries=args.setup_verify_retries,
         spawn_to_line=not args.no_spawn_line,
     )
     if args.ac_root is not None:

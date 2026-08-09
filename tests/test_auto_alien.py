@@ -2269,3 +2269,267 @@ def test_scientist_requires_requested_laps_before_persisting(
     else:
         assert expected_error in result["error"]
         assert not (user_dir / "journal" / "alien_scientist" / "experiments.jsonl").exists()
+
+
+# --------------------------------------------------------------------- #737 setup re-bake race
+def _scientist_lap_payload(lap_n: int, lap_ms: int, *, wing: int, path: Path) -> dict:
+    """A combo-matched, valid archived lap for the #737 candidate-retry tests (pure)."""
+    return {
+        "schema_version": 1,
+        "lap_uuid": f"lap-{wing}-{lap_n}",
+        "session_uuid": f"session-{wing}",
+        "exported_at": f"2026-08-09T00:00:0{lap_n}Z",
+        "car": {"id": "car_a"},
+        "track": {"id": "trk", "layout": None},
+        "lap": {"lap_n": lap_n, "lap_ms": lap_ms, "is_valid": True},
+        "setup": {
+            "hash": f"setup-{wing}",
+            "path": str(path),
+            "snapshot": {"WING_2.VALUE": wing, "FRONT_BIAS.VALUE": 60},
+        },
+    }
+
+
+def _scientist_batch_env(monkeypatch, tmp_path):
+    """Schema + verifiable 2-lap baseline batch shared by the #737 candidate-retry tests."""
+    from tools.ai_sidecar import car_schema
+    from tools.ai_sidecar.car_schema import CarSetupSchema
+
+    user_dir = tmp_path / "Assetto Corsa"
+    baseline_setup = user_dir / "setups" / "car_a" / "trk" / "baseline.ini"
+    baseline_setup.parent.mkdir(parents=True)
+    baseline_setup.write_text("[WING_2]\nVALUE=10\n\n[FRONT_BIAS]\nVALUE=60\n", encoding="utf-8")
+    schema = CarSetupSchema.from_spinners_dump(
+        "car_a",
+        [
+            {"name": "WING_2", "min": 0, "max": 20, "step": 1},
+            {"name": "FRONT_BIAS", "min": 50, "max": 70, "step": 1},
+        ],
+    )
+    monkeypatch.setattr(car_schema, "load_latest_schema", lambda car: schema)
+
+    baseline_paths = []
+    for lap_n, lap_ms in ((1, 100_000), (2, 101_000)):
+        path = tmp_path / f"baseline_lap_{lap_n}.json"
+        path.write_text(
+            _json.dumps(_scientist_lap_payload(lap_n, lap_ms, wing=10, path=baseline_setup)),
+            encoding="utf-8",
+        )
+        baseline_paths.append(str(path))
+    base_outcome = {
+        "report": {"lap_times_ms": [100_000, 101_000], "drive": {"recoveries": 0}},
+        "lap_archives": baseline_paths,
+    }
+    return user_dir, baseline_setup, base_outcome
+
+
+def _race_failed_pipeline_result(candidate_args) -> tuple[int, dict]:
+    """A candidate pipeline failure carrying the auto_drive #737 race signature."""
+    identify_dir = Path(candidate_args.evidence_dir) / "identify"
+    identify_dir.mkdir(parents=True)
+    (identify_dir / "report.json").write_text(
+        _json.dumps(
+            {
+                "report": {
+                    "ok": False,
+                    "stage": "setup",
+                    "setup_race_suspected": True,
+                    "error": "setup not applied: fuel 30.0L != setup FUEL 40.0L (±2.5)",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    return 1, {
+        "stages": {"identify": {"exit_code": 1, "evidence_dir": str(identify_dir)}},
+        "ok": False,
+        "error": "identification stage failed (exit 1)",
+    }
+
+
+def _run_scientist_with_fake_pipeline(monkeypatch, tmp_path, fake_nested_pipeline):
+    user_dir, baseline_setup, base_outcome = _scientist_batch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(auto_alien, "run_pipeline", fake_nested_pipeline)
+    args = _args(
+        user_dir, "--setup", str(baseline_setup), "--laps", "2", "--iterations", "1", "--scientist"
+    )
+    result = run_scientist(
+        args,
+        run_stage=lambda argv: 0,
+        evidence_root=tmp_path / "evidence",
+        user_dir=user_dir,
+        setup_ini=baseline_setup,
+        selfplay={"base": {"valid": True}, "iterations": [], "stopped": "pace plateau"},
+        base_outcome=base_outcome,
+    )
+    return result, user_dir
+
+
+def _successful_candidate_pipeline_result(candidate_args) -> tuple[int, dict]:
+    """A complete 2-lap candidate batch faster than the baseline (promotable)."""
+    drive_dir = Path(candidate_args.evidence_dir) / "drive"
+    drive_dir.mkdir(parents=True)
+    paths = []
+    for lap_n, lap_ms in ((3, 90_000), (4, 91_000)):
+        path = drive_dir / f"lap_{lap_n}.json"
+        path.write_text(
+            _json.dumps(
+                _scientist_lap_payload(lap_n, lap_ms, wing=9, path=Path(candidate_args.setup))
+            ),
+            encoding="utf-8",
+        )
+        paths.append(str(path))
+    (drive_dir / "report.json").write_text(
+        _json.dumps(
+            {
+                "report": {"lap_times_ms": [90_000, 91_000], "drive": {"recoveries": 0}},
+                "lap_archives": paths,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return 0, {"stages": {"drive": {"evidence_dir": str(drive_dir)}}, "ok": True}
+
+
+def test_scientist_candidate_retries_once_on_setup_race_and_completes(monkeypatch, tmp_path):
+    # #737: candidate 1's identify stage lost the setup re-bake race. The batch must NOT abort —
+    # one fresh pipeline cycle recovers, and the completed baseline + verdict persist normally.
+    nested_calls = []
+
+    def fake_nested_pipeline(candidate_args, *, run_stage):
+        del run_stage
+        nested_calls.append(candidate_args)
+        if len(nested_calls) == 1:
+            return _race_failed_pipeline_result(candidate_args)
+        return _successful_candidate_pipeline_result(candidate_args)
+
+    result, user_dir = _run_scientist_with_fake_pipeline(
+        monkeypatch, tmp_path, fake_nested_pipeline
+    )
+
+    assert result["ok"] is True
+    assert len(nested_calls) == 2
+    assert str(nested_calls[0].evidence_dir).endswith("candidate_01")
+    assert str(nested_calls[1].evidence_dir).endswith("candidate_01_retry")
+    assert nested_calls[1].setup == nested_calls[0].setup  # the same candidate file retries
+    assert result["setup_race_retries"] == [
+        {
+            "candidate": 1,
+            "stage": "identify",
+            "first_evidence_root": str(tmp_path / "evidence" / "scientist" / "candidate_01"),
+            "evidence_root": str(tmp_path / "evidence" / "scientist" / "candidate_01_retry"),
+            "recovered": True,
+        }
+    ]
+    assert result["outcomes"][0]["evidence_root"].endswith("candidate_01_retry")
+    assert result["outcomes"][0]["promoted"] is True
+    assert Path(result["run_path"]).is_file()
+    assert Path(result["ledger_path"]).is_file()
+
+
+def test_scientist_candidate_retry_exhaustion_aborts_batch_honestly(monkeypatch, tmp_path):
+    # #737 bound: a candidate that loses the race twice still aborts the batch — the retry never
+    # launders a persistently unverifiable candidate into the ledger.
+    nested_calls = []
+
+    def fake_nested_pipeline(candidate_args, *, run_stage):
+        del run_stage
+        nested_calls.append(candidate_args)
+        return _race_failed_pipeline_result(candidate_args)
+
+    result, user_dir = _run_scientist_with_fake_pipeline(
+        monkeypatch, tmp_path, fake_nested_pipeline
+    )
+
+    assert result["ok"] is False
+    assert "scientist_candidate_batch_incomplete" in result["error"]
+    assert len(nested_calls) == 2  # exactly one retry — bounded
+    assert result["setup_race_retries"][0]["recovered"] is False
+    assert not (user_dir / "journal" / "alien_scientist" / "experiments.jsonl").exists()
+
+
+def test_scientist_setup_race_retry_composes_boundedly_with_real_pipeline(monkeypatch, tmp_path):
+    # Codex P2 (PR #740): the earlier retry tests mock run_pipeline, so they cannot see the
+    # composed budget. This drives the REAL run_pipeline (scripted run_stage) for a candidate
+    # whose identify stage persistently fails with the race signature: the scientist enters the
+    # pipeline exactly TWICE (initial + one retry) and then aborts — the pipeline-level bound is
+    # enforced; the per-stage launch bound is proven by the auto_drive wrapper tests, so the
+    # composed worst case is 2 * (1 + setup_verify_retries) launches.
+    user_dir, baseline_setup, base_outcome = _scientist_batch_env(monkeypatch, tmp_path)
+    _usable_plant(monkeypatch, False)  # every candidate pipeline requires identification
+    stage_calls: list[list[str]] = []
+
+    def run_stage(argv: list[str]) -> int:
+        stage_calls.append(list(argv))
+        evidence_dir = Path(argv[argv.index("--evidence-dir") + 1])
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        (evidence_dir / "report.json").write_text(
+            _json.dumps(
+                {
+                    "report": {
+                        "ok": False,
+                        "stage": "setup",
+                        "setup_race_suspected": True,
+                        "error": "setup not applied: fuel 30.0L != setup FUEL 40.0L (±2.5)",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        return 1
+
+    args = _args(
+        user_dir, "--setup", str(baseline_setup), "--laps", "2", "--iterations", "1", "--scientist"
+    )
+    result = run_scientist(
+        args,
+        run_stage=run_stage,
+        evidence_root=tmp_path / "evidence",
+        user_dir=user_dir,
+        setup_ini=baseline_setup,
+        selfplay={"base": {"valid": True}, "iterations": [], "stopped": "pace plateau"},
+        base_outcome=base_outcome,
+    )
+
+    assert result["ok"] is False
+    assert "scientist_candidate_batch_incomplete" in result["error"]
+    # The real pipeline ran exactly twice: identify failed in the initial attempt and in the one
+    # retry — no third pipeline entry, so the composed budget cannot grow beyond 2 attempts.
+    assert len(stage_calls) == 2
+    assert all("handshake" in call for call in stage_calls)  # both were identify stages
+    assert "candidate_01" in " ".join(stage_calls[0])
+    assert "candidate_01_retry" in " ".join(stage_calls[1])
+    assert result["setup_race_retries"] == [
+        {
+            "candidate": 1,
+            "stage": "identify",
+            "first_evidence_root": str(tmp_path / "evidence" / "scientist" / "candidate_01"),
+            "evidence_root": str(tmp_path / "evidence" / "scientist" / "candidate_01_retry"),
+            "recovered": False,
+        }
+    ]
+
+
+def test_scientist_candidate_non_race_failure_does_not_retry(monkeypatch, tmp_path):
+    # Any other candidate failure keeps the pre-#737 contract: no retry, honest abort.
+    nested_calls = []
+
+    def fake_nested_pipeline(candidate_args, *, run_stage):
+        del run_stage
+        nested_calls.append(candidate_args)
+        stage_dir = Path(candidate_args.evidence_dir) / "identify"
+        return 1, {
+            # No report.json on disk — the failure carries no race signature.
+            "stages": {"identify": {"exit_code": 1, "evidence_dir": str(stage_dir)}},
+            "ok": False,
+            "error": "identification stage failed (exit 1)",
+        }
+
+    result, user_dir = _run_scientist_with_fake_pipeline(
+        monkeypatch, tmp_path, fake_nested_pipeline
+    )
+
+    assert result["ok"] is False
+    assert "scientist_candidate_batch_incomplete" in result["error"]
+    assert len(nested_calls) == 1  # no retry burned on a non-race failure
+    assert "setup_race_retries" not in result
