@@ -255,6 +255,12 @@ class AutoDriveConfig:
     # sim death: bounded retries with every attempt retained in report.json.  0 disables.
     setup_verify_retries: int = 1
     skip_launch: bool = False
+    # #738: auto-skip CM's pre-drive "Custom Shaders Patch data" dialog. On a boot where the
+    # online patch-data fetch hangs (CM Main Log: "Cannot get data"), that dialog blocks the
+    # launch — acs.exe never spawns — and the attempt loop would otherwise relaunch-loop
+    # against it, burning ~2x launch cycles per drive. The watcher only ever invokes the
+    # dialog's own Skip button (CM then proceeds on its local cache).
+    cm_dialog_skip: bool = True
 
 
 @dataclass
@@ -970,6 +976,10 @@ async def run_auto_drive(
                 last_launch_error = reason
                 continue
             launched_once = True
+            # #738 forensics: a successful launch's detail (attempt count, csp_dialog_skips
+            # evidence) must survive into report.json — overnight ladders read the evidence
+            # bundle, not the console stream, and this string was previously dropped on success.
+            launch_notes.append(f"launch: {reason}")
             # Reset so the post-loop stage report reflects THIS attempt's terminal cause, not a
             # stale launch/mismatch error from an earlier attempt (#537 Codex P2 observability): a
             # relaunch that reaches LIVE but fails to hijack must read as stage="hijack", while one
@@ -2795,6 +2805,24 @@ def _race_ini_path(config: AutoDriveConfig) -> Path:  # pragma: no cover - rig-o
     return resolve_ac_user_dir(config.ac_user_dir) / "cfg" / "race.ini"
 
 
+def compose_skip_evidence(message: str, watcher: object | None) -> str:
+    """Append CSP-dialog (#738) skip evidence to a launch detail message.
+
+    * ``watcher is None`` (disabled/env-off/failed-to-arm) → message unchanged.
+    * armed with skips/errors → ``summary()`` suffix (``csp_dialog_skips=N …``).
+    * armed with none → an explicit ``csp_dialog_skips=0`` so ``report.json`` readers can tell an
+      armed-zero run from a disabled one, matching resilient_launch / EntryLauncher's int/null
+      forensic (Codex #743). Pure (no lifecycle) so it is unit-tested directly.
+    """
+
+    if watcher is None:
+        return message
+    summary = watcher.summary()
+    if summary:
+        return f"{message}; {summary}"
+    return f"{message}; csp_dialog_skips={watcher.skip_count()}"
+
+
 def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover - rig-only
     """Launch AC via the de-elevated Content-Manager URL and wait for the sim to go LIVE.
 
@@ -2807,48 +2835,78 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
     ``race.ini`` while CM regenerates it. That keeps the setup in the spawn file without mutating
     the AC/CSP install tree.
     """
+    from tools.ac_harness.cm_dialog_watcher import CmSkipWatcher, dialog_skip_enabled
     from tools.ac_harness.entry_launcher import ContentManagerActuator
 
     actuator = ContentManagerActuator(preset=config.cm_preset, cm_exe=config.cm_exe)
     actuator.normalize_prior_state()
-    for attempt in range(1, config.max_launches + 1):
-        _log(
-            "launching AC via Content Manager"
-            + (" (setup baked into race.ini)" if config.setup_ini is not None else "")
-        )
-        minimize_foreground_window()  # the CM auto-start race needs the desktop foreground free
-        if config.setup_ini is not None:
-            race_ini = _race_ini_path(config)
-            with race_ini_setup_bake_loop(
-                race_ini, config.setup_ini, interval=config.setup_rebake_interval
-            ) as bake:
-                actuator.launch() if attempt == 1 else actuator.relaunch()
-                live = _wait_live(config.attempt_timeout)
-            if live:
-                _log(
-                    f"LIVE reached; setup re-bake ready={bake.ready}x writes={bake.writes} "
-                    f"(interval={config.setup_rebake_interval}s)"
-                )
-                time.sleep(config.settle_seconds)  # let CSP arm Custom-AI before the hijack
-                if bake.ready > 0:
+    # #738: while attempts wait for LIVE, auto-skip CM's "Custom Shaders Patch data" dialog —
+    # a hanging online fetch otherwise blocks acs.exe from ever spawning and every relaunch
+    # re-opens the same dialog. One watcher spans all attempts; its evidence rides the
+    # returned launch message either way the run ends. Track the ACTUAL CM image (Codex #743:
+    # a renamed --cm-exe would be missed by a hard-coded default) and honor the env kill-switch.
+    watcher: CmSkipWatcher | None = None
+    if dialog_skip_enabled(not config.cm_dialog_skip):
+        watcher = CmSkipWatcher(log=_log, process_image=actuator.cm_exe.name)
+        if not watcher.start():
+            watcher = None  # failed to arm → do not report false skip evidence (#743)
+
+    def _with_skip_evidence(message: str) -> str:
+        # Stop (join) the watcher BEFORE reading its evidence so a skip/error completing during
+        # the join is not silently dropped (antigravity #743). stop() is idempotent, so the outer
+        # finally calling it again is harmless. Composition itself is a pure, tested helper.
+        if watcher is not None:
+            watcher.stop()
+        return compose_skip_evidence(message, watcher)
+
+    try:
+        for attempt in range(1, config.max_launches + 1):
+            _log(
+                "launching AC via Content Manager"
+                + (" (setup baked into race.ini)" if config.setup_ini is not None else "")
+            )
+            minimize_foreground_window()  # the CM auto-start race needs the foreground free
+            if config.setup_ini is not None:
+                race_ini = _race_ini_path(config)
+                with race_ini_setup_bake_loop(
+                    race_ini, config.setup_ini, interval=config.setup_rebake_interval
+                ) as bake:
+                    actuator.launch() if attempt == 1 else actuator.relaunch()
+                    live = _wait_live(config.attempt_timeout)
+                if live:
+                    _log(
+                        f"LIVE reached; setup re-bake ready={bake.ready}x writes={bake.writes} "
+                        f"(interval={config.setup_rebake_interval}s)"
+                    )
+                    time.sleep(config.settle_seconds)  # let CSP arm Custom-AI before the hijack
+                    if bake.ready > 0:
+                        return (
+                            True,
+                            _with_skip_evidence(
+                                f"LIVE with setup after {attempt} launch attempt(s) — race.ini "
+                                f"ready {bake.ready}x during CM launch ({bake.writes} rewrite(s))"
+                            ),
+                        )
+                    detail = f"; last error: {bake.last_error}" if bake.last_error else ""
                     return (
                         True,
-                        f"LIVE with setup after {attempt} launch attempt(s) — race.ini ready "
-                        f"{bake.ready}x during CM launch ({bake.writes} rewrite(s))",
+                        _with_skip_evidence(
+                            "LIVE with setup verification deferred after "
+                            f"{attempt} launch attempt(s) — race.ini readiness was not observed "
+                            f"at {race_ini}{detail}"
+                        ),
                     )
-                detail = f"; last error: {bake.last_error}" if bake.last_error else ""
-                return (
-                    True,
-                    "LIVE with setup verification deferred after "
-                    f"{attempt} launch attempt(s) — race.ini readiness was not observed at "
-                    f"{race_ini}{detail}",
-                )
-            continue
-        actuator.launch() if attempt == 1 else actuator.relaunch()
-        if _wait_live(config.attempt_timeout):
-            time.sleep(config.settle_seconds)  # let CSP arm Custom-AI before the hijack
-            return True, f"LIVE after {attempt} launch attempt(s)"
-    return False, f"sim never reached LIVE after {config.max_launches} attempt(s)"
+                continue
+            actuator.launch() if attempt == 1 else actuator.relaunch()
+            if _wait_live(config.attempt_timeout):
+                time.sleep(config.settle_seconds)  # let CSP arm Custom-AI before the hijack
+                return True, _with_skip_evidence(f"LIVE after {attempt} launch attempt(s)")
+        return False, _with_skip_evidence(
+            f"sim never reached LIVE after {config.max_launches} attempt(s)"
+        )
+    finally:
+        if watcher is not None:
+            watcher.stop()
 
 
 def rig_restart_launcher(config: AutoDriveConfig) -> None:  # pragma: no cover - rig-only
@@ -3994,6 +4052,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="do not teleport a pit-box spawn onto the racing line (use the OUT-phase pit exit)",
     )
     p.add_argument(
+        "--no-cm-dialog-skip",
+        action="store_true",
+        help="do not auto-skip CM's pre-drive 'Custom Shaders Patch data' dialog (#738)",
+    )
+    p.add_argument(
         "--no-sidecar-autostart",
         action="store_true",
         help="fail preflight instead of auto-starting a loopback sidecar",
@@ -4047,6 +4110,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         alien_l3=args.l3,
         strict=args.strict,
         skip_launch=args.skip_launch,
+        cm_dialog_skip=not args.no_cm_dialog_skip,
         hijack_probe_seconds=args.hijack_probe_seconds,
         max_recoveries=args.max_recoveries,
         progress_stall_seconds=args.progress_stall_seconds,

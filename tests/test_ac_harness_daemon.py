@@ -378,3 +378,54 @@ def test_http_sidecar_before_session_conflict(live_daemon) -> None:
     status, body = _request(host, port, "POST", "/sidecar/start", token="rig-test-token")
     assert status == 409
     assert "session not started" in body["error"]
+
+
+def test_dialog_skips_crosses_the_api_boundary() -> None:
+    # Codex #743: the #738 dialog-skip forensic must survive /session/start AND /status, and stay
+    # distinguishable (int 0 = armed-no-dialog vs null = disabled/unarmed).
+    result = EntryLaunchResult(
+        EntryOutcome.DRIVING,
+        launches=1,
+        polls=1,
+        last_phase=EntryPhase.DRIVING,
+        reason="driving",
+        dialog_skips=2,
+    )
+    daemon = HarnessDaemon(
+        HarnessDaemonConfig(bind_host="127.0.0.1", bind_port=0, token="rig-test-token"),
+        launcher_factory=lambda: type("L", (), {"run": staticmethod(lambda: result)})(),
+        sidecar_starter=lambda: FakePopen(pid=1),
+    )
+    handler = daemon.build_handler()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    host, port = server.server_address
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        token = "rig-test-token"
+        status, body = _request(host, port, "POST", "/session/start", token=token)
+        assert status == 200
+        assert body["dialog_skips"] == 2
+        status, body = _request(host, port, "GET", "/status", token=token)
+        assert status == 200
+        assert body["session"]["dialog_skips"] == 2
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_dialog_skips_null_when_watcher_unarmed() -> None:
+    # Default result (dialog_skips=None) must serialize as JSON null, not 0 — the disabled/unarmed
+    # state is distinct from armed-no-dialog (Codex #743).
+    result = EntryLaunchResult(
+        EntryOutcome.DRIVING, launches=1, polls=1, last_phase=EntryPhase.DRIVING
+    )
+    daemon = HarnessDaemon(
+        HarnessDaemonConfig(bind_host="127.0.0.1", bind_port=0, token="t"),
+        launcher_factory=lambda: type("L", (), {"run": staticmethod(lambda: result)})(),
+        sidecar_starter=lambda: FakePopen(pid=1),
+    )
+    daemon.start_session()
+    payload = daemon.status_payload()
+    assert payload["session"]["dialog_skips"] is None

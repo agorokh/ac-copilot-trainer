@@ -43,6 +43,7 @@ from tools.ac_harness.auto_drive import (
     car_content_preflight,
     collect_lap_archives,
     compose_failure_reason,
+    compose_skip_evidence,
     custom_ai_enabled,
     default_ac_root,
     drive_leg_succeeded,
@@ -389,7 +390,28 @@ def test_safety_confirmed_hijack_cleanup_uses_remaining_launch_budget():
     assert report.ok is True
     assert launches == [True, True]
     assert restarts == [True]
-    assert report.notes[0] == "AC safety shutdown confirmed"
+    # #738 surfaces successful-launch details as notes too, so assert membership, not order.
+    assert "AC safety shutdown confirmed" in report.notes
+
+
+def test_successful_launch_detail_lands_in_report_notes():
+    # #738: the launch leg's success detail (attempt count + csp_dialog_skips forensics)
+    # previously vanished on success; overnight ladders read report.json, not the console.
+    ctrl = FakeController()
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=lambda _config: (True, "LIVE after 1 launch attempt(s); csp_dialog_skips=2"),
+            hijack=lambda c: ctrl,
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+    assert report.ok is True
+    assert any(
+        note == "launch: LIVE after 1 launch attempt(s); csp_dialog_skips=2"
+        for note in report.notes
+    )
 
 
 def test_happy_path_window_mode_passes_and_tears_down():
@@ -1589,7 +1611,8 @@ def test_track_mismatch_close_failure_preserves_primary_mismatch():
 
     assert report.stage == "launch"
     assert report.error is not None and "loaded track" in report.error
-    assert report.notes and "native close failed" in report.notes[0]
+    # #738 surfaces successful-launch details as notes too, so scan rather than index.
+    assert any("native close failed" in note for note in report.notes)
 
 
 def test_track_mismatch_telemetry_cleanup_uses_remaining_relaunch_budget():
@@ -1622,7 +1645,8 @@ def test_track_mismatch_telemetry_cleanup_uses_remaining_relaunch_budget():
     assert report.ok is True
     assert launches == [True, True]
     assert report.cleanup_holds == (retained,)
-    assert report.notes and "read-only telemetry mapping retained" in report.notes[0]
+    # #738 surfaces successful-launch details as notes too, so scan rather than index.
+    assert any("read-only telemetry mapping retained" in note for note in report.notes)
     assert landed.closed is True
 
 
@@ -1656,7 +1680,8 @@ def test_retained_cleanup_note_survives_later_hijack_early_exit():
     )
 
     assert report.stage == "hijack"
-    assert report.notes and "read-only telemetry mapping retained" in report.notes[0]
+    # #738 surfaces successful-launch details as notes too, so scan rather than index.
+    assert any("read-only telemetry mapping retained" in note for note in report.notes)
     assert len(report.cleanup_holds) == 1
 
 
@@ -2482,6 +2507,8 @@ def test_rig_launch_stops_rebake_loop_before_live_settle(tmp_path, monkeypatch):
             return False
 
     class FakeActuator:
+        cm_exe = Path("Content Manager.exe")
+
         def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
             pass
 
@@ -2493,6 +2520,10 @@ def test_rig_launch_stops_rebake_loop_before_live_settle(tmp_path, monkeypatch):
 
         def relaunch(self) -> None:
             pytest.fail("single-attempt rig_launch should not relaunch after LIVE")
+
+    # This test is about the setup re-bake loop, not the #738 dialog watcher — keep it hermetic
+    # (no real UIA thread on a Windows CI runner) via the documented env kill-switch.
+    monkeypatch.setenv("AC_COPILOT_CM_DIALOG_SKIP", "0")
 
     def _fake_bake_loop(race_ini, setup_ini, *, interval):  # noqa: ANN001, ANN202
         assert race_ini == ac_user_dir / "cfg" / "race.ini"
@@ -2528,6 +2559,32 @@ def test_rig_launch_stops_rebake_loop_before_live_settle(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # Overlay fast-fail + CLI validation (#466).
 # ---------------------------------------------------------------------------
+class _SkipEvidenceWatcher:
+    def __init__(self, summary: str | None, skips: int = 0) -> None:
+        self._summary = summary
+        self._skips = skips
+
+    def summary(self) -> str | None:
+        return self._summary
+
+    def skip_count(self) -> int:
+        return self._skips
+
+
+def test_compose_skip_evidence_distinguishes_armed_zero_from_disabled():
+    # Codex #743: an armed-but-no-dialog run must carry csp_dialog_skips=0 so report.json readers
+    # can tell it from a disabled/unarmed run (which appends nothing).
+    assert compose_skip_evidence("LIVE", None) == "LIVE"  # disabled / failed to arm
+    assert (
+        compose_skip_evidence("LIVE", _SkipEvidenceWatcher(summary=None, skips=0))
+        == "LIVE; csp_dialog_skips=0"  # armed, no dialog
+    )
+    assert (
+        compose_skip_evidence("LIVE", _SkipEvidenceWatcher(summary="csp_dialog_skips=2"))
+        == "LIVE; csp_dialog_skips=2"  # armed, skips happened
+    )
+
+
 def test_probe_and_rebake_cli_flags_map_to_config():
     base = ["--car", "ks_porsche_911_gt3_r_2016", "--track", "spa"]
     cfg = _config_from_args(_build_arg_parser().parse_args(base))

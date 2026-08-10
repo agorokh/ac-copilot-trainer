@@ -788,3 +788,203 @@ def test_terminate_graceful_grace_validation(monkeypatch):
         terminate_process_tree_confirmed_absent(
             "acs.exe", is_running=lambda: False, timeout=10.0, graceful_grace=10.0
         )
+
+
+# ---------------------------------------------------------------------------
+# #738: the shared EntryLauncher path (daemon /session/start, entry_launcher CLI)
+# arms the CSP-dialog skip watcher for CM launches — Codex #743 "wire the daemon too".
+# ---------------------------------------------------------------------------
+class _FakeWatcher:
+    def __init__(
+        self,
+        skips: int = 0,
+        summary: str | None = None,
+        *,
+        skips_after_stop: int | None = None,
+        start_result: bool = True,
+    ) -> None:
+        self.started = False
+        self.stopped = False
+        self.skips = skips
+        self._summary = summary
+        # Models stop()'s join flushing final state: forensics read before stop see the stale
+        # value, so a test asserting the flushed value proves read-after-stop ordering (#743).
+        self._skips_after_stop = skips_after_stop
+        self._start_result = start_result
+
+    def start(self) -> bool:
+        self.started = True
+        return self._start_result
+
+    def stop(self) -> None:
+        self.stopped = True
+        if self._skips_after_stop is not None:
+            self.skips = self._skips_after_stop
+
+    def skip_count(self) -> int:
+        return self.skips
+
+    def summary(self) -> str | None:
+        return self._summary
+
+
+def _one_launch_driving_factory():
+    frames = [
+        (_g(AcGameStatus.LIVE), _p(1)),
+        (_g(AcGameStatus.LIVE), _p(2)),
+        (_g(AcGameStatus.LIVE), _p(3)),
+    ]
+    return ReaderFactory([frames])
+
+
+def test_entry_launcher_arms_and_stops_dialog_watcher_on_cm_launch():
+    watchers: list[_FakeWatcher] = []
+
+    def factory():
+        w = _FakeWatcher()
+        watchers.append(w)
+        return w
+
+    clock = FakeClock()
+    result = EntryLauncher(
+        FakeActuator(),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(required_live_reads=2),
+        clock=clock,
+        sleep=clock.sleep,
+        dialog_watcher_factory=factory,
+    ).run()
+
+    assert result.outcome is EntryOutcome.DRIVING
+    assert len(watchers) == 1
+    assert watchers[0].started is True
+    assert watchers[0].stopped is True  # stopped via the run() finally
+
+
+def test_entry_launcher_surfaces_dialog_watcher_forensics_on_result():
+    # antigravity #743: the daemon/CLI path must not silently discard skips — the count and a
+    # summary must ride the returned result, mirroring auto_drive / resilient_launch.
+    watcher = _FakeWatcher(skips=2, summary="csp_dialog_skips=2")
+    clock = FakeClock()
+    result = EntryLauncher(
+        FakeActuator(),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(required_live_reads=2),
+        clock=clock,
+        sleep=clock.sleep,
+        dialog_watcher_factory=lambda: watcher,
+    ).run()
+
+    assert result.dialog_skips == 2
+    assert "csp_dialog_skips=2" in result.reason
+
+
+def test_entry_launcher_reads_forensics_after_stop_join():
+    # antigravity #743: read skips/summary only after stop() joins the thread, so a skip that
+    # lands during the join is not dropped. The fake exposes the flushed count only post-stop.
+    watcher = _FakeWatcher(skips=0, skips_after_stop=3)
+    clock = FakeClock()
+    result = EntryLauncher(
+        FakeActuator(),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(required_live_reads=2),
+        clock=clock,
+        sleep=clock.sleep,
+        dialog_watcher_factory=lambda: watcher,
+    ).run()
+    assert watcher.stopped is True
+    assert result.dialog_skips == 3  # read after stop(), not the pre-join 0
+
+
+def test_entry_launcher_discards_watcher_that_failed_to_arm():
+    # Codex #743: if start() returns False (UIA unavailable / thread couldn't start), the watcher
+    # must be discarded so dialog_skips reads null (unarmed), not a false armed-0.
+    failed = _FakeWatcher(skips=0, start_result=False)
+    clock = FakeClock()
+    result = EntryLauncher(
+        FakeActuator(),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(required_live_reads=2),
+        clock=clock,
+        sleep=clock.sleep,
+        dialog_watcher_factory=lambda: failed,
+    ).run()
+    assert result.dialog_skips is None  # not 0 — the watcher never armed
+    assert failed.stopped is False  # discarded, never entered the run() lifecycle
+
+
+def test_entry_launcher_result_has_no_dialog_skips_when_watcher_absent():
+    # No watcher (opt-out / non-CM) → dialog_skips stays None, reason untouched.
+    clock = FakeClock()
+    result = EntryLauncher(
+        FakeActuator(),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(required_live_reads=2, cm_dialog_skip=False),
+        clock=clock,
+        sleep=clock.sleep,
+        dialog_watcher_factory=lambda: _FakeWatcher(),
+    ).run()
+    assert result.dialog_skips is None
+
+
+def test_entry_launcher_stops_watcher_even_when_launch_raises():
+    watcher = _FakeWatcher()
+
+    class BoomActuator(FakeActuator):
+        def launch(self) -> ActuatorEvent:  # type: ignore[override]
+            raise RuntimeError("launch blew up")
+
+    with pytest.raises(RuntimeError, match="launch blew up"):
+        EntryLauncher(
+            BoomActuator(),
+            reader_factory=_one_launch_driving_factory(),
+            config=_config(),
+            clock=FakeClock(),
+            sleep=lambda _s: None,
+            dialog_watcher_factory=lambda: watcher,
+        ).run()
+
+    assert watcher.started is True
+    assert watcher.stopped is True  # finally guarantees teardown on an exception
+
+
+def test_entry_launcher_skips_watcher_when_config_opts_out():
+    watchers: list[_FakeWatcher] = []
+    clock = FakeClock()
+    EntryLauncher(
+        FakeActuator(),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(required_live_reads=2, cm_dialog_skip=False),
+        clock=clock,
+        sleep=clock.sleep,
+        dialog_watcher_factory=lambda: watchers.append(_FakeWatcher()) or watchers[-1],
+    ).run()
+    assert watchers == []  # opt-out short-circuits before the factory is called
+
+
+def test_default_factory_builds_no_watcher_for_non_cm_actuator(tmp_path):
+    # The default (None) factory path only arms for a ContentManagerActuator; a ColdRestart
+    # (direct acs.exe) launch must resolve to no watcher without touching UIA or subprocess.
+    acs = tmp_path / "acs.exe"
+    acs.write_text("", encoding="utf-8")
+    launcher = EntryLauncher(
+        ColdRestartActuator(acs_exe=acs),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(),
+    )
+    assert launcher._start_dialog_watcher() is None
+
+
+def test_default_factory_opt_out_skips_cm_actuator(tmp_path, monkeypatch):
+    # Even for a CM actuator, config opt-out returns no watcher (default-factory branch).
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+    cm = tmp_path / "Content Manager.exe"
+    cm.write_text("", encoding="utf-8")
+    preset = tmp_path / "quick.cmpreset"
+    preset.write_text("[PRESET]\n", encoding="utf-8")
+    launcher = EntryLauncher(
+        ContentManagerActuator(preset=preset, cm_exe=cm),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(cm_dialog_skip=False),
+    )
+    assert launcher._start_dialog_watcher() is None

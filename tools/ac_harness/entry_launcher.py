@@ -23,7 +23,7 @@ import sys
 import time
 import urllib.parse
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -100,6 +100,11 @@ class EntryLauncherConfig:
     max_drive_triggers_per_launch: int = 5
     required_live_reads: int = 5
     stagnation_seconds: float = 0.05
+    # #738: auto-skip CM's pre-drive "Custom Shaders Patch data" dialog while a CM launch waits
+    # to go DRIVING. Applies only when the actuator is a ContentManagerActuator; a hanging online
+    # patch-data fetch otherwise blocks acs.exe from ever spawning and the daemon's hands-off
+    # /session/start path (which drives EntryLauncher) would relaunch-loop against the same dialog.
+    cm_dialog_skip: bool = True
 
     def __post_init__(self) -> None:
         if self.max_launches < 1:
@@ -130,6 +135,10 @@ class EntryLaunchResult:
     last_phase: EntryPhase | None
     events: tuple[ActuatorEvent, ...] = ()
     reason: str = ""
+    # #738: CSP patch-data dialog skips delivered during this launch (None = watcher not armed —
+    # non-CM actuator, opt-out, or env kill). Parallels resilient_launch's report.launch field so
+    # the daemon/CLI path surfaces the same forensic instead of a silent black hole (antigravity).
+    dialog_skips: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -777,16 +786,85 @@ class EntryLauncher:
         config: EntryLauncherConfig | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        log: Callable[[str], None] | None = None,
+        dialog_watcher_factory: Callable[[], object] | None = None,
     ) -> None:
         self.actuator = actuator
         self.reader_factory = reader_factory
         self.config = config or EntryLauncherConfig()
         self.clock = clock
         self.sleep = sleep
+        self._log = log
+        # Injectable so CI can assert the daemon/CLI shared path arms the watcher without any
+        # real UIA. None → build the real CmSkipWatcher lazily in run() for CM actuators (#738).
+        self._dialog_watcher_factory = dialog_watcher_factory
+
+    def _start_dialog_watcher(self) -> object | None:
+        """Arm the #738 CSP-dialog skip watcher for a CM launch (shared daemon/CLI path).
+
+        Returns the started watcher (with a ``stop()`` method) or None when it does not apply:
+        a non-CM actuator, the config opt-out, or the ``AC_COPILOT_CM_DIALOG_SKIP`` env kill.
+        """
+
+        if not self.config.cm_dialog_skip:
+            return None
+        factory = self._dialog_watcher_factory
+        if factory is None:
+            if not isinstance(self.actuator, ContentManagerActuator):
+                return None
+            from tools.ac_harness.cm_dialog_watcher import CmSkipWatcher, dialog_skip_enabled
+
+            if not dialog_skip_enabled(False):
+                return None
+            cm_image = self.actuator.cm_exe.name
+            log = self._log
+            # Pass the logger so daemon/CLI-path UIA errors and skips are not silent
+            # (antigravity #743): consistency with auto_drive / resilient_launch.
+            factory = lambda: CmSkipWatcher(process_image=cm_image, log=log)  # noqa: E731
+        watcher = factory()
+        start = getattr(watcher, "start", None)
+        if callable(start) and start() is False:
+            # Watcher failed to arm (UIA unavailable / thread could not start): discard it so the
+            # forensic reads null/unarmed, not a false "armed, 0 skips" (Codex #743).
+            return None
+        return watcher
 
     def run(self) -> EntryLaunchResult:
-        """Normalize, launch, and retry until driving or exhausted."""
+        """Normalize, launch, and retry until driving or exhausted.
 
+        Arms the #738 CSP-dialog skip watcher for a CM launch across the whole loop and surfaces
+        its forensic evidence on the returned result (``dialog_skips`` + a ``reason`` suffix) —
+        the daemon/CLI path must not silently discard skips the way an earlier cut did.
+        """
+
+        watcher = self._start_dialog_watcher()
+        skips: int | None = None
+        summary: str | None = None
+        try:
+            result = self._run_launch_loop()
+        finally:
+            if watcher is not None:
+                # Stop (join) BEFORE reading forensics so a skip/error completing during the
+                # join is not silently dropped from the report (antigravity #743).
+                stop = getattr(watcher, "stop", None)
+                if callable(stop):
+                    stop()
+                # Read the skip count through the lock-guarded accessor, not the raw attribute
+                # (Codex #743): honors CmSkipWatcher's documented _lock discipline. Fall back to
+                # the raw attribute for injected test doubles that don't expose the accessor.
+                skip_count = getattr(watcher, "skip_count", None)
+                skips = skip_count() if callable(skip_count) else getattr(watcher, "skips", None)
+                get_summary = getattr(watcher, "summary", None)
+                if callable(get_summary):
+                    summary = get_summary()
+        if watcher is not None:
+            reason = result.reason
+            if summary:
+                reason = f"{reason}; {summary}" if reason else summary
+            result = replace(result, reason=reason, dialog_skips=skips)
+        return result
+
+    def _run_launch_loop(self) -> EntryLaunchResult:
         events: list[ActuatorEvent] = []
         polls = 0
         last_phase: EntryPhase | None = None
@@ -963,6 +1041,8 @@ def _main(argv: Sequence[str] | None = None) -> int:
             required_live_reads=args.required_live_reads,
             stagnation_seconds=args.stagnation_seconds,
         ),
+        # Surface #738 dialog-watcher progress/errors on the CLI path (antigravity #743).
+        log=lambda msg: print(f"[entry] {msg}"),
     )
     result = launcher.run()
     for event in result.events:
