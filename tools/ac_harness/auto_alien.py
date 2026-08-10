@@ -315,7 +315,7 @@ def combo_filter_payloads(
 
 
 def flying_lap_consistency(
-    archive_payloads: list[dict], *, expected_laps: int | None = None
+    archive_payloads: list[dict], *, expected_lap_times_ms: list[int] | None = None
 ) -> dict:
     """Lap-time spread across the batch's FLYING laps (pure; #746).
 
@@ -324,13 +324,19 @@ def flying_lap_consistency(
     (measured: including it turns a 0.02% median spread into a 19% one). So the out-lap is
     dropped and only the flying laps are compared.
 
-    ``expected_laps`` is the count of TIMED laps the stage reported. ``collect_lap_archives``
-    returns every combo-matching archive newer than ``since_epoch``, which can exceed the batch
-    (a drive may complete a lap after the tap stopped counting, or a neighbouring stint can fall
-    inside the window). An extra lap from a different stint carries a different tyre state, so
-    letting it into the spread could falsify a perfectly repeatable batch — so when the archive
-    count does not match the timed-lap count the batch is not attributable and goes UNJUDGED
-    rather than being judged on evidence that may not be its own (#746 Qodo).
+    ``expected_lap_times_ms`` is the list of TIMED lap times the stage itself reported, and the
+    archive set must reproduce it EXACTLY (as a multiset). ``collect_lap_archives`` returns every
+    combo-matching archive newer than ``since_epoch``, which need not be this batch: a lap can
+    complete after the tap stopped counting, an expected async archive can be missing, and a
+    neighbouring stint can fall inside the window.
+
+    Matching on count alone is not enough, and neither is count + single ``session_uuid`` +
+    unique ``lap_n`` (#746 Codex, round 8). Concrete counter-example: reported
+    ``[106655, 81505, 95122]`` against same-session archives ``lap_n`` 1, 2, 4 holding
+    ``[106655, 81505, 81519]`` satisfies every one of those heuristics, yet the *unrepeatable*
+    third lap has been silently replaced by a repeatable post-window one — and the batch is then
+    reported at a 0.02% spread, hiding the 17% the drive actually produced. Comparing the times
+    themselves is the identity check those proxies were standing in for.
 
     Returns ``{"judged": False, "malformed": bool, "reason": ...}`` whenever consistency cannot
     be established, and the two cases are NOT the same (#746 self-hosted review):
@@ -427,20 +433,24 @@ def flying_lap_consistency(
                 f"batch spans {len(sessions)} session_uuids (archives from more than one session)"
             ),
         }
-    # Only now, on a batch proven well-formed and single-session, is a count mismatch merely an
-    # attribution problem rather than possible contamination.
-    if expected_laps is not None and len(archive_payloads) != expected_laps:
-        return {
-            "judged": False,
-            "malformed": False,
-            # Non-falsifying, but the caller must not feed this to a refit: we have just said the
-            # set may contain a lap from another stint (#746 Codex P1).
-            "attributable": False,
-            "reason": (
-                f"{len(archive_payloads)} archive(s) for {expected_laps} timed lap(s) "
-                "— batch not attributable"
-            ),
-        }
+    # The archive set must REPRODUCE the times the stage reported, not merely have the same
+    # cardinality (#746 Codex, round 8). This subsumes the count check and closes the
+    # missing-archive-replaced-by-a-post-window-lap case that count + session + lap_n all pass.
+    if expected_lap_times_ms is not None:
+        observed = sorted(int(round(lap_ms)) for _, lap_ms in laps)
+        reported = sorted(int(round(value)) for value in expected_lap_times_ms)
+        if observed != reported:
+            return {
+                "judged": False,
+                "malformed": False,
+                # The caller FALSIFIES on this: a batch that is not demonstrably this drive's own
+                # evidence may not validate a rung, seed a refit, or feed the scientist (#746).
+                "attributable": False,
+                "reason": (
+                    f"archive lap times {observed} do not match the "
+                    f"{len(reported)} timed lap(s) {reported} — batch not attributable"
+                ),
+            }
     if len(laps) < 3:
         flying_count = max(0, len(laps) - 1)
         return {
@@ -534,7 +544,7 @@ def evaluate_selfplay_iteration(
     # in the ladder report cannot drift apart from two independent computations (#746
     # self-hosted review).
     if consistency is None:
-        consistency = flying_lap_consistency(archive_payloads, expected_laps=len(lap_times))
+        consistency = flying_lap_consistency(archive_payloads, expected_lap_times_ms=lap_times)
     # Corrupt evidence fails CLOSED, exactly like a payload with no validity verdict: an archive
     # that passed `is_valid` yet has no usable lap_n/lap_ms contradicts its own schema, and the
     # refit would consume that same batch.
@@ -849,7 +859,7 @@ def run_selfplay(
     base_payloads, base_foreign = combo_filter_payloads(
         base_payloads, car_id=args.car, track_id=args.track, layout=args.track_layout
     )
-    base_consistency = flying_lap_consistency(base_payloads, expected_laps=len(base_laps))
+    base_consistency = flying_lap_consistency(base_payloads, expected_lap_times_ms=base_laps)
     # Same fold as the iteration path: unreadable archives make the batch unverifiable, and that
     # fact lives out here rather than in the payloads the helper can see (#746 Qodo, round 6).
     if base_load_errors and base_consistency.get("attributable") is not False:
@@ -1233,7 +1243,7 @@ def run_selfplay(
         # verdict can never disagree (#746 self-hosted review). Recorded whether or not it
         # falsified, so a ladder can be audited after the fact for envelopes that were merely
         # survivable rather than repeatable.
-        consistency = flying_lap_consistency(archive_payloads, expected_laps=len(lap_times))
+        consistency = flying_lap_consistency(archive_payloads, expected_lap_times_ms=lap_times)
         # Unreadable archives are the same unattributability wearing a different hat (#746 Qodo,
         # round 6): `flying_lap_consistency` only ever sees payloads that LOADED, so an unreadable
         # expected archive plus a stray readable one "fills the count" and the batch looks
@@ -1673,7 +1683,7 @@ def run_scientist(
         # another stint's lap (#746 Codex P1, round 7). Attribution is now required, not just
         # sufficiency.
         baseline_attribution = flying_lap_consistency(
-            baseline_payloads, expected_laps=len(baseline_lap_times)
+            baseline_payloads, expected_lap_times_ms=baseline_lap_times
         )
         if (
             load_errors
@@ -1788,7 +1798,7 @@ def run_scientist(
             # Same one-sided gate as the baseline: too few archives failed, too many passed
             # (#746 Codex P1, round 7).
             candidate_attribution = flying_lap_consistency(
-                candidate_payloads, expected_laps=len(candidate_lap_times)
+                candidate_payloads, expected_lap_times_ms=candidate_lap_times
             )
             if (
                 candidate_outcome is None

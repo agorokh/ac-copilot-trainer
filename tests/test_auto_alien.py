@@ -360,7 +360,9 @@ def _batch(*lap_ms, valid=True):
 
 
 def test_evaluate_selfplay_iteration_falsification_branches():
-    ok_payloads = [_archive_payload(1), _archive_payload(2)]
+    # The archives must reproduce the reported timed laps; the oracle checks that since #746
+    # round 8, so these fixtures carry the same times the stage reports.
+    ok_payloads = _batch(95000, 93000)
     valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000]), ok_payloads)
     assert valid and "AC-valid" in reason
 
@@ -368,7 +370,7 @@ def test_evaluate_selfplay_iteration_falsification_branches():
     assert not valid and "report missing" in reason
 
     valid, reason = evaluate_selfplay_iteration(
-        1, _stage_outcome([95000], stage="drive", error="boom"), ok_payloads
+        1, _stage_outcome([95000], stage="drive", error="boom"), _batch(95000)
     )
     assert not valid and "exit 1" in reason and "boom" in reason
 
@@ -376,12 +378,12 @@ def test_evaluate_selfplay_iteration_falsification_branches():
     # `error` alone rendered a real physics falsification as "error=None" (#746).
     vetoed = _stage_outcome([177161], recoveries=7)
     vetoed["report"]["reason"] = "recovery cap (6) exceeded at 10366m"
-    valid, reason = evaluate_selfplay_iteration(1, vetoed, ok_payloads)
+    valid, reason = evaluate_selfplay_iteration(1, vetoed, _batch(177161))
     assert not valid and "recovery cap (6) exceeded at 10366m" in reason
     assert "error=None" not in reason
 
     valid, reason = evaluate_selfplay_iteration(
-        0, _stage_outcome([95000], recoveries=2), ok_payloads
+        0, _stage_outcome([95000], recoveries=2), _batch(95000)
     )
     assert not valid and "recovery" in reason
 
@@ -391,18 +393,19 @@ def test_evaluate_selfplay_iteration_falsification_branches():
     valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000]), [])
     assert not valid and "no lap archives" in reason
 
-    bad = [_archive_payload(1), _archive_payload(2, valid=False)]
+    bad = _batch(95000, 96000)
+    bad[1]["lap"]["is_valid"] = False
     valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 96000]), bad)
     assert not valid and "AC-invalid lap" in reason and "lap_n=2" in reason
 
     # A payload with no explicit lap-validity verdict fails CLOSED (#579 Qodo).
-    malformed = [_archive_payload(1), {"car": {"id": "car_a"}, "trace": {}}]
+    malformed = [_archive_payload(1, lap_ms=95000), {"car": {"id": "car_a"}, "trace": {}}]
     valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 96000]), malformed)
     assert not valid and "without a lap-validity verdict" in reason
 
     # A partial archive set leaves counted laps unverifiable -> falsified (#579 Codex P2).
     valid, reason = evaluate_selfplay_iteration(
-        0, _stage_outcome([95000, 93000, 92000]), [_archive_payload(1)]
+        0, _stage_outcome([95000, 93000, 92000]), [_archive_payload(1, lap_ms=95000)]
     )
     assert not valid and "archive count 1 < 3 timed laps" in reason
 
@@ -598,13 +601,15 @@ def test_non_positive_lap_numbers_are_malformed_not_silently_dropped():
 def test_oracle_uses_the_consistency_measurement_it_is_given():
     """The ladder measures once and passes it in, so report and verdict cannot diverge (#746)."""
     batch = _batch(106655, 81505, 81519)
-    measured = flying_lap_consistency(batch, expected_laps=3)
+    measured = flying_lap_consistency(batch, expected_lap_times_ms=[106655, 81505, 81519])
     valid, reason = evaluate_selfplay_iteration(
         0, _stage_outcome([106655, 81505, 81519]), batch, consistency=measured
     )
     assert valid and "spread 0.02%" in reason
     # A supplied measurement is authoritative: pass a falsifying one over the same laps.
-    injected = flying_lap_consistency(_batch(106655, 80791, 95122), expected_laps=3)
+    injected = flying_lap_consistency(
+        _batch(106655, 80791, 95122), expected_lap_times_ms=[106655, 80791, 95122]
+    )
     valid, reason = evaluate_selfplay_iteration(
         0, _stage_outcome([106655, 81505, 81519]), batch, consistency=injected
     )
@@ -840,7 +845,14 @@ class _SelfplayHarness:
             paths = []
             for n, valid in enumerate(archive_valids, start=1):
                 p = stage_dir / f"lap_{n}.json"
-                p.write_text(_json.dumps(_archive_payload(n, valid)), encoding="utf-8")
+                # A real drive archives the very laps it timed; the oracle now checks that
+                # correspondence, so the fake must honour it too (#746 round 8). An archive with
+                # no matching reported lap keeps a distinct time, which is exactly the
+                # unattributable shape some tests want.
+                lap_ms = lap_times[n - 1] if n - 1 < len(lap_times) else 90000
+                p.write_text(
+                    _json.dumps(_archive_payload(n, valid, lap_ms=lap_ms)), encoding="utf-8"
+                )
                 paths.append(str(p))
             payload = {
                 "report": {
@@ -915,15 +927,23 @@ def test_selfplay_ladder_alternates_one_knob_per_iteration(monkeypatch, tmp_path
     assert _json.loads(harness.plant_path.read_text(encoding="utf-8")) == {"v": "iter2"}
 
 
-def test_selfplay_reproduces_the_529_g2_recipe_unchanged(monkeypatch, tmp_path):
-    """The hand-run recipe that produced G2 must drive the SAME sequence after #703.
+def test_selfplay_stops_the_529_g2_recipe_at_its_unrepeatable_rung(monkeypatch, tmp_path):
+    """#746 deliberately CHANGES the recorded G2 ladder — this pins the new behaviour.
 
     Ladder 3 of the #529 Magione session ran ``--ggv-scale 1.0 --scale-step 0.15 --max-scale
-    1.15 --iterations 2 --laps 3`` and both iterations drove at 1.15 (the rung is capped at the
-    first step), with iteration 1's refit a no-op and iteration 2's real. That recipe IS a
-    decoupled ladder run by hand — capping the rung so the top step can never falsify is exactly
-    how the operator kept the refit — so decoupling must reproduce it rather than perturb the
-    configuration that broke the 82.7 s floor.
+    1.15 --iterations 2 --laps 3``; both iterations drove at the capped 1.15 rung, iteration 1's
+    refit was a no-op and iteration 2's was real. #703 pinned that the decoupled ladder drives
+    the same SEQUENCE, and it still does — the scales and step kinds below are unchanged.
+
+    What changes is the verdict on iteration 2. Its real stint was ``80.791 s`` then
+    ``95.122 s``: both AC-valid, zero recoveries, and a **17.7 % spread**. The pre-#746 oracle
+    called that VALID and the 86.27 s-floor plant was retained on it — which is the exact defect
+    this issue exists to fix. So the ladder that produced the headline G2 number would now STOP
+    at that rung and revert the plant.
+
+    That does not retract G2: ladder 2 of the same session ran ``81.505 / 81.519`` (14 ms apart,
+    repeatable) and also beat the 82.7 s floor. What #746 withdraws is the *retention of a plant
+    refined from an unrepeatable stint*, which is the thing that was never real.
     """
     no_op = {
         "lateral_bins_adopted": 0,
@@ -965,15 +985,18 @@ def test_selfplay_reproduces_the_529_g2_recipe_unchanged(monkeypatch, tmp_path):
     code, report = run_pipeline(args, run_stage=harness.runner())
     assert code == 0 and report["ok"]
     selfplay = report["selfplay"]
-    assert selfplay["stopped"] == "completed"
-    # Identical drive sequence to the recorded ladder: both iterations at the capped 1.15 rung.
+    # The SEQUENCE is unchanged (#703): both iterations at the capped 1.15 rung, envelope first.
     assert [entry["ggv_scale"] for entry in selfplay["iterations"]] == [1.15, 1.15]
-    # Iteration 1's no-op refit falls through to the rung; iteration 2 is the plant step that
-    # actually raised bins — and it is retained, exactly as the live ladder recorded.
     assert [entry["step_kind"] for entry in selfplay["iterations"]] == ["envelope", "plant"]
-    assert selfplay["refit_iterations"] == [2]
-    assert selfplay["best_lap_ms"] == 80791
-    assert _json.loads(harness.plant_path.read_text(encoding="utf-8")) == {"v": "iter1"}
+    # The VERDICT changes (#746): iteration 2's stint was 80.791 s then 95.122 s.
+    assert "falsified at iteration 2" in selfplay["stopped"]
+    assert "not repeatable" in selfplay["stopped"]
+    assert "17.7%" in selfplay["stopped"]
+    # Its refit is therefore never validated, and the plant is rolled back to the last valid fit.
+    assert selfplay["refit_iterations"] == []
+    assert _json.loads(harness.plant_path.read_text(encoding="utf-8")) == {"v": "original"}
+    # The best lap credited is iteration 1's repeatable 81.492 s, not the unrepeatable 80.791 s.
+    assert selfplay["best_lap_ms"] == 81492
 
 
 def test_selfplay_falsified_envelope_rung_keeps_the_validated_refit(monkeypatch, tmp_path):
