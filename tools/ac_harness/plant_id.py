@@ -42,18 +42,23 @@ import math
 import os
 import re
 import uuid
+from collections import Counter
 from dataclasses import asdict, dataclass
 from dataclasses import replace as dc_replace
 from pathlib import Path
 
 from tools.ac_harness.ai_line import _horizontal
 from tools.ac_harness.ggv_profile import (
+    DEFAULT_THERMAL_COVERAGE_FRACTION,
+    DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C,
+    DEFAULT_THERMAL_STABILITY_FRACTION,
     GGVModel,
     blend_ggv_safe,
     fit_steer_feedforward,
     ggv_from_lap_archives,
     ggv_from_telemetry,
     merge_selfplay_model,
+    observe_lap_tyre_state,
     seg_lengths,
     signed_curvature_profile,
 )
@@ -1552,6 +1557,15 @@ def refine_ggv_from_lap_archives(
     except (ValueError, ZeroDivisionError, KeyError, TypeError) as exc:
         logger.exception("thermal uncertainty fit failed; ggv block degrades to the generic plant")
         block["reason"] = f"thermal uncertainty fit error: {type(exc).__name__}: {exc}"
+        # Say WHICH eligibility term rejected WHICH lap, and with what value (#749).
+        #
+        # The bare exception text ("no thermally consistent valid lap archives") names the symptom
+        # and nothing else, so diagnosing a refused refit meant re-running `observe_lap_tyre_state`
+        # over the archives by hand — which is how the 2026-08-10 huracan@spa stall was eventually
+        # traced to `stability` 0.41-0.62 against the 0.80 floor, with every other term passing.
+        # A ladder that silently stops compounding is the expensive failure here: the operator
+        # cannot see it from the report at all.
+        block["thermal_eligibility"] = _thermal_eligibility_report(matching)
         result["ggv"] = block
         return block
     block.update(summary)
@@ -1560,6 +1574,147 @@ def refine_ggv_from_lap_archives(
     block["reason"] = "ok"
     result["ggv"] = block
     return block
+
+
+# `observe_lap_tyre_state` reasons produced by its eligibility CONJUNCTION — i.e. reached after
+# the measurements were computed, so they are meaningful. Any other reason is an early exit whose
+# measurements are zeroed placeholders.
+_CONJUNCTION_REASONS = frozenset(
+    {
+        "missing tyre compound identity",
+        "missing setup identity",
+        "outside thermal stability/validity gate",
+    }
+)
+# `observe_lap_tyre_state` reports `wheel_spread_c` rounded to 3 dp while comparing the raw value,
+# so within this envelope of the cap the report cannot establish which side the raw value fell on.
+_WHEEL_SPREAD_ROUNDING = 5e-4
+
+
+def _failed_eligibility_terms(lap: dict, state: dict) -> list[str]:
+    """Which individual eligibility predicates this lap failed (#749).
+
+    :func:`observe_lap_tyre_state` reports its own specific reason for most branches and one
+    COLLAPSED string for five of them. So the observer's reason is authoritative wherever it is
+    specific, and the measurements are re-derived only for the collapsed case — re-deriving
+    unconditionally would invent misleading terms, because an early observer failure (missing
+    trace, missing `optimalTempC`, missing tyre channels) returns zeroed measurements that trip
+    coverage, stability, tag and spread all at once for what is really one cause (#749 Codex P2).
+    """
+
+    def _below(value: object, floor: float) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and value < floor
+
+    if state.get("fit_eligible") is True:
+        return []
+    reason = str(state.get("reason") or "")
+    if reason not in _CONJUNCTION_REASONS:
+        # An early observer exit (missing trace / optimalTempC / tyre channels). Its measurements
+        # are ZEROED placeholders, so deriving predicates from them would invent failures. Its own
+        # reason is the specific one; keep it verbatim.
+        return [f"observer:{reason}"]
+
+    # The observer got far enough to MEASURE, so every predicate below is meaningful — report all
+    # of them, not just the one the observer's reason happened to name. A lap missing setup
+    # identity that ALSO fails stability must say so, or fixing identity just surfaces stability
+    # next with no warning (#749 Codex P2, round 4).
+    terms: list[str] = []
+    if state.get("compound_index") is None and state.get("compound_name") is None:
+        terms.append("missing_compound_identity")
+    if state.get("setup_hash") is None:
+        terms.append("missing_setup_identity")
+    if lap.get("is_valid") is not True:
+        terms.append("lap_not_ac_valid")
+    if state.get("tag") == "unknown":
+        terms.append("unknown_thermal_tag")
+    if _below(state.get("sample_coverage_fraction"), DEFAULT_THERMAL_COVERAGE_FRACTION):
+        terms.append("coverage_below_min")
+    if _below(state.get("thermal_stability_fraction"), DEFAULT_THERMAL_STABILITY_FRACTION):
+        terms.append("stability_below_min")
+    spread = state.get("wheel_spread_c")
+    if spread is None:
+        terms.append("wheel_spread_unmeasurable")
+    elif isinstance(spread, (int, float)):
+        # The observer compares the RAW spread but reports it rounded to 3 dp, so within half a
+        # milli-degree of the cap the report simply CANNOT say which side the raw value fell on.
+        # Claiming either is overreach, so that band gets its own honest term rather than being
+        # folded into "above max" (#749 Codex P2, rounds 5-6).
+        if spread > DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C + _WHEEL_SPREAD_ROUNDING:
+            terms.append("wheel_spread_above_max")
+        elif spread >= DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C - _WHEEL_SPREAD_ROUNDING:
+            terms.append("wheel_spread_at_limit")
+    if not terms:
+        # Rejected by the conjunction for something not re-derived above. Never report "no
+        # failing terms" for an ineligible lap — say that it could not be classified.
+        terms.append(f"other:{reason}")
+    return terms
+
+
+def _thermal_eligibility_report(archives: list[dict]) -> dict:
+    """Per-lap thermal-eligibility diagnostics for a refit that found no usable cohort (#749).
+
+    `ggv_from_lap_archives` raises a single sentence naming the symptom — "no thermally consistent
+    valid lap archives" — and nothing about WHICH of the seven eligibility terms rejected WHICH
+    lap, or by how much. That silence is what makes a stalled ladder expensive: it stops
+    compounding and the report gives the operator no way to see why.
+
+    Purely diagnostic, and deliberately best-effort: an observer failure here must never replace
+    the real fit error that is already recorded on the block.
+    """
+    report: dict = {
+        "thresholds": {
+            "min_coverage_fraction": DEFAULT_THERMAL_COVERAGE_FRACTION,
+            "min_stability_fraction": DEFAULT_THERMAL_STABILITY_FRACTION,
+            "max_wheel_spread_c": DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C,
+        },
+        "laps": [],
+    }
+    failing: Counter[str] = Counter()
+    for archive in archives:
+        try:
+            state = observe_lap_tyre_state(archive)
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not mask the fit error
+            report["laps"].append({"error": f"{type(exc).__name__}: {exc}"})
+            continue
+        lap = archive.get("lap") if isinstance(archive.get("lap"), dict) else {}
+        entry = {
+            "lap_n": lap.get("lap_n"),
+            "lap_ms": lap.get("lap_ms"),
+            "fit_eligible": state.get("fit_eligible"),
+            "reason": state.get("reason"),
+            "tag": state.get("tag"),
+            "core_temp_c": state.get("core_temp_c"),
+            "thermal_stability_fraction": state.get("thermal_stability_fraction"),
+            "sample_coverage_fraction": state.get("sample_coverage_fraction"),
+            "wheel_spread_c": state.get("wheel_spread_c"),
+            "setup_hash": state.get("setup_hash"),
+        }
+        # `observe_lap_tyre_state`'s own `reason` collapses coverage, stability, wheel spread,
+        # validity and the unknown-tag case into one string ("outside thermal stability/validity
+        # gate"), so counting it would merge distinct failures and report a low-coverage batch
+        # identically to the stability stall this exists to diagnose (#749 Codex P2). Re-derive
+        # the individual predicates from the reported measurements instead.
+        terms = _failed_eligibility_terms(lap, state)
+        entry["failing_terms"] = terms
+        report["laps"].append(entry)
+        failing.update(terms)
+    if failing:
+        # The headline: one line an operator can read without opening the archives. Report ALL
+        # tied causes rather than letting Counter's insertion order pick a winner — one
+        # low-coverage lap and one unstable lap is a different situation from two unstable laps,
+        # and naming only one of them sends the next session down the wrong path (#749 Codex P2).
+        report["dominant_count"] = failing.most_common(1)[0][1]
+        report["dominant_terms"] = sorted(
+            term for term, count in failing.items() if count == report["dominant_count"]
+        )
+        report["failing_term_counts"] = dict(failing)
+    report["eligible_count"] = sum(
+        1 for entry in report["laps"] if entry.get("fit_eligible") is True
+    )
+    # Laps the observer could not read at all contribute no terms, so a headline drawn only from
+    # the laps that DID parse would silently speak for the whole batch (#749 Codex P2, round 6).
+    report["observer_error_count"] = sum(1 for entry in report["laps"] if "error" in entry)
+    return report
 
 
 def selfplay_refine_result(

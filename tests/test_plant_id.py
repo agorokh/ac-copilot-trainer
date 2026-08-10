@@ -1216,6 +1216,195 @@ def test_selfplay_refine_requires_current_fit_and_archives():
     assert "no thermally consistent" in block["reason"]
 
 
+def test_selfplay_refine_reports_which_thermal_term_emptied_the_cohort():
+    """#749: a refused refit must name the failing term per lap, not just the symptom.
+
+    Reproduces the 2026-08-10 huracan@spa stall shape: every lap AC-valid with a real setup
+    identity and full sample coverage, but core temperatures swinging so the per-wheel stability
+    fraction falls under the 0.80 floor. Before this, the block carried only "no thermally
+    consistent valid lap archives" and the operator had to re-run the observer over the archives
+    by hand to learn which of the seven terms rejected them — while the ladder silently stopped
+    compounding.
+    """
+    from tools.ac_harness.plant_id import selfplay_refine_result
+
+    artifact = _selfplay_artifact()
+    archives = [
+        _selfplay_thermal_archive("unstable-1", lateral_g=1.35, lap_n=1),
+        _selfplay_thermal_archive("unstable-2", lateral_g=1.35, lap_n=2),
+    ]
+    # Swing each wheel far from its own median for most of the lap: stability collapses while
+    # coverage, compound identity, setup identity and lap validity all still pass.
+    for archive in archives:
+        index = {name: i for i, name in enumerate(archive["trace"]["fields"])}
+        for n, sample in enumerate(archive["trace"]["samples"]):
+            for wheel in ("fl", "fr", "rl", "rr"):
+                sample[index[f"tyreCoreTemp_{wheel}"]] = 90.0 + (12.0 if n % 2 else -12.0)
+
+    result, block = selfplay_refine_result(artifact, archives, generic_gt3_ggv())
+    assert result is None and block["ok"] is False
+    assert "no thermally consistent valid lap archives" in block["reason"]
+
+    report = block["thermal_eligibility"]
+    assert report["eligible_count"] == 0
+    assert report["dominant_count"] == 2
+    # The INDIVIDUAL predicate must be named. `observe_lap_tyre_state`'s own reason collapses
+    # coverage / stability / wheel-spread / validity / unknown-tag into one string, so counting
+    # that would report a low-coverage batch identically to this stability stall (#749 Codex P2).
+    assert report["dominant_terms"] == ["stability_below_min"]
+    assert report["failing_term_counts"] == {"stability_below_min": 2}
+    # The thresholds are reported alongside the measurements, so the gap is readable in place.
+    assert report["thresholds"]["min_stability_fraction"] == 0.80
+    for lap in report["laps"]:
+        assert lap["fit_eligible"] is False
+        assert lap["failing_terms"] == ["stability_below_min"]
+        assert lap["thermal_stability_fraction"] < 0.80
+        # …and the terms that PASSED are shown too, so they need not be re-derived by hand.
+        assert lap["sample_coverage_fraction"] == 1.0
+        assert lap["setup_hash"]
+        assert lap["lap_n"] in (1, 2)
+
+
+def test_thermal_eligibility_distinguishes_coverage_from_stability_failures():
+    """Distinct terms must not collapse into one dominant reason (#749 Codex P2).
+
+    `observe_lap_tyre_state` returns the same `outside thermal stability/validity gate` string
+    for coverage, stability, wheel-spread, validity and unknown-tag failures. If the report
+    counted that, a low-coverage batch would be indistinguishable from a stability stall — and
+    they demand different fixes.
+    """
+    from tools.ac_harness.plant_id import selfplay_refine_result
+
+    def _blank_coverage(archive: dict) -> dict:
+        index = {name: i for i, name in enumerate(archive["trace"]["fields"])}
+        for sample in archive["trace"]["samples"][:400]:
+            for wheel in ("fl", "fr", "rl", "rr"):
+                sample[index[f"tyreCoreTemp_{wheel}"]] = 0.0
+        return archive
+
+    archives = [
+        _blank_coverage(_selfplay_thermal_archive("low-coverage-1", lateral_g=1.35, lap_n=1)),
+        _blank_coverage(_selfplay_thermal_archive("low-coverage-2", lateral_g=1.35, lap_n=2)),
+    ]
+    _, block = selfplay_refine_result(_selfplay_artifact(), archives, generic_gt3_ggv())
+    assert block["ok"] is False
+    report = block["thermal_eligibility"]
+    assert report["eligible_count"] == 0
+    # Named as coverage, NOT as the stability stall — the two are now separable.
+    assert "coverage_below_min" in report["failing_term_counts"]
+    assert "stability_below_min" not in report["dominant_terms"]
+    for lap in report["laps"]:
+        assert "coverage_below_min" in lap["failing_terms"]
+
+
+def test_thermal_eligibility_keeps_early_observer_reasons_and_reports_ties():
+    """Two ways the diagnostic could mislead, both closed (#749 Codex P2, round 3).
+
+    1. An early observer failure (missing trace) returns ZEROED measurements, so re-deriving
+       predicates from them would invent coverage + stability + tag + spread failures for what is
+       really one cause. The observer's own reason is authoritative there.
+    2. A tie between two causes must report BOTH — one low-coverage lap and one unstable lap is a
+       different situation from two unstable laps, and naming one sends the reader the wrong way.
+    """
+    from tools.ac_harness.plant_id import selfplay_refine_result
+
+    # 1. Missing trace on both laps.
+    blind = [
+        _selfplay_thermal_archive("no-trace-1", lateral_g=1.35, lap_n=1),
+        _selfplay_thermal_archive("no-trace-2", lateral_g=1.35, lap_n=2),
+    ]
+    for archive in blind:
+        archive["trace"] = {}
+    _, block = selfplay_refine_result(_selfplay_artifact(), blind, generic_gt3_ggv())
+    report = block["thermal_eligibility"]
+    for lap in report["laps"]:
+        assert lap["failing_terms"] == ["observer:missing trace"]
+        assert "coverage_below_min" not in lap["failing_terms"]
+        assert "stability_below_min" not in lap["failing_terms"]
+
+    # 2. One low-coverage lap and one unstable lap -> a genuine 1-1 tie.
+    mixed = [
+        _selfplay_thermal_archive("tie-coverage", lateral_g=1.35, lap_n=1),
+        _selfplay_thermal_archive("tie-stability", lateral_g=1.35, lap_n=2),
+    ]
+    cov_index = {name: i for i, name in enumerate(mixed[0]["trace"]["fields"])}
+    for sample in mixed[0]["trace"]["samples"][:400]:
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[cov_index[f"tyreCoreTemp_{wheel}"]] = 0.0
+    stab_index = {name: i for i, name in enumerate(mixed[1]["trace"]["fields"])}
+    for n, sample in enumerate(mixed[1]["trace"]["samples"]):
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[stab_index[f"tyreCoreTemp_{wheel}"]] = 90.0 + (12.0 if n % 2 else -12.0)
+
+    _, block = selfplay_refine_result(_selfplay_artifact(), mixed, generic_gt3_ggv())
+    report = block["thermal_eligibility"]
+    assert report["eligible_count"] == 0
+    assert report["dominant_count"] == 1
+    assert "coverage_below_min" in report["dominant_terms"]
+    assert "stability_below_min" in report["dominant_terms"]
+
+
+def test_thermal_eligibility_reports_identity_and_measured_failures_together():
+    """An identity failure must not hide a co-occurring measured one (#749 Codex P2, round 4).
+
+    `observe_lap_tyre_state`'s reason names only the first term its conjunction tripped, so a lap
+    missing setup identity that ALSO fails stability reported identity alone — and fixing identity
+    would then surface stability with no warning. The measurements are valid whenever the
+    conjunction was reached, so every failing predicate is reported.
+    """
+    from tools.ac_harness.plant_id import selfplay_refine_result
+
+    archives = [
+        _selfplay_thermal_archive("identity-and-stability", lateral_g=1.35, lap_n=1),
+        _selfplay_thermal_archive("identity-and-stability-2", lateral_g=1.35, lap_n=2),
+    ]
+    for archive in archives:
+        archive["setup"] = {}  # strip setup identity
+        index = {name: i for i, name in enumerate(archive["trace"]["fields"])}
+        for n, sample in enumerate(archive["trace"]["samples"]):
+            for wheel in ("fl", "fr", "rl", "rr"):
+                sample[index[f"tyreCoreTemp_{wheel}"]] = 90.0 + (12.0 if n % 2 else -12.0)
+
+    _, block = selfplay_refine_result(_selfplay_artifact(), archives, generic_gt3_ggv())
+    report = block["thermal_eligibility"]
+    assert report["eligible_count"] == 0
+    for lap in report["laps"]:
+        assert "missing_setup_identity" in lap["failing_terms"]
+        # …and the measured failure is NOT hidden behind it.
+        assert "stability_below_min" in lap["failing_terms"]
+
+
+def test_thermal_eligibility_names_a_wheel_spread_at_the_rounded_limit():
+    """The reported spread is ROUNDED; the gate compares the raw value (#749 Codex P2, round 5).
+
+    A raw 15.0004 °C spread rejects the lap but arrives in the report as `15.000`, so a strict
+    `>` against the 15 °C cap would miss the very term that caused the rejection and fall back to
+    an unhelpful "other: outside thermal stability/validity gate".
+    """
+    from tools.ac_harness.plant_id import _failed_eligibility_terms
+
+    at_limit = {
+        "fit_eligible": False,
+        "reason": "outside thermal stability/validity gate",
+        "tag": "cold",
+        "sample_coverage_fraction": 1.0,
+        "thermal_stability_fraction": 1.0,
+        "wheel_spread_c": 15.0,  # rounded from a raw value just over the cap
+        "setup_hash": "setup-a",
+        "compound_index": 1,
+        "compound_name": "sv",
+    }
+    # Within the rounding envelope the report CANNOT say which side the raw value fell on, so it
+    # says exactly that instead of overclaiming either way.
+    assert _failed_eligibility_terms({"is_valid": True}, at_limit) == ["wheel_spread_at_limit"]
+    clearly_over = dict(at_limit, wheel_spread_c=15.6)
+    assert _failed_eligibility_terms({"is_valid": True}, clearly_over) == ["wheel_spread_above_max"]
+
+    # A comfortably-inside spread is still not blamed; the real cause is reported instead.
+    inside = dict(at_limit, wheel_spread_c=7.0, thermal_stability_fraction=0.5)
+    assert _failed_eligibility_terms({"is_valid": True}, inside) == ["stability_below_min"]
+
+
 def test_selfplay_refine_merges_monotonically_and_strips_stale_meta(tmp_path):
     from tools.ac_harness.ggv_profile import GGVModel as _GGV
     from tools.ac_harness.plant_id import selfplay_refine_result

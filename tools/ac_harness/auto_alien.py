@@ -1161,6 +1161,30 @@ def run_selfplay(
                             f"auto-alien: iteration {index} refine FAILED — keeping the "
                             f"last-valid plant ({block.get('reason')})"
                         )
+                        # Name the term that actually rejected the cohort, on the console, so a
+                        # ladder that has silently stopped compounding is visible without
+                        # re-analysing archives by hand (#749).
+                        eligibility = block.get("thermal_eligibility")
+                        # Only claim an empty cohort when it IS empty. This branch runs for every
+                        # fit exception, so a batch with eligible laps that failed downstream —
+                        # too few friction rows, say — would otherwise be announced as a thermal
+                        # stall using a dominant term drawn from the ineligible minority, pointing
+                        # the next session at the wrong cause (#749 Codex P2).
+                        # …and only when every lap was actually READ. A lap the observer could not
+                        # parse contributes no terms, so a headline drawn from the laps that did
+                        # parse would silently speak for the whole batch (#749 Codex P2, round 6).
+                        if (
+                            isinstance(eligibility, dict)
+                            and eligibility.get("eligible_count") == 0
+                            and eligibility.get("dominant_terms")
+                            and not eligibility.get("observer_error_count")
+                        ):
+                            lap_count = len(eligibility.get("laps") or [])
+                            terms = ", ".join(eligibility["dominant_terms"])
+                            print(
+                                f"auto-alien: iteration {index} thermal cohort empty — "
+                                f"{eligibility['dominant_count']}/{lap_count} lap(s): {terms}"
+                            )
         except (OSError, RigSessionBusy) as exc:
             # Fail loud IN the report: keep-last-valid integrity can no longer be guaranteed
             # once artifact I/O errors, so the ladder stops with the named reason.
