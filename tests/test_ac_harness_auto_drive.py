@@ -43,6 +43,7 @@ from tools.ac_harness.auto_drive import (
     car_content_preflight,
     collect_lap_archives,
     compose_failure_reason,
+    compose_skip_evidence,
     custom_ai_enabled,
     default_ac_root,
     drive_leg_succeeded,
@@ -2558,6 +2559,32 @@ def test_rig_launch_stops_rebake_loop_before_live_settle(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # Overlay fast-fail + CLI validation (#466).
 # ---------------------------------------------------------------------------
+class _SkipEvidenceWatcher:
+    def __init__(self, summary: str | None, skips: int = 0) -> None:
+        self._summary = summary
+        self._skips = skips
+
+    def summary(self) -> str | None:
+        return self._summary
+
+    def skip_count(self) -> int:
+        return self._skips
+
+
+def test_compose_skip_evidence_distinguishes_armed_zero_from_disabled():
+    # Codex #743: an armed-but-no-dialog run must carry csp_dialog_skips=0 so report.json readers
+    # can tell it from a disabled/unarmed run (which appends nothing).
+    assert compose_skip_evidence("LIVE", None) == "LIVE"  # disabled / failed to arm
+    assert (
+        compose_skip_evidence("LIVE", _SkipEvidenceWatcher(summary=None, skips=0))
+        == "LIVE; csp_dialog_skips=0"  # armed, no dialog
+    )
+    assert (
+        compose_skip_evidence("LIVE", _SkipEvidenceWatcher(summary="csp_dialog_skips=2"))
+        == "LIVE; csp_dialog_skips=2"  # armed, skips happened
+    )
+
+
 def test_probe_and_rebake_cli_flags_map_to_config():
     base = ["--car", "ks_porsche_911_gt3_r_2016", "--track", "spa"]
     cfg = _config_from_args(_build_arg_parser().parse_args(base))

@@ -331,8 +331,11 @@ class CmSkipWatcher:
             # A failed scan invalidates the pending confirmation (Codex #743): otherwise a window
             # seen once, then a transient UIA fault, then seen again would count as the 2nd
             # consecutive poll and be clicked immediately, bypassing the confirm-before-click gate.
+            # Clear ONLY _seen_polls — retaining _last_click keeps the post-click cooldown alive
+            # (Codex #743): a transient fault must not let the same dialog be re-clicked ~3 s after
+            # the previous click instead of respecting the 5 s cooldown. A truly vanished window's
+            # stale cooldown entry is pruned on the next successful scan.
             self._seen_polls.clear()
-            self._last_click.clear()
             return
         # The scan is a cross-process UIA call that can outlast stop()'s join budget (Codex #743):
         # if a stop was requested while we were blocked in it, do NOT invoke anything — the launch

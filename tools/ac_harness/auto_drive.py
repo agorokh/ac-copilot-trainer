@@ -2805,6 +2805,24 @@ def _race_ini_path(config: AutoDriveConfig) -> Path:  # pragma: no cover - rig-o
     return resolve_ac_user_dir(config.ac_user_dir) / "cfg" / "race.ini"
 
 
+def compose_skip_evidence(message: str, watcher: object | None) -> str:
+    """Append CSP-dialog (#738) skip evidence to a launch detail message.
+
+    * ``watcher is None`` (disabled/env-off/failed-to-arm) → message unchanged.
+    * armed with skips/errors → ``summary()`` suffix (``csp_dialog_skips=N …``).
+    * armed with none → an explicit ``csp_dialog_skips=0`` so ``report.json`` readers can tell an
+      armed-zero run from a disabled one, matching resilient_launch / EntryLauncher's int/null
+      forensic (Codex #743). Pure (no lifecycle) so it is unit-tested directly.
+    """
+
+    if watcher is None:
+        return message
+    summary = watcher.summary()
+    if summary:
+        return f"{message}; {summary}"
+    return f"{message}; csp_dialog_skips={watcher.skip_count()}"
+
+
 def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover - rig-only
     """Launch AC via the de-elevated Content-Manager URL and wait for the sim to go LIVE.
 
@@ -2834,13 +2852,12 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
             watcher = None  # failed to arm → do not report false skip evidence (#743)
 
     def _with_skip_evidence(message: str) -> str:
-        # Stop (join) the watcher BEFORE reading its summary so a skip/error completing during
-        # the join is not silently dropped from the returned evidence (antigravity #743). stop()
-        # is idempotent, so the outer finally calling it again is harmless.
+        # Stop (join) the watcher BEFORE reading its evidence so a skip/error completing during
+        # the join is not silently dropped (antigravity #743). stop() is idempotent, so the outer
+        # finally calling it again is harmless. Composition itself is a pure, tested helper.
         if watcher is not None:
             watcher.stop()
-        summary = watcher.summary() if watcher is not None else None
-        return f"{message}; {summary}" if summary else message
+        return compose_skip_evidence(message, watcher)
 
     try:
         for attempt in range(1, config.max_launches + 1):

@@ -209,6 +209,29 @@ def test_failed_scan_resets_pending_confirmation():
     assert backend.invoked == [DIALOG.hwnd]
 
 
+def test_failed_scan_preserves_click_cooldown():
+    # Codex #743: a transient scan failure clears the pending confirmation but must NOT erase the
+    # active post-click cooldown, or the same dialog could be re-clicked ~3s after the prior click
+    # instead of respecting the 5s cooldown.
+    backend, clock = FakeBackend(), FakeClock()
+    watcher, _lines = _make(backend, clock, confirm_polls=2, click_cooldown=5.0)
+    backend.windows = [DIALOG]
+    watcher._tick(backend)  # sighting 1
+    watcher._tick(backend)  # sighting 2 → click (skips=1, last_click=now)
+    assert watcher.skips == 1
+    clock.now += 1.0
+    backend.find_error = RuntimeError("uia glitch")
+    watcher._tick(backend)  # scan fails → _seen_polls cleared, _last_click RETAINED
+    backend.find_error = None
+    clock.now += 1.0  # 2s since the click — still inside the 5s cooldown
+    watcher._tick(backend)  # re-sighting 1
+    watcher._tick(backend)  # re-sighting 2 (confirmed) but cooldown blocks → NO re-click
+    assert watcher.skips == 1
+    clock.now += 4.0  # now >5s since the click
+    watcher._tick(backend)  # confirmed + cooldown elapsed → click
+    assert watcher.skips == 2
+
+
 def test_start_returns_false_when_thread_cannot_start(monkeypatch):
     # Codex #743: the watcher is best-effort — a failure to spawn its thread must never raise into
     # the launch path; start() records it and returns False.
