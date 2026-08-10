@@ -353,6 +353,43 @@ def test_stop_keeps_thread_reference_when_join_times_out():
     assert _wait_until(lambda: not watcher.running)
 
 
+class HangingInvokeBackend(FakeBackend):
+    """invoke_skip blocks until released — models a hung cross-process UIA invoke."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.invoke_entered = threading.Event()
+        self.release = threading.Event()
+
+    def invoke_skip(self, hwnd: int) -> bool:
+        self.invoke_entered.set()
+        self.release.wait(timeout=10.0)
+        return super().invoke_skip(hwnd)
+
+
+def test_stop_is_bounded_even_while_an_invoke_hangs():
+    # Codex #743 P1: stop() must NOT block on _invoke_lock while a cross-process invoke_skip is
+    # hung, or every launch path's stop() would freeze. It sets the event first (no lock) and the
+    # bounded join returns; the thread ref is retained (join timed out on the stuck invoke).
+    backend = HangingInvokeBackend()
+    backend.windows = [DIALOG]
+    watcher = CmSkipWatcher(
+        backend_factory=lambda: backend,
+        poll_interval=0.01,
+        confirm_polls=1,
+        click_cooldown=0.0,
+        join_timeout=0.1,
+    )
+    watcher.start()
+    assert backend.invoke_entered.wait(timeout=5.0)  # a click is in-flight, holding _invoke_lock
+    start = time.monotonic()
+    watcher.stop()  # must return promptly, not deadlock on the lock
+    assert (time.monotonic() - start) < 3.0
+    assert watcher._stop_event.is_set()
+    backend.release.set()  # let the hung invoke finish
+    assert _wait_until(lambda: not watcher.running)
+
+
 def test_in_flight_tick_does_not_click_after_stop_requested():
     # Codex #743: a stop requested while blocked in the scan must suppress the click.
     backend = SlowBackend()

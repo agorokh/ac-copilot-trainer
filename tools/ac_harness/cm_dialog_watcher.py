@@ -159,10 +159,10 @@ class CmSkipWatcher:
         self._join_timeout = max(0.0, float(join_timeout))
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
-        # Serializes the stop request with an in-flight Skip invoke so no click STARTS after stop
-        # was signaled (Codex #743 TOCTOU): _tick invokes under this lock; stop() sets the event
-        # under it. An invoke already running still completes — a syscall can't be aborted — but
-        # no new one begins post-stop.
+        # Groups _tick's stop-check with its Skip invoke so a tick entering after stop() has set
+        # _stop_event skips instead of clicking (Codex #743 TOCTOU). stop() sets the event WITHOUT
+        # this lock (P1: a hung invoke holds it, and a lock-taking stop() would block forever), so
+        # this lock only orders the check+invoke pair — it never gates shutdown.
         self._invoke_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         # Forensic state (guarded by _lock; read by the launch loop for report suffixes).
@@ -221,12 +221,16 @@ class CmSkipWatcher:
         watcher that coexists with the orphan. The orphan itself checks ``_stop_event`` after its
         scan (see :meth:`_tick`), so it will not invoke Skip once stop was requested.
 
-        The event is set under ``_invoke_lock`` so it cannot land between ``_tick``'s stop-check
-        and its ``invoke_skip`` — closing the TOCTOU that let a click fire after stop (Codex #743).
+        The event is set FIRST and **without** ``_invoke_lock`` (Codex #743 P1): a cross-process
+        ``invoke_skip`` that hangs holds the lock, so acquiring it here would make ``stop()`` — on
+        every launch path's success/exit — block forever and never reach the bounded join. Setting
+        the event before the join still prevents any NEW click: ``_tick`` re-reads it under the
+        lock immediately before invoking, so a tick entering after the signal skips. Only a click
+        already past that check can still fire, and that lands on the CSP dialog's own Skip (the
+        intended action, merely late) — a benign, unavoidable in-flight residual.
         """
 
-        with self._invoke_lock:
-            self._stop_event.set()
+        self._stop_event.set()
         thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=self._join_timeout)
