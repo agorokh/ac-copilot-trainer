@@ -159,6 +159,11 @@ class CmSkipWatcher:
         self._join_timeout = max(0.0, float(join_timeout))
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
+        # Serializes the stop request with an in-flight Skip invoke so no click STARTS after stop
+        # was signaled (Codex #743 TOCTOU): _tick invokes under this lock; stop() sets the event
+        # under it. An invoke already running still completes — a syscall can't be aborted — but
+        # no new one begins post-stop.
+        self._invoke_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         # Forensic state (guarded by _lock; read by the launch loop for report suffixes).
         self.skips = 0
@@ -191,8 +196,15 @@ class CmSkipWatcher:
                 dialog_signatures=self.dialog_signatures,
             )
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, name="cm-dialog-skip", daemon=True)
-        self._thread.start()
+        thread = threading.Thread(target=self._run, name="cm-dialog-skip", daemon=True)
+        try:
+            thread.start()
+        except (RuntimeError, OSError) as exc:  # e.g. OS cannot allocate another thread
+            # The watcher is best-effort: a failure to arm must never break the launch (Codex #743).
+            self._thread = None
+            self._note_error(f"could not start watcher thread: {exc!r}")
+            return False
+        self._thread = thread
         self._emit(
             f"armed (process={self.process_image!r} button={self.button_name!r} "
             f"poll={self._poll_interval:g}s confirm={self._confirm_polls} "
@@ -208,9 +220,13 @@ class CmSkipWatcher:
         cleared reference would let ``running`` read False and a later ``start()`` spawn a second
         watcher that coexists with the orphan. The orphan itself checks ``_stop_event`` after its
         scan (see :meth:`_tick`), so it will not invoke Skip once stop was requested.
+
+        The event is set under ``_invoke_lock`` so it cannot land between ``_tick``'s stop-check
+        and its ``invoke_skip`` — closing the TOCTOU that let a click fire after stop (Codex #743).
         """
 
-        self._stop_event.set()
+        with self._invoke_lock:
+            self._stop_event.set()
         thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=self._join_timeout)
@@ -292,6 +308,11 @@ class CmSkipWatcher:
             candidates = backend.find_candidates()
         except Exception as exc:  # noqa: BLE001 - scan faults are recorded, never raised
             self._note_error(f"scan failed: {exc!r}")
+            # A failed scan invalidates the pending confirmation (Codex #743): otherwise a window
+            # seen once, then a transient UIA fault, then seen again would count as the 2nd
+            # consecutive poll and be clicked immediately, bypassing the confirm-before-click gate.
+            self._seen_polls.clear()
+            self._last_click.clear()
             return
         # The scan is a cross-process UIA call that can outlast stop()'s join budget (Codex #743):
         # if a stop was requested while we were blocked in it, do NOT invoke anything — the launch
@@ -310,18 +331,24 @@ class CmSkipWatcher:
             last = self._last_click.get(cand.hwnd)
             if last is not None and (now - last) < self._click_cooldown:
                 continue
-            # Re-check between finding a confirmed candidate and invoking: a stop requested mid-tick
-            # must win the race against the click (Codex #743).
-            if self._stop_event.is_set():
+            # Invoke under _invoke_lock with the stop-check INSIDE the lock: stop() also sets the
+            # event under this lock, so a stop can never land between the check and the click
+            # (Codex #743 TOCTOU). skipped==True means the event was set → bail without invoking.
+            skipped = False
+            with self._invoke_lock:
+                if self._stop_event.is_set():
+                    skipped = True
+                else:
+                    self._last_click[cand.hwnd] = now
+                    try:
+                        delivered = backend.invoke_skip(cand.hwnd)
+                    except Exception as exc:  # noqa: BLE001 - a failed click must not stop polling
+                        with self._lock:
+                            self.clicks_failed += 1
+                        self._note_error(f"invoke failed on {cand.title!r}: {exc!r}")
+                        continue
+            if skipped:
                 return
-            self._last_click[cand.hwnd] = now
-            try:
-                delivered = backend.invoke_skip(cand.hwnd)
-            except Exception as exc:  # noqa: BLE001 - a failed click must not stop polling
-                with self._lock:
-                    self.clicks_failed += 1
-                self._note_error(f"invoke failed on {cand.title!r}: {exc!r}")
-                continue
             if delivered:
                 with self._lock:
                     self.skips += 1
@@ -421,6 +448,7 @@ class _UiaBackend:  # pragma: no cover - rig-only (Windows UIA COM)
         self._oleaut32 = ctypes.windll.oleaut32
         self._user32 = ctypes.windll.user32
         self._kernel32 = ctypes.windll.kernel32
+        self._declare_win32_prototypes()
         # COINIT_MULTITHREADED: single dedicated worker thread, no message pump needed.
         hr = self._ole32.CoInitializeEx(None, 0)
         # 0/1 = initialized here (owe CoUninitialize); RPC_E_CHANGED_MODE = host thread
@@ -429,6 +457,40 @@ class _UiaBackend:  # pragma: no cover - rig-only (Windows UIA COM)
         self._automation = self._co_create_automation()
         self._button_condition = self._create_controltype_condition(_UIA_BUTTON_CONTROLTYPE_ID)
         self._text_condition = self._create_controltype_condition(_UIA_TEXT_CONTROLTYPE_ID)
+
+    def _declare_win32_prototypes(self) -> None:
+        """Set pointer-width-correct restype/argtypes for the raw HANDLE/HWND APIs (Codex #743).
+
+        Without this, ctypes defaults a function's return type to C ``int`` (32-bit), so on the
+        64-bit rig ``OpenProcess`` would truncate a >32-bit HANDLE before
+        ``QueryFullProcessImageNameW`` — silently returning an empty image name and making the
+        watcher miss every CM window. Declared once here so the whole backend is width-safe.
+        """
+
+        from ctypes import wintypes  # Windows-only; backend is constructed only on Windows
+
+        k, u = self._kernel32, self._user32
+        k.OpenProcess.restype = wintypes.HANDLE
+        k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k.CloseHandle.restype = wintypes.BOOL
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        k.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        k.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        u.IsWindowVisible.restype = wintypes.BOOL
+        u.IsWindowVisible.argtypes = [wintypes.HWND]
+        u.GetWindowThreadProcessId.restype = wintypes.DWORD
+        u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        u.GetWindowTextW.restype = ctypes.c_int
+        u.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        # EnumWindows returns BOOL and takes (WNDENUMPROC, LPARAM); leave its argtypes at the
+        # ctypes default so the inline WINFUNCTYPE callback keeps passing cleanly — it returns no
+        # HANDLE, so it carries no truncation risk.
+        u.EnumWindows.restype = wintypes.BOOL
 
     # -- SkipBackend interface --------------------------------------------
 

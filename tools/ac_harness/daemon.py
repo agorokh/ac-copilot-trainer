@@ -297,6 +297,10 @@ class HarnessDaemon:
                     "outcome": self.state.session_result.outcome.value,
                     "ok": self.state.session_result.ok,
                     "reason": self.state.session_result.reason,
+                    # #738 CSP-dialog skip forensic: keep it distinguishable across the API
+                    # boundary — int (armed; 0 = no dialog) vs null (disabled/unarmed) — since an
+                    # armed-no-skip run leaves summary() empty (Codex #743).
+                    "dialog_skips": self.state.session_result.dialog_skips,
                 }
             return {
                 "session_started": self.state.session_started,
@@ -357,6 +361,9 @@ class HarnessDaemon:
                             "ok": result.ok,
                             "outcome": result.outcome.value,
                             "reason": result.reason,
+                            # #738: surface the dialog-skip forensic on the supported API
+                            # boundary (Codex #743) — see status_payload for the int/null contract.
+                            "dialog_skips": result.dialog_skips,
                         },
                     )
                     return

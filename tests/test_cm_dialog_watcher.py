@@ -191,6 +191,45 @@ def test_scan_failure_recorded_and_logged_once_per_distinct_message():
     assert len(error_lines) == 2  # a new message is worth a new line
 
 
+def test_failed_scan_resets_pending_confirmation():
+    # Codex #743: a transient scan failure must invalidate a pending confirmation so a window
+    # seen once → fault → seen again is NOT clicked on the second sighting (that would bypass the
+    # confirm-before-click gate via a UIA glitch).
+    backend, clock = FakeBackend(), FakeClock()
+    watcher, _lines = _make(backend, clock, confirm_polls=2)
+    backend.windows = [DIALOG]
+    watcher._tick(backend)  # sighting 1
+    backend.find_error = RuntimeError("uia glitch")
+    watcher._tick(backend)  # scan fails → confirmation reset
+    backend.find_error = None
+    backend.windows = [DIALOG]
+    watcher._tick(backend)  # sighting 1 again (not 2) → must NOT click
+    assert backend.invoked == []
+    watcher._tick(backend)  # sighting 2 → click
+    assert backend.invoked == [DIALOG.hwnd]
+
+
+def test_start_returns_false_when_thread_cannot_start(monkeypatch):
+    # Codex #743: the watcher is best-effort — a failure to spawn its thread must never raise into
+    # the launch path; start() records it and returns False.
+    class BoomThread:
+        def __init__(self, *a, **k) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("cannot allocate thread")
+
+        def is_alive(self) -> bool:
+            return False
+
+    monkeypatch.setattr(cm_dialog_watcher.threading, "Thread", BoomThread)
+    lines: list[str] = []
+    watcher = CmSkipWatcher(backend_factory=lambda: FakeBackend(), log=lines.append)
+    assert watcher.start() is False
+    assert not watcher.running
+    assert watcher.last_error is not None and "could not start watcher thread" in watcher.last_error
+
+
 def test_summary_and_as_dict_report_forensics():
     backend, clock = FakeBackend(), FakeClock()
     watcher, _lines = _make(backend, clock)
