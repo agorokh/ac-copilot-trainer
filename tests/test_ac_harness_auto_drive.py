@@ -2506,6 +2506,8 @@ def test_rig_launch_stops_rebake_loop_before_live_settle(tmp_path, monkeypatch):
             return False
 
     class FakeActuator:
+        cm_exe = Path("Content Manager.exe")
+
         def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
             pass
 
@@ -2517,6 +2519,10 @@ def test_rig_launch_stops_rebake_loop_before_live_settle(tmp_path, monkeypatch):
 
         def relaunch(self) -> None:
             pytest.fail("single-attempt rig_launch should not relaunch after LIVE")
+
+    # This test is about the setup re-bake loop, not the #738 dialog watcher — keep it hermetic
+    # (no real UIA thread on a Windows CI runner) via the documented env kill-switch.
+    monkeypatch.setenv("AC_COPILOT_CM_DIALOG_SKIP", "0")
 
     def _fake_bake_loop(race_ini, setup_ini, *, interval):  # noqa: ANN001, ANN202
         assert race_ini == ac_user_dir / "cfg" / "race.ini"

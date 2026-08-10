@@ -100,6 +100,11 @@ class EntryLauncherConfig:
     max_drive_triggers_per_launch: int = 5
     required_live_reads: int = 5
     stagnation_seconds: float = 0.05
+    # #738: auto-skip CM's pre-drive "Custom Shaders Patch data" dialog while a CM launch waits
+    # to go DRIVING. Applies only when the actuator is a ContentManagerActuator; a hanging online
+    # patch-data fetch otherwise blocks acs.exe from ever spawning and the daemon's hands-off
+    # /session/start path (which drives EntryLauncher) would relaunch-loop against the same dialog.
+    cm_dialog_skip: bool = True
 
     def __post_init__(self) -> None:
         if self.max_launches < 1:
@@ -777,12 +782,41 @@ class EntryLauncher:
         config: EntryLauncherConfig | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        dialog_watcher_factory: Callable[[], object] | None = None,
     ) -> None:
         self.actuator = actuator
         self.reader_factory = reader_factory
         self.config = config or EntryLauncherConfig()
         self.clock = clock
         self.sleep = sleep
+        # Injectable so CI can assert the daemon/CLI shared path arms the watcher without any
+        # real UIA. None → build the real CmSkipWatcher lazily in run() for CM actuators (#738).
+        self._dialog_watcher_factory = dialog_watcher_factory
+
+    def _start_dialog_watcher(self) -> object | None:
+        """Arm the #738 CSP-dialog skip watcher for a CM launch (shared daemon/CLI path).
+
+        Returns the started watcher (with a ``stop()`` method) or None when it does not apply:
+        a non-CM actuator, the config opt-out, or the ``AC_COPILOT_CM_DIALOG_SKIP`` env kill.
+        """
+
+        if not self.config.cm_dialog_skip:
+            return None
+        factory = self._dialog_watcher_factory
+        if factory is None:
+            if not isinstance(self.actuator, ContentManagerActuator):
+                return None
+            from tools.ac_harness.cm_dialog_watcher import CmSkipWatcher, dialog_skip_enabled
+
+            if not dialog_skip_enabled(False):
+                return None
+            cm_image = self.actuator.cm_exe.name
+            factory = lambda: CmSkipWatcher(process_image=cm_image)  # noqa: E731
+        watcher = factory()
+        start = getattr(watcher, "start", None)
+        if callable(start):
+            start()
+        return watcher
 
     def run(self) -> EntryLaunchResult:
         """Normalize, launch, and retry until driving or exhausted."""
@@ -792,42 +826,49 @@ class EntryLauncher:
         last_phase: EntryPhase | None = None
         last_reason = ""
 
-        normalized = self.actuator.normalize_prior_state()
-        if normalized is not None:
-            events.append(normalized)
+        watcher = self._start_dialog_watcher()
+        try:
+            normalized = self.actuator.normalize_prior_state()
+            if normalized is not None:
+                events.append(normalized)
 
-        for launch_index in range(self.config.max_launches):
-            if launch_index == 0:
-                events.append(self.actuator.launch())
-            else:
-                events.append(self.actuator.relaunch())
+            for launch_index in range(self.config.max_launches):
+                if launch_index == 0:
+                    events.append(self.actuator.launch())
+                else:
+                    events.append(self.actuator.relaunch())
 
-            attempt = self._poll_one_launch()
-            polls += attempt.polls
-            events.extend(attempt.events)
-            last_phase = attempt.last_phase
-            last_reason = attempt.reason
-            if attempt.outcome is EntryOutcome.DRIVING:
-                return EntryLaunchResult(
-                    EntryOutcome.DRIVING,
-                    launches=launch_index + 1,
-                    polls=polls,
-                    last_phase=EntryPhase.DRIVING,
-                    events=tuple(events),
-                    reason=attempt.reason,
-                )
+                attempt = self._poll_one_launch()
+                polls += attempt.polls
+                events.extend(attempt.events)
+                last_phase = attempt.last_phase
+                last_reason = attempt.reason
+                if attempt.outcome is EntryOutcome.DRIVING:
+                    return EntryLaunchResult(
+                        EntryOutcome.DRIVING,
+                        launches=launch_index + 1,
+                        polls=polls,
+                        last_phase=EntryPhase.DRIVING,
+                        events=tuple(events),
+                        reason=attempt.reason,
+                    )
 
-        return EntryLaunchResult(
-            EntryOutcome.FAILED,
-            launches=self.config.max_launches,
-            polls=polls,
-            last_phase=last_phase,
-            events=tuple(events),
-            reason=(
-                f"not driving after {self.config.max_launches} launch attempt(s)"
-                + (f"; last attempt: {last_reason}" if last_reason else "")
-            ),
-        )
+            return EntryLaunchResult(
+                EntryOutcome.FAILED,
+                launches=self.config.max_launches,
+                polls=polls,
+                last_phase=last_phase,
+                events=tuple(events),
+                reason=(
+                    f"not driving after {self.config.max_launches} launch attempt(s)"
+                    + (f"; last attempt: {last_reason}" if last_reason else "")
+                ),
+            )
+        finally:
+            if watcher is not None:
+                stop = getattr(watcher, "stop", None)
+                if callable(stop):
+                    stop()
 
     def _poll_one_launch(self) -> EntryLaunchResult:
         detector = DrivingEntryDetector(

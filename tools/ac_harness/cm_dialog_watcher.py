@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import os
 import sys
 import threading
 import time
@@ -53,9 +54,48 @@ DEFAULT_POLL_INTERVAL_S = 1.0
 DEFAULT_CONFIRM_POLLS = 2
 DEFAULT_CLICK_COOLDOWN_S = 5.0
 
+#: Case-insensitive substrings that identify the CSP patch-data dialog by its **content**
+#: (Codex #743: only click Skip on the known dialog, not any CM window that happens to expose
+#: a Skip button). The live dialog's *window title* is the generic "Waiting…", so title alone
+#: is not a reliable discriminator — the durable identity is the dialog's own text. CM is a WPF
+#: app, so its content TextBlocks are exposed as UIA elements whose Name the backend can read.
+#: Verified live on AG_PC 2026-08-09: the real dialog text carries "Loading data for Custom
+#: Shaders Patch" / "Config for track …" / "Loading entries list". A candidate qualifies only
+#: when a signature matches its title OR any descendant text — and a Skip-bearing CM window that
+#: matches NONE is logged and left alone, so a signature miss is self-diagnosing.
+DEFAULT_DIALOG_SIGNATURES: tuple[str, ...] = (
+    "custom shaders patch",
+    "loading data for",
+    "loading entries",
+    "config for track",
+    "patch data",
+)
+
+#: Env override so any launch path (including the frozen Game Point launcher, which cannot pass
+#: new CLI args to its resilient child) can disable the default-on watcher (Codex #743).
+ENV_DIALOG_SKIP = "AC_COPILOT_CM_DIALOG_SKIP"
+_ENV_DISABLE_VALUES = frozenset({"0", "false", "no", "off", "disable", "disabled"})
+
 #: Upper bound on distinct window titles retained for forensics (memory hygiene).
 _MAX_TITLES_TRACKED = 32
 _MAX_TITLE_LEN = 120
+
+
+def dialog_skip_enabled(cli_opt_out: bool, *, env: dict[str, str] | None = None) -> bool:
+    """Resolve whether the CSP-dialog watcher should arm for this launch.
+
+    Default-on; disabled by either the CLI opt-out (``--no-cm-dialog-skip``) or the
+    ``AC_COPILOT_CM_DIALOG_SKIP`` env override (Codex #743 — the frozen Game Point launcher
+    cannot add CLI args to its resilient child, so an env override is the operator's kill-switch).
+    """
+
+    if cli_opt_out:
+        return False
+    source = os.environ if env is None else env
+    raw = source.get(ENV_DIALOG_SKIP)
+    if raw is not None and raw.strip().casefold() in _ENV_DISABLE_VALUES:
+        return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -102,8 +142,10 @@ class CmSkipWatcher:
         click_cooldown: float = DEFAULT_CLICK_COOLDOWN_S,
         process_image: str = DEFAULT_PROCESS_IMAGE,
         button_name: str = DEFAULT_BUTTON_NAME,
+        dialog_signatures: Sequence[str] = DEFAULT_DIALOG_SIGNATURES,
         backend_factory: Callable[[], SkipBackend] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        join_timeout: float = 5.0,
     ) -> None:
         self._log = log
         self._poll_interval = max(0.05, float(poll_interval))
@@ -111,8 +153,10 @@ class CmSkipWatcher:
         self._click_cooldown = max(0.0, float(click_cooldown))
         self.process_image = process_image
         self.button_name = button_name
+        self.dialog_signatures = tuple(dialog_signatures)
         self._backend_factory = backend_factory
         self._clock = clock
+        self._join_timeout = max(0.0, float(join_timeout))
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -142,7 +186,9 @@ class CmSkipWatcher:
                 self._emit("disabled: UI Automation unavailable on this platform")
                 return False
             self._backend_factory = lambda: _UiaBackend(  # pragma: no cover - rig-only
-                process_image=self.process_image, button_name=self.button_name
+                process_image=self.process_image,
+                button_name=self.button_name,
+                dialog_signatures=self.dialog_signatures,
             )
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, name="cm-dialog-skip", daemon=True)
@@ -155,13 +201,21 @@ class CmSkipWatcher:
         return True
 
     def stop(self) -> None:
-        """Disarm and join the watcher thread (bounded; safe to call repeatedly)."""
+        """Disarm and join the watcher thread (bounded; safe to call repeatedly).
+
+        If the join times out — the thread is blocked in a cross-process UIA scan longer than
+        the join budget — the live thread reference is **kept**, not discarded (Codex #743): a
+        cleared reference would let ``running`` read False and a later ``start()`` spawn a second
+        watcher that coexists with the orphan. The orphan itself checks ``_stop_event`` after its
+        scan (see :meth:`_tick`), so it will not invoke Skip once stop was requested.
+        """
 
         self._stop_event.set()
         thread = self._thread
         if thread is not None and thread.is_alive():
-            thread.join(timeout=5.0)
-        self._thread = None
+            thread.join(timeout=self._join_timeout)
+        if thread is None or not thread.is_alive():
+            self._thread = None
 
     def __enter__(self) -> CmSkipWatcher:
         self.start()
@@ -239,6 +293,11 @@ class CmSkipWatcher:
         except Exception as exc:  # noqa: BLE001 - scan faults are recorded, never raised
             self._note_error(f"scan failed: {exc!r}")
             return
+        # The scan is a cross-process UIA call that can outlast stop()'s join budget (Codex #743):
+        # if a stop was requested while we were blocked in it, do NOT invoke anything — the launch
+        # phase is over and a click now would be an unrelated CM action after the fact.
+        if self._stop_event.is_set():
+            return
         now = self._clock()
         live: set[int] = set()
         for cand in candidates:
@@ -251,6 +310,10 @@ class CmSkipWatcher:
             last = self._last_click.get(cand.hwnd)
             if last is not None and (now - last) < self._click_cooldown:
                 continue
+            # Re-check between finding a confirmed candidate and invoking: a stop requested mid-tick
+            # must win the race against the click (Codex #743).
+            if self._stop_event.is_set():
+                return
             self._last_click[cand.hwnd] = now
             try:
                 delivered = backend.invoke_skip(cand.hwnd)
@@ -289,6 +352,7 @@ class CmSkipWatcher:
 _TREESCOPE_DESCENDANTS = 0x4
 _UIA_CONTROLTYPE_PROPERTY_ID = 30003
 _UIA_BUTTON_CONTROLTYPE_ID = 50000
+_UIA_TEXT_CONTROLTYPE_ID = 50020
 _UIA_INVOKE_PATTERN_ID = 10000
 
 _CLSID_CUIAUTOMATION = "{ff48dba4-60ef-4201-aa87-54103eef594e}"
@@ -346,11 +410,13 @@ class _UiaBackend:  # pragma: no cover - rig-only (Windows UIA COM)
         *,
         process_image: str = DEFAULT_PROCESS_IMAGE,
         button_name: str = DEFAULT_BUTTON_NAME,
+        dialog_signatures: Sequence[str] = DEFAULT_DIALOG_SIGNATURES,
     ) -> None:
         if not available():
             raise RuntimeError("UIA backend requires Windows")
         self._process_image = process_image.casefold()
         self._button_target = button_name.strip().casefold()
+        self._signatures = tuple(s.casefold() for s in dialog_signatures if s)
         self._ole32 = ctypes.windll.ole32
         self._oleaut32 = ctypes.windll.oleaut32
         self._user32 = ctypes.windll.user32
@@ -361,7 +427,8 @@ class _UiaBackend:  # pragma: no cover - rig-only (Windows UIA COM)
         # already has an apartment — usable as-is, nothing owed.
         self._owe_couninit = hr in (0, 1)
         self._automation = self._co_create_automation()
-        self._button_condition = self._create_button_condition()
+        self._button_condition = self._create_controltype_condition(_UIA_BUTTON_CONTROLTYPE_ID)
+        self._text_condition = self._create_controltype_condition(_UIA_TEXT_CONTROLTYPE_ID)
 
     # -- SkipBackend interface --------------------------------------------
 
@@ -369,9 +436,15 @@ class _UiaBackend:  # pragma: no cover - rig-only (Windows UIA COM)
         out: list[DialogCandidate] = []
         for hwnd, title in self._target_windows():
             button = self._find_skip_button(hwnd)
-            if button is not None:
-                self._release(button)
-                out.append(DialogCandidate(hwnd=hwnd, title=title))
+            if button is None:
+                continue
+            self._release(button)
+            # Codex #743: a Skip button + CM ownership is necessary but not sufficient — clicking
+            # Skip on some *other* CM window would be an unrelated action. Require the CSP
+            # patch-data dialog's own content/title signature before treating it as a target.
+            if self._signatures and not self._window_matches_signature(hwnd, title):
+                continue
+            out.append(DialogCandidate(hwnd=hwnd, title=title))
         return out
 
     def invoke_skip(self, hwnd: int) -> bool:
@@ -404,11 +477,39 @@ class _UiaBackend:  # pragma: no cover - rig-only (Windows UIA COM)
     def close(self) -> None:
         self._release(self._button_condition)
         self._button_condition = None
+        self._release(self._text_condition)
+        self._text_condition = None
         self._release(self._automation)
         self._automation = None
         if self._owe_couninit:
             self._ole32.CoUninitialize()
             self._owe_couninit = False
+
+    # -- signature identity (Codex #743) ----------------------------------
+
+    def _window_matches_signature(self, hwnd: int, title: str) -> bool:
+        """True when the window's title OR any descendant static-text names a CSP-data signature."""
+
+        haystack = title.casefold()
+        if any(sig in haystack for sig in self._signatures):
+            return True
+        for text in self._descendant_text(hwnd):
+            folded = text.casefold()
+            if any(sig in folded for sig in self._signatures):
+                return True
+        return False
+
+    def _descendant_text(self, hwnd: int) -> list[str]:
+        """Names of every descendant Text control of ``hwnd`` (elements released, names kept)."""
+
+        names: list[str] = []
+
+        def visit(_element: ctypes.c_void_p, name: str) -> bool:
+            names.append(name)
+            return False  # keep walking; never take ownership
+
+        self._walk_condition(hwnd, self._text_condition, visit)
+        return names
 
     # -- diagnostics (CLI only) -------------------------------------------
 
@@ -419,6 +520,29 @@ class _UiaBackend:  # pragma: no cover - rig-only (Windows UIA COM)
         for hwnd, title in self._target_windows():
             names = [name for _button, name in self._iter_buttons_released(hwnd)]
             out.append((title, names))
+        return out
+
+    def dump_windows(self) -> list[dict[str, object]]:
+        """Per target-process window: title, button names, text names, signature verdict.
+
+        The ground-truth capture used to confirm the #743 signature gate against the *real*
+        CSP-data dialog (its window title is the generic "Waiting…"; identity is in the text).
+        """
+
+        out: list[dict[str, object]] = []
+        for hwnd, title in self._target_windows():
+            buttons = [name for _b, name in self._iter_buttons_released(hwnd)]
+            texts = self._descendant_text(hwnd)
+            out.append(
+                {
+                    "hwnd": hwnd,
+                    "title": title,
+                    "buttons": buttons,
+                    "texts": texts,
+                    "has_skip": any(n.strip().casefold() == self._button_target for n in buttons),
+                    "matches_signature": self._window_matches_signature(hwnd, title),
+                }
+            )
         return out
 
     # -- COM plumbing ------------------------------------------------------
@@ -481,10 +605,10 @@ class _UiaBackend:  # pragma: no cover - rig-only (Windows UIA COM)
             raise OSError(f"QueryInterface({iid_str}) returned NULL")
         return out
 
-    def _create_button_condition(self) -> ctypes.c_void_p:
+    def _create_controltype_condition(self, control_type_id: int) -> ctypes.c_void_p:
         variant = _Variant()
         variant.vt = _VT_I4
-        variant.llVal = _UIA_BUTTON_CONTROLTYPE_ID
+        variant.llVal = control_type_id
         out = ctypes.c_void_p()
         self._call(
             self._automation,
@@ -495,7 +619,7 @@ class _UiaBackend:  # pragma: no cover - rig-only (Windows UIA COM)
             ctypes.byref(out),
         )
         if not out.value:
-            raise OSError("CreatePropertyCondition(ControlType==Button) returned NULL")
+            raise OSError(f"CreatePropertyCondition(ControlType=={control_type_id}) returned NULL")
         return out
 
     # -- window + element walking -----------------------------------------
@@ -556,7 +680,7 @@ class _UiaBackend:  # pragma: no cover - rig-only (Windows UIA COM)
             names.append((None, name))
             return False  # keep walking
 
-        self._walk_buttons(hwnd, visit)
+        self._walk_condition(hwnd, self._button_condition, visit)
         return names
 
     def _find_skip_button(self, hwnd: int) -> ctypes.c_void_p | None:
@@ -575,11 +699,16 @@ class _UiaBackend:  # pragma: no cover - rig-only (Windows UIA COM)
                 return True  # stop; ownership transferred
             return False
 
-        self._walk_buttons(hwnd, visit)
+        self._walk_condition(hwnd, self._button_condition, visit)
         return found[0] if found else None
 
-    def _walk_buttons(self, hwnd: int, visit: Callable[[ctypes.c_void_p, str], bool]) -> None:
-        """Call ``visit(button_element, name)`` per descendant button of ``hwnd``.
+    def _walk_condition(
+        self,
+        hwnd: int,
+        condition: ctypes.c_void_p,
+        visit: Callable[[ctypes.c_void_p, str], bool],
+    ) -> None:
+        """Call ``visit(element, name)`` per descendant of ``hwnd`` matching ``condition``.
 
         ``visit`` returns True to take ownership of the element and stop the walk;
         otherwise the element is released here.
@@ -602,7 +731,7 @@ class _UiaBackend:  # pragma: no cover - rig-only (Windows UIA COM)
                 _VT_ELEMENT_FIND_ALL,
                 (ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)),
                 _TREESCOPE_DESCENDANTS,
-                self._button_condition,
+                condition,
                 ctypes.byref(array),
             )
             if not array.value:
@@ -673,12 +802,17 @@ def _main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-o
     mode.add_argument(
         "--list-buttons", action="store_true", help="print every button name per window"
     )
+    mode.add_argument(
+        "--dump-tree",
+        action="store_true",
+        help="print title/buttons/texts/signature verdict per window (ground-truth capture)",
+    )
     mode.add_argument("--watch", type=float, metavar="SECONDS", help="run the watcher")
     args = parser.parse_args(argv)
     if not available():
         print("UIA unavailable: Windows only", file=sys.stderr)
         return 2
-    if args.scan or args.list_buttons:
+    if args.scan or args.list_buttons or args.dump_tree:
         backend = _UiaBackend(process_image=args.process_image, button_name=args.button_name)
         try:
             if args.scan:
@@ -686,6 +820,11 @@ def _main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-o
                 for cand in candidates:
                     print(f"candidate hwnd={cand.hwnd:#x} title={cand.title!r}")
                 print(f"{len(candidates)} candidate(s)")
+            elif args.dump_tree:
+                import json
+
+                for win in backend.dump_windows():
+                    print(json.dumps(win, ensure_ascii=False))
             else:
                 for title, names in backend.enumerate_buttons():
                     print(f"window {title!r}: buttons={names}")

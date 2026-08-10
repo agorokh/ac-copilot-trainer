@@ -7,6 +7,7 @@ rig-only and covered by the live synthetic-WPF proof plus rig verification (PR #
 
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -21,6 +22,7 @@ from tools.ac_harness.cm_dialog_watcher import (
     _MAX_TITLES_TRACKED,
     CmSkipWatcher,
     DialogCandidate,
+    dialog_skip_enabled,
 )
 
 
@@ -279,6 +281,76 @@ def test_start_is_disabled_without_uia_and_without_injected_backend(monkeypatch)
     assert any("disabled" in line for line in lines)
 
 
+class SlowBackend(FakeBackend):
+    """find_candidates blocks until released — models a UIA scan outlasting stop()'s join."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def find_candidates(self):
+        self.entered.set()
+        self.release.wait(timeout=5.0)
+        return super().find_candidates()
+
+
+def test_stop_keeps_thread_reference_when_join_times_out():
+    # Codex #743: if the scan outlasts stop()'s join, the live thread must NOT be dropped —
+    # otherwise `running` reads False and a second start() spawns a coexisting watcher.
+    backend = SlowBackend()
+    backend.windows = [DIALOG]
+    watcher = CmSkipWatcher(
+        backend_factory=lambda: backend,
+        poll_interval=0.01,
+        confirm_polls=1,
+        join_timeout=0.05,
+    )
+    watcher.start()
+    assert backend.entered.wait(timeout=5.0)  # thread is blocked inside the scan
+    watcher.stop()  # join times out — thread still alive
+    assert watcher.running  # reference retained, not dropped
+    backend.release.set()  # let the blocked scan finish
+    assert _wait_until(lambda: not watcher.running)
+
+
+def test_in_flight_tick_does_not_click_after_stop_requested():
+    # Codex #743: a stop requested while blocked in the scan must suppress the click.
+    backend = SlowBackend()
+    backend.windows = [DIALOG]
+    watcher = CmSkipWatcher(
+        backend_factory=lambda: backend,
+        poll_interval=0.01,
+        confirm_polls=1,
+        join_timeout=0.05,
+    )
+    watcher.start()
+    assert backend.entered.wait(timeout=5.0)
+    watcher._stop_event.set()  # request stop while the scan is blocked
+    backend.release.set()  # scan returns a candidate, but the post-scan guard must skip it
+    assert _wait_until(lambda: not watcher.running)
+    assert backend.invoked == []
+    assert watcher.skips == 0
+
+
+# ---------------------------------------------------------------------------
+# Env / CLI opt-out resolution (#738 / Codex #743).
+# ---------------------------------------------------------------------------
+def test_dialog_skip_enabled_default_on_and_cli_opt_out():
+    assert dialog_skip_enabled(False, env={}) is True
+    assert dialog_skip_enabled(True, env={}) is False
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "disable", "DISABLED", " No "])
+def test_env_kill_switch_disables(value):
+    assert dialog_skip_enabled(False, env={"AC_COPILOT_CM_DIALOG_SKIP": value}) is False
+
+
+@pytest.mark.parametrize("value", ["1", "true", "yes", "", "on", "please"])
+def test_env_non_disable_values_keep_it_on(value):
+    assert dialog_skip_enabled(False, env={"AC_COPILOT_CM_DIALOG_SKIP": value}) is True
+
+
 # ---------------------------------------------------------------------------
 # auto_drive seam: config default + CLI opt-out (#738).
 # ---------------------------------------------------------------------------
@@ -304,6 +376,9 @@ def test_resilient_launch_cli_accepts_no_cm_dialog_skip():
     source = inspect.getsource(resilient_launch.main)
     assert '"--no-cm-dialog-skip"' in source
     assert "CmSkipWatcher" in source
+    # The env kill-switch resolution must be wired (Codex #743: Game Point's frozen child
+    # cannot receive the CLI arg, so the env override is its only opt-out).
+    assert "dialog_skip_enabled" in source
 
 
 if __name__ == "__main__":  # pragma: no cover

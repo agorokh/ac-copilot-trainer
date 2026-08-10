@@ -2284,7 +2284,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     parser.add_argument("--rig-release-path", type=Path, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
-    from tools.ac_harness.cm_dialog_watcher import CmSkipWatcher
+    from tools.ac_harness.cm_dialog_watcher import CmSkipWatcher, dialog_skip_enabled
     from tools.ac_harness.entry_launcher import (
         ContentManagerActuator,
         EntryLaunchUnsupported,
@@ -2718,61 +2718,79 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         # #738: while launch attempts wait to go LIVE, auto-skip CM's "Custom Shaders Patch
         # data" dialog — on a boot with a hanging patch-data fetch it blocks acs.exe from ever
         # spawning, so every attempt (and every cold CM restart) would relaunch into the same
-        # dialog. One watcher spans the whole retry loop; stopped at every loop exit below
-        # (the os._exit fatal path tears the daemon thread down with the process).
+        # dialog. One watcher spans the whole retry loop. Track the ACTUAL CM image (Codex #743:
+        # a renamed --cm-exe would be missed by a hard-coded default) and honor the env
+        # kill-switch, which is the ONLY way the frozen Game Point launcher — it cannot add CLI
+        # args to this child — can disable the default-on watcher.
         csp_watcher: CmSkipWatcher | None = None
-        if not args.no_cm_dialog_skip:
-            csp_watcher = CmSkipWatcher(log=_log)
+        if dialog_skip_enabled(args.no_cm_dialog_skip):
+            csp_watcher = CmSkipWatcher(log=_log, process_image=actuator.cm_exe.name)
             csp_watcher.start()
+
+        _csp_summary_logged = [False]
 
         def stop_csp_watcher() -> None:
             if csp_watcher is None:
                 return
             csp_watcher.stop()
+            if _csp_summary_logged[0]:
+                return
+            _csp_summary_logged[0] = True
             summary = csp_watcher.summary()
             if summary:
                 _log(f"launch-phase dialog watcher: {summary}")
 
+        # try/finally guarantees the launch-phase watcher is torn down on EVERY structured exit
+        # of the launch loop — success, a return-path exception, or an unexpected one such as
+        # KeyboardInterrupt (antigravity #743) — and promptly, before the (possibly long) hold
+        # below rather than lingering through it. The _Car0ProbeCleanupError branch still calls
+        # stop_csp_watcher() explicitly because os._exit() bypasses finally (grok #743); the
+        # explicit + finally calls are idempotent.
         try:
-            report = _run_with_safe_release(
-                lambda: run_retry_loop(
-                    watch_attempt,
-                    max_attempts=args.trials if trials_mode else args.max_attempts,
-                    on_never_live_streak=cold_restart_cm,
-                    stop_on_stable=not trials_mode,
-                    uptime_hours=_machine_uptime_hours,
-                    expect_perturbers=args.expect_perturbers,
-                ),
-                acs_present,
-                release_requested=release_requested,
-            )
-        except _OperatorRelease:
+            try:
+                report = _run_with_safe_release(
+                    lambda: run_retry_loop(
+                        watch_attempt,
+                        max_attempts=args.trials if trials_mode else args.max_attempts,
+                        on_never_live_streak=cold_restart_cm,
+                        stop_on_stable=not trials_mode,
+                        uptime_hours=_machine_uptime_hours,
+                        expect_perturbers=args.expect_perturbers,
+                    ),
+                    acs_present,
+                    release_requested=release_requested,
+                )
+            except _OperatorRelease:
+                _log(
+                    "Game Point release interrupted launch; AC was made safe before ownership "
+                    "release"
+                )
+                return 1
+            except _Car0ProbeCleanupError as exc:
+                _log(f"launch aborted: {exc}")
+                # close() retained a native CarControls mapping. Normal return would run the
+                # finally block and release the machine lock first; terminate the process so
+                # Windows closes mapping and lock together. The exception retains the controller
+                # until that boundary. Re-confirm AC teardown here even though
+                # _run_with_safe_release already attempted it: this fatal boundary ignores both
+                # Game Point release and Ctrl-C, and cannot make ownership available while a
+                # surviving acs.exe could inherit the stale mapping. os._exit() skips the finally,
+                # so stop the watcher explicitly first (grok #743) to flush its summary.
+                stop_csp_watcher()
+                _make_rig_safe(
+                    acs_present,
+                    allow_operator_release=False,
+                    hold_timeout=30.0,
+                )
+                os._exit(1)
+            except _AcsCleanupTimeout as exc:
+                _log(f"launch aborted: {exc}")
+                return 1
+            except _ContentManagerRestartTimeout as exc:
+                _log(f"restart aborted: {exc}")
+                return 1
+        finally:
             stop_csp_watcher()
-            _log("Game Point release interrupted launch; AC was made safe before ownership release")
-            return 1
-        except _Car0ProbeCleanupError as exc:
-            _log(f"launch aborted: {exc}")
-            # close() retained a native CarControls mapping. Normal return would run the finally
-            # block and release the machine lock first; terminate the process so Windows closes
-            # mapping and lock together. The exception retains the controller until that boundary.
-            # Re-confirm AC teardown here even though _run_with_safe_release already attempted it:
-            # this fatal boundary ignores both Game Point release and Ctrl-C, and cannot make
-            # ownership available while a surviving acs.exe could inherit the stale mapping.
-            _make_rig_safe(
-                acs_present,
-                allow_operator_release=False,
-                hold_timeout=30.0,
-            )
-            os._exit(1)
-        except _AcsCleanupTimeout as exc:
-            stop_csp_watcher()
-            _log(f"launch aborted: {exc}")
-            return 1
-        except _ContentManagerRestartTimeout as exc:
-            stop_csp_watcher()
-            _log(f"restart aborted: {exc}")
-            return 1
-        stop_csp_watcher()
         report = replace(
             report,
             launch={

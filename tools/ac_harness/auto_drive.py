@@ -2817,7 +2817,7 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
     ``race.ini`` while CM regenerates it. That keeps the setup in the spawn file without mutating
     the AC/CSP install tree.
     """
-    from tools.ac_harness.cm_dialog_watcher import CmSkipWatcher
+    from tools.ac_harness.cm_dialog_watcher import CmSkipWatcher, dialog_skip_enabled
     from tools.ac_harness.entry_launcher import ContentManagerActuator
 
     actuator = ContentManagerActuator(preset=config.cm_preset, cm_exe=config.cm_exe)
@@ -2825,10 +2825,11 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
     # #738: while attempts wait for LIVE, auto-skip CM's "Custom Shaders Patch data" dialog —
     # a hanging online fetch otherwise blocks acs.exe from ever spawning and every relaunch
     # re-opens the same dialog. One watcher spans all attempts; its evidence rides the
-    # returned launch message either way the run ends.
+    # returned launch message either way the run ends. Track the ACTUAL CM image (Codex #743:
+    # a renamed --cm-exe would be missed by a hard-coded default) and honor the env kill-switch.
     watcher: CmSkipWatcher | None = None
-    if config.cm_dialog_skip:
-        watcher = CmSkipWatcher(log=_log)
+    if dialog_skip_enabled(not config.cm_dialog_skip):
+        watcher = CmSkipWatcher(log=_log, process_image=actuator.cm_exe.name)
         watcher.start()
 
     def _with_skip_evidence(message: str) -> str:

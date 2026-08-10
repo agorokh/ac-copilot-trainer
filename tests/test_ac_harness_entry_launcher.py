@@ -788,3 +788,116 @@ def test_terminate_graceful_grace_validation(monkeypatch):
         terminate_process_tree_confirmed_absent(
             "acs.exe", is_running=lambda: False, timeout=10.0, graceful_grace=10.0
         )
+
+
+# ---------------------------------------------------------------------------
+# #738: the shared EntryLauncher path (daemon /session/start, entry_launcher CLI)
+# arms the CSP-dialog skip watcher for CM launches — Codex #743 "wire the daemon too".
+# ---------------------------------------------------------------------------
+class _FakeWatcher:
+    def __init__(self) -> None:
+        self.started = False
+        self.stopped = False
+
+    def start(self) -> bool:
+        self.started = True
+        return True
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def _one_launch_driving_factory():
+    frames = [
+        (_g(AcGameStatus.LIVE), _p(1)),
+        (_g(AcGameStatus.LIVE), _p(2)),
+        (_g(AcGameStatus.LIVE), _p(3)),
+    ]
+    return ReaderFactory([frames])
+
+
+def test_entry_launcher_arms_and_stops_dialog_watcher_on_cm_launch():
+    watchers: list[_FakeWatcher] = []
+
+    def factory():
+        w = _FakeWatcher()
+        watchers.append(w)
+        return w
+
+    clock = FakeClock()
+    result = EntryLauncher(
+        FakeActuator(),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(required_live_reads=2),
+        clock=clock,
+        sleep=clock.sleep,
+        dialog_watcher_factory=factory,
+    ).run()
+
+    assert result.outcome is EntryOutcome.DRIVING
+    assert len(watchers) == 1
+    assert watchers[0].started is True
+    assert watchers[0].stopped is True  # stopped via the run() finally
+
+
+def test_entry_launcher_stops_watcher_even_when_launch_raises():
+    watcher = _FakeWatcher()
+
+    class BoomActuator(FakeActuator):
+        def launch(self) -> ActuatorEvent:  # type: ignore[override]
+            raise RuntimeError("launch blew up")
+
+    with pytest.raises(RuntimeError, match="launch blew up"):
+        EntryLauncher(
+            BoomActuator(),
+            reader_factory=_one_launch_driving_factory(),
+            config=_config(),
+            clock=FakeClock(),
+            sleep=lambda _s: None,
+            dialog_watcher_factory=lambda: watcher,
+        ).run()
+
+    assert watcher.started is True
+    assert watcher.stopped is True  # finally guarantees teardown on an exception
+
+
+def test_entry_launcher_skips_watcher_when_config_opts_out():
+    watchers: list[_FakeWatcher] = []
+    clock = FakeClock()
+    EntryLauncher(
+        FakeActuator(),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(required_live_reads=2, cm_dialog_skip=False),
+        clock=clock,
+        sleep=clock.sleep,
+        dialog_watcher_factory=lambda: watchers.append(_FakeWatcher()) or watchers[-1],
+    ).run()
+    assert watchers == []  # opt-out short-circuits before the factory is called
+
+
+def test_default_factory_builds_no_watcher_for_non_cm_actuator(tmp_path):
+    # The default (None) factory path only arms for a ContentManagerActuator; a ColdRestart
+    # (direct acs.exe) launch must resolve to no watcher without touching UIA or subprocess.
+    acs = tmp_path / "acs.exe"
+    acs.write_text("", encoding="utf-8")
+    launcher = EntryLauncher(
+        ColdRestartActuator(acs_exe=acs),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(),
+    )
+    assert launcher._start_dialog_watcher() is None
+
+
+def test_default_factory_opt_out_skips_cm_actuator(tmp_path, monkeypatch):
+    # Even for a CM actuator, config opt-out returns no watcher (default-factory branch).
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+    cm = tmp_path / "Content Manager.exe"
+    cm.write_text("", encoding="utf-8")
+    preset = tmp_path / "quick.cmpreset"
+    preset.write_text("[PRESET]\n", encoding="utf-8")
+    launcher = EntryLauncher(
+        ContentManagerActuator(preset=preset, cm_exe=cm),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(cm_dialog_skip=False),
+    )
+    assert launcher._start_dialog_watcher() is None
