@@ -1374,6 +1374,33 @@ def test_thermal_eligibility_reports_identity_and_measured_failures_together():
         assert "stability_below_min" in lap["failing_terms"]
 
 
+def test_thermal_eligibility_names_a_wheel_spread_at_the_rounded_limit():
+    """The reported spread is ROUNDED; the gate compares the raw value (#749 Codex P2, round 5).
+
+    A raw 15.0004 °C spread rejects the lap but arrives in the report as `15.000`, so a strict
+    `>` against the 15 °C cap would miss the very term that caused the rejection and fall back to
+    an unhelpful "other: outside thermal stability/validity gate".
+    """
+    from tools.ac_harness.plant_id import _failed_eligibility_terms
+
+    at_limit = {
+        "fit_eligible": False,
+        "reason": "outside thermal stability/validity gate",
+        "tag": "cold",
+        "sample_coverage_fraction": 1.0,
+        "thermal_stability_fraction": 1.0,
+        "wheel_spread_c": 15.0,  # rounded from a raw value just over the cap
+        "setup_hash": "setup-a",
+        "compound_index": 1,
+        "compound_name": "sv",
+    }
+    assert _failed_eligibility_terms({"is_valid": True}, at_limit) == ["wheel_spread_above_max"]
+
+    # A comfortably-inside spread is still not blamed; the real cause is reported instead.
+    inside = dict(at_limit, wheel_spread_c=7.0, thermal_stability_fraction=0.5)
+    assert _failed_eligibility_terms({"is_valid": True}, inside) == ["stability_below_min"]
+
+
 def test_selfplay_refine_merges_monotonically_and_strips_stale_meta(tmp_path):
     from tools.ac_harness.ggv_profile import GGVModel as _GGV
     from tools.ac_harness.plant_id import selfplay_refine_result
