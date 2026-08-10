@@ -1587,8 +1587,8 @@ _CONJUNCTION_REASONS = frozenset(
     }
 )
 # `observe_lap_tyre_state` reports `wheel_spread_c` rounded to 3 dp while comparing the raw value,
-# so the reported number can sit a fraction below the cap that actually rejected the lap.
-_WHEEL_SPREAD_REPORT_LIMIT = DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C - 5e-4
+# so within this envelope of the cap the report cannot establish which side the raw value fell on.
+_WHEEL_SPREAD_ROUNDING = 5e-4
 
 
 def _failed_eligibility_terms(lap: dict, state: dict) -> list[str]:
@@ -1634,14 +1634,15 @@ def _failed_eligibility_terms(lap: dict, state: dict) -> list[str]:
     spread = state.get("wheel_spread_c")
     if spread is None:
         terms.append("wheel_spread_unmeasurable")
-    elif isinstance(spread, (int, float)) and spread >= _WHEEL_SPREAD_REPORT_LIMIT:
-        # The observer compares the RAW spread but reports it rounded to 3 dp, so a raw 15.0004
-        # arrives here as 15.000 and a strict `>` would miss the very rejection it caused. Half a
-        # milli-degree of slack covers the rounding. This only ever runs for a lap the observer
-        # already rejected, so the worst case is naming a genuinely-at-the-limit spread — with the
-        # measured value printed beside it — rather than falling back to an unhelpful
-        # "other: outside thermal stability/validity gate" (#749 Codex P2, round 5).
-        terms.append("wheel_spread_above_max")
+    elif isinstance(spread, (int, float)):
+        # The observer compares the RAW spread but reports it rounded to 3 dp, so within half a
+        # milli-degree of the cap the report simply CANNOT say which side the raw value fell on.
+        # Claiming either is overreach, so that band gets its own honest term rather than being
+        # folded into "above max" (#749 Codex P2, rounds 5-6).
+        if spread > DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C + _WHEEL_SPREAD_ROUNDING:
+            terms.append("wheel_spread_above_max")
+        elif spread >= DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C - _WHEEL_SPREAD_ROUNDING:
+            terms.append("wheel_spread_at_limit")
     if not terms:
         # Rejected by the conjunction for something not re-derived above. Never report "no
         # failing terms" for an ineligible lap — say that it could not be classified.
@@ -1710,6 +1711,9 @@ def _thermal_eligibility_report(archives: list[dict]) -> dict:
     report["eligible_count"] = sum(
         1 for entry in report["laps"] if entry.get("fit_eligible") is True
     )
+    # Laps the observer could not read at all contribute no terms, so a headline drawn only from
+    # the laps that DID parse would silently speak for the whole batch (#749 Codex P2, round 6).
+    report["observer_error_count"] = sum(1 for entry in report["laps"] if "error" in entry)
     return report
 
 

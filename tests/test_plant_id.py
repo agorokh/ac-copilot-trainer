@@ -1394,7 +1394,11 @@ def test_thermal_eligibility_names_a_wheel_spread_at_the_rounded_limit():
         "compound_index": 1,
         "compound_name": "sv",
     }
-    assert _failed_eligibility_terms({"is_valid": True}, at_limit) == ["wheel_spread_above_max"]
+    # Within the rounding envelope the report CANNOT say which side the raw value fell on, so it
+    # says exactly that instead of overclaiming either way.
+    assert _failed_eligibility_terms({"is_valid": True}, at_limit) == ["wheel_spread_at_limit"]
+    clearly_over = dict(at_limit, wheel_spread_c=15.6)
+    assert _failed_eligibility_terms({"is_valid": True}, clearly_over) == ["wheel_spread_above_max"]
 
     # A comfortably-inside spread is still not blamed; the real cause is reported instead.
     inside = dict(at_limit, wheel_spread_c=7.0, thermal_stability_fraction=0.5)
