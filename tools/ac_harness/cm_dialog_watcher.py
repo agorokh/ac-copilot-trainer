@@ -335,9 +335,11 @@ class CmSkipWatcher:
             last = self._last_click.get(cand.hwnd)
             if last is not None and (now - last) < self._click_cooldown:
                 continue
-            # Invoke under _invoke_lock with the stop-check INSIDE the lock: stop() also sets the
-            # event under this lock, so a stop can never land between the check and the click
-            # (Codex #743 TOCTOU). skipped==True means the event was set → bail without invoking.
+            # Check the stop event and invoke under _invoke_lock so the pair is atomic w.r.t.
+            # itself. stop() sets the event WITHOUT this lock (P1: a hung invoke holds it), so a
+            # tick entering the lock after the signal sees it and skips; only a tick already past
+            # this check can still fire one benign, late Skip (Codex #743 — TOCTOU narrowed to
+            # that in-flight residual to keep stop() bounded). skipped==True → bail, no invoke.
             skipped = False
             with self._invoke_lock:
                 if self._stop_event.is_set():
