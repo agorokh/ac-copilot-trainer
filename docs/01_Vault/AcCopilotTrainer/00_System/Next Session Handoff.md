@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-08-09T14:35:00Z
+last_updated: 2026-08-10T05:05:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-738-cm-csp-dialog-skip-2026-08-09.md
   - AcCopilotTrainer/03_Investigations/issue-737-setup-race-retry-2026-08-09.md
   - AcCopilotTrainer/03_Investigations/issue-529-g1-cold-p4-scientist-2026-08-08.md
   - AcCopilotTrainer/03_Investigations/issue-627-retention-duplicate-planner-2026-07-30.md
@@ -132,6 +133,38 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-08-10) — #738 CLOSED: CM "Custom Shaders Patch data" dialog auto-skipped in the launcher (PR #743 MERGED `6173766`)
+
+`/autonomous-deliver 738`, on-rig (AG_PC). Full write-up:
+[issue-738-cm-csp-dialog-skip-2026-08-09.md](../03_Investigations/issue-738-cm-csp-dialog-skip-2026-08-09.md).
+
+- **What shipped:** `tools/ac_harness/cm_dialog_watcher.py` — a **stdlib-only raw-ctypes UI
+  Automation** watcher that finds CM's blocking pre-drive dialog by a **Skip button + content
+  signature** (the window title is the generic "Waiting…"; identity is the dialog text "Loading
+  data for Custom Shaders Patch…") and invokes Skip, so a hanging online patch-data fetch no
+  longer relaunch-loops the harness (~2× launches/drive → 1). Armed across **all three** launch
+  paths — `auto_drive.rig_launch`, `resilient_launch` (Game Point), and `EntryLauncher`
+  (daemon `/session/start` + CLI) — default-on, `AC_COPILOT_CM_DIALOG_SKIP=0` env kill-switch,
+  `dialog_skips` forensic on every path incl. the daemon API. `.scratch/skip_watcher.ps1` is now
+  dead (mechanism lives in the launcher).
+- **Live-proven on the merged path (AG_PC, 2026-08-09→10):** the failing fetch reproduced; the
+  real dialog was captured via `--dump-tree` (`matches_signature: true`), a *second* Skip-bearing
+  "Waiting…" dialog ("Waiting for the end of race…") correctly `matches_signature: false`, and
+  `auto_drive --car bmw_m3_gt2 --track magione --driver ggv --wait-lap` → **PASS, attempts=1,
+  csp_dialog_skips=1, 1 lap 105.9 s, HUD RENDERING**. Evidence bundles
+  `.scratch/harness-evidence/pr743-dialog-skip-{launch-proof,reverify}/`.
+- **Review:** an exceptionally deep loop (Codex gate + self-hosted daemon advisory, ~10 rounds)
+  surfaced and fixed real depth — 64-bit HANDLE ctypes truncation, a stop/invoke TOCTOU, the P1
+  where the TOCTOU lock made `stop()` unbounded on a hung invoke, scan-failure confirm/cooldown
+  semantics, best-effort thread-start + start-failure=unarmed, forensics ordering + API
+  serialization. Both reviewers converged clean (Codex "chef's kiss"; daemon "no findings at or
+  above medium ✅"). 40+ CI-safe tests; `make ci-fast` green throughout.
+
+**Resume here (next autonomous lever):** unchanged from #737 — the rig no longer burns ~2× launch
+cycles on this dialog, so the **larger scientist batch (batch-size 3) on a plateaued combo** (the
+#529 plan) is the clean next run. Then G1-pace architectural work (cross-session plant
+compounding); G3 stays operator-gated.
 
 ## Delivered (2026-08-09) — #737 CLOSED: scientist batches survive the setup re-bake race (PR #740 MERGED `0e2b6ac`)
 
