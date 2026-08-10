@@ -362,6 +362,16 @@ def flying_lap_consistency(
                 "malformed": True,
                 "reason": "a lap archive has no integer lap_n (cannot identify the out-lap)",
             }
+        # Completed in-game laps start at 1. A non-positive lap_n violates the archive contract
+        # and would sort FIRST, so a corrupt `-1` record would be silently dropped as the
+        # "out-lap" while the real flyers were compared — hiding the corruption rather than
+        # reporting it (#746 Codex P2, round 6).
+        if lap_n < 1:
+            return {
+                "judged": False,
+                "malformed": True,
+                "reason": f"lap_n={lap_n} is not a completed lap number (must be >= 1)",
+            }
         # Finiteness is load-bearing, not defensive: Python's json decoder accepts a bare `NaN`,
         # and every comparison with NaN is False — so `lap_ms <= 0` does NOT reject it. A NaN lap
         # time then produces a NaN spread, `spread > threshold` is False, and the corrupt batch
@@ -397,6 +407,25 @@ def flying_lap_consistency(
             "judged": False,
             "malformed": True,
             "reason": "duplicate lap_n in the batch (archives from more than one session)",
+        }
+    # `session_uuid` is the DIRECT attribution fact; unique lap numbers are only a proxy for it.
+    # A missing current archive replaced by a uniquely-numbered lap from a neighbouring stint
+    # yields the expected count AND unique lap_n, so the duplicate check above passes while the
+    # batch still spans two sessions (#746 Codex P2, round 6). Every in-game archive carries one
+    # (`src/ac_copilot_trainer/modules/lap_archive.lua`). Two distinct non-empty UUIDs PROVE
+    # contamination; absence proves nothing, so it is not treated as corruption here.
+    sessions = {
+        payload.get("session_uuid")
+        for payload in archive_payloads
+        if isinstance(payload.get("session_uuid"), str) and payload.get("session_uuid")
+    }
+    if len(sessions) > 1:
+        return {
+            "judged": False,
+            "malformed": True,
+            "reason": (
+                f"batch spans {len(sessions)} session_uuids (archives from more than one session)"
+            ),
         }
     # Only now, on a batch proven well-formed and single-session, is a count mismatch merely an
     # attribution problem rather than possible contamination.
@@ -835,7 +864,7 @@ def run_selfplay(
     # The base batch faces the same attribution test as every iteration: oracle-VALID is not
     # enough to make it refit evidence if the archive set could not be tied to this stage's own
     # timed laps (#746 Codex P1).
-    base_attributable = base_consistency.get("attributable") is not False
+    base_attributable = base_consistency.get("attributable") is not False and not base_load_errors
     prev_archives = stage_lap_archives(base_outcome) if (base_valid and base_attributable) else []
     if not base_valid:
         print(
@@ -843,7 +872,9 @@ def run_selfplay(
             "the ladder starts without a refit batch"
         )
     elif not base_attributable:
-        withheld = base_consistency.get("reason")
+        withheld = base_consistency.get("reason") or (
+            f"{len(base_load_errors)} archive(s) could not be read — batch unverifiable"
+        )
         selfplay["base"]["refit_evidence_withheld"] = withheld
         print(
             f"auto-alien: base drive archives withheld from refit — {withheld}; "
@@ -1501,9 +1532,22 @@ def run_selfplay(
         # otherwise fit from an archive we explicitly said might belong to another stint, and the
         # merge is strictly monotone (raise-only), so a different tyre state raises the plant
         # PERMANENTLY. Scoping archives to the batch at source is the real fix (#751).
+        #
+        # Unreadable archives are the same problem wearing a different hat (#746 Qodo, round 6):
+        # `flying_lap_consistency` sees only the payloads that LOADED, so if an expected archive
+        # is unreadable and a stray readable one fills the count, the batch looks attributable
+        # while being unverifiable. `load_errors` is the only evidence that happened.
+        withheld = None
         if consistency.get("attributable") is False:
             withheld = consistency.get("reason")
+        elif load_errors:
+            withheld = f"{len(load_errors)} archive(s) could not be read — batch unverifiable"
+        if withheld:
             entry["refit_evidence_withheld"] = withheld
+            # Bar it from the scientist too, not just the next refit: `_scientist_baseline_outcome`
+            # selects the newest oracle-valid entry, so without this it would compare and persist
+            # setup verdicts from archives we just declared unattributable (#746 Codex P1, round 6).
+            entry["usable_as_evidence"] = False
             print(f"auto-alien: iteration {index} archives withheld from refit — {withheld}")
             prev_archives = []
         else:

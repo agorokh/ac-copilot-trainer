@@ -554,6 +554,45 @@ def test_non_finite_lap_time_cannot_pass_as_a_positive_lap_ms():
         assert "nan" not in reason.lower()
 
 
+def test_batch_spanning_two_session_uuids_falsifies():
+    """`session_uuid` is the direct attribution fact; unique lap_n is only a proxy (#746 round 6).
+
+    A missing current archive replaced by a uniquely-numbered lap from a neighbouring stint gives
+    the expected COUNT and unique lap numbers, so the duplicate check passes while the batch still
+    spans two sessions. Two distinct non-empty UUIDs prove contamination; absence proves nothing.
+    """
+    batch = _batch(106655, 81505, 81519)
+    for payload in batch:
+        payload["session_uuid"] = "aaaa1111"
+    batch[2]["session_uuid"] = "bbbb2222"
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([106655, 81505, 81519]), batch)
+    assert not valid
+    assert "spans 2 session_uuids" in reason
+
+    # One shared UUID is fine, and so is the legacy case where none carry one.
+    same = _batch(106655, 81505, 81519)
+    for payload in same:
+        payload["session_uuid"] = "aaaa1111"
+    valid, _ = evaluate_selfplay_iteration(0, _stage_outcome([106655, 81505, 81519]), same)
+    assert valid
+    valid, _ = evaluate_selfplay_iteration(
+        0, _stage_outcome([106655, 81505, 81519]), _batch(106655, 81505, 81519)
+    )
+    assert valid
+
+
+def test_non_positive_lap_numbers_are_malformed_not_silently_dropped():
+    """A `lap_n <= 0` record sorts first and would be discarded as the out-lap (#746 round 6)."""
+    for bad_n in (0, -1):
+        batch = _batch(106655, 81505, 81519)
+        batch[0]["lap"]["lap_n"] = bad_n
+        valid, reason = evaluate_selfplay_iteration(
+            0, _stage_outcome([106655, 81505, 81519]), batch
+        )
+        assert not valid, f"lap_n={bad_n} must falsify rather than be dropped as the out-lap"
+        assert "not a completed lap number" in reason
+
+
 def test_oracle_uses_the_consistency_measurement_it_is_given():
     """The ladder measures once and passes it in, so report and verdict cannot diverge (#746)."""
     batch = _batch(106655, 81505, 81519)
