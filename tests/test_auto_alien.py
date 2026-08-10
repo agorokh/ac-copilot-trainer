@@ -605,6 +605,29 @@ def test_gapped_lap_numbers_falsify_even_when_the_times_line_up():
     assert valid
 
 
+def test_a_permuted_lap_time_stream_is_not_attributable():
+    """Times must match IN LAP ORDER, not as a multiset (#746 Codex P2, round 11).
+
+    The report's `lap_times_ms` is the tap's ordered stream. Sorting both sides accepts archives
+    whose lap_n-to-time correspondence is scrambled — and since the out-lap is chosen by `lap_n`,
+    a permutation can move the slow lap out of position 1 and change which lap is discarded.
+    """
+    # Reported out-lap 106655 first; archives carry the same three times in a different order.
+    permuted = [
+        _archive_payload(1, lap_ms=81505),
+        _archive_payload(2, lap_ms=106655),
+        _archive_payload(3, lap_ms=81519),
+    ]
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([106655, 81505, 81519]), permuted)
+    assert not valid, "a permuted lap stream must not be judged as the batch"
+    assert "do not match" in reason
+    # In-order archives for the same reported stream stay VALID.
+    valid, _ = evaluate_selfplay_iteration(
+        0, _stage_outcome([106655, 81505, 81519]), _batch(106655, 81505, 81519)
+    )
+    assert valid
+
+
 def test_a_shifted_lap_window_cannot_invert_the_out_lap():
     """A window starting past lap 1 flips which lap is treated as the out-lap (#746 round 10).
 

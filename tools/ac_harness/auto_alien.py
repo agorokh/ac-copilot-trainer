@@ -474,9 +474,15 @@ def flying_lap_consistency(
     # The archive set must REPRODUCE the times the stage reported, not merely have the same
     # cardinality (#746 Codex, round 8). This subsumes the count check and closes the
     # missing-archive-replaced-by-a-post-window-lap case that count + session + lap_n all pass.
+    #
+    # Matched IN LAP ORDER, not as a multiset (#746 Codex P2, round 11): the report's
+    # `lap_times_ms` is the tap's ordered stream, so sorting both sides accepts a PERMUTATION —
+    # archives whose lap_n↔time correspondence is scrambled relative to the drive. That matters
+    # because the out-lap is chosen by lap_n: a permutation can move the slow lap out of position
+    # 1 and change which lap is discarded, the same inversion round 10 closed for shifts.
     if expected_lap_times_ms is not None:
-        observed = sorted(int(round(lap_ms)) for _, lap_ms in laps)
-        reported = sorted(int(round(value)) for value in expected_lap_times_ms)
+        observed = [int(round(lap_ms)) for _, lap_ms in sorted(laps)]
+        reported = [int(round(value)) for value in expected_lap_times_ms]
         if observed != reported:
             return {
                 "judged": False,
@@ -1730,6 +1736,9 @@ def run_scientist(
             or len(baseline_lap_times) < args.laps
             or len(baseline_payloads) < args.laps
             or baseline_attribution.get("attributable") is False
+            # Corrupt / mixed-session candidate evidence must abort too, not only
+            # unattributable evidence (#746 Codex P2, round 11).
+            or baseline_attribution.get("malformed") is True
         ):
             raise ScientistError(
                 "scientist_baseline_batch_unverifiable:"
@@ -1845,6 +1854,7 @@ def run_scientist(
                 or candidate_load_errors
                 or candidate_foreign
                 or candidate_attribution.get("attributable") is False
+                or candidate_attribution.get("malformed") is True
             ):
                 raise ScientistError(
                     "scientist_candidate_batch_incomplete:"
