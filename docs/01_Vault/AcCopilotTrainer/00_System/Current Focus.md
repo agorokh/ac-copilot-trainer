@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-08-09T14:35:00Z
+last_updated: 2026-08-10T05:05:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-738-cm-csp-dialog-skip-2026-08-09.md
   - AcCopilotTrainer/03_Investigations/issue-737-setup-race-retry-2026-08-09.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
   - AcCopilotTrainer/03_Investigations/issue-719-treatment-receipt-2026-07-28.md
@@ -61,6 +62,16 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-08-10):** `/autonomous-deliver 738` — **#738 CLOSED** by PR
+[#743](https://github.com/agorokh/ac-copilot-trainer/pull/743) (MERGED `6173766`): CM's blocking
+pre-drive "Custom Shaders Patch data" dialog is auto-skipped in-launcher (stdlib raw-ctypes UIA,
+Skip-button + content-signature identity), so a hanging patch-data fetch no longer relaunch-loops
+the harness (~2× launches/drive → 1). Armed across all three launch paths (auto_drive /
+resilient_launch / EntryLauncher-daemon), env kill-switch `AC_COPILOT_CM_DIALOG_SKIP=0`,
+`dialog_skips` forensic everywhere. Live-proven on the merged path (real dialog skipped, PASS
+attempts=1). Removes the `.scratch/skip_watcher.ps1` workaround. Node:
+[[issue-738-cm-csp-dialog-skip-2026-08-09]]. **Next lever unchanged:** batch-size-3 scientist run.
 
 **Delivered (2026-08-09):** `/autonomous-deliver 737` — **#737 CLOSED** by PR
 [#740](https://github.com/agorokh/ac-copilot-trainer/pull/740) (MERGED `0e2b6ac`): the #466 setup
