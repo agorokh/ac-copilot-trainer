@@ -443,17 +443,11 @@ def test_flying_lap_spread_is_unjudged_rather_than_falsified_when_it_cannot_be_m
     )
     assert valid and "consistency unjudged" in reason and "need 2 to compare" in reason
 
-    # A payload with no lap_n cannot identify the out-lap.
-    no_lap_n = _batch(95000, 93000, 92000)
-    del no_lap_n[1]["lap"]["lap_n"]
-    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000, 92000]), no_lap_n)
-    assert valid and "no integer lap_n" in reason
+    # A payload with no lap_n is CORRUPT, not merely unjudgeable, and fails closed — see
+    # test_malformed_lap_evidence_falsifies_but_unjudgeable_evidence_does_not (#746).
 
-    # A duplicate lap_n means "the lowest is the out-lap" no longer holds.
-    dupes = _batch(95000, 93000, 92000)
-    dupes[2]["lap"]["lap_n"] = 2
-    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000, 92000]), dupes)
-    assert valid and "duplicate lap_n" in reason
+    # A duplicate lap_n is session CONTAMINATION and fails closed — see
+    # test_mixed_session_batch_falsifies_because_the_refit_would_consume_it (#746).
 
 
 def test_flying_lap_spread_ignores_archives_it_cannot_attribute_to_the_batch():
@@ -473,6 +467,64 @@ def test_flying_lap_spread_ignores_archives_it_cannot_attribute_to_the_batch():
         0, _stage_outcome([106655, 81505, 81519]), _batch(106655, 81505, 81519)
     )
     assert valid and "spread 0.02%" in reason
+
+
+def test_malformed_lap_evidence_falsifies_but_unjudgeable_evidence_does_not():
+    """Corrupt evidence fails CLOSED; merely-unjudgeable evidence does not (#746 self-hosted).
+
+    An archive that passed `is_valid` yet has no usable `lap_n`/`lap_ms` contradicts its own
+    schema — the refit consumes that same batch, so it must falsify. A two-lap ladder or an
+    over-wide archive scan is a known harness situation, not corrupt data, and falsifying it
+    would revert the plant and stop the ladder for no physical reason.
+    """
+    broken_n = _batch(95000, 93000, 92000)
+    del broken_n[1]["lap"]["lap_n"]
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000, 92000]), broken_n)
+    assert not valid and "unusable lap evidence" in reason and "no integer lap_n" in reason
+
+    broken_ms = _batch(95000, 93000, 92000)
+    broken_ms[2]["lap"]["lap_ms"] = 0
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000, 92000]), broken_ms)
+    assert not valid and "unusable lap evidence" in reason and "no positive lap_ms" in reason
+
+    # Well-formed but unjudgeable stays VALID — these must not become falsifications.
+    valid, _ = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000]), _batch(95000, 93000))
+    assert valid, "an ordinary --laps 2 ladder must not be falsified for lacking a second flyer"
+    over_scan = _batch(106655, 81505, 81519, 95122)
+    valid, _ = evaluate_selfplay_iteration(0, _stage_outcome([106655, 81505, 81519]), over_scan)
+    assert valid, "an over-wide archive scan is a harness artifact, not corrupt data"
+
+
+def test_mixed_session_batch_falsifies_because_the_refit_would_consume_it():
+    """A duplicate lap_n means two sessions in one batch — fail closed (#746 Codex P2).
+
+    When `auto_drive` retries after a sim death that already produced an archive,
+    `run_started_epoch` spans both attempts while the Lua session resets `lap_n`. The batch then
+    mixes sessions with different tyre states, and it also feeds `persist_selfplay_refinement`,
+    whose merge is strictly monotone — so a hotter session's grip would be adopted permanently.
+    Scoping archives to the batch at source is the real fix (#751); this is the safety net.
+    """
+    dupes = _batch(95000, 93000, 92000)
+    dupes[2]["lap"]["lap_n"] = 2
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000, 92000]), dupes)
+    assert not valid
+    assert "unusable lap evidence" in reason and "more than one session" in reason
+
+
+def test_oracle_uses_the_consistency_measurement_it_is_given():
+    """The ladder measures once and passes it in, so report and verdict cannot diverge (#746)."""
+    batch = _batch(106655, 81505, 81519)
+    measured = flying_lap_consistency(batch, expected_laps=3)
+    valid, reason = evaluate_selfplay_iteration(
+        0, _stage_outcome([106655, 81505, 81519]), batch, consistency=measured
+    )
+    assert valid and "spread 0.02%" in reason
+    # A supplied measurement is authoritative: pass a falsifying one over the same laps.
+    injected = flying_lap_consistency(_batch(106655, 80791, 95122), expected_laps=3)
+    valid, reason = evaluate_selfplay_iteration(
+        0, _stage_outcome([106655, 81505, 81519]), batch, consistency=injected
+    )
+    assert not valid and "not repeatable" in reason
 
 
 def test_flying_lap_spread_threshold_admits_every_healthy_historical_batch():

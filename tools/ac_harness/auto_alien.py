@@ -332,16 +332,22 @@ def flying_lap_consistency(
     count does not match the timed-lap count the batch is not attributable and goes UNJUDGED
     rather than being judged on evidence that may not be its own (#746 Qodo).
 
-    Returns ``{"judged": False, "reason": ...}`` whenever consistency cannot be established —
-    an unattributable batch, fewer than two flying laps, or an archive without the
-    ``lap_n``/``lap_ms`` needed to identify the out-lap and measure the spread. Unjudgeable is
-    NOT a falsification: the batch still faces every other gate, and inventing a verdict from
-    data we do not have would be the opposite of the fail-closed discipline everywhere else in
-    this oracle.
+    Returns ``{"judged": False, "malformed": bool, "reason": ...}`` whenever consistency cannot
+    be established, and the two cases are NOT the same (#746 self-hosted review):
+
+    * ``malformed=True`` — an archive contradicts its own schema: it carried ``is_valid: True``
+      (so it already passed the validity gate) yet has no integer ``lap_n`` or no positive
+      ``lap_ms``. That is corrupt evidence, and the caller FALSIFIES, matching how a payload
+      with no validity verdict is treated.
+    * ``malformed=False`` — the batch is well-formed but not judgeable *here*: too few flying
+      laps (an ordinary ``--laps 2`` run), a count mismatch, or a duplicate ``lap_n``. These are
+      known harness situations, not corrupt data. Falsifying them would revert the plant and
+      stop the ladder for no physical reason — and would break every two-lap ladder outright.
     """
     if expected_laps is not None and len(archive_payloads) != expected_laps:
         return {
             "judged": False,
+            "malformed": False,
             "reason": (
                 f"{len(archive_payloads)} archive(s) for {expected_laps} timed lap(s) "
                 "— batch not attributable"
@@ -355,25 +361,34 @@ def flying_lap_consistency(
         if not isinstance(lap_n, int) or isinstance(lap_n, bool):
             return {
                 "judged": False,
+                "malformed": True,
                 "reason": "a lap archive has no integer lap_n (cannot identify the out-lap)",
             }
         if not isinstance(lap_ms, (int, float)) or isinstance(lap_ms, bool) or lap_ms <= 0:
             return {
                 "judged": False,
+                "malformed": True,
                 "reason": f"lap_n={lap_n} has no positive lap_ms (cannot measure spread)",
             }
         laps.append((lap_n, float(lap_ms)))
-    # Duplicate lap_n means the batch is not a clean per-lap set, so "the lowest is the out-lap"
-    # no longer holds and dropping one entry would leave a duplicate flyer skewing the spread.
+    # Duplicate lap_n is CONTAMINATION, not just an attribution nuisance (#746 Codex P2): when
+    # `auto_drive` retries after a sim death that already produced an archive, `run_started_epoch`
+    # spans both attempts while the Lua session resets `lap_n`, so the set mixes two sessions with
+    # DIFFERENT TYRE STATES. That batch also feeds `persist_selfplay_refinement`, whose merge is
+    # strictly monotone (raise-only) — so a hotter session's grip would be adopted permanently.
+    # Treating it as merely "unjudged" let exactly that through, so it fails closed.
+    # Scoping the archive set to the batch at the source is the real fix (#751).
     if len({lap_n for lap_n, _ in laps}) != len(laps):
         return {
             "judged": False,
-            "reason": "duplicate lap_n in the batch (cannot identify the out-lap)",
+            "malformed": True,
+            "reason": "duplicate lap_n in the batch (archives from more than one session)",
         }
     if len(laps) < 3:
         flying_count = max(0, len(laps) - 1)
         return {
             "judged": False,
+            "malformed": False,
             "reason": f"only {flying_count} flying lap(s) after the out-lap (need 2 to compare)",
         }
     laps.sort()
@@ -395,6 +410,7 @@ def evaluate_selfplay_iteration(
     archive_payloads: list[dict],
     *,
     max_flying_lap_spread: float = SELFPLAY_MAX_FLYING_LAP_SPREAD,
+    consistency: dict | None = None,
 ) -> tuple[bool, str]:
     """The keep-last-valid falsification oracle for one envelope step (pure; #577/#244).
 
@@ -456,7 +472,17 @@ def evaluate_selfplay_iteration(
         )
     # Repeatability last: a batch that fails any gate above is already falsified for a more
     # specific reason, and naming the spread instead would hide it (#746).
-    consistency = flying_lap_consistency(archive_payloads, expected_laps=len(lap_times))
+    #
+    # The caller may pass the measurement it already made, so the verdict and the value recorded
+    # in the ladder report cannot drift apart from two independent computations (#746
+    # self-hosted review).
+    if consistency is None:
+        consistency = flying_lap_consistency(archive_payloads, expected_laps=len(lap_times))
+    # Corrupt evidence fails CLOSED, exactly like a payload with no validity verdict: an archive
+    # that passed `is_valid` yet has no usable lap_n/lap_ms contradicts its own schema, and the
+    # refit would consume that same batch.
+    if consistency.get("malformed"):
+        return False, f"unusable lap evidence for repeatability: {consistency['reason']}"
     if consistency["judged"] and consistency["spread"] > max_flying_lap_spread:
         flying = ", ".join(f"{ms / 1000.0:.3f}s" for ms in consistency["flying_ms"])
         return False, (
@@ -756,14 +782,15 @@ def run_selfplay(
     base_payloads, base_foreign = combo_filter_payloads(
         base_payloads, car_id=args.car, track_id=args.track, layout=args.track_layout
     )
-    base_valid, base_reason = evaluate_selfplay_iteration(0, base_outcome, base_payloads)
+    base_consistency = flying_lap_consistency(base_payloads, expected_laps=len(base_laps))
+    base_valid, base_reason = evaluate_selfplay_iteration(
+        0, base_outcome, base_payloads, consistency=base_consistency
+    )
     selfplay["base"] = {
         "valid": base_valid,
         "reason": base_reason,
         "lap_times_ms": base_laps,
-        "flying_lap_consistency": flying_lap_consistency(
-            base_payloads, expected_laps=len(base_laps)
-        ),
+        "flying_lap_consistency": base_consistency,
     }
     base_l3 = stage_l3_summary(base_outcome)
     if base_l3 is not None:
@@ -1124,14 +1151,17 @@ def run_selfplay(
         lap_times = stage_lap_times_ms(outcome)
         entry["lap_times_ms"] = lap_times
         selfplay["lap_trajectory_ms"].append(lap_times)
-        valid, reason = evaluate_selfplay_iteration(code, outcome, archive_payloads)
+        # Measure once and hand the SAME dict to the oracle, so the recorded value and the
+        # verdict can never disagree (#746 self-hosted review). Recorded whether or not it
+        # falsified, so a ladder can be audited after the fact for envelopes that were merely
+        # survivable rather than repeatable.
+        consistency = flying_lap_consistency(archive_payloads, expected_laps=len(lap_times))
+        entry["flying_lap_consistency"] = consistency
+        valid, reason = evaluate_selfplay_iteration(
+            code, outcome, archive_payloads, consistency=consistency
+        )
         entry["valid"] = valid
         entry["reason"] = reason
-        # Record the measured spread whether or not it falsified, so a ladder can be audited
-        # after the fact for envelopes that were merely survivable rather than repeatable (#746).
-        entry["flying_lap_consistency"] = flying_lap_consistency(
-            archive_payloads, expected_laps=len(lap_times)
-        )
         # The pre-drive check above narrows the window but cannot close it: `auto_drive` loads the
         # plant after taking the rig lock, which we do not hold. So confirm afterwards that the
         # step really did run the plant we expected, and refuse to attribute the verdict when it
