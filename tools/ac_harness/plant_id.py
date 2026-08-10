@@ -1576,22 +1576,38 @@ def refine_ggv_from_lap_archives(
     return block
 
 
+# The one `observe_lap_tyre_state` reason that merges several distinct predicates.
+_COLLAPSED_THERMAL_REASON = "outside thermal stability/validity gate"
+
+
 def _failed_eligibility_terms(lap: dict, state: dict) -> list[str]:
     """Which individual eligibility predicates this lap failed (#749).
 
-    Mirrors the conjunction in :func:`observe_lap_tyre_state`, which reports a single collapsed
-    `reason` for five distinct terms. Naming them separately is the whole point of the report:
-    "coverage 0.6 < 0.80" and "stability 0.5 < 0.80" demand different fixes.
+    :func:`observe_lap_tyre_state` reports its own specific reason for most branches and one
+    COLLAPSED string for five of them. So the observer's reason is authoritative wherever it is
+    specific, and the measurements are re-derived only for the collapsed case — re-deriving
+    unconditionally would invent misleading terms, because an early observer failure (missing
+    trace, missing `optimalTempC`, missing tyre channels) returns zeroed measurements that trip
+    coverage, stability, tag and spread all at once for what is really one cause (#749 Codex P2).
     """
 
     def _below(value: object, floor: float) -> bool:
         return isinstance(value, (int, float)) and not isinstance(value, bool) and value < floor
 
+    if state.get("fit_eligible") is True:
+        return []
+    reason = str(state.get("reason") or "")
+    if reason == "missing tyre compound identity":
+        return ["missing_compound_identity"]
+    if reason == "missing setup identity":
+        return ["missing_setup_identity"]
+    if reason != _COLLAPSED_THERMAL_REASON:
+        # An early observer failure. Its own reason IS the specific one; keep it verbatim.
+        return [f"observer:{reason}"]
+
     terms: list[str] = []
     if lap.get("is_valid") is not True:
         terms.append("lap_not_ac_valid")
-    if state.get("setup_hash") is None:
-        terms.append("missing_setup_identity")
     if state.get("tag") == "unknown":
         terms.append("unknown_thermal_tag")
     if _below(state.get("sample_coverage_fraction"), DEFAULT_THERMAL_COVERAGE_FRACTION):
@@ -1603,10 +1619,10 @@ def _failed_eligibility_terms(lap: dict, state: dict) -> list[str]:
         terms.append("wheel_spread_unmeasurable")
     elif isinstance(spread, (int, float)) and spread > DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C:
         terms.append("wheel_spread_above_max")
-    if not terms and state.get("fit_eligible") is not True:
-        # The conjunction rejected it for something not re-derived above (e.g. missing tyre
-        # compound identity). Never report "no failing terms" for an ineligible lap — say so.
-        terms.append(f"other:{state.get('reason')}")
+    if not terms:
+        # Rejected by the conjunction for something not re-derived above. Never report "no
+        # failing terms" for an ineligible lap — say that it could not be classified.
+        terms.append(f"other:{reason}")
     return terms
 
 
@@ -1659,8 +1675,14 @@ def _thermal_eligibility_report(archives: list[dict]) -> dict:
         report["laps"].append(entry)
         failing.update(terms)
     if failing:
-        # The headline: one line an operator can read without opening the archives.
-        report["dominant_term"], report["dominant_count"] = failing.most_common(1)[0]
+        # The headline: one line an operator can read without opening the archives. Report ALL
+        # tied causes rather than letting Counter's insertion order pick a winner — one
+        # low-coverage lap and one unstable lap is a different situation from two unstable laps,
+        # and naming only one of them sends the next session down the wrong path (#749 Codex P2).
+        report["dominant_count"] = failing.most_common(1)[0][1]
+        report["dominant_terms"] = sorted(
+            term for term, count in failing.items() if count == report["dominant_count"]
+        )
         report["failing_term_counts"] = dict(failing)
     report["eligible_count"] = sum(
         1 for entry in report["laps"] if entry.get("fit_eligible") is True

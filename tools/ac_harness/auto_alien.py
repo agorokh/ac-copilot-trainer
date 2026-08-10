@@ -1173,13 +1173,13 @@ def run_selfplay(
                         if (
                             isinstance(eligibility, dict)
                             and eligibility.get("eligible_count") == 0
-                            and eligibility.get("dominant_term")
+                            and eligibility.get("dominant_terms")
                         ):
                             lap_count = len(eligibility.get("laps") or [])
+                            terms = ", ".join(eligibility["dominant_terms"])
                             print(
                                 f"auto-alien: iteration {index} thermal cohort empty — "
-                                f"{eligibility['dominant_count']}/{lap_count} lap(s): "
-                                f"{eligibility['dominant_term']}"
+                                f"{eligibility['dominant_count']}/{lap_count} lap(s): {terms}"
                             )
         except (OSError, RigSessionBusy) as exc:
             # Fail loud IN the report: keep-last-valid integrity can no longer be guaranteed

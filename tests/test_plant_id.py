@@ -1251,7 +1251,7 @@ def test_selfplay_refine_reports_which_thermal_term_emptied_the_cohort():
     # The INDIVIDUAL predicate must be named. `observe_lap_tyre_state`'s own reason collapses
     # coverage / stability / wheel-spread / validity / unknown-tag into one string, so counting
     # that would report a low-coverage batch identically to this stability stall (#749 Codex P2).
-    assert report["dominant_term"] == "stability_below_min"
+    assert report["dominant_terms"] == ["stability_below_min"]
     assert report["failing_term_counts"] == {"stability_below_min": 2}
     # The thresholds are reported alongside the measurements, so the gap is readable in place.
     assert report["thresholds"]["min_stability_fraction"] == 0.80
@@ -1292,9 +1292,56 @@ def test_thermal_eligibility_distinguishes_coverage_from_stability_failures():
     assert report["eligible_count"] == 0
     # Named as coverage, NOT as the stability stall — the two are now separable.
     assert "coverage_below_min" in report["failing_term_counts"]
-    assert report["dominant_term"] != "stability_below_min"
+    assert "stability_below_min" not in report["dominant_terms"]
     for lap in report["laps"]:
         assert "coverage_below_min" in lap["failing_terms"]
+
+
+def test_thermal_eligibility_keeps_early_observer_reasons_and_reports_ties():
+    """Two ways the diagnostic could mislead, both closed (#749 Codex P2, round 3).
+
+    1. An early observer failure (missing trace) returns ZEROED measurements, so re-deriving
+       predicates from them would invent coverage + stability + tag + spread failures for what is
+       really one cause. The observer's own reason is authoritative there.
+    2. A tie between two causes must report BOTH — one low-coverage lap and one unstable lap is a
+       different situation from two unstable laps, and naming one sends the reader the wrong way.
+    """
+    from tools.ac_harness.plant_id import selfplay_refine_result
+
+    # 1. Missing trace on both laps.
+    blind = [
+        _selfplay_thermal_archive("no-trace-1", lateral_g=1.35, lap_n=1),
+        _selfplay_thermal_archive("no-trace-2", lateral_g=1.35, lap_n=2),
+    ]
+    for archive in blind:
+        archive["trace"] = {}
+    _, block = selfplay_refine_result(_selfplay_artifact(), blind, generic_gt3_ggv())
+    report = block["thermal_eligibility"]
+    for lap in report["laps"]:
+        assert lap["failing_terms"] == ["observer:missing trace"]
+        assert "coverage_below_min" not in lap["failing_terms"]
+        assert "stability_below_min" not in lap["failing_terms"]
+
+    # 2. One low-coverage lap and one unstable lap -> a genuine 1-1 tie.
+    mixed = [
+        _selfplay_thermal_archive("tie-coverage", lateral_g=1.35, lap_n=1),
+        _selfplay_thermal_archive("tie-stability", lateral_g=1.35, lap_n=2),
+    ]
+    cov_index = {name: i for i, name in enumerate(mixed[0]["trace"]["fields"])}
+    for sample in mixed[0]["trace"]["samples"][:400]:
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[cov_index[f"tyreCoreTemp_{wheel}"]] = 0.0
+    stab_index = {name: i for i, name in enumerate(mixed[1]["trace"]["fields"])}
+    for n, sample in enumerate(mixed[1]["trace"]["samples"]):
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[stab_index[f"tyreCoreTemp_{wheel}"]] = 90.0 + (12.0 if n % 2 else -12.0)
+
+    _, block = selfplay_refine_result(_selfplay_artifact(), mixed, generic_gt3_ggv())
+    report = block["thermal_eligibility"]
+    assert report["eligible_count"] == 0
+    assert report["dominant_count"] == 1
+    assert "coverage_below_min" in report["dominant_terms"]
+    assert "stability_below_min" in report["dominant_terms"]
 
 
 def test_selfplay_refine_merges_monotonically_and_strips_stale_meta(tmp_path):
