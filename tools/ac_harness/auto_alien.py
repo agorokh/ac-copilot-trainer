@@ -1161,6 +1161,17 @@ def run_selfplay(
                             f"auto-alien: iteration {index} refine FAILED — keeping the "
                             f"last-valid plant ({block.get('reason')})"
                         )
+                        # Name the term that actually rejected the cohort, on the console, so a
+                        # ladder that has silently stopped compounding is visible without
+                        # re-analysing archives by hand (#749).
+                        eligibility = block.get("thermal_eligibility")
+                        if isinstance(eligibility, dict) and eligibility.get("dominant_reason"):
+                            lap_count = len(eligibility.get("laps") or [])
+                            print(
+                                f"auto-alien: iteration {index} thermal cohort empty — "
+                                f"{eligibility['dominant_count']}/{lap_count} lap(s): "
+                                f"{eligibility['dominant_reason']}"
+                            )
         except (OSError, RigSessionBusy) as exc:
             # Fail loud IN the report: keep-last-valid integrity can no longer be guaranteed
             # once artifact I/O errors, so the ladder stops with the named reason.

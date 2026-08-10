@@ -42,18 +42,23 @@ import math
 import os
 import re
 import uuid
+from collections import Counter
 from dataclasses import asdict, dataclass
 from dataclasses import replace as dc_replace
 from pathlib import Path
 
 from tools.ac_harness.ai_line import _horizontal
 from tools.ac_harness.ggv_profile import (
+    DEFAULT_THERMAL_COVERAGE_FRACTION,
+    DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C,
+    DEFAULT_THERMAL_STABILITY_FRACTION,
     GGVModel,
     blend_ggv_safe,
     fit_steer_feedforward,
     ggv_from_lap_archives,
     ggv_from_telemetry,
     merge_selfplay_model,
+    observe_lap_tyre_state,
     seg_lengths,
     signed_curvature_profile,
 )
@@ -1552,6 +1557,15 @@ def refine_ggv_from_lap_archives(
     except (ValueError, ZeroDivisionError, KeyError, TypeError) as exc:
         logger.exception("thermal uncertainty fit failed; ggv block degrades to the generic plant")
         block["reason"] = f"thermal uncertainty fit error: {type(exc).__name__}: {exc}"
+        # Say WHICH eligibility term rejected WHICH lap, and with what value (#749).
+        #
+        # The bare exception text ("no thermally consistent valid lap archives") names the symptom
+        # and nothing else, so diagnosing a refused refit meant re-running `observe_lap_tyre_state`
+        # over the archives by hand — which is how the 2026-08-10 huracan@spa stall was eventually
+        # traced to `stability` 0.41-0.62 against the 0.80 floor, with every other term passing.
+        # A ladder that silently stops compounding is the expensive failure here: the operator
+        # cannot see it from the report at all.
+        block["thermal_eligibility"] = _thermal_eligibility_report(matching)
         result["ggv"] = block
         return block
     block.update(summary)
@@ -1560,6 +1574,57 @@ def refine_ggv_from_lap_archives(
     block["reason"] = "ok"
     result["ggv"] = block
     return block
+
+
+def _thermal_eligibility_report(archives: list[dict]) -> dict:
+    """Per-lap thermal-eligibility diagnostics for a refit that found no usable cohort (#749).
+
+    `ggv_from_lap_archives` raises a single sentence naming the symptom — "no thermally consistent
+    valid lap archives" — and nothing about WHICH of the seven eligibility terms rejected WHICH
+    lap, or by how much. That silence is what makes a stalled ladder expensive: it stops
+    compounding and the report gives the operator no way to see why.
+
+    Purely diagnostic, and deliberately best-effort: an observer failure here must never replace
+    the real fit error that is already recorded on the block.
+    """
+    report: dict = {
+        "thresholds": {
+            "min_coverage_fraction": DEFAULT_THERMAL_COVERAGE_FRACTION,
+            "min_stability_fraction": DEFAULT_THERMAL_STABILITY_FRACTION,
+            "max_wheel_spread_c": DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C,
+        },
+        "laps": [],
+    }
+    failing: Counter[str] = Counter()
+    for archive in archives:
+        try:
+            state = observe_lap_tyre_state(archive)
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not mask the fit error
+            report["laps"].append({"error": f"{type(exc).__name__}: {exc}"})
+            continue
+        lap = archive.get("lap") if isinstance(archive.get("lap"), dict) else {}
+        entry = {
+            "lap_n": lap.get("lap_n"),
+            "lap_ms": lap.get("lap_ms"),
+            "fit_eligible": state.get("fit_eligible"),
+            "reason": state.get("reason"),
+            "tag": state.get("tag"),
+            "core_temp_c": state.get("core_temp_c"),
+            "thermal_stability_fraction": state.get("thermal_stability_fraction"),
+            "sample_coverage_fraction": state.get("sample_coverage_fraction"),
+            "wheel_spread_c": state.get("wheel_spread_c"),
+            "setup_hash": state.get("setup_hash"),
+        }
+        report["laps"].append(entry)
+        if state.get("fit_eligible") is not True:
+            failing[str(state.get("reason"))] += 1
+    if failing:
+        # The headline: one line an operator can read without opening the archives.
+        report["dominant_reason"], report["dominant_count"] = failing.most_common(1)[0]
+    report["eligible_count"] = sum(
+        1 for entry in report["laps"] if entry.get("fit_eligible") is True
+    )
+    return report
 
 
 def selfplay_refine_result(

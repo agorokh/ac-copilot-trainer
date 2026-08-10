@@ -1216,6 +1216,50 @@ def test_selfplay_refine_requires_current_fit_and_archives():
     assert "no thermally consistent" in block["reason"]
 
 
+def test_selfplay_refine_reports_which_thermal_term_emptied_the_cohort():
+    """#749: a refused refit must name the failing term per lap, not just the symptom.
+
+    Reproduces the 2026-08-10 huracan@spa stall shape: every lap AC-valid with a real setup
+    identity and full sample coverage, but core temperatures swinging so the per-wheel stability
+    fraction falls under the 0.80 floor. Before this, the block carried only "no thermally
+    consistent valid lap archives" and the operator had to re-run the observer over the archives
+    by hand to learn which of the seven terms rejected them — while the ladder silently stopped
+    compounding.
+    """
+    from tools.ac_harness.plant_id import selfplay_refine_result
+
+    artifact = _selfplay_artifact()
+    archives = [
+        _selfplay_thermal_archive("unstable-1", lateral_g=1.35, lap_n=1),
+        _selfplay_thermal_archive("unstable-2", lateral_g=1.35, lap_n=2),
+    ]
+    # Swing each wheel far from its own median for most of the lap: stability collapses while
+    # coverage, compound identity, setup identity and lap validity all still pass.
+    for archive in archives:
+        index = {name: i for i, name in enumerate(archive["trace"]["fields"])}
+        for n, sample in enumerate(archive["trace"]["samples"]):
+            for wheel in ("fl", "fr", "rl", "rr"):
+                sample[index[f"tyreCoreTemp_{wheel}"]] = 90.0 + (12.0 if n % 2 else -12.0)
+
+    result, block = selfplay_refine_result(artifact, archives, generic_gt3_ggv())
+    assert result is None and block["ok"] is False
+    assert "no thermally consistent valid lap archives" in block["reason"]
+
+    report = block["thermal_eligibility"]
+    assert report["eligible_count"] == 0
+    assert report["dominant_count"] == 2
+    assert "thermal stability" in report["dominant_reason"]
+    # The thresholds are reported alongside the measurements, so the gap is readable in place.
+    assert report["thresholds"]["min_stability_fraction"] == 0.80
+    for lap in report["laps"]:
+        assert lap["fit_eligible"] is False
+        assert lap["thermal_stability_fraction"] < 0.80
+        # …and the terms that PASSED are shown too, so they need not be re-derived by hand.
+        assert lap["sample_coverage_fraction"] == 1.0
+        assert lap["setup_hash"]
+        assert lap["lap_n"] in (1, 2)
+
+
 def test_selfplay_refine_merges_monotonically_and_strips_stale_meta(tmp_path):
     from tools.ac_harness.ggv_profile import GGVModel as _GGV
     from tools.ac_harness.plant_id import selfplay_refine_result
