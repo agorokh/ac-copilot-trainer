@@ -340,19 +340,17 @@ def flying_lap_consistency(
       ``lap_ms``. That is corrupt evidence, and the caller FALSIFIES, matching how a payload
       with no validity verdict is treated.
     * ``malformed=False`` — the batch is well-formed but not judgeable *here*: too few flying
-      laps (an ordinary ``--laps 2`` run), a count mismatch, or a duplicate ``lap_n``. These are
-      known harness situations, not corrupt data. Falsifying them would revert the plant and
-      stop the ladder for no physical reason — and would break every two-lap ladder outright.
+      laps (an ordinary ``--laps 2`` run) or a count mismatch. These are known harness
+      situations, not corrupt data. Falsifying them would revert the plant and stop the ladder
+      for no physical reason — and would break every two-lap ladder outright.
+
+    ORDER MATTERS. Schema and duplicate checks run BEFORE the count check (#746 Codex P2 +
+    Qodo, round 3). A retry that leaves one archive from the failed attempt alongside the final
+    attempt's laps produces BOTH a count mismatch and a duplicate ``lap_n``; returning on the
+    count first labelled that mixed-session batch ``malformed=False``, the oracle accepted it as
+    merely unjudged, and ``run_selfplay`` then handed the whole archive list to the next refit as
+    ``prev_archives`` — exactly the contamination the duplicate check exists to stop.
     """
-    if expected_laps is not None and len(archive_payloads) != expected_laps:
-        return {
-            "judged": False,
-            "malformed": False,
-            "reason": (
-                f"{len(archive_payloads)} archive(s) for {expected_laps} timed lap(s) "
-                "— batch not attributable"
-            ),
-        }
     laps: list[tuple[int, float]] = []
     for payload in archive_payloads:
         lap = payload.get("lap") if isinstance(payload.get("lap"), dict) else {}
@@ -364,11 +362,20 @@ def flying_lap_consistency(
                 "malformed": True,
                 "reason": "a lap archive has no integer lap_n (cannot identify the out-lap)",
             }
-        if not isinstance(lap_ms, (int, float)) or isinstance(lap_ms, bool) or lap_ms <= 0:
+        # `math.isfinite` is load-bearing, not defensive: Python's json decoder accepts a bare
+        # `NaN`, and every comparison with NaN is False — so `lap_ms <= 0` does NOT reject it.
+        # A NaN lap time then produces a NaN spread, `spread > threshold` is False, and the
+        # corrupt batch was reported VALID with "flying-lap spread nan%" (#746 Codex P2).
+        if (
+            not isinstance(lap_ms, (int, float))
+            or isinstance(lap_ms, bool)
+            or not math.isfinite(lap_ms)
+            or lap_ms <= 0
+        ):
             return {
                 "judged": False,
                 "malformed": True,
-                "reason": f"lap_n={lap_n} has no positive lap_ms (cannot measure spread)",
+                "reason": f"lap_n={lap_n} has no finite positive lap_ms (cannot measure spread)",
             }
         laps.append((lap_n, float(lap_ms)))
     # Duplicate lap_n is CONTAMINATION, not just an attribution nuisance (#746 Codex P2): when
@@ -383,6 +390,17 @@ def flying_lap_consistency(
             "judged": False,
             "malformed": True,
             "reason": "duplicate lap_n in the batch (archives from more than one session)",
+        }
+    # Only now, on a batch proven well-formed and single-session, is a count mismatch merely an
+    # attribution problem rather than possible contamination.
+    if expected_laps is not None and len(archive_payloads) != expected_laps:
+        return {
+            "judged": False,
+            "malformed": False,
+            "reason": (
+                f"{len(archive_payloads)} archive(s) for {expected_laps} timed lap(s) "
+                "— batch not attributable"
+            ),
         }
     if len(laps) < 3:
         flying_count = max(0, len(laps) - 1)

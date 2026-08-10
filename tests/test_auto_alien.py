@@ -485,7 +485,7 @@ def test_malformed_lap_evidence_falsifies_but_unjudgeable_evidence_does_not():
     broken_ms = _batch(95000, 93000, 92000)
     broken_ms[2]["lap"]["lap_ms"] = 0
     valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000, 92000]), broken_ms)
-    assert not valid and "unusable lap evidence" in reason and "no positive lap_ms" in reason
+    assert not valid and "unusable lap evidence" in reason and "finite positive lap_ms" in reason
 
     # Well-formed but unjudgeable stays VALID — these must not become falsifications.
     valid, _ = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000]), _batch(95000, 93000))
@@ -509,6 +509,46 @@ def test_mixed_session_batch_falsifies_because_the_refit_would_consume_it():
     valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000, 92000]), dupes)
     assert not valid
     assert "unusable lap evidence" in reason and "more than one session" in reason
+
+
+def test_corruption_is_checked_before_the_count_mismatch():
+    """Schema/duplicate checks must precede the count check (#746 Codex P2 + Qodo, round 3).
+
+    A retry that leaves one archive from the failed attempt alongside the final attempt's laps
+    produces BOTH a count mismatch and a duplicate `lap_n`. Returning on the count first labelled
+    that mixed-session batch `malformed=False`, so the oracle accepted it and `run_selfplay`
+    handed the whole list to the next refit — the exact contamination the duplicate check exists
+    to prevent.
+    """
+    # Count mismatch AND a duplicate lap_n: contamination must win over "not attributable".
+    mixed = _batch(95000, 93000, 92000)
+    mixed[2]["lap"]["lap_n"] = 2
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000]), mixed)
+    assert not valid, "a mixed-session batch must falsify even when the count also mismatches"
+    assert "more than one session" in reason
+
+    # Count mismatch AND corrupt lap evidence: corruption must win.
+    corrupt = _batch(95000, 93000, 92000)
+    del corrupt[1]["lap"]["lap_n"]
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000]), corrupt)
+    assert not valid and "unusable lap evidence" in reason
+
+
+def test_non_finite_lap_time_cannot_pass_as_a_positive_lap_ms():
+    """`NaN <= 0` is False, so NaN slipped the positivity check (#746 Codex P2).
+
+    A NaN lap time yields a NaN spread, and `NaN > threshold` is also False, so the corrupt batch
+    was reported VALID with "flying-lap spread nan%".
+    """
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        batch = _batch(106655, 81505, 81519)
+        batch[2]["lap"]["lap_ms"] = bad
+        valid, reason = evaluate_selfplay_iteration(
+            0, _stage_outcome([106655, 81505, 81519]), batch
+        )
+        assert not valid, f"lap_ms={bad} must falsify, not be accepted"
+        assert "finite positive lap_ms" in reason
+        assert "nan" not in reason.lower()
 
 
 def test_oracle_uses_the_consistency_measurement_it_is_given():
