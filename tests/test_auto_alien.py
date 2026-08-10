@@ -372,6 +372,14 @@ def test_evaluate_selfplay_iteration_falsification_branches():
     )
     assert not valid and "exit 1" in reason and "boom" in reason
 
+    # A VETOED drive finishes stage=done with error=None and the cause in `reason`; reporting
+    # `error` alone rendered a real physics falsification as "error=None" (#746).
+    vetoed = _stage_outcome([177161], recoveries=7)
+    vetoed["report"]["reason"] = "recovery cap (6) exceeded at 10366m"
+    valid, reason = evaluate_selfplay_iteration(1, vetoed, ok_payloads)
+    assert not valid and "recovery cap (6) exceeded at 10366m" in reason
+    assert "error=None" not in reason
+
     valid, reason = evaluate_selfplay_iteration(
         0, _stage_outcome([95000], recoveries=2), ok_payloads
     )
@@ -446,6 +454,25 @@ def test_flying_lap_spread_is_unjudged_rather_than_falsified_when_it_cannot_be_m
     dupes[2]["lap"]["lap_n"] = 2
     valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000, 92000]), dupes)
     assert valid and "duplicate lap_n" in reason
+
+
+def test_flying_lap_spread_ignores_archives_it_cannot_attribute_to_the_batch():
+    """An over-wide archive scan must not be judged as if it were the batch (#746 Qodo).
+
+    ``collect_lap_archives`` returns every combo-matching archive newer than ``since_epoch``,
+    which can exceed the timed-lap count. A stray lap from a neighbouring stint carries a
+    different tyre state, so judging it would falsify a perfectly repeatable batch.
+    """
+    # Two repeatable flying laps (14 ms apart) plus a stray archive from another stint.
+    payloads = _batch(106655, 81505, 81519, 95122)
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([106655, 81505, 81519]), payloads)
+    assert valid, reason
+    assert "not attributable" in reason
+    # Same laps, correctly attributed, stay judged and VALID.
+    valid, reason = evaluate_selfplay_iteration(
+        0, _stage_outcome([106655, 81505, 81519]), _batch(106655, 81505, 81519)
+    )
+    assert valid and "spread 0.02%" in reason
 
 
 def test_flying_lap_spread_threshold_admits_every_healthy_historical_batch():

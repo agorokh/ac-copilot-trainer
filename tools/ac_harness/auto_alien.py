@@ -314,7 +314,9 @@ def combo_filter_payloads(
     return kept, len(payloads) - len(kept)
 
 
-def flying_lap_consistency(archive_payloads: list[dict]) -> dict:
+def flying_lap_consistency(
+    archive_payloads: list[dict], *, expected_laps: int | None = None
+) -> dict:
     """Lap-time spread across the batch's FLYING laps (pure; #746).
 
     The batch's lowest ``lap_n`` is the standing-start out-lap and is legitimately far slower
@@ -322,12 +324,29 @@ def flying_lap_consistency(archive_payloads: list[dict]) -> dict:
     (measured: including it turns a 0.02% median spread into a 19% one). So the out-lap is
     dropped and only the flying laps are compared.
 
+    ``expected_laps`` is the count of TIMED laps the stage reported. ``collect_lap_archives``
+    returns every combo-matching archive newer than ``since_epoch``, which can exceed the batch
+    (a drive may complete a lap after the tap stopped counting, or a neighbouring stint can fall
+    inside the window). An extra lap from a different stint carries a different tyre state, so
+    letting it into the spread could falsify a perfectly repeatable batch — so when the archive
+    count does not match the timed-lap count the batch is not attributable and goes UNJUDGED
+    rather than being judged on evidence that may not be its own (#746 Qodo).
+
     Returns ``{"judged": False, "reason": ...}`` whenever consistency cannot be established —
-    fewer than two flying laps, or an archive without the ``lap_n``/``lap_ms`` needed to
-    identify the out-lap and measure the spread. Unjudgeable is NOT a falsification: the batch
-    still faces every other gate, and inventing a verdict from data we do not have would be the
-    opposite of the fail-closed discipline everywhere else in this oracle.
+    an unattributable batch, fewer than two flying laps, or an archive without the
+    ``lap_n``/``lap_ms`` needed to identify the out-lap and measure the spread. Unjudgeable is
+    NOT a falsification: the batch still faces every other gate, and inventing a verdict from
+    data we do not have would be the opposite of the fail-closed discipline everywhere else in
+    this oracle.
     """
+    if expected_laps is not None and len(archive_payloads) != expected_laps:
+        return {
+            "judged": False,
+            "reason": (
+                f"{len(archive_payloads)} archive(s) for {expected_laps} timed lap(s) "
+                "— batch not attributable"
+            ),
+        }
     laps: list[tuple[int, float]] = []
     for payload in archive_payloads:
         lap = payload.get("lap") if isinstance(payload.get("lap"), dict) else {}
@@ -395,8 +414,14 @@ def evaluate_selfplay_iteration(
     report = outcome.get("report") if isinstance(outcome.get("report"), dict) else {}
     if exit_code != 0:
         stage = report.get("stage")
-        error = report.get("error")
-        return False, f"drive stage failed (exit {exit_code}, stage={stage}, error={error})"
+        # `error` is only set for an exception-shaped failure. A drive that ran and was VETOED —
+        # recovery cap, sim death, spawn trap — finishes `stage=done` with `error=None` and puts
+        # the cause in `reason`, so reporting `error` alone rendered a real physics falsification
+        # as "stage=done, error=None" and hid why the rung failed (#746, observed at ggv_scale
+        # 1.20: `recovery cap (6) exceeded at 10366m`, 7 recoveries).
+        drive_report = report.get("drive") if isinstance(report.get("drive"), dict) else {}
+        cause = report.get("error") or report.get("reason") or drive_report.get("reason")
+        return False, f"drive stage failed (exit {exit_code}, stage={stage}, cause={cause})"
     drive = report.get("drive") if isinstance(report.get("drive"), dict) else {}
     recoveries = drive.get("recoveries")
     if isinstance(recoveries, (int, float)) and recoveries > 0:
@@ -431,7 +456,7 @@ def evaluate_selfplay_iteration(
         )
     # Repeatability last: a batch that fails any gate above is already falsified for a more
     # specific reason, and naming the spread instead would hide it (#746).
-    consistency = flying_lap_consistency(archive_payloads)
+    consistency = flying_lap_consistency(archive_payloads, expected_laps=len(lap_times))
     if consistency["judged"] and consistency["spread"] > max_flying_lap_spread:
         flying = ", ".join(f"{ms / 1000.0:.3f}s" for ms in consistency["flying_ms"])
         return False, (
@@ -736,7 +761,9 @@ def run_selfplay(
         "valid": base_valid,
         "reason": base_reason,
         "lap_times_ms": base_laps,
-        "flying_lap_consistency": flying_lap_consistency(base_payloads),
+        "flying_lap_consistency": flying_lap_consistency(
+            base_payloads, expected_laps=len(base_laps)
+        ),
     }
     base_l3 = stage_l3_summary(base_outcome)
     if base_l3 is not None:
@@ -1102,7 +1129,9 @@ def run_selfplay(
         entry["reason"] = reason
         # Record the measured spread whether or not it falsified, so a ladder can be audited
         # after the fact for envelopes that were merely survivable rather than repeatable (#746).
-        entry["flying_lap_consistency"] = flying_lap_consistency(archive_payloads)
+        entry["flying_lap_consistency"] = flying_lap_consistency(
+            archive_payloads, expected_laps=len(lap_times)
+        )
         # The pre-drive check above narrows the window but cannot close it: `auto_drive` loads the
         # plant after taking the rig lock, which we do not hold. So confirm afterwards that the
         # step really did run the plant we expected, and refuse to attribute the verdict when it
