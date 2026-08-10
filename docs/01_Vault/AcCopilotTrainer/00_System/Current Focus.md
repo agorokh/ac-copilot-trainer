@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-08-10T05:05:00Z
+last_updated: 2026-08-10T11:45:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-746-749-repeatability-and-thermal-gate-2026-08-10.md
   - AcCopilotTrainer/03_Investigations/issue-738-cm-csp-dialog-skip-2026-08-09.md
   - AcCopilotTrainer/03_Investigations/issue-737-setup-race-retry-2026-08-09.md
   - AcCopilotTrainer/03_Investigations/issue-712-prefetch-worktree-markers-2026-07-29.md
@@ -62,6 +63,26 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-08-10):** `/autonomous-deliver 529` — **#746 CLOSED** by PR
+[#748](https://github.com/agorokh/ac-copilot-trainer/pull/748) (MERGED `c9ec97c`): the self-play
+oracle no longer accepts an **unrepeatable** envelope. Calibrated on all 31 self-play-era batches
+(median flying-lap spread **0.02 %**; pathologies at 5.2 / 17.7 / 22.0 %; threshold 5 %, out-lap
+excluded). Attribution now asserts the archive contract directly — contiguous from lap 1, single
+`session_uuid`, reproducing the reported lap-time stream in order. **This retro-judges the recorded
+G2 ladder**: its `80.791 / 95.122` stint now falsifies and the plant rolls back (G2 stands on ladder
+2's repeatable `81.505 / 81.519`). Node:
+[[issue-746-749-repeatability-and-thermal-gate-2026-08-10]].
+
+**Active focus — EPIC #529 G1 pace is blocked on
+[#749](https://github.com/agorokh/ac-copilot-trainer/issues/749), not on rig availability.** The
+huracan@spa ladder proved inherited-plant carry is real (base 180.366 s vs 185.53 s cold = 5.2 s)
+but **every refit was refused** by the #543 thermal `stability >= 0.80` gate (measured 0.41–0.62),
+so nothing compounded. Two hypotheses are already refuted with measurements and one framing of mine
+withdrawn — read the node before re-deriving. Also open:
+[#750](https://github.com/agorokh/ac-copilot-trainer/issues/750) (scientist compares out-laps),
+[#751](https://github.com/agorokh/ac-copilot-trainer/issues/751) (`lap_archives` not scoped to its
+batch — the structural end of #746's review spiral).
 
 **Delivered (2026-08-10):** `/autonomous-deliver 738` — **#738 CLOSED** by PR
 [#743](https://github.com/agorokh/ac-copilot-trainer/pull/743) (MERGED `6173766`): CM's blocking
