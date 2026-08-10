@@ -430,15 +430,15 @@ def test_flying_lap_spread_ignores_the_out_lap():
 def test_flying_lap_spread_is_unjudged_rather_than_falsified_when_it_cannot_be_measured():
     """Unjudgeable is not a falsification — the batch still faces every other gate (#746)."""
     # One flying lap after the out-lap: nothing to compare against.
-    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000]), _batch(95000, 93000))
+    valid, reason = evaluate_selfplay_iteration(
+        0, _stage_outcome([95000, 93000]), _batch(95000, 93000)
+    )
     assert valid and "consistency unjudged" in reason and "need 2 to compare" in reason
 
     # A payload with no lap_n cannot identify the out-lap.
     no_lap_n = _batch(95000, 93000, 92000)
     del no_lap_n[1]["lap"]["lap_n"]
-    valid, reason = evaluate_selfplay_iteration(
-        0, _stage_outcome([95000, 93000, 92000]), no_lap_n
-    )
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000, 92000]), no_lap_n)
     assert valid and "no integer lap_n" in reason
 
     # A duplicate lap_n means "the lowest is the out-lap" no longer holds.

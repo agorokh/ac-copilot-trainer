@@ -334,18 +334,28 @@ def flying_lap_consistency(archive_payloads: list[dict]) -> dict:
         lap_n = lap.get("lap_n")
         lap_ms = lap.get("lap_ms")
         if not isinstance(lap_n, int) or isinstance(lap_n, bool):
-            return {"judged": False, "reason": "a lap archive has no integer lap_n (cannot identify the out-lap)"}
+            return {
+                "judged": False,
+                "reason": "a lap archive has no integer lap_n (cannot identify the out-lap)",
+            }
         if not isinstance(lap_ms, (int, float)) or isinstance(lap_ms, bool) or lap_ms <= 0:
-            return {"judged": False, "reason": f"lap_n={lap_n} has no positive lap_ms (cannot measure spread)"}
+            return {
+                "judged": False,
+                "reason": f"lap_n={lap_n} has no positive lap_ms (cannot measure spread)",
+            }
         laps.append((lap_n, float(lap_ms)))
     # Duplicate lap_n means the batch is not a clean per-lap set, so "the lowest is the out-lap"
     # no longer holds and dropping one entry would leave a duplicate flyer skewing the spread.
     if len({lap_n for lap_n, _ in laps}) != len(laps):
-        return {"judged": False, "reason": "duplicate lap_n in the batch (cannot identify the out-lap)"}
-    if len(laps) < 3:
         return {
             "judged": False,
-            "reason": f"only {max(0, len(laps) - 1)} flying lap(s) after the out-lap (need 2 to compare)",
+            "reason": "duplicate lap_n in the batch (cannot identify the out-lap)",
+        }
+    if len(laps) < 3:
+        flying_count = max(0, len(laps) - 1)
+        return {
+            "judged": False,
+            "reason": f"only {flying_count} flying lap(s) after the out-lap (need 2 to compare)",
         }
     laps.sort()
     flying = [lap_ms for _, lap_ms in laps[1:]]
