@@ -842,13 +842,15 @@ class EntryLauncher:
             result = self._run_launch_loop()
         finally:
             if watcher is not None:
+                # Stop (join) BEFORE reading forensics so a skip/error completing during the
+                # join is not silently dropped from the report (antigravity #743).
+                stop = getattr(watcher, "stop", None)
+                if callable(stop):
+                    stop()
                 skips = getattr(watcher, "skips", None)
                 get_summary = getattr(watcher, "summary", None)
                 if callable(get_summary):
                     summary = get_summary()
-                stop = getattr(watcher, "stop", None)
-                if callable(stop):
-                    stop()
         if watcher is not None:
             reason = result.reason
             if summary:

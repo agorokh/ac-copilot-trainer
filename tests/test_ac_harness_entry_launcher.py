@@ -795,11 +795,16 @@ def test_terminate_graceful_grace_validation(monkeypatch):
 # arms the CSP-dialog skip watcher for CM launches — Codex #743 "wire the daemon too".
 # ---------------------------------------------------------------------------
 class _FakeWatcher:
-    def __init__(self, skips: int = 0, summary: str | None = None) -> None:
+    def __init__(
+        self, skips: int = 0, summary: str | None = None, *, skips_after_stop: int | None = None
+    ) -> None:
         self.started = False
         self.stopped = False
         self.skips = skips
         self._summary = summary
+        # Models stop()'s join flushing final state: forensics read before stop see the stale
+        # value, so a test asserting the flushed value proves read-after-stop ordering (#743).
+        self._skips_after_stop = skips_after_stop
 
     def start(self) -> bool:
         self.started = True
@@ -807,6 +812,8 @@ class _FakeWatcher:
 
     def stop(self) -> None:
         self.stopped = True
+        if self._skips_after_stop is not None:
+            self.skips = self._skips_after_stop
 
     def summary(self) -> str | None:
         return self._summary
@@ -861,6 +868,23 @@ def test_entry_launcher_surfaces_dialog_watcher_forensics_on_result():
 
     assert result.dialog_skips == 2
     assert "csp_dialog_skips=2" in result.reason
+
+
+def test_entry_launcher_reads_forensics_after_stop_join():
+    # antigravity #743: read skips/summary only after stop() joins the thread, so a skip that
+    # lands during the join is not dropped. The fake exposes the flushed count only post-stop.
+    watcher = _FakeWatcher(skips=0, skips_after_stop=3)
+    clock = FakeClock()
+    result = EntryLauncher(
+        FakeActuator(),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(required_live_reads=2),
+        clock=clock,
+        sleep=clock.sleep,
+        dialog_watcher_factory=lambda: watcher,
+    ).run()
+    assert watcher.stopped is True
+    assert result.dialog_skips == 3  # read after stop(), not the pre-join 0
 
 
 def test_entry_launcher_result_has_no_dialog_skips_when_watcher_absent():

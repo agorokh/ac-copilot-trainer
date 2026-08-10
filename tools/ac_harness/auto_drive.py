@@ -2833,6 +2833,11 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
         watcher.start()
 
     def _with_skip_evidence(message: str) -> str:
+        # Stop (join) the watcher BEFORE reading its summary so a skip/error completing during
+        # the join is not silently dropped from the returned evidence (antigravity #743). stop()
+        # is idempotent, so the outer finally calling it again is harmless.
+        if watcher is not None:
+            watcher.stop()
         summary = watcher.summary() if watcher is not None else None
         return f"{message}; {summary}" if summary else message
 
