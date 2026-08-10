@@ -404,6 +404,9 @@ def flying_lap_consistency(
         return {
             "judged": False,
             "malformed": False,
+            # Non-falsifying, but the caller must not feed this to a refit: we have just said the
+            # set may contain a lap from another stint (#746 Codex P1).
+            "attributable": False,
             "reason": (
                 f"{len(archive_payloads)} archive(s) for {expected_laps} timed lap(s) "
                 "— batch not attributable"
@@ -829,10 +832,21 @@ def run_selfplay(
     # An oracle-invalid base's laps are marked unusable by this very report — they must not seed
     # the performance summary either (#579 Codex P2).
     best: int | None = min(base_laps) if (base_laps and base_valid) else None
-    prev_archives = stage_lap_archives(base_outcome) if base_valid else []
+    # The base batch faces the same attribution test as every iteration: oracle-VALID is not
+    # enough to make it refit evidence if the archive set could not be tied to this stage's own
+    # timed laps (#746 Codex P1).
+    base_attributable = base_consistency.get("attributable") is not False
+    prev_archives = stage_lap_archives(base_outcome) if (base_valid and base_attributable) else []
     if not base_valid:
         print(
             f"auto-alien: base drive not usable as refinement evidence ({base_reason}) — "
+            "the ladder starts without a refit batch"
+        )
+    elif not base_attributable:
+        withheld = base_consistency.get("reason")
+        selfplay["base"]["refit_evidence_withheld"] = withheld
+        print(
+            f"auto-alien: base drive archives withheld from refit — {withheld}; "
             "the ladder starts without a refit batch"
         )
     prev_scale = resolved_base_scale
@@ -1481,7 +1495,19 @@ def run_selfplay(
         if step_kind == "envelope":
             rung += 1
         next_step_kind = "envelope" if step_kind == "plant" else "plant"
-        prev_archives = archives
+        # A batch we could not attribute to this stage's own timed laps stays VALID — the ladder
+        # continues, because a false falsification would revert the plant for a harness artifact
+        # — but it must NOT become refit evidence (#746 Codex P1). `selfplay_refine_result` would
+        # otherwise fit from an archive we explicitly said might belong to another stint, and the
+        # merge is strictly monotone (raise-only), so a different tyre state raises the plant
+        # PERMANENTLY. Scoping archives to the batch at source is the real fix (#751).
+        if consistency.get("attributable") is False:
+            withheld = consistency.get("reason")
+            entry["refit_evidence_withheld"] = withheld
+            print(f"auto-alien: iteration {index} archives withheld from refit — {withheld}")
+            prev_archives = []
+        else:
+            prev_archives = archives
         prev_scale = scale
 
     selfplay["best_lap_ms"] = best

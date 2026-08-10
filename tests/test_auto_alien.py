@@ -1125,6 +1125,41 @@ def test_selfplay_base_drive_must_pass_the_oracle_to_seed_refinement(monkeypatch
     assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "original"}'
 
 
+def test_unattributable_batch_stays_valid_but_is_withheld_from_refinement(monkeypatch, tmp_path):
+    """#746 Codex P1: non-falsifying must not mean usable as refit evidence.
+
+    An over-wide archive scan (more archives than timed laps) is a harness artifact, so it must
+    not falsify — a false falsification would revert the plant and stop the ladder. But the set
+    may carry a lap from another stint with a different tyre state, and `selfplay_refine_result`
+    merges strictly monotonically (raise-only), so feeding it would raise the plant PERMANENTLY
+    on evidence we just declared unattributable.
+    """
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True, True]),  # base: 1 timed lap but 2 archives -> not attributable
+            (0, [93000], [True]),  # iteration 1 drives; no refit batch to work from
+        ],
+    )
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "1"
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0
+    selfplay = report["selfplay"]
+    # Non-falsifying: the ladder ran on.
+    assert selfplay["base"]["valid"] is True
+    assert "not attributable" in selfplay["base"]["reason"]
+    # …but the archives never became refinement evidence.
+    assert "not attributable" in selfplay["base"]["refit_evidence_withheld"]
+    assert harness.refine_calls == []
+    assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "original"}'
+    assert (
+        selfplay["iterations"][0]["refine"]["reason"] == "no lap archives from the previous drive"
+    )
+
+
 def test_selfplay_noop_refit_at_scale_cap_stops_instead_of_retrying(monkeypatch, tmp_path):
     # #579 Codex P2: a refit that changes nothing + a capped scale = the identical physical
     # envelope; the ladder must stop, and the no-op fit must not even be persisted.
