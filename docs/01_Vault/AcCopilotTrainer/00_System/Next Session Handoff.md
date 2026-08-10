@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-08-10T05:05:00Z
+last_updated: 2026-08-10T11:45:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-746-749-repeatability-and-thermal-gate-2026-08-10.md
   - AcCopilotTrainer/03_Investigations/issue-738-cm-csp-dialog-skip-2026-08-09.md
   - AcCopilotTrainer/03_Investigations/issue-737-setup-race-retry-2026-08-09.md
   - AcCopilotTrainer/03_Investigations/issue-529-g1-cold-p4-scientist-2026-08-08.md
@@ -133,6 +134,51 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-08-10) — #746 CLOSED: the self-play oracle accepted UNREPEATABLE envelopes (PR #748 MERGED `c9ec97c`)
+
+`/autonomous-deliver 529`, on-rig (AG_PC). Full write-up:
+[issue-746-749-repeatability-and-thermal-gate-2026-08-10.md](../03_Investigations/issue-746-749-repeatability-and-thermal-gate-2026-08-10.md).
+
+- **What shipped:** `evaluate_selfplay_iteration` now falsifies an iteration whose **flying laps
+  are not repeatable**. It previously accepted on *drive passed + zero recoveries + all laps
+  AC-valid* — which proves an envelope was **survivable once**, not reproducible, so an envelope the
+  controller could not repeat was retained and compounded into the plant.
+- **Calibration:** across all 31 self-play-era oracle-passing batches on the rig, **median flying-lap
+  spread 0.02 %**, only 4 above 1 %, three pathologies at 5.2 / 17.7 / 22.0 %. Threshold 5 %. The
+  **out-lap must be excluded** — include it and the 0.02 % median becomes ~19 %.
+- **Attribution hardening (11 review rounds):** a batch must be well-formed, **contiguous from lap
+  1**, single `session_uuid`, and **reproduce the reported lap-time stream in order**; anything else
+  falsifies via the #703 keep-last-valid path. Every weaker proxy was defeated by a counter-example.
+- **⚠️ This changed the epic's own record.** The recorded **G2 ladder** (2026-07-26) had
+  `80.791 s` then `95.122 s` in one clean stint (17.7 %) — accepted by the old oracle, so the
+  86.27 s-floor plant was **retained on it**. That ladder now **stops** there and the plant rolls
+  back. G2 stands on ladder 2's repeatable `81.505 / 81.519`; what is withdrawn is the retention of a
+  plant refined from an unrepeatable stint. Recorded on
+  [#529](https://github.com/agorokh/ac-copilot-trainer/issues/529#issuecomment-5238819125).
+- **Test-double warning:** two fixtures had drifted from the real archive contract —
+  `_SelfplayHarness` wrote a constant `lap_ms: 90000` into every fake archive, and two scientist
+  fixtures numbered a *candidate* drive's laps 3–4. **That is why eight rounds of green tests
+  coexisted with reachable holes.** Do not trust this suite's coverage of archive attribution
+  without re-reading the doubles.
+- Post-merge classification: **no flags** (no migration / env / deps / workflow).
+
+### G1 pace is blocked on #749, not on rig availability
+
+The huracan@spa ladder on the retained plant: base@1.00 **180.366 / 180.387** (vs 185.53 cold two
+days earlier — **5.2 s of genuine inherited carry**, so compounding *works* when the refit lands),
+it1@1.15 167.300 / 167.470, it2@1.20 falsified on 7 recoveries (honest physics). **Every plant refit
+was refused** by the #543 thermal `stability >= 0.80` gate (measured 0.41–0.62), so nothing
+compounded. Best 167.300 s vs the ≤144.576 s band.
+
+**Resume here:** [#749](https://github.com/agorokh/ac-copilot-trainer/issues/749) is the critical
+path — no further ladder compounds until a refit can land on high-envelope laps. Two hypotheses are
+already **refuted with measurements** (a #740/#743 `setup.snapshot` regression; a thermal settling
+budget) and one of my own framings **withdrawn** (it is a rarely-firing gate — 3/71 laps — not a
+systematic bias against pace). Read the investigation node before re-deriving any of them.
+
+**Measurement-integrity note:** iteration 1's flying laps are **not clean** — I ran three concurrent
+`pytest` batches on this 6-core i5-9400F while the car was driving. The base drive predates them.
 
 ## Delivered (2026-08-10) — #738 CLOSED: CM "Custom Shaders Patch data" dialog auto-skipped in the launcher (PR #743 MERGED `6173766`)
 
