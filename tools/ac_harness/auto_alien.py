@@ -449,6 +449,28 @@ def flying_lap_consistency(
                 "and another stood in for it"
             ),
         }
+    # …and it must start at lap 1, because each stage launches a fresh session and drives from a
+    # standing start (#746 Codex P2, round 10). A SHIFTED window is worse than a gapped one: with
+    # reported [96000, 80000, 95000] and archives (2,80000) (3,95000) (4,96000), the multiset and
+    # contiguity checks both pass, the helper then drops lap 2 as the "out-lap", and an 18.8%
+    # flying spread is reported as 1.1% — the gate inverted into hiding exactly what it exists to
+    # catch.
+    #
+    # Measured cost, stated because it is not zero: 1 of 80 real self-play-era sessions on the
+    # rig starts at lap_n 3 (a coherent 145.4 s + 109.110/109.107 batch), and this rejects it.
+    # That failure is CONSERVATIVE — it stops a ladder and corrupts nothing — whereas the
+    # inversion above retains an unrepeatable envelope, which is the defect #746 exists to fix.
+    # #751's source-side scoping removes the guesswork entirely.
+    if lap_numbers and lap_numbers[0] != 1:
+        return {
+            "judged": False,
+            "malformed": False,
+            "attributable": False,
+            "reason": (
+                f"batch starts at lap_n={lap_numbers[0]}, not 1 — a standing-start stage's "
+                "laps begin at 1, so this window is shifted"
+            ),
+        }
     # The archive set must REPRODUCE the times the stage reported, not merely have the same
     # cardinality (#746 Codex, round 8). This subsumes the count check and closes the
     # missing-archive-replaced-by-a-post-window-lap case that count + session + lap_n all pass.

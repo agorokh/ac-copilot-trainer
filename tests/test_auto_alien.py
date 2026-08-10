@@ -605,6 +605,29 @@ def test_gapped_lap_numbers_falsify_even_when_the_times_line_up():
     assert valid
 
 
+def test_a_shifted_lap_window_cannot_invert_the_out_lap():
+    """A window starting past lap 1 flips which lap is treated as the out-lap (#746 round 10).
+
+    Codex's case: reported ``[96000, 80000, 95000]`` with archives ``(2,80000) (3,95000)
+    (4,96000)``. Multiset matches, lap numbers are contiguous — but the helper then drops lap 2
+    as the "out-lap" and reports a **1.1%** spread where the drive's real flying spread was
+    **18.8%**. The gate inverts into hiding precisely what it exists to catch.
+    """
+    shifted = [
+        _archive_payload(2, lap_ms=80000),
+        _archive_payload(3, lap_ms=95000),
+        _archive_payload(4, lap_ms=96000),
+    ]
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([96000, 80000, 95000]), shifted)
+    assert not valid, "a shifted window must not be judged as the batch"
+    assert "not 1" in reason and "shifted" in reason
+    # The same times, correctly anchored, expose the real 18.8% spread instead.
+    valid, reason = evaluate_selfplay_iteration(
+        0, _stage_outcome([96000, 80000, 95000]), _batch(96000, 80000, 95000)
+    )
+    assert not valid and "not repeatable" in reason and "18.8%" in reason
+
+
 def test_non_positive_lap_numbers_are_malformed_not_silently_dropped():
     """A `lap_n <= 0` record sorts first and would be discarded as the out-lap (#746 round 6)."""
     for bad_n in (0, -1):
@@ -2474,9 +2497,9 @@ def test_selfplay_late_persist_error_cannot_return_green(monkeypatch, tmp_path):
 @pytest.mark.parametrize(
     ("baseline_laps", "candidate_laps", "expected_error"),
     [
-        (((1, 100_000), (2, 101_000)), ((3, 90_000), (4, 91_000)), None),
-        (((1, 100_000), (2, 101_000)), ((3, 90_000),), "candidate_batch_incomplete"),
-        (((1, 100_000),), ((3, 90_000), (4, 91_000)), "baseline_batch_unverifiable"),
+        (((1, 100_000), (2, 101_000)), ((1, 90_000), (2, 91_000)), None),
+        (((1, 100_000), (2, 101_000)), ((1, 90_000),), "candidate_batch_incomplete"),
+        (((1, 100_000),), ((1, 90_000), (2, 91_000)), "baseline_batch_unverifiable"),
     ],
 )
 def test_scientist_requires_requested_laps_before_persisting(
@@ -2696,7 +2719,7 @@ def _successful_candidate_pipeline_result(candidate_args) -> tuple[int, dict]:
     drive_dir = Path(candidate_args.evidence_dir) / "drive"
     drive_dir.mkdir(parents=True)
     paths = []
-    for lap_n, lap_ms in ((3, 90_000), (4, 91_000)):
+    for lap_n, lap_ms in ((1, 90_000), (2, 91_000)):
         path = drive_dir / f"lap_{lap_n}.json"
         path.write_text(
             _json.dumps(
