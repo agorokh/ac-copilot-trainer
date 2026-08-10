@@ -1165,12 +1165,21 @@ def run_selfplay(
                         # ladder that has silently stopped compounding is visible without
                         # re-analysing archives by hand (#749).
                         eligibility = block.get("thermal_eligibility")
-                        if isinstance(eligibility, dict) and eligibility.get("dominant_reason"):
+                        # Only claim an empty cohort when it IS empty. This branch runs for every
+                        # fit exception, so a batch with eligible laps that failed downstream —
+                        # too few friction rows, say — would otherwise be announced as a thermal
+                        # stall using a dominant term drawn from the ineligible minority, pointing
+                        # the next session at the wrong cause (#749 Codex P2).
+                        if (
+                            isinstance(eligibility, dict)
+                            and eligibility.get("eligible_count") == 0
+                            and eligibility.get("dominant_term")
+                        ):
                             lap_count = len(eligibility.get("laps") or [])
                             print(
                                 f"auto-alien: iteration {index} thermal cohort empty — "
                                 f"{eligibility['dominant_count']}/{lap_count} lap(s): "
-                                f"{eligibility['dominant_reason']}"
+                                f"{eligibility['dominant_term']}"
                             )
         except (OSError, RigSessionBusy) as exc:
             # Fail loud IN the report: keep-last-valid integrity can no longer be guaranteed

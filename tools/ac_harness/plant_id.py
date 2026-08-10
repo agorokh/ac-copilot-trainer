@@ -1576,6 +1576,40 @@ def refine_ggv_from_lap_archives(
     return block
 
 
+def _failed_eligibility_terms(lap: dict, state: dict) -> list[str]:
+    """Which individual eligibility predicates this lap failed (#749).
+
+    Mirrors the conjunction in :func:`observe_lap_tyre_state`, which reports a single collapsed
+    `reason` for five distinct terms. Naming them separately is the whole point of the report:
+    "coverage 0.6 < 0.80" and "stability 0.5 < 0.80" demand different fixes.
+    """
+
+    def _below(value: object, floor: float) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and value < floor
+
+    terms: list[str] = []
+    if lap.get("is_valid") is not True:
+        terms.append("lap_not_ac_valid")
+    if state.get("setup_hash") is None:
+        terms.append("missing_setup_identity")
+    if state.get("tag") == "unknown":
+        terms.append("unknown_thermal_tag")
+    if _below(state.get("sample_coverage_fraction"), DEFAULT_THERMAL_COVERAGE_FRACTION):
+        terms.append("coverage_below_min")
+    if _below(state.get("thermal_stability_fraction"), DEFAULT_THERMAL_STABILITY_FRACTION):
+        terms.append("stability_below_min")
+    spread = state.get("wheel_spread_c")
+    if spread is None:
+        terms.append("wheel_spread_unmeasurable")
+    elif isinstance(spread, (int, float)) and spread > DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C:
+        terms.append("wheel_spread_above_max")
+    if not terms and state.get("fit_eligible") is not True:
+        # The conjunction rejected it for something not re-derived above (e.g. missing tyre
+        # compound identity). Never report "no failing terms" for an ineligible lap — say so.
+        terms.append(f"other:{state.get('reason')}")
+    return terms
+
+
 def _thermal_eligibility_report(archives: list[dict]) -> dict:
     """Per-lap thermal-eligibility diagnostics for a refit that found no usable cohort (#749).
 
@@ -1615,12 +1649,19 @@ def _thermal_eligibility_report(archives: list[dict]) -> dict:
             "wheel_spread_c": state.get("wheel_spread_c"),
             "setup_hash": state.get("setup_hash"),
         }
+        # `observe_lap_tyre_state`'s own `reason` collapses coverage, stability, wheel spread,
+        # validity and the unknown-tag case into one string ("outside thermal stability/validity
+        # gate"), so counting it would merge distinct failures and report a low-coverage batch
+        # identically to the stability stall this exists to diagnose (#749 Codex P2). Re-derive
+        # the individual predicates from the reported measurements instead.
+        terms = _failed_eligibility_terms(lap, state)
+        entry["failing_terms"] = terms
         report["laps"].append(entry)
-        if state.get("fit_eligible") is not True:
-            failing[str(state.get("reason"))] += 1
+        failing.update(terms)
     if failing:
         # The headline: one line an operator can read without opening the archives.
-        report["dominant_reason"], report["dominant_count"] = failing.most_common(1)[0]
+        report["dominant_term"], report["dominant_count"] = failing.most_common(1)[0]
+        report["failing_term_counts"] = dict(failing)
     report["eligible_count"] = sum(
         1 for entry in report["laps"] if entry.get("fit_eligible") is True
     )
