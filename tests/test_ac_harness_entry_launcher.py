@@ -815,6 +815,9 @@ class _FakeWatcher:
         if self._skips_after_stop is not None:
             self.skips = self._skips_after_stop
 
+    def skip_count(self) -> int:
+        return self.skips
+
     def summary(self) -> str | None:
         return self._summary
 

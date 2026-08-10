@@ -230,6 +230,18 @@ def test_start_returns_false_when_thread_cannot_start(monkeypatch):
     assert watcher.last_error is not None and "could not start watcher thread" in watcher.last_error
 
 
+def test_skip_count_accessor_is_lock_guarded_and_current():
+    # Codex #743: launch paths must read the skip count through this accessor (lock-guarded),
+    # not the raw attribute.
+    backend, clock = FakeBackend(), FakeClock()
+    watcher, _lines = _make(backend, clock)
+    assert watcher.skip_count() == 0
+    backend.windows = [DIALOG]
+    watcher._tick(backend)
+    watcher._tick(backend)
+    assert watcher.skip_count() == 1
+
+
 def test_summary_and_as_dict_report_forensics():
     backend, clock = FakeBackend(), FakeClock()
     watcher, _lines = _make(backend, clock)

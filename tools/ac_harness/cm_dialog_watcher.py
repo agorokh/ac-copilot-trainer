@@ -246,6 +246,18 @@ class CmSkipWatcher:
 
     # -- reporting ---------------------------------------------------------
 
+    def skip_count(self) -> int:
+        """Lock-guarded read of the delivered-skip count for launch reporting (Codex #743).
+
+        ``skips`` is documented as guarded by ``_lock``; callers must read it through this
+        accessor rather than the raw attribute so the documented discipline holds even if a read
+        ever races the watcher thread (reads today happen post-``stop()``, so this is belt-and-
+        suspenders — but it keeps the contract honest for the next maintainer).
+        """
+
+        with self._lock:
+            return self.skips
+
     def summary(self) -> str | None:
         """Short evidence string for launch detail messages; None when nothing happened."""
 

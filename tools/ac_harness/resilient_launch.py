@@ -2801,8 +2801,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 "go_live_timeout": args.go_live_timeout,
                 "trials_per_invocation": int(args.trials) if args.trials is not None else 1,
                 # #738 forensic: Skip invokes delivered on CM's patch-data dialog during this
-                # run's launch phase (None = watcher disabled via --no-cm-dialog-skip).
-                "csp_dialog_skips": (csp_watcher.skips if csp_watcher is not None else None),
+                # run's launch phase (None = watcher disabled via --no-cm-dialog-skip). Read via
+                # the lock-guarded accessor to honor the documented _lock discipline (Codex #743).
+                "csp_dialog_skips": (csp_watcher.skip_count() if csp_watcher is not None else None),
             },
         )
         report_written = True

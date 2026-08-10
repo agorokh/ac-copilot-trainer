@@ -847,7 +847,11 @@ class EntryLauncher:
                 stop = getattr(watcher, "stop", None)
                 if callable(stop):
                     stop()
-                skips = getattr(watcher, "skips", None)
+                # Read the skip count through the lock-guarded accessor, not the raw attribute
+                # (Codex #743): honors CmSkipWatcher's documented _lock discipline. Fall back to
+                # the raw attribute for injected test doubles that don't expose the accessor.
+                skip_count = getattr(watcher, "skip_count", None)
+                skips = skip_count() if callable(skip_count) else getattr(watcher, "skips", None)
                 get_summary = getattr(watcher, "summary", None)
                 if callable(get_summary):
                     summary = get_summary()
