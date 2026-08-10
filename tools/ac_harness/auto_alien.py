@@ -540,6 +540,16 @@ def evaluate_selfplay_iteration(
     # refit would consume that same batch.
     if consistency.get("malformed"):
         return False, f"unusable lap evidence for repeatability: {consistency['reason']}"
+    # An UNATTRIBUTABLE batch falsifies too (#746 Codex P1, round 7). This was first modelled as
+    # "valid but withheld from the refit", which is a third state — neither validated nor
+    # rejected — and it had to be re-defended at every consumer: the refit, the scientist
+    # baseline, the scientist candidate, the rung counter, the persisted plant candidate. Four of
+    # those were missed. If the batch cannot be shown to be this drive's own evidence, nothing it
+    # produced may validate anything, so it takes the ordinary keep-last-valid path: the plant
+    # reverts, the rung does not advance, and the ladder stops with a named reason. The cost is a
+    # wasted ladder on a harness artifact; the cost of the middle state was silent contamination.
+    if consistency.get("attributable") is False:
+        return False, f"batch not attributable to this drive: {consistency['reason']}"
     if consistency["judged"] and consistency["spread"] > max_flying_lap_spread:
         flying = ", ".join(f"{ms / 1000.0:.3f}s" for ms in consistency["flying_ms"])
         return False, (
@@ -840,6 +850,15 @@ def run_selfplay(
         base_payloads, car_id=args.car, track_id=args.track, layout=args.track_layout
     )
     base_consistency = flying_lap_consistency(base_payloads, expected_laps=len(base_laps))
+    # Same fold as the iteration path: unreadable archives make the batch unverifiable, and that
+    # fact lives out here rather than in the payloads the helper can see (#746 Qodo, round 6).
+    if base_load_errors and base_consistency.get("attributable") is not False:
+        base_consistency = {
+            **base_consistency,
+            "judged": False,
+            "attributable": False,
+            "reason": f"{len(base_load_errors)} archive(s) could not be read — batch unverifiable",
+        }
     base_valid, base_reason = evaluate_selfplay_iteration(
         0, base_outcome, base_payloads, consistency=base_consistency
     )
@@ -861,23 +880,12 @@ def run_selfplay(
     # An oracle-invalid base's laps are marked unusable by this very report — they must not seed
     # the performance summary either (#579 Codex P2).
     best: int | None = min(base_laps) if (base_laps and base_valid) else None
-    # The base batch faces the same attribution test as every iteration: oracle-VALID is not
-    # enough to make it refit evidence if the archive set could not be tied to this stage's own
-    # timed laps (#746 Codex P1).
-    base_attributable = base_consistency.get("attributable") is not False and not base_load_errors
-    prev_archives = stage_lap_archives(base_outcome) if (base_valid and base_attributable) else []
+    # No separate attribution flag is needed here any more: an unattributable or unverifiable
+    # base batch now fails the oracle itself, so `base_valid` already carries it (#746 round 7).
+    prev_archives = stage_lap_archives(base_outcome) if base_valid else []
     if not base_valid:
         print(
             f"auto-alien: base drive not usable as refinement evidence ({base_reason}) — "
-            "the ladder starts without a refit batch"
-        )
-    elif not base_attributable:
-        withheld = base_consistency.get("reason") or (
-            f"{len(base_load_errors)} archive(s) could not be read — batch unverifiable"
-        )
-        selfplay["base"]["refit_evidence_withheld"] = withheld
-        print(
-            f"auto-alien: base drive archives withheld from refit — {withheld}; "
             "the ladder starts without a refit batch"
         )
     prev_scale = resolved_base_scale
@@ -1226,6 +1234,19 @@ def run_selfplay(
         # falsified, so a ladder can be audited after the fact for envelopes that were merely
         # survivable rather than repeatable.
         consistency = flying_lap_consistency(archive_payloads, expected_laps=len(lap_times))
+        # Unreadable archives are the same unattributability wearing a different hat (#746 Qodo,
+        # round 6): `flying_lap_consistency` only ever sees payloads that LOADED, so an unreadable
+        # expected archive plus a stray readable one "fills the count" and the batch looks
+        # attributable while being unverifiable. `load_errors` is the only evidence that happened,
+        # and it lives out here — so fold it into the same verdict rather than inventing a second
+        # mechanism for it.
+        if load_errors and consistency.get("attributable") is not False:
+            consistency = {
+                **consistency,
+                "judged": False,
+                "attributable": False,
+                "reason": (f"{len(load_errors)} archive(s) could not be read — batch unverifiable"),
+            }
         entry["flying_lap_consistency"] = consistency
         valid, reason = evaluate_selfplay_iteration(
             code, outcome, archive_payloads, consistency=consistency
@@ -1526,32 +1547,7 @@ def run_selfplay(
         if step_kind == "envelope":
             rung += 1
         next_step_kind = "envelope" if step_kind == "plant" else "plant"
-        # A batch we could not attribute to this stage's own timed laps stays VALID — the ladder
-        # continues, because a false falsification would revert the plant for a harness artifact
-        # — but it must NOT become refit evidence (#746 Codex P1). `selfplay_refine_result` would
-        # otherwise fit from an archive we explicitly said might belong to another stint, and the
-        # merge is strictly monotone (raise-only), so a different tyre state raises the plant
-        # PERMANENTLY. Scoping archives to the batch at source is the real fix (#751).
-        #
-        # Unreadable archives are the same problem wearing a different hat (#746 Qodo, round 6):
-        # `flying_lap_consistency` sees only the payloads that LOADED, so if an expected archive
-        # is unreadable and a stray readable one fills the count, the batch looks attributable
-        # while being unverifiable. `load_errors` is the only evidence that happened.
-        withheld = None
-        if consistency.get("attributable") is False:
-            withheld = consistency.get("reason")
-        elif load_errors:
-            withheld = f"{len(load_errors)} archive(s) could not be read — batch unverifiable"
-        if withheld:
-            entry["refit_evidence_withheld"] = withheld
-            # Bar it from the scientist too, not just the next refit: `_scientist_baseline_outcome`
-            # selects the newest oracle-valid entry, so without this it would compare and persist
-            # setup verdicts from archives we just declared unattributable (#746 Codex P1, round 6).
-            entry["usable_as_evidence"] = False
-            print(f"auto-alien: iteration {index} archives withheld from refit — {withheld}")
-            prev_archives = []
-        else:
-            prev_archives = archives
+        prev_archives = archives
         prev_scale = scale
 
     selfplay["best_lap_ms"] = best
@@ -1671,18 +1667,28 @@ def run_scientist(
             0, baseline_outcome, baseline_payloads
         )
         baseline_lap_times = stage_lap_times_ms(baseline_outcome)
+        # These gates only ever caught TOO FEW archives, so an oversized batch — an extra
+        # same-combo archive from a neighbouring stint — reached `build_plan` /
+        # `evaluate_experiment` and could persist a durable setup verdict measured partly on
+        # another stint's lap (#746 Codex P1, round 7). Attribution is now required, not just
+        # sufficiency.
+        baseline_attribution = flying_lap_consistency(
+            baseline_payloads, expected_laps=len(baseline_lap_times)
+        )
         if (
             load_errors
             or foreign
             or not baseline_valid
             or len(baseline_lap_times) < args.laps
             or len(baseline_payloads) < args.laps
+            or baseline_attribution.get("attributable") is False
         ):
             raise ScientistError(
                 "scientist_baseline_batch_unverifiable:"
                 f"{baseline_reason}:requested_laps={args.laps}:"
                 f"timed_laps={len(baseline_lap_times)}:archives={len(baseline_payloads)}:"
-                f"load_errors={len(load_errors)}:foreign={foreign}"
+                f"load_errors={len(load_errors)}:foreign={foreign}:"
+                f"attributable={baseline_attribution.get('attributable') is not False}"
             )
         scope = {
             "mechanical_platform": args.scientist_mechanical_platform or args.car,
@@ -1779,19 +1785,26 @@ def run_scientist(
                 layout=args.track_layout,
             )
             candidate_lap_times = stage_lap_times_ms(candidate_outcome)
+            # Same one-sided gate as the baseline: too few archives failed, too many passed
+            # (#746 Codex P1, round 7).
+            candidate_attribution = flying_lap_consistency(
+                candidate_payloads, expected_laps=len(candidate_lap_times)
+            )
             if (
                 candidate_outcome is None
                 or len(candidate_lap_times) < args.laps
                 or len(candidate_payloads) < args.laps
                 or candidate_load_errors
                 or candidate_foreign
+                or candidate_attribution.get("attributable") is False
             ):
                 raise ScientistError(
                     "scientist_candidate_batch_incomplete:"
                     f"exit={code}:requested_laps={args.laps}:"
                     f"timed_laps={len(candidate_lap_times)}:"
                     f"archives={len(candidate_payloads)}:"
-                    f"load_errors={len(candidate_load_errors)}:foreign={candidate_foreign}"
+                    f"load_errors={len(candidate_load_errors)}:foreign={candidate_foreign}:"
+                    f"attributable={candidate_attribution.get('attributable') is not False}"
                 )
             candidate_valid, candidate_reason = evaluate_selfplay_iteration(
                 code, candidate_outcome, candidate_payloads

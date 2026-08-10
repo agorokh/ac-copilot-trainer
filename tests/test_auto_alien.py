@@ -450,17 +450,20 @@ def test_flying_lap_spread_is_unjudged_rather_than_falsified_when_it_cannot_be_m
     # test_mixed_session_batch_falsifies_because_the_refit_would_consume_it (#746).
 
 
-def test_flying_lap_spread_ignores_archives_it_cannot_attribute_to_the_batch():
-    """An over-wide archive scan must not be judged as if it were the batch (#746 Qodo).
+def test_an_unattributable_batch_falsifies_rather_than_being_judged_as_the_batch():
+    """An over-wide archive scan validates NOTHING (#746 Codex P1, round 7).
 
     ``collect_lap_archives`` returns every combo-matching archive newer than ``since_epoch``,
-    which can exceed the timed-lap count. A stray lap from a neighbouring stint carries a
-    different tyre state, so judging it would falsify a perfectly repeatable batch.
+    which can exceed the timed-lap count. This was first modelled as "valid but withheld from the
+    refit" — a third state, neither validated nor rejected, that had to be re-defended at every
+    consumer (refit, scientist baseline, scientist candidate, rung counter, persisted plant
+    candidate); four of those were missed. A batch that cannot be shown to be this drive's own
+    evidence now takes the ordinary keep-last-valid path instead.
     """
     # Two repeatable flying laps (14 ms apart) plus a stray archive from another stint.
     payloads = _batch(106655, 81505, 81519, 95122)
     valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([106655, 81505, 81519]), payloads)
-    assert valid, reason
+    assert not valid
     assert "not attributable" in reason
     # Same laps, correctly attributed, stay judged and VALID.
     valid, reason = evaluate_selfplay_iteration(
@@ -487,12 +490,11 @@ def test_malformed_lap_evidence_falsifies_but_unjudgeable_evidence_does_not():
     valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000, 92000]), broken_ms)
     assert not valid and "unusable lap evidence" in reason and "finite positive lap_ms" in reason
 
-    # Well-formed but unjudgeable stays VALID — these must not become falsifications.
+    # The one genuinely unjudgeable case that must still stay VALID: a correctly attributed batch
+    # that simply does not have two flying laps to compare. Falsifying it would break every
+    # ordinary `--laps 2` ladder, which is what the G1b cold start runs.
     valid, _ = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000]), _batch(95000, 93000))
     assert valid, "an ordinary --laps 2 ladder must not be falsified for lacking a second flyer"
-    over_scan = _batch(106655, 81505, 81519, 95122)
-    valid, _ = evaluate_selfplay_iteration(0, _stage_outcome([106655, 81505, 81519]), over_scan)
-    assert valid, "an over-wide archive scan is a harness artifact, not corrupt data"
 
 
 def test_mixed_session_batch_falsifies_because_the_refit_would_consume_it():
@@ -1164,14 +1166,15 @@ def test_selfplay_base_drive_must_pass_the_oracle_to_seed_refinement(monkeypatch
     assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "original"}'
 
 
-def test_unattributable_batch_stays_valid_but_is_withheld_from_refinement(monkeypatch, tmp_path):
-    """#746 Codex P1: non-falsifying must not mean usable as refit evidence.
+def test_unattributable_base_batch_validates_nothing(monkeypatch, tmp_path):
+    """#746 Codex P1, round 7: an unattributable batch may not seed refinement.
 
-    An over-wide archive scan (more archives than timed laps) is a harness artifact, so it must
-    not falsify — a false falsification would revert the plant and stop the ladder. But the set
-    may carry a lap from another stint with a different tyre state, and `selfplay_refine_result`
-    merges strictly monotonically (raise-only), so feeding it would raise the plant PERMANENTLY
-    on evidence we just declared unattributable.
+    An over-wide archive scan (more archives than timed laps) may carry a lap from another stint
+    with a different tyre state, and `selfplay_refine_result` merges strictly monotonically
+    (raise-only), so feeding it would raise the plant PERMANENTLY on evidence that was never
+    shown to belong to this drive. The batch therefore fails the oracle outright rather than
+    being carried as "valid but withheld" — but the ladder still RUNS ON, because each later
+    iteration changes the envelope and is falsification-gated in its own right.
     """
     harness = _SelfplayHarness(
         monkeypatch,
@@ -1187,13 +1190,14 @@ def test_unattributable_batch_stays_valid_but_is_withheld_from_refinement(monkey
     code, report = run_pipeline(args, run_stage=harness.runner())
     assert code == 0
     selfplay = report["selfplay"]
-    # Non-falsifying: the ladder ran on.
-    assert selfplay["base"]["valid"] is True
+    # The batch validates nothing: it fails the oracle and names why.
+    assert selfplay["base"]["valid"] is False
     assert "not attributable" in selfplay["base"]["reason"]
-    # …but the archives never became refinement evidence.
-    assert "not attributable" in selfplay["base"]["refit_evidence_withheld"]
+    # It never became refinement evidence, and the plant on disk is untouched.
     assert harness.refine_calls == []
     assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "original"}'
+    # …but the ladder still ran its envelope step, which is gated on its own merits.
+    assert selfplay["iterations"][0]["valid"] is True
     assert (
         selfplay["iterations"][0]["refine"]["reason"] == "no lap archives from the previous drive"
     )
