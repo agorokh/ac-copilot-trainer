@@ -2725,7 +2725,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         csp_watcher: CmSkipWatcher | None = None
         if dialog_skip_enabled(args.no_cm_dialog_skip):
             csp_watcher = CmSkipWatcher(log=_log, process_image=actuator.cm_exe.name)
-            csp_watcher.start()
+            if not csp_watcher.start():
+                csp_watcher = None  # failed to arm → report null skips, not a false armed-0 (#743)
 
         _csp_summary_logged = [False]
 

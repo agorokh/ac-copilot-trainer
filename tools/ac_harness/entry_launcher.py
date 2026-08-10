@@ -823,8 +823,10 @@ class EntryLauncher:
             factory = lambda: CmSkipWatcher(process_image=cm_image, log=log)  # noqa: E731
         watcher = factory()
         start = getattr(watcher, "start", None)
-        if callable(start):
-            start()
+        if callable(start) and start() is False:
+            # Watcher failed to arm (UIA unavailable / thread could not start): discard it so the
+            # forensic reads null/unarmed, not a false "armed, 0 skips" (Codex #743).
+            return None
         return watcher
 
     def run(self) -> EntryLaunchResult:

@@ -312,10 +312,14 @@ class CmSkipWatcher:
         except Exception as exc:  # noqa: BLE001 - the watcher must never propagate
             self._note_error(f"watcher thread aborted: {exc!r}")
         finally:
-            try:
-                backend.close()
-            except Exception as exc:  # noqa: BLE001
-                self._note_error(f"backend close failed: {exc!r}")
+            # A factory that RAISES already returned above, so this finally only runs after a
+            # successful build — but guard against a factory that returns None so a NoneType
+            # close error can never clobber the recorded init failure (Codex #743).
+            if backend is not None:
+                try:
+                    backend.close()
+                except Exception as exc:  # noqa: BLE001
+                    self._note_error(f"backend close failed: {exc!r}")
 
     def _tick(self, backend: SkipBackend) -> None:
         """One poll: observe candidates, click the confirmed ones off cooldown."""

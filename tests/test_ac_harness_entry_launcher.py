@@ -796,7 +796,12 @@ def test_terminate_graceful_grace_validation(monkeypatch):
 # ---------------------------------------------------------------------------
 class _FakeWatcher:
     def __init__(
-        self, skips: int = 0, summary: str | None = None, *, skips_after_stop: int | None = None
+        self,
+        skips: int = 0,
+        summary: str | None = None,
+        *,
+        skips_after_stop: int | None = None,
+        start_result: bool = True,
     ) -> None:
         self.started = False
         self.stopped = False
@@ -805,10 +810,11 @@ class _FakeWatcher:
         # Models stop()'s join flushing final state: forensics read before stop see the stale
         # value, so a test asserting the flushed value proves read-after-stop ordering (#743).
         self._skips_after_stop = skips_after_stop
+        self._start_result = start_result
 
     def start(self) -> bool:
         self.started = True
-        return True
+        return self._start_result
 
     def stop(self) -> None:
         self.stopped = True
@@ -888,6 +894,23 @@ def test_entry_launcher_reads_forensics_after_stop_join():
     ).run()
     assert watcher.stopped is True
     assert result.dialog_skips == 3  # read after stop(), not the pre-join 0
+
+
+def test_entry_launcher_discards_watcher_that_failed_to_arm():
+    # Codex #743: if start() returns False (UIA unavailable / thread couldn't start), the watcher
+    # must be discarded so dialog_skips reads null (unarmed), not a false armed-0.
+    failed = _FakeWatcher(skips=0, start_result=False)
+    clock = FakeClock()
+    result = EntryLauncher(
+        FakeActuator(),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(required_live_reads=2),
+        clock=clock,
+        sleep=clock.sleep,
+        dialog_watcher_factory=lambda: failed,
+    ).run()
+    assert result.dialog_skips is None  # not 0 — the watcher never armed
+    assert failed.stopped is False  # discarded, never entered the run() lifecycle
 
 
 def test_entry_launcher_result_has_no_dialog_skips_when_watcher_absent():

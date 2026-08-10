@@ -2830,7 +2830,8 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
     watcher: CmSkipWatcher | None = None
     if dialog_skip_enabled(not config.cm_dialog_skip):
         watcher = CmSkipWatcher(log=_log, process_image=actuator.cm_exe.name)
-        watcher.start()
+        if not watcher.start():
+            watcher = None  # failed to arm → do not report false skip evidence (#743)
 
     def _with_skip_evidence(message: str) -> str:
         # Stop (join) the watcher BEFORE reading its summary so a skip/error completing during
