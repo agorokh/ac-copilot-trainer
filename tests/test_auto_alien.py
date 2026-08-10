@@ -586,6 +586,25 @@ def test_batch_spanning_two_session_uuids_falsifies():
     assert valid
 
 
+def test_gapped_lap_numbers_falsify_even_when_the_times_line_up():
+    """A lap_n gap is an attribution failure even if the times match (#746 Codex P2, round 9).
+
+    Archives for lap_n 1, 2, 4 mean the counted lap 3's validity and telemetry are absent and
+    lap 4 stood in for it — so lap 4 would feed refinement in lap 3's place. Times can coincide
+    to the millisecond, so the multiset comparison alone does not catch it.
+    """
+    batch = _batch(106655, 81505, 81519)
+    batch[2]["lap"]["lap_n"] = 4  # lap 3 missing, a post-window lap stands in with the same time
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([106655, 81505, 81519]), batch)
+    assert not valid
+    assert "not contiguous" in reason
+    # The contiguous batch with identical times stays VALID.
+    valid, _ = evaluate_selfplay_iteration(
+        0, _stage_outcome([106655, 81505, 81519]), _batch(106655, 81505, 81519)
+    )
+    assert valid
+
+
 def test_non_positive_lap_numbers_are_malformed_not_silently_dropped():
     """A `lap_n <= 0` record sorts first and would be discarded as the out-lap (#746 round 6)."""
     for bad_n in (0, -1):

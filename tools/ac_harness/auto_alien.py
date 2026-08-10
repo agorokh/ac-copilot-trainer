@@ -433,6 +433,22 @@ def flying_lap_consistency(
                 f"batch spans {len(sessions)} session_uuids (archives from more than one session)"
             ),
         }
+    # A drive's timed laps are CONTIGUOUS, so a gap in lap_n is an observable attribution failure
+    # even when the times happen to line up: archives for lap_n 1, 2, 4 mean lap 3's validity and
+    # telemetry are absent and lap 4 stood in for it, so lap 4 would feed refinement in its place
+    # (#746 Codex P2, round 9). Cheaper and stricter than relying on the times alone, which can
+    # coincide to the millisecond.
+    lap_numbers = sorted(lap_n for lap_n, _ in laps)
+    if lap_numbers and lap_numbers[-1] - lap_numbers[0] != len(lap_numbers) - 1:
+        return {
+            "judged": False,
+            "malformed": False,
+            "attributable": False,
+            "reason": (
+                f"lap numbers {lap_numbers} are not contiguous — a counted lap is missing "
+                "and another stood in for it"
+            ),
+        }
     # The archive set must REPRODUCE the times the stage reported, not merely have the same
     # cardinality (#746 Codex, round 8). This subsumes the count check and closes the
     # missing-archive-replaced-by-a-post-window-lap case that count + session + lap_n all pass.
