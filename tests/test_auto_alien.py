@@ -540,13 +540,16 @@ def test_non_finite_lap_time_cannot_pass_as_a_positive_lap_ms():
     A NaN lap time yields a NaN spread, and `NaN > threshold` is also False, so the corrupt batch
     was reported VALID with "flying-lap spread nan%".
     """
-    for bad in (float("nan"), float("inf"), float("-inf")):
+    # An oversized Python int is the same class of corruption but a different failure: ints are
+    # arbitrary precision, so `math.isfinite(10**309)` RAISES OverflowError and would abort the
+    # pipeline rather than fail the batch closed (#746 Codex P2, round 4).
+    for bad in (float("nan"), float("inf"), float("-inf"), 10**309, 10**400, -(10**400)):
         batch = _batch(106655, 81505, 81519)
         batch[2]["lap"]["lap_ms"] = bad
         valid, reason = evaluate_selfplay_iteration(
             0, _stage_outcome([106655, 81505, 81519]), batch
         )
-        assert not valid, f"lap_ms={bad} must falsify, not be accepted"
+        assert not valid, f"lap_ms={bad!r} must falsify, not be accepted"
         assert "finite positive lap_ms" in reason
         assert "nan" not in reason.lower()
 

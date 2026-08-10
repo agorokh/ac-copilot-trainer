@@ -362,22 +362,29 @@ def flying_lap_consistency(
                 "malformed": True,
                 "reason": "a lap archive has no integer lap_n (cannot identify the out-lap)",
             }
-        # `math.isfinite` is load-bearing, not defensive: Python's json decoder accepts a bare
-        # `NaN`, and every comparison with NaN is False — so `lap_ms <= 0` does NOT reject it.
-        # A NaN lap time then produces a NaN spread, `spread > threshold` is False, and the
-        # corrupt batch was reported VALID with "flying-lap spread nan%" (#746 Codex P2).
-        if (
-            not isinstance(lap_ms, (int, float))
-            or isinstance(lap_ms, bool)
-            or not math.isfinite(lap_ms)
-            or lap_ms <= 0
-        ):
+        # Finiteness is load-bearing, not defensive: Python's json decoder accepts a bare `NaN`,
+        # and every comparison with NaN is False — so `lap_ms <= 0` does NOT reject it. A NaN lap
+        # time then produces a NaN spread, `spread > threshold` is False, and the corrupt batch
+        # was reported VALID with "flying-lap spread nan%" (#746 Codex P2).
+        #
+        # The float() conversion must be GUARDED: Python ints are arbitrary precision, so a
+        # corrupt archive carrying `lap_ms: 10**309` makes `math.isfinite` raise OverflowError.
+        # That escapes this malformed-evidence return and aborts the whole self-play/scientist
+        # pipeline instead of failing the batch closed — the opposite of the intent (#746 Codex
+        # P2, round 4). Convert first, judge second, and treat an unconvertible value as corrupt.
+        lap_ms_value: float | None = None
+        if isinstance(lap_ms, (int, float)) and not isinstance(lap_ms, bool):
+            try:
+                lap_ms_value = float(lap_ms)
+            except (OverflowError, ValueError):
+                lap_ms_value = None
+        if lap_ms_value is None or not math.isfinite(lap_ms_value) or lap_ms_value <= 0:
             return {
                 "judged": False,
                 "malformed": True,
                 "reason": f"lap_n={lap_n} has no finite positive lap_ms (cannot measure spread)",
             }
-        laps.append((lap_n, float(lap_ms)))
+        laps.append((lap_n, lap_ms_value))
     # Duplicate lap_n is CONTAMINATION, not just an attribution nuisance (#746 Codex P2): when
     # `auto_drive` retries after a sim death that already produced an archive, `run_started_epoch`
     # spans both attempts while the Lua session resets `lap_n`, so the set mixes two sessions with
