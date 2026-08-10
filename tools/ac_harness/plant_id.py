@@ -1576,8 +1576,16 @@ def refine_ggv_from_lap_archives(
     return block
 
 
-# The one `observe_lap_tyre_state` reason that merges several distinct predicates.
-_COLLAPSED_THERMAL_REASON = "outside thermal stability/validity gate"
+# `observe_lap_tyre_state` reasons produced by its eligibility CONJUNCTION — i.e. reached after
+# the measurements were computed, so they are meaningful. Any other reason is an early exit whose
+# measurements are zeroed placeholders.
+_CONJUNCTION_REASONS = frozenset(
+    {
+        "missing tyre compound identity",
+        "missing setup identity",
+        "outside thermal stability/validity gate",
+    }
+)
 
 
 def _failed_eligibility_terms(lap: dict, state: dict) -> list[str]:
@@ -1597,15 +1605,21 @@ def _failed_eligibility_terms(lap: dict, state: dict) -> list[str]:
     if state.get("fit_eligible") is True:
         return []
     reason = str(state.get("reason") or "")
-    if reason == "missing tyre compound identity":
-        return ["missing_compound_identity"]
-    if reason == "missing setup identity":
-        return ["missing_setup_identity"]
-    if reason != _COLLAPSED_THERMAL_REASON:
-        # An early observer failure. Its own reason IS the specific one; keep it verbatim.
+    if reason not in _CONJUNCTION_REASONS:
+        # An early observer exit (missing trace / optimalTempC / tyre channels). Its measurements
+        # are ZEROED placeholders, so deriving predicates from them would invent failures. Its own
+        # reason is the specific one; keep it verbatim.
         return [f"observer:{reason}"]
 
+    # The observer got far enough to MEASURE, so every predicate below is meaningful — report all
+    # of them, not just the one the observer's reason happened to name. A lap missing setup
+    # identity that ALSO fails stability must say so, or fixing identity just surfaces stability
+    # next with no warning (#749 Codex P2, round 4).
     terms: list[str] = []
+    if state.get("compound_index") is None and state.get("compound_name") is None:
+        terms.append("missing_compound_identity")
+    if state.get("setup_hash") is None:
+        terms.append("missing_setup_identity")
     if lap.get("is_valid") is not True:
         terms.append("lap_not_ac_valid")
     if state.get("tag") == "unknown":

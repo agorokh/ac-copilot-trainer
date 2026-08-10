@@ -1344,6 +1344,36 @@ def test_thermal_eligibility_keeps_early_observer_reasons_and_reports_ties():
     assert "stability_below_min" in report["dominant_terms"]
 
 
+def test_thermal_eligibility_reports_identity_and_measured_failures_together():
+    """An identity failure must not hide a co-occurring measured one (#749 Codex P2, round 4).
+
+    `observe_lap_tyre_state`'s reason names only the first term its conjunction tripped, so a lap
+    missing setup identity that ALSO fails stability reported identity alone — and fixing identity
+    would then surface stability with no warning. The measurements are valid whenever the
+    conjunction was reached, so every failing predicate is reported.
+    """
+    from tools.ac_harness.plant_id import selfplay_refine_result
+
+    archives = [
+        _selfplay_thermal_archive("identity-and-stability", lateral_g=1.35, lap_n=1),
+        _selfplay_thermal_archive("identity-and-stability-2", lateral_g=1.35, lap_n=2),
+    ]
+    for archive in archives:
+        archive["setup"] = {}  # strip setup identity
+        index = {name: i for i, name in enumerate(archive["trace"]["fields"])}
+        for n, sample in enumerate(archive["trace"]["samples"]):
+            for wheel in ("fl", "fr", "rl", "rr"):
+                sample[index[f"tyreCoreTemp_{wheel}"]] = 90.0 + (12.0 if n % 2 else -12.0)
+
+    _, block = selfplay_refine_result(_selfplay_artifact(), archives, generic_gt3_ggv())
+    report = block["thermal_eligibility"]
+    assert report["eligible_count"] == 0
+    for lap in report["laps"]:
+        assert "missing_setup_identity" in lap["failing_terms"]
+        # …and the measured failure is NOT hidden behind it.
+        assert "stability_below_min" in lap["failing_terms"]
+
+
 def test_selfplay_refine_merges_monotonically_and_strips_stale_meta(tmp_path):
     from tools.ac_harness.ggv_profile import GGVModel as _GGV
     from tools.ac_harness.plant_id import selfplay_refine_result
