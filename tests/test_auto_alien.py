@@ -12,6 +12,7 @@ from tools.ac_harness.auto_alien import (
     _build_arg_parser,
     drive_argv,
     evaluate_selfplay_iteration,
+    flying_lap_consistency,
     identify_argv,
     iteration_scale,
     load_stage_outcome,
@@ -343,12 +344,19 @@ def _stage_outcome(lap_times, *, recoveries=0, archives=(), stage="done", error=
     }
 
 
-def _archive_payload(lap_n=1, valid=True, car="car_a", track="trk"):
+def _archive_payload(lap_n=1, valid=True, car="car_a", track="trk", lap_ms=90000):
     return {
         "car": {"id": car},
         "track": {"id": track, "layout": None},
-        "lap": {"lap_n": lap_n, "lap_ms": 90000, "is_valid": valid},
+        "lap": {"lap_n": lap_n, "lap_ms": lap_ms, "is_valid": valid},
     }
+
+
+def _batch(*lap_ms, valid=True):
+    """A clean per-lap batch; the first entry is the standing-start out-lap."""
+    return [
+        _archive_payload(lap_n=i, valid=valid, lap_ms=ms) for i, ms in enumerate(lap_ms, start=1)
+    ]
 
 
 def test_evaluate_selfplay_iteration_falsification_branches():
@@ -389,6 +397,82 @@ def test_evaluate_selfplay_iteration_falsification_branches():
         0, _stage_outcome([95000, 93000, 92000]), [_archive_payload(1)]
     )
     assert not valid and "archive count 1 < 3 timed laps" in reason
+
+
+def test_flying_lap_spread_falsifies_an_unrepeatable_envelope():
+    """The #529 ladder-3 batch: drivable once, not reproducible -> must falsify (#746).
+
+    Real archives from 2026-07-26 (911 GT3 R @ Magione): out-lap 106.655 s then flying laps
+    80.791 s and 95.122 s, every lap AC-valid with zero recoveries. The pre-#746 oracle called
+    this VALID and the 86.27 s-floor plant was retained on it.
+    """
+    batch = _batch(106655, 80791, 95122)
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([106655, 80791, 95122]), batch)
+    assert not valid
+    assert "not repeatable" in reason
+    assert "17.7%" in reason  # (95.122 - 80.791) / 80.791
+    assert "80.791s" in reason and "95.122s" in reason
+
+
+def test_flying_lap_spread_ignores_the_out_lap():
+    """The out-lap is legitimately slow; counting it would falsify every healthy batch (#746)."""
+    # Ladder 2's stint: same shape, but the two FLYING laps are 14 ms apart.
+    batch = _batch(106655, 81505, 81519)
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([106655, 81505, 81519]), batch)
+    assert valid, reason
+    assert "spread 0.02%" in reason
+    # The out-lap alone is 31% slower than the flyers — proof it was excluded, not tolerated.
+    consistency = flying_lap_consistency(batch)
+    assert consistency["judged"] and consistency["out_lap_ms"] == 106655
+    assert consistency["flying_ms"] == [81505, 81519]
+
+
+def test_flying_lap_spread_is_unjudged_rather_than_falsified_when_it_cannot_be_measured():
+    """Unjudgeable is not a falsification — the batch still faces every other gate (#746)."""
+    # One flying lap after the out-lap: nothing to compare against.
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000]), _batch(95000, 93000))
+    assert valid and "consistency unjudged" in reason and "need 2 to compare" in reason
+
+    # A payload with no lap_n cannot identify the out-lap.
+    no_lap_n = _batch(95000, 93000, 92000)
+    del no_lap_n[1]["lap"]["lap_n"]
+    valid, reason = evaluate_selfplay_iteration(
+        0, _stage_outcome([95000, 93000, 92000]), no_lap_n
+    )
+    assert valid and "no integer lap_n" in reason
+
+    # A duplicate lap_n means "the lowest is the out-lap" no longer holds.
+    dupes = _batch(95000, 93000, 92000)
+    dupes[2]["lap"]["lap_n"] = 2
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 93000, 92000]), dupes)
+    assert valid and "duplicate lap_n" in reason
+
+
+def test_flying_lap_spread_threshold_admits_every_healthy_historical_batch():
+    """No false positives against real rig history (#746).
+
+    Every self-play-era batch measured on the rig that had >=2 flying laps and a spread under
+    1% must stay VALID; the three measured pathologies must not.
+    """
+    healthy = [  # (out-lap, flying...) in ms, from journal/laps
+        (191890, 180366, 180387),  # huracan @ spa, 2026-08-10
+        (106655, 81505, 81519),  # 911 @ magione, ladder 2
+        (112002, 85072, 85132),  # 911 @ magione, 1.15 rung
+        (145361, 109110, 109107),  # 911 @ magione, 2026-07-14
+    ]
+    for laps in healthy:
+        valid, reason = evaluate_selfplay_iteration(0, _stage_outcome(list(laps)), _batch(*laps))
+        assert valid, f"{laps} should stay VALID but was falsified: {reason}"
+
+    pathological = [
+        (178873, 190068, 155763, 169388),  # amg_gtp @ spa, 22.0%
+        (106655, 80791, 95122),  # 911 @ magione, 17.7%
+        (189509, 167425, 159161),  # 911 @ spa, 5.2%
+    ]
+    for laps in pathological:
+        valid, reason = evaluate_selfplay_iteration(0, _stage_outcome(list(laps)), _batch(*laps))
+        assert not valid, f"{laps} should falsify but was accepted"
+        assert "not repeatable" in reason
 
 
 def test_stage_outcome_readers_round_trip(tmp_path):

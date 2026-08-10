@@ -64,6 +64,13 @@ StageRunner = Callable[[list[str]], int]
 
 DEFAULT_SIDECAR_URL = "ws://127.0.0.1:8765"
 
+# Flying-lap spread above which a self-play iteration is falsified as unrepeatable (#746).
+# Calibrated against every self-play-era batch on the rig: 31 oracle-passing batches, MEDIAN
+# spread 0.02% and only 4 above 1% — the deterministic controller normally repeats to within
+# milliseconds. 5% sits far above that noise floor and below the observed pathologies (5.2%,
+# 17.7%, 22.0%), so it separates "unrepeatable" from "normal" with room on both sides.
+SELFPLAY_MAX_FLYING_LAP_SPREAD = 0.05
+
 
 def _utc_stamp() -> str:
     return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
@@ -307,15 +314,71 @@ def combo_filter_payloads(
     return kept, len(payloads) - len(kept)
 
 
+def flying_lap_consistency(archive_payloads: list[dict]) -> dict:
+    """Lap-time spread across the batch's FLYING laps (pure; #746).
+
+    The batch's lowest ``lap_n`` is the standing-start out-lap and is legitimately far slower
+    than the rest — comparing it against the flyers would make every batch look inconsistent
+    (measured: including it turns a 0.02% median spread into a 19% one). So the out-lap is
+    dropped and only the flying laps are compared.
+
+    Returns ``{"judged": False, "reason": ...}`` whenever consistency cannot be established —
+    fewer than two flying laps, or an archive without the ``lap_n``/``lap_ms`` needed to
+    identify the out-lap and measure the spread. Unjudgeable is NOT a falsification: the batch
+    still faces every other gate, and inventing a verdict from data we do not have would be the
+    opposite of the fail-closed discipline everywhere else in this oracle.
+    """
+    laps: list[tuple[int, float]] = []
+    for payload in archive_payloads:
+        lap = payload.get("lap") if isinstance(payload.get("lap"), dict) else {}
+        lap_n = lap.get("lap_n")
+        lap_ms = lap.get("lap_ms")
+        if not isinstance(lap_n, int) or isinstance(lap_n, bool):
+            return {"judged": False, "reason": "a lap archive has no integer lap_n (cannot identify the out-lap)"}
+        if not isinstance(lap_ms, (int, float)) or isinstance(lap_ms, bool) or lap_ms <= 0:
+            return {"judged": False, "reason": f"lap_n={lap_n} has no positive lap_ms (cannot measure spread)"}
+        laps.append((lap_n, float(lap_ms)))
+    # Duplicate lap_n means the batch is not a clean per-lap set, so "the lowest is the out-lap"
+    # no longer holds and dropping one entry would leave a duplicate flyer skewing the spread.
+    if len({lap_n for lap_n, _ in laps}) != len(laps):
+        return {"judged": False, "reason": "duplicate lap_n in the batch (cannot identify the out-lap)"}
+    if len(laps) < 3:
+        return {
+            "judged": False,
+            "reason": f"only {max(0, len(laps) - 1)} flying lap(s) after the out-lap (need 2 to compare)",
+        }
+    laps.sort()
+    flying = [lap_ms for _, lap_ms in laps[1:]]
+    best, worst = min(flying), max(flying)
+    return {
+        "judged": True,
+        "spread": (worst - best) / best,
+        "best_ms": best,
+        "worst_ms": worst,
+        "out_lap_ms": laps[0][1],
+        "flying_ms": flying,
+    }
+
+
 def evaluate_selfplay_iteration(
-    exit_code: int, outcome: dict | None, archive_payloads: list[dict]
+    exit_code: int,
+    outcome: dict | None,
+    archive_payloads: list[dict],
+    *,
+    max_flying_lap_spread: float = SELFPLAY_MAX_FLYING_LAP_SPREAD,
 ) -> tuple[bool, str]:
     """The keep-last-valid falsification oracle for one envelope step (pure; #577/#244).
 
     An iteration is VALID only when the drive stage passed, the car never needed a recovery,
-    at least one TIMED lap completed with its archive present, and no counted lap is AC-invalid.
-    Anything else falsifies the step — the caller reverts to the last-valid plant and reports
-    the named reason (never a silent retry of the same envelope).
+    at least one TIMED lap completed with its archive present, no counted lap is AC-invalid,
+    and — since #746 — the flying laps are REPEATABLE. Anything else falsifies the step: the
+    caller reverts to the last-valid plant and reports the named reason (never a silent retry
+    of the same envelope).
+
+    Why repeatability belongs here: validity + zero recoveries only prove the envelope was
+    *survivable* once. An envelope the controller cannot reproduce (measured: 80.791 s then
+    95.122 s in one clean stint, #529) was retained as VALID and compounded into the plant,
+    which is exactly the evidence the pace ladder is built on.
     """
     if outcome is None:
         return False, "stage report missing (drive stage did not produce report.json)"
@@ -356,7 +419,23 @@ def evaluate_selfplay_iteration(
             f"archive count {verifiable} < {len(lap_times)} timed laps "
             "(cannot verify every counted lap)"
         )
-    return True, (f"{len(lap_times)} timed lap(s), all archived laps AC-valid, zero recoveries")
+    # Repeatability last: a batch that fails any gate above is already falsified for a more
+    # specific reason, and naming the spread instead would hide it (#746).
+    consistency = flying_lap_consistency(archive_payloads)
+    if consistency["judged"] and consistency["spread"] > max_flying_lap_spread:
+        flying = ", ".join(f"{ms / 1000.0:.3f}s" for ms in consistency["flying_ms"])
+        return False, (
+            f"flying laps not repeatable at this envelope: spread "
+            f"{consistency['spread'] * 100:.1f}% > {max_flying_lap_spread * 100:.1f}% "
+            f"({flying}) — drivable once, not reproducible"
+        )
+    if consistency["judged"]:
+        suffix = f", flying-lap spread {consistency['spread'] * 100:.2f}%"
+    else:
+        suffix = f", consistency unjudged ({consistency['reason']})"
+    return True, (
+        f"{len(lap_times)} timed lap(s), all archived laps AC-valid, zero recoveries{suffix}"
+    )
 
 
 def iteration_scale(base: float, step: float, index: int, cap: float) -> float:
@@ -643,7 +722,12 @@ def run_selfplay(
         base_payloads, car_id=args.car, track_id=args.track, layout=args.track_layout
     )
     base_valid, base_reason = evaluate_selfplay_iteration(0, base_outcome, base_payloads)
-    selfplay["base"] = {"valid": base_valid, "reason": base_reason, "lap_times_ms": base_laps}
+    selfplay["base"] = {
+        "valid": base_valid,
+        "reason": base_reason,
+        "lap_times_ms": base_laps,
+        "flying_lap_consistency": flying_lap_consistency(base_payloads),
+    }
     base_l3 = stage_l3_summary(base_outcome)
     if base_l3 is not None:
         selfplay["base"]["l3"] = base_l3
@@ -1006,6 +1090,9 @@ def run_selfplay(
         valid, reason = evaluate_selfplay_iteration(code, outcome, archive_payloads)
         entry["valid"] = valid
         entry["reason"] = reason
+        # Record the measured spread whether or not it falsified, so a ladder can be audited
+        # after the fact for envelopes that were merely survivable rather than repeatable (#746).
+        entry["flying_lap_consistency"] = flying_lap_consistency(archive_payloads)
         # The pre-drive check above narrows the window but cannot close it: `auto_drive` loads the
         # plant after taking the rig lock, which we do not hold. So confirm afterwards that the
         # step really did run the plant we expected, and refuse to attribute the verdict when it
