@@ -389,7 +389,28 @@ def test_safety_confirmed_hijack_cleanup_uses_remaining_launch_budget():
     assert report.ok is True
     assert launches == [True, True]
     assert restarts == [True]
-    assert report.notes[0] == "AC safety shutdown confirmed"
+    # #738 surfaces successful-launch details as notes too, so assert membership, not order.
+    assert "AC safety shutdown confirmed" in report.notes
+
+
+def test_successful_launch_detail_lands_in_report_notes():
+    # #738: the launch leg's success detail (attempt count + csp_dialog_skips forensics)
+    # previously vanished on success; overnight ladders read report.json, not the console.
+    ctrl = FakeController()
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=lambda _config: (True, "LIVE after 1 launch attempt(s); csp_dialog_skips=2"),
+            hijack=lambda c: ctrl,
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+    assert report.ok is True
+    assert any(
+        note == "launch: LIVE after 1 launch attempt(s); csp_dialog_skips=2"
+        for note in report.notes
+    )
 
 
 def test_happy_path_window_mode_passes_and_tears_down():
@@ -1589,7 +1610,8 @@ def test_track_mismatch_close_failure_preserves_primary_mismatch():
 
     assert report.stage == "launch"
     assert report.error is not None and "loaded track" in report.error
-    assert report.notes and "native close failed" in report.notes[0]
+    # #738 surfaces successful-launch details as notes too, so scan rather than index.
+    assert any("native close failed" in note for note in report.notes)
 
 
 def test_track_mismatch_telemetry_cleanup_uses_remaining_relaunch_budget():
@@ -1622,7 +1644,8 @@ def test_track_mismatch_telemetry_cleanup_uses_remaining_relaunch_budget():
     assert report.ok is True
     assert launches == [True, True]
     assert report.cleanup_holds == (retained,)
-    assert report.notes and "read-only telemetry mapping retained" in report.notes[0]
+    # #738 surfaces successful-launch details as notes too, so scan rather than index.
+    assert any("read-only telemetry mapping retained" in note for note in report.notes)
     assert landed.closed is True
 
 
@@ -1656,7 +1679,8 @@ def test_retained_cleanup_note_survives_later_hijack_early_exit():
     )
 
     assert report.stage == "hijack"
-    assert report.notes and "read-only telemetry mapping retained" in report.notes[0]
+    # #738 surfaces successful-launch details as notes too, so scan rather than index.
+    assert any("read-only telemetry mapping retained" in note for note in report.notes)
     assert len(report.cleanup_holds) == 1
 
 

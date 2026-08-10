@@ -976,6 +976,10 @@ async def run_auto_drive(
                 last_launch_error = reason
                 continue
             launched_once = True
+            # #738 forensics: a successful launch's detail (attempt count, csp_dialog_skips
+            # evidence) must survive into report.json — overnight ladders read the evidence
+            # bundle, not the console stream, and this string was previously dropped on success.
+            launch_notes.append(f"launch: {reason}")
             # Reset so the post-loop stage report reflects THIS attempt's terminal cause, not a
             # stale launch/mismatch error from an earlier attempt (#537 Codex P2 observability): a
             # relaunch that reaches LIVE but fails to hijack must read as stage="hijack", while one
