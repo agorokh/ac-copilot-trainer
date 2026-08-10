@@ -23,7 +23,7 @@ import sys
 import time
 import urllib.parse
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -135,6 +135,10 @@ class EntryLaunchResult:
     last_phase: EntryPhase | None
     events: tuple[ActuatorEvent, ...] = ()
     reason: str = ""
+    # #738: CSP patch-data dialog skips delivered during this launch (None = watcher not armed —
+    # non-CM actuator, opt-out, or env kill). Parallels resilient_launch's report.launch field so
+    # the daemon/CLI path surfaces the same forensic instead of a silent black hole (antigravity).
+    dialog_skips: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -782,6 +786,7 @@ class EntryLauncher:
         config: EntryLauncherConfig | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        log: Callable[[str], None] | None = None,
         dialog_watcher_factory: Callable[[], object] | None = None,
     ) -> None:
         self.actuator = actuator
@@ -789,6 +794,7 @@ class EntryLauncher:
         self.config = config or EntryLauncherConfig()
         self.clock = clock
         self.sleep = sleep
+        self._log = log
         # Injectable so CI can assert the daemon/CLI shared path arms the watcher without any
         # real UIA. None → build the real CmSkipWatcher lazily in run() for CM actuators (#738).
         self._dialog_watcher_factory = dialog_watcher_factory
@@ -811,7 +817,10 @@ class EntryLauncher:
             if not dialog_skip_enabled(False):
                 return None
             cm_image = self.actuator.cm_exe.name
-            factory = lambda: CmSkipWatcher(process_image=cm_image)  # noqa: E731
+            log = self._log
+            # Pass the logger so daemon/CLI-path UIA errors and skips are not silent
+            # (antigravity #743): consistency with auto_drive / resilient_launch.
+            factory = lambda: CmSkipWatcher(process_image=cm_image, log=log)  # noqa: E731
         watcher = factory()
         start = getattr(watcher, "start", None)
         if callable(start):
@@ -819,56 +828,76 @@ class EntryLauncher:
         return watcher
 
     def run(self) -> EntryLaunchResult:
-        """Normalize, launch, and retry until driving or exhausted."""
+        """Normalize, launch, and retry until driving or exhausted.
 
+        Arms the #738 CSP-dialog skip watcher for a CM launch across the whole loop and surfaces
+        its forensic evidence on the returned result (``dialog_skips`` + a ``reason`` suffix) —
+        the daemon/CLI path must not silently discard skips the way an earlier cut did.
+        """
+
+        watcher = self._start_dialog_watcher()
+        skips: int | None = None
+        summary: str | None = None
+        try:
+            result = self._run_launch_loop()
+        finally:
+            if watcher is not None:
+                skips = getattr(watcher, "skips", None)
+                get_summary = getattr(watcher, "summary", None)
+                if callable(get_summary):
+                    summary = get_summary()
+                stop = getattr(watcher, "stop", None)
+                if callable(stop):
+                    stop()
+        if watcher is not None:
+            reason = result.reason
+            if summary:
+                reason = f"{reason}; {summary}" if reason else summary
+            result = replace(result, reason=reason, dialog_skips=skips)
+        return result
+
+    def _run_launch_loop(self) -> EntryLaunchResult:
         events: list[ActuatorEvent] = []
         polls = 0
         last_phase: EntryPhase | None = None
         last_reason = ""
 
-        watcher = self._start_dialog_watcher()
-        try:
-            normalized = self.actuator.normalize_prior_state()
-            if normalized is not None:
-                events.append(normalized)
+        normalized = self.actuator.normalize_prior_state()
+        if normalized is not None:
+            events.append(normalized)
 
-            for launch_index in range(self.config.max_launches):
-                if launch_index == 0:
-                    events.append(self.actuator.launch())
-                else:
-                    events.append(self.actuator.relaunch())
+        for launch_index in range(self.config.max_launches):
+            if launch_index == 0:
+                events.append(self.actuator.launch())
+            else:
+                events.append(self.actuator.relaunch())
 
-                attempt = self._poll_one_launch()
-                polls += attempt.polls
-                events.extend(attempt.events)
-                last_phase = attempt.last_phase
-                last_reason = attempt.reason
-                if attempt.outcome is EntryOutcome.DRIVING:
-                    return EntryLaunchResult(
-                        EntryOutcome.DRIVING,
-                        launches=launch_index + 1,
-                        polls=polls,
-                        last_phase=EntryPhase.DRIVING,
-                        events=tuple(events),
-                        reason=attempt.reason,
-                    )
+            attempt = self._poll_one_launch()
+            polls += attempt.polls
+            events.extend(attempt.events)
+            last_phase = attempt.last_phase
+            last_reason = attempt.reason
+            if attempt.outcome is EntryOutcome.DRIVING:
+                return EntryLaunchResult(
+                    EntryOutcome.DRIVING,
+                    launches=launch_index + 1,
+                    polls=polls,
+                    last_phase=EntryPhase.DRIVING,
+                    events=tuple(events),
+                    reason=attempt.reason,
+                )
 
-            return EntryLaunchResult(
-                EntryOutcome.FAILED,
-                launches=self.config.max_launches,
-                polls=polls,
-                last_phase=last_phase,
-                events=tuple(events),
-                reason=(
-                    f"not driving after {self.config.max_launches} launch attempt(s)"
-                    + (f"; last attempt: {last_reason}" if last_reason else "")
-                ),
-            )
-        finally:
-            if watcher is not None:
-                stop = getattr(watcher, "stop", None)
-                if callable(stop):
-                    stop()
+        return EntryLaunchResult(
+            EntryOutcome.FAILED,
+            launches=self.config.max_launches,
+            polls=polls,
+            last_phase=last_phase,
+            events=tuple(events),
+            reason=(
+                f"not driving after {self.config.max_launches} launch attempt(s)"
+                + (f"; last attempt: {last_reason}" if last_reason else "")
+            ),
+        )
 
     def _poll_one_launch(self) -> EntryLaunchResult:
         detector = DrivingEntryDetector(
@@ -1004,6 +1033,8 @@ def _main(argv: Sequence[str] | None = None) -> int:
             required_live_reads=args.required_live_reads,
             stagnation_seconds=args.stagnation_seconds,
         ),
+        # Surface #738 dialog-watcher progress/errors on the CLI path (antigravity #743).
+        log=lambda msg: print(f"[entry] {msg}"),
     )
     result = launcher.run()
     for event in result.events:

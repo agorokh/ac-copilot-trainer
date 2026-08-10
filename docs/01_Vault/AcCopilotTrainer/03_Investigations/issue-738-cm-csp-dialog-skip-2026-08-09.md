@@ -78,10 +78,36 @@ Codex was slow (~9 min, past the first two cooldowns) but landed. Fixes on branc
   duplicated except blocks. Both done (finally + explicit pre-`os._exit` stop, since `os._exit`
   bypasses finally). 12 new tests; `make ci-fast` green.
 
-## Pending re-verification
+## Signature gate CONFIRMED against reality (`4ae1cb6`, AG_PC 2026-08-10 01:25)
 
-The signature gate (#2) must be confirmed against the REAL dialog's UIA text (title is
-"Waiting…"; content must contain a signature). Added `--dump-tree` diagnostic for this; will
-re-run a launch and, if the failing fetch reproduces, dump the dialog's text to confirm a
-signature hit before final merge. If it does not reproduce this session, the WPF-exposure
-reasoning + synthetic proof stand and the miss-logging makes any gap self-diagnosing.
+`--dump-tree` captured the real CSP-data dialog during a reproduced failing-fetch launch:
+`title="Waiting…"` (generic — title-only gating would miss it), content
+`"Loading data for Custom Shaders Patch…"` + `"Config for track Magione / Loading entries
+list…"`, buttons `[Skip, Hide, Cancel]` → **`matches_signature: true`**. WPF exposes the
+TextBlocks as UIA Text exactly as reasoned; content, not title, is the durable identity.
+
+**The finding-2 risk is real and the gate prevents it.** The same capture caught a *second*
+Skip-bearing `"Waiting…"` dialog — content `"Waiting for the end of race…"` → **`matches_signature:
+false`**. The pre-fix broad logic (any CM window + a Skip button) would have clicked it; the
+signature gate leaves it alone. So the fix is not just theoretically correct — a false target
+genuinely occurs on this rig.
+
+**Launch outcome (fixed code, unmodified path):** `PASS (stage=done)`, **attempts=1**,
+`csp_dialog_skips=1` (exactly one skip, on the real dialog; surfaced in `report.notes`), 1 timed
+lap 105.935 s, 210.7 km/h, HUD RENDERING (screenshot inspected). Evidence bundle
+`.scratch/harness-evidence/pr743-dialog-skip-reverify/`; capture
+`.scratch/pr743-dumptree-capture.log`. PR comment #743#issuecomment-5234967691.
+
+## Review round 2 (`4ae1cb6`) — Codex clean; one daemon MEDIUM fixed
+
+- **Codex R2: CLEAN** ("Didn't find any major issues", current-SHA reviewed-commit comment
+  01:29:46Z). Gating reviewer satisfied; round-1's 5 threads resolved.
+- **Daemon (advisory, cursor-lens quota-skipped again):** grok HIGH "signature gate not
+  live-verified" — already satisfied by the `--dump-tree` capture above (done ~same time the
+  daemon looked); replied with the evidence. antigravity MEDIUM "EntryLauncher discards watcher
+  forensics + no log callback" — **objectively correct, fixed** in the next commit: the shared
+  path now passes a `log` callback (CLI → `print`) and surfaces `dialog_skips` + a summary suffix
+  on `EntryLaunchResult`, matching auto_drive / resilient_launch. Two new tests.
+
+This closed the last real gap from finding 3: the daemon path is now covered *and* observable,
+not covered-but-silent.

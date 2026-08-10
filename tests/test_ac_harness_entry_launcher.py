@@ -795,9 +795,11 @@ def test_terminate_graceful_grace_validation(monkeypatch):
 # arms the CSP-dialog skip watcher for CM launches — Codex #743 "wire the daemon too".
 # ---------------------------------------------------------------------------
 class _FakeWatcher:
-    def __init__(self) -> None:
+    def __init__(self, skips: int = 0, summary: str | None = None) -> None:
         self.started = False
         self.stopped = False
+        self.skips = skips
+        self._summary = summary
 
     def start(self) -> bool:
         self.started = True
@@ -805,6 +807,9 @@ class _FakeWatcher:
 
     def stop(self) -> None:
         self.stopped = True
+
+    def summary(self) -> str | None:
+        return self._summary
 
 
 def _one_launch_driving_factory():
@@ -838,6 +843,38 @@ def test_entry_launcher_arms_and_stops_dialog_watcher_on_cm_launch():
     assert len(watchers) == 1
     assert watchers[0].started is True
     assert watchers[0].stopped is True  # stopped via the run() finally
+
+
+def test_entry_launcher_surfaces_dialog_watcher_forensics_on_result():
+    # antigravity #743: the daemon/CLI path must not silently discard skips — the count and a
+    # summary must ride the returned result, mirroring auto_drive / resilient_launch.
+    watcher = _FakeWatcher(skips=2, summary="csp_dialog_skips=2")
+    clock = FakeClock()
+    result = EntryLauncher(
+        FakeActuator(),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(required_live_reads=2),
+        clock=clock,
+        sleep=clock.sleep,
+        dialog_watcher_factory=lambda: watcher,
+    ).run()
+
+    assert result.dialog_skips == 2
+    assert "csp_dialog_skips=2" in result.reason
+
+
+def test_entry_launcher_result_has_no_dialog_skips_when_watcher_absent():
+    # No watcher (opt-out / non-CM) → dialog_skips stays None, reason untouched.
+    clock = FakeClock()
+    result = EntryLauncher(
+        FakeActuator(),
+        reader_factory=_one_launch_driving_factory(),
+        config=_config(required_live_reads=2, cm_dialog_skip=False),
+        clock=clock,
+        sleep=clock.sleep,
+        dialog_watcher_factory=lambda: _FakeWatcher(),
+    ).run()
+    assert result.dialog_skips is None
 
 
 def test_entry_launcher_stops_watcher_even_when_launch_raises():
