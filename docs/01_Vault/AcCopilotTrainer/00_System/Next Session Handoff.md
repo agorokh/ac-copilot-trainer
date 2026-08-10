@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-08-10T11:45:00Z
+last_updated: 2026-08-10T13:52:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-746-749-repeatability-and-thermal-gate-2026-08-10.md
   - AcCopilotTrainer/03_Investigations/issue-738-cm-csp-dialog-skip-2026-08-09.md
@@ -134,6 +134,32 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-08-10) — #749 observability: a stalled refit now NAMES its failing term (PR #753 MERGED `7026286`)
+
+The `#749` **physics** fix is deliberately still open; this is the diagnostic half.
+
+- **What shipped:** `selfplay_refine_result` attaches `thermal_eligibility` to a refused refit —
+  per lap the failing predicates plus measured coverage / stability / wheel-spread / core-temp /
+  setup-hash, the thresholds they are judged against, `failing_term_counts`, and all tied
+  `dominant_terms`. `auto_alien` prints the headline beside the refine-FAILED line, so a ladder
+  that has silently stopped compounding is visible in the console.
+- **Why it mattered:** diagnosing the 2026-08-10 stall meant re-running `observe_lap_tyre_state`
+  over the archives by hand. The bare exception named only the symptom.
+- **Six review rounds, all one theme — the report claiming more than it knew.**
+  `observe_lap_tyre_state` returns ONE collapsed reason for five distinct terms, so the first
+  version could not actually name the failing term (the thing the PR claimed); an early observer
+  exit returns ZEROED measurements, so re-deriving from them invented four failures for one cause;
+  ties were resolved by `Counter` insertion order; an identity failure masked a co-occurring
+  measured one; and the reported wheel spread is **rounded**, so it cannot establish which side of
+  the cap the raw value fell on — that band now reports `wheel_spread_at_limit` rather than
+  guessing. A lap the observer could not read at all suppresses the headline entirely.
+- Post-merge classification: **no flags**.
+
+**Still open on #749:** the physics decision — temperature-tagged friction rows (option a).
+Option (c), a settling budget, is **refuted by trace measurement**; the "gate systematically
+rejects fast laps" framing is **withdrawn** (3/71 rejections across the full history). Read
+[[issue-746-749-repeatability-and-thermal-gate-2026-08-10]] before re-deriving either.
 
 ## Delivered (2026-08-10) — #746 CLOSED: the self-play oracle accepted UNREPEATABLE envelopes (PR #748 MERGED `c9ec97c`)
 
