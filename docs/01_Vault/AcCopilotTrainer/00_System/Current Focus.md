@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-27T03:35:00Z
+last_updated: 2026-07-27T18:05:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-529-pace-ladder-115-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-695-qss-apex-envelope-2026-07-26.md
@@ -61,9 +61,12 @@ factor was **retaining** the plant refit: identical 1.15 scale, plant QSS floor 
 reference is stated on the issue for the operator to adjudicate. Detail:
 [[issue-529-pace-ladder-115-2026-07-26]].
 
-**Open now:** PR [#702](https://github.com/agorokh/ac-copilot-trainer/pull/702) (#697
-`remote_launcher` off-rig transport) — CI green, 0 threads, live-proven, **merge blocked only by a
-Codex usage-limit wall**. New issue [#703](https://github.com/agorokh/ac-copilot-trainer/issues/703)
+**Delivered (2026-07-27):** PR [#702](https://github.com/agorokh/ac-copilot-trainer/pull/702)
+MERGED [`88c1e59`](https://github.com/agorokh/ac-copilot-trainer/commit/88c1e59) — #697
+`remote_launcher` off-rig transport, live-proven driving the G2 ladder from session 0. Issue #697
+CLOSED. Merged by the operator **without** the Codex gate (15 consecutive usage-limit refusals), and
+the final head `7d32cb1` carries fixes the self-hosted reviewer never saw — do not read the merge as
+reviewer-validated. New issue [#703](https://github.com/agorokh/ac-copilot-trainer/issues/703)
 — a falsified ladder step discards the evidence-backed plant refit made in the same iteration; that
 cost ladder 1 ~3.5 s, so it is the top pace lever remaining. #627 is *not* the binding constraint it was assumed to be: a ~4 h
 hold restored 6 launch cycles, no reboot needed.

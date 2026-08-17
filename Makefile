@@ -53,6 +53,7 @@ memory-contract-check:
 
 ci-policy:
 	$(PYTHON) scripts/check_policy_docs.py
+	$(PYTHON) scripts/check_mcp_preflight.py
 
 ci-agent-proof:
 	$(PYTHON) scripts/check_agent_forbidden.py

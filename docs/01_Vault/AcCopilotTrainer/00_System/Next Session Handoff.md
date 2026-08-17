@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-27T04:30:00Z
+last_updated: 2026-07-27T18:05:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-529-pace-ladder-115-2026-07-26.md
   - AcCopilotTrainer/03_Investigations/issue-695-qss-apex-envelope-2026-07-26.md
@@ -120,6 +120,44 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-27) — **#697 CLOSED / PR #702 MERGED** `88c1e59`: off-rig transport entrypoint
+
+`tools/ac_harness/remote_launcher.py` + `_remote_exec.py` replace the hand-run `schtasks` runbook
+for driving the harness from off-rig. **Live-proven**: it drove #529's G2 ladder end to end from an
+SSH session-0 login (`installed app provenance: match`, `Scheduled Task State: Disabled`,
+`verified_complete: true`, `exit_code: 0`), and `cleanup`/`reap` left no task behind. 136 tests;
+`make ci-fast` green. Post-merge classification: **no** migration/env/deps/workflow flags.
+
+**Design, in one line:** `/tr` runs the repo's own interpreter against a version-controlled shim —
+never a generated script in the agent-writable `.scratch` tree — the shim re-validates argv against
+an explicit payload-module allowlist and spawns with `shell=False`, and the `/sc once` trigger is
+**disabled immediately after `/run`** rather than defended against with marker files.
+
+### Two things about this merge that the next session must not misread
+
+1. **The Codex gate was never satisfied.** Under the active rollback Codex is the gating reviewer,
+   and it refused **15 consecutive rounds** (`03:16`→`16:52Z`) with *"You have reached your Codex
+   usage limits for code reviews"* — each within ~10 s of the trigger. The operator merged
+   explicitly, which is one of the two documented unblockers. **CI green + zero unresolved threads
+   is exactly what an unreviewed PR looks like** — do not read this merge as reviewer-validated.
+2. **Round 15's fixes were never reviewer-checked.** The self-hosted daemon's review for the final
+   head `7d32cb1` had **not posted** when the merge landed. Everything up to `01ff95f` was reviewed
+   and fixed; `7d32cb1` (the payload-module allowlist + four correctness fixes) went in unreviewed.
+   If the daemon posts against that SHA retroactively, treat its findings as live work.
+
+### What the review rounds actually cost, and what they bought
+
+Fifteen rounds; the daemon and Qodo found something real in **every** one, and **five** of them
+found a defect in the *previous round's fix*. The recurring shape was mine: fixing one layer below
+the invariant — shell metacharacters → interpreter flags → interpreter *path* → the module
+namespace; and pairing two guards that cancelled each other (exclusive-create + append-on-failure).
+The fleet-value line: a green run proves nothing about a path a run never takes — the `/sc once`
+double-execution bug never fired because every ladder ran longer than the 5-minute delay.
+
+**Residual, stated rather than implied:** every agent on this rig runs as the same Windows account,
+so no filesystem location is beyond a peer's reach. The design makes tampering **fail closed** and
+removes command injection; it does **not** create isolation.
 
 ## Delivered (2026-07-26 PM) — **#529 G2 MET: 80.791 s** at Magione (floor was 82.7 s); #697 entrypoint live
 
@@ -256,46 +294,35 @@ disabled (silent 3 h wait), `$car`/`$track` were interpolated raw into an execut
 ascii encoding mangles non-ASCII paths. Guards assert their own preconditions; steps 3/4 split so an
 agent cannot paste itself into a blocking wait. #697 still OPEN for the script.
 
-## RESUME — #529 G2, and PR #702's Codex quota wall
+## RESUME — #529 cold-start gates; #703; a possible unreviewed-SHA sweep
 
-**Supersedes the previous "blocked on a rig reboot" resume** (2026-07-26 AM), which was wrong on
-both halves: the 1.15/1.20 rungs *were* driven, and no reboot was needed — a ~4 h hold carried
-~11 landed launch cycles across two full ladders.
+**PR #702 / issue #697 are DONE** (merged `88c1e59`, 2026-07-27T17:51:56Z) — that section is
+superseded. Local `main` is at `88c1e59`; the PR branch and its ephemeral worktree were removed by
+the post-merge steward (gov-hub#209 teardown fired and worked).
 
-**1. PR [#702](https://github.com/agorokh/ac-copilot-trainer/pull/702) (#697) — merge when Codex can
-review.** Head is `279af83`. Everything else is done: 0 review threads, `make ci-fast: OK`,
-72 tests, live-proven on the rig including `cleanup`/`reap`. The only blocker
-is the Codex usage-limit wall — **five** consecutive trigger+cooldown rounds
-(`03:17`, `03:36`, `03:54`, `04:09`, `04:24` UTC) each drew
-*"You have reached your Codex usage limits for code reviews"*. Re-run the atomic
-trigger/cooldown/audit block from `/resolve-pr` § Bot triggers once the quota rolls; if it still
-refuses, that is a genuine operator escalation, not an unfinished loop.
+**1. Possible follow-up on the unreviewed SHA.** `7d32cb1` merged without a daemon review (see the
+delivered section). Cheap check first: re-read the daemon's review list for that commit_id. If it
+posted findings retroactively, they are live work against `tools/ac_harness/remote_launcher.py`;
+if it never posted, nothing to do. Do **not** assume clean from silence.
 
-**2. #529 — G2 is met; the remaining gates are the cold-start ones.** Still unclaimed: **G1 as
-written** (cold start on an **unseen** combo, ≤20 laps — the pace band is already cleared on the seed
-combo, so this is about generality, not speed), **G1b** (novel archetype), **G3** (needs a human at
-the wheel across sessions — operator-gated, not rig-gated), and **P4**'s first real rig scientist
-batch. The obvious next rig run is a cold start on a genuinely unseen combo (no plant artifact), and
-`auto_alien` already does identify→line→drive in one invocation.
+**2. [#703](https://github.com/agorokh/ac-copilot-trainer/issues/703) is the top pace lever.** A
+falsified ladder step discards the evidence-backed plant refit made in the same iteration; that cost
+ladder 1 ~3.5 s. Until it lands, never set `--max-scale` to a rung you expect to falsify.
 
-**3. Push G2 further, and resolve #703.** The plant on the rig is now the **retained** refined fit,
-so a fresh `--max-scale 1.15` ladder starts from a lower floor again and should compound. Watch the
-line build's QSS number (87.14 s at the end of tonight): lower means the refit stuck.
+**3. #529's remaining gates are about generality, not speed.** G2 is met (80.791 s) and G1's pace
+band is cleared — both on the **seed** combo with a pre-identified plant. Unclaimed: **G1 as
+written** (cold start on an *unseen* combo, ≤20 laps), **G1b** (novel archetype), **G3** (needs a
+human at the wheel across sessions — operator-gated), and **P4**'s first real rig scientist batch.
+Note G1's pace half needs a Track-Titan reference for whichever combo is tested — a **data**
+dependency, not a rig one.
 
-```
-python -m tools.ac_harness.remote_launcher start --label alien-529-compound -- \
-    -m tools.ac_harness.auto_alien --car ks_porsche_911_gt3_r_2016 --track magione \
-    --laps 3 --ggv-scale 1.0 --scale-step 0.15 --iterations 2 --max-scale 1.15
-```
+**Off-rig now has a real entrypoint** (merged): `python -m tools.ac_harness.remote_launcher start
+--label <id> -- -m tools.ac_harness.auto_alien --car … --track … --evidence-dir
+.scratch/harness-evidence/{run_id}`, then `poll` / `wait` / `cleanup` / `reap`. Diagnosis of *why*
+session 0 cannot drive AC stays in `docs/10_Development/18_Autonomous_Harness.md`.
+**Check the app junction's checkout is at the merged `main` tip first** — it was stale on arrival
+three sessions running. Rig was left restored to merged `main` with no leftover scheduled tasks.
 
-**Until #703 lands, never set the top rung to one you expect to falsify** — ladder 1 paid 3.5 s for
-exactly that. If the operator wants the strict TC-off comparison against the 82.7 s reference, that
-is one more ladder with `TractionControl:0`.
-
-**Off-rig?** Use `python -m tools.ac_harness.remote_launcher` (#697 / PR #702) — session 0 cannot
-drive AC. Diagnosis in `docs/10_Development/18_Autonomous_Harness.md` § *Driving the harness from
-off-rig*. **Check the app junction's checkout is at the merged `main` tip first** — it has been
-stale on arrival three sessions running.
 
 ## Delivered (2026-07-25) — #381 CLOSED: critical Brake articulation accepted and guarded
 
