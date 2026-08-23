@@ -11,9 +11,14 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
 
+# A label-at-create PR (`gh pr create --label vault-only`) fires both `opened`
+# and `labeled`. Serialize per PR so duplicate runs do not race each other; do
+# not cancel, because each run should finish with a real success/failure result
+# (template-repo#238 — a cancelled run throws away one of the few 300s merge
+# windows the event dispatched).
 concurrency:
   group: vault-automerge-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: write
