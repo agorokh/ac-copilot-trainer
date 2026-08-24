@@ -90,15 +90,12 @@ jobs:
             echo "::error::hub-root '${HUB_ROOT}' is not an absolute path"
             exit 1
           fi
-          # gov-hub#305: the canonical producer is the hub's TOP-LEVEL `process_miner`
-          # package + `scripts/process_miner.py`. It is NOT `tools/process_miner` — a spoke
-          # `tools/` package shadows a PYTHONPATH-sourced `tools.process_miner`, which is why
-          # the hub moved it. This spoke's own `tools/process_miner` (restored below) is a
-          # different, local thing; do not conflate them.
-          if [[ ! -f "${HUB_ROOT}/scripts/process_miner.py" || ! -d "${HUB_ROOT}/process_miner" ]]; then
-            echo "::error::hub-root '${HUB_ROOT}' does not contain the canonical producer"
-            exit 1
-          fi
+          # NOTE: hub layout is deliberately NOT re-asserted here. `process-miner/action.yml`
+          # emits `hub-root` at exactly one site, and only after it has itself verified
+          # `scripts/process_miner.py` + the top-level `process_miner/` package; if it cannot,
+          # it exits 1 and this output is empty, which the non-empty check above catches.
+          # A second copy of that layout carries no independent signal and only drifts —
+          # it is what left four spokes RED for 13 days (gov-hub#461, gov-hub#305).
           if [[ ! "${LEARNED_COUNT}" =~ ^[0-9]+$ ]]; then
             echo "::error::learned_artifact_files_count is not an integer (got '${LEARNED_COUNT}')"
             exit 1
