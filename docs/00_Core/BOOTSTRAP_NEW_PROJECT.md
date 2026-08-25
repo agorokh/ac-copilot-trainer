@@ -73,6 +73,8 @@ If you did not use Copier, complete these manually:
 - [ ] Update `.github/pull_request_template.md` and issue templates for your team.
 - [ ] Replace `.github/agents/*.agent.md` with a real custom agent or delete if unused (avoid stale third-party names in prompts).
 
+- [ ] **Private child repos: register a self-hosted runner slot BEFORE relying on CI.** A private repo gets no hosted-runner fallback on this fleet — until a runner-fleet row exists and is reconciled, the first CI run **queues forever with no red build** (workstation-ops#2896, observed bootstrapping tuning-atelier). In **workstation-ops**: add `'<github_org>/<repo>': {instances: 1}` to `ops/github-runner/fleet.yaml` (or the host map that owns your lane), add the matching `github-runner-<repo>` row to `ops/service.yaml` (`test_service_catalog_tracks_every_declared_slot` enforces the lockstep), then run reconcile `--apply` on that runner host. Defense-in-depth: the hourly registration sweep (workstation-ops#2908) flags an unregistered private repo within ~90 minutes of its first starving dispatch — but the bootstrap hour is on this checklist.
+
 ## 6. MCP and local LLMs
 
 - [ ] Confirm `.mcp.json` carries only repo-local servers launched via their wrappers (e.g. `repo-knowledge` via `bash scripts/mcp/repo-knowledge.sh`); GitHub work goes through the `gh` CLI. The retired github/context7 MCP servers must not be added (governance-hub#274; see [TOOLCHAIN.md](TOOLCHAIN.md), skill **`new-project-setup`**). <!-- mcp-retirement-ok -->
