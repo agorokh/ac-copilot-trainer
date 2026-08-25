@@ -151,7 +151,7 @@ Use this checklist before you call the repo “bootstrapped”:
 - [ ] `python3 scripts/check_bootstrap_complete.py` prints no warnings.
 - [ ] `.github/agents/issue-refiner.agent.md` (and any copied agent prompts) point at `docs/01_Vault/<YourProjectKey>/...`, not `AcCopilotTrainer`.
 - [ ] `make ci-fast` passes; test PR confirms policy + CI workflows.
-- [ ] CI compute settled per visibility: private → fleet row registered **and reconciled** (self-hosted lanes actually pick up the test PR's jobs); public → `runs-on` migrated to GitHub-hosted (no self-hosted slot).
+- [ ] CI compute settled per visibility: private → fleet row registered **and reconciled** (self-hosted lanes actually pick up the test PR's jobs); public → the dedicated CI-migration issue is **closed** (hosted images, fork guards removed, private-action callers replaced, billed-runner gates addressed) — or the repo stayed private. No self-hosted slot for public repos.
 - [ ] Invariants and glossary indexes reflect your domain; new knowledge uses small linked nodes per `00_Graph_Schema.md`.
 - [ ] `ops/service.yaml` exists with the correct `repo_id` and either a populated `services:` block or an explicit `services: []` (catalog-aware-no-services), and the repo is registered in `workstation-ops/ops/sources.yaml`.
 
