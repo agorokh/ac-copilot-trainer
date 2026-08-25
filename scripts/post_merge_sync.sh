@@ -66,6 +66,8 @@ fi
 cd "$REPO_ROOT"
 
 STASH_LABEL="post-merge-pr${PR}-wip"
+STASH_BASE_BRANCH=""
+STASH_BASE_OID=""
 SAVED_STASH=""
 
 stash_wip_if_dirty() {
@@ -73,6 +75,8 @@ stash_wip_if_dirty() {
     echo "Working tree dirty; stashing as '${STASH_LABEL}'..."
     if git stash push --include-untracked --message "$STASH_LABEL" >/dev/null 2>&1; then
       SAVED_STASH="$(git stash list --grep="$STASH_LABEL" --pretty=format:'%gd' | head -n1)"
+      STASH_BASE_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+      STASH_BASE_OID="$(git rev-parse --verify HEAD 2>/dev/null || true)"
       echo "Stashed: ${SAVED_STASH:-(unknown ref)}"
     else
       echo "error: git stash push failed; resolve the working tree and retry." >&2
@@ -83,6 +87,22 @@ stash_wip_if_dirty() {
 
 restore_stash_best_effort() {
   if [[ -n "$SAVED_STASH" ]]; then
+  # agent-factory#1778: a stash diff is computed against the branch it was taken on.
+  # This script checks out main between stash and restore, so a pop here would replay
+  # that diff onto a different tree and write conflict markers into the operator's own
+  # files. Refuse instead: the stash stays intact and recovery is exact.
+  local _head_now=""
+  _head_now="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+  if [[ -n "$STASH_BASE_OID" && -n "$_head_now" && "$_head_now" != "$STASH_BASE_OID" ]]; then
+    echo "" >&2
+    echo "error: refusing to restore the stash here — it was taken on a different base." >&2
+    echo "       stashed on: ${STASH_BASE_BRANCH:-<unknown>} (${STASH_BASE_OID})" >&2
+    echo "       HEAD now:   $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '<detached>') (${_head_now})" >&2
+    echo "       Your WIP is intact. Restore it with:" >&2
+    echo "         git checkout ${STASH_BASE_BRANCH:-$STASH_BASE_OID}" >&2
+    echo "         git stash pop \"$SAVED_STASH\"" >&2
+    exit 10
+  fi
     if git stash pop "$SAVED_STASH" >/dev/null 2>&1; then
       echo "Restored stash $SAVED_STASH"
       SAVED_STASH=""
