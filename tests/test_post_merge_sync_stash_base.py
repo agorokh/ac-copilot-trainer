@@ -52,6 +52,4 @@ def test_stash_restore_refuses_a_different_base() -> None:
         if "echo" not in body[line_start : m.start()]:
             pops.append(m.start())
     assert pops, "no actual `git stash pop` found in the restore function"
-    assert guard_at < min(pops), (
-        "the base check must run BEFORE the pop, not after it"
-    )
+    assert guard_at < min(pops), "the base check must run BEFORE the pop, not after it"
