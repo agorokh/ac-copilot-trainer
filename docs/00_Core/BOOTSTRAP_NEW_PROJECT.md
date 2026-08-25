@@ -73,6 +73,8 @@ If you did not use Copier, complete these manually:
 - [ ] Update `.github/pull_request_template.md` and issue templates for your team.
 - [ ] Replace `.github/agents/*.agent.md` with a real custom agent or delete if unused (avoid stale third-party names in prompts).
 
+- [ ] **Settle CI compute BEFORE relying on CI — the copied lanes are all self-hosted, act by visibility.** An unserved lane **queues forever with no red build** (workstation-ops#2896, observed bootstrapping tuning-atelier). **Private child** → register a runner slot in **workstation-ops**: add `'<github_org>/<repo>': {instances: 1}` to `ops/github-runner/fleet.yaml` — in the host map whose runner labels match the copied lanes (default: the m1max map), add the matching `github-runner-<repo>` row to `ops/service.yaml` (`test_service_catalog_tracks_every_declared_slot` enforces the lockstep), then run reconcile `--apply` on that runner host. **Public child** → do **NOT** attach self-hosted runners (fleet policy `adr-2026-06-27-local-ci-compute-architecture` keeps public repos GitHub-hosted; no self-hosted runners on public fork-PR surfaces) — and note that going public needs a **full CI migration beyond `runs-on`**: hosted images, a review of the same-repo fork guards (drop only those gating ordinary CI — keep token-dependent safety skips), replacement of private `governance-hub` action callers, and the billed-runner rejection gates. File a dedicated CI-migration issue before flipping visibility, or keep the repo private. Defense-in-depth: the hourly registration sweep (workstation-ops#2908) flags a starving private lane within ~90 minutes of its first stale dispatch.
+
 ## 6. MCP and local LLMs
 
 - [ ] Confirm `.mcp.json` carries only repo-local servers launched via their wrappers (e.g. `repo-knowledge` via `bash scripts/mcp/repo-knowledge.sh`); GitHub work goes through the `gh` CLI. The retired github/context7 MCP servers must not be added (governance-hub#274; see [TOOLCHAIN.md](TOOLCHAIN.md), skill **`new-project-setup`**). <!-- mcp-retirement-ok -->
@@ -149,6 +151,7 @@ Use this checklist before you call the repo “bootstrapped”:
 - [ ] `python3 scripts/check_bootstrap_complete.py` prints no warnings.
 - [ ] `.github/agents/issue-refiner.agent.md` (and any copied agent prompts) point at `docs/01_Vault/<YourProjectKey>/...`, not `AcCopilotTrainer`.
 - [ ] `make ci-fast` passes; test PR confirms policy + CI workflows.
+- [ ] CI compute settled per visibility: private → fleet row registered **and reconciled** (self-hosted lanes actually pick up the test PR's jobs); public → the dedicated CI-migration issue is **closed** (hosted images, fork guards reviewed, private-action callers replaced, billed-runner gates addressed) — or the repo stayed private. No self-hosted slot for public repos.
 - [ ] Invariants and glossary indexes reflect your domain; new knowledge uses small linked nodes per `00_Graph_Schema.md`.
 - [ ] `ops/service.yaml` exists with the correct `repo_id` and either a populated `services:` block or an explicit `services: []` (catalog-aware-no-services), and the repo is registered in `workstation-ops/ops/sources.yaml`.
 
