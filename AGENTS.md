@@ -152,3 +152,65 @@ References:
 Originating postmortem: [template-repo#115](https://github.com/agorokh/template-repo/issues/115).
 
 <!-- memory-contract:end -->
+
+<!-- code-review-rules:start -->
+<!-- DO NOT EDIT BY HAND. Re-render with: python3 ${FLEET_GOVERNANCE_ROOT:-$HOME/.fleet-governance}/scripts/merge_code_review_rules.py --root "$PWD" -->
+
+## Code Review Rules
+
+Guidance for automated code reviewers (OpenAI Codex `@codex review`, and any
+reviewer that reads `AGENTS.md`). Official heading: `## Code Review Rules`
+(`developers.openai.com/codex/integrations/github` and
+`developers.openai.com/blog/custom-code-review-rules-for-codex`).
+
+Mis-severitied findings train the fleet to ignore the high bands. Keep P1/P2
+trustworthy. Leave formatting, lint, and other deterministic checks in CI.
+
+### Severity calibration
+
+- **P1 / high**: reserve for correctness bugs, security/credential exposure,
+  data loss or corruption, breaking an interface/contract other code or repos
+  consume, unsafe irreversible actions (merge/deploy/delete), or a regression
+  in tested behavior. A real defect stays P1 no matter how small the diff.
+- **P2 / medium**: material maintainability, reliability, or performance
+  issues with a concrete failure path.
+- **P3 / nit / low**: everything else: style, formatting, punctuation / prose
+  typography, wording, naming preference, comment polish, and documentation
+  hygiene (`relates_to` URL form, vault-index membership, "note not in index").
+  On **code PRs**, never raise a prose/formatting/doc-hygiene finding above
+  **nit**.
+- **Do not escalate by phrasing.** A style or doc-hygiene issue dressed in
+  severe-sounding language ("breaks parsing", "inconsistent") is still a nit
+  unless it has a demonstrated correctness/security/contract impact.
+
+### Scope to the diff's purpose
+
+- Flag style, prose, and doc-hygiene findings outside the PR's stated intent
+  as nits or follow-up suggestions, not P1/P2.
+- Safe path: a demonstrated correctness, security, credential-exposure,
+  data-loss, or contract-breakage defect is always P1 even when it falls
+  outside the stated intent. Scope-to-purpose only demotes style/doc-hygiene
+  findings; it never demotes a real defect.
+
+### Session-bookkeeping meta-findings
+
+- Flag session-bookkeeping commentary (handoff freshness, "agent should have
+  queried memory", vault-index membership of a vault-only note, "note not in
+  index") as in-scope review only when the PR's purpose is that bookkeeping.
+- Safe path: on a code or product PR, treat those as nits or omit them. They
+  are a measured false-positive class (2026-08-27 review-layer audit).
+
+### Generated receipts
+
+- Flag generated receipts, step summaries, render stamps, and other
+  machine-written artifacts only when the generator or its contract changed.
+- Safe path: do not raise style, wording, or heading-order findings against
+  files whose body is produced by a renderer (`merge_memory_contract.py`,
+  `merge_code_review_rules.py`, vault-automerge receipts). Edit the generator.
+
+Canonical source: `governance/CODE_REVIEW_RULES.md` in
+[agorokh/governance-hub](https://github.com/agorokh/governance-hub). Re-render
+with `python3 scripts/merge_code_review_rules.py` (or the hub copy under
+`${FLEET_GOVERNANCE_ROOT:-$HOME/.fleet-governance}`).
+
+<!-- code-review-rules:end -->
