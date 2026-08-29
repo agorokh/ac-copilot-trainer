@@ -2177,8 +2177,8 @@ def run_pipeline(
         raise ValueError(f"--laps must be >= 0 (got {args.laps})")
     if args.iterations < 0:
         raise ValueError(f"--iterations must be >= 0 (got {args.iterations})")
-    if args.scientist and (args.iterations < 1 or args.laps < 2 or not args.setup):
-        raise ValueError("--scientist requires --setup, --iterations >= 1, and --laps >= 2")
+    if args.scientist and (args.iterations < 1 or args.laps < 3 or not args.setup):
+        raise ValueError("--scientist requires --setup, --iterations >= 1, and --laps >= 3")
     if not 1 <= args.scientist_batch_size <= 3:
         raise ValueError("--scientist-batch-size must be between 1 and 3")
     if args.stint_laps is not None and args.stint_laps < 1:

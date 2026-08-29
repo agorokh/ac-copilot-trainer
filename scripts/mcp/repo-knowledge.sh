@@ -65,12 +65,13 @@ else
   fi
 fi
 
-# Preflight: the selected interpreter must be able to import `mcp`. Without this
+# Preflight: the selected interpreter must provide the MCP v2 server API. A v1 install can import
+# `mcp` but cannot run this server, so test the exact public symbol used by the module. Without this
 # the server starts then dies with a bare ModuleNotFoundError that surfaces to
 # the client only as MCP -32000 "Connection closed" — exactly the failure this
 # wrapper exists to fix. Fail early with an actionable message instead.
-if ! "${PYTHON}" -c "import mcp" >/dev/null 2>&1; then
-  echo "repo-knowledge.sh: interpreter '${PYTHON}' cannot import 'mcp' — install it with: ${PYTHON} -m pip install -e '.[knowledge]'" >&2
+if ! "${PYTHON}" -c "from mcp.server import MCPServer" >/dev/null 2>&1; then
+  echo "repo-knowledge.sh: interpreter '${PYTHON}' lacks MCP SDK v2 — install it with: ${PYTHON} -m pip install -e '.[knowledge]'" >&2
   exit 1
 fi
 

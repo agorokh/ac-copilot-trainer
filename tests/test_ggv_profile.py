@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from tools.ac_harness.ggv_profile import (
     CurvatureFeedforwardSteering,
     GGVModel,
@@ -699,6 +701,125 @@ def test_lap_archive_fit_excludes_thermally_inconsistent_laps():
     assert states["cold"]["thermal_stability_fraction"] == 0.0
     # The excluded 1.7 g cold lap cannot lift the posterior mean.
     assert model.uncertainty_bins[6]["lateral"]["mean_g"] < 1.3
+
+
+def test_lap_archive_fit_admits_cold_side_drift_without_hotter_grip_leakage():
+    prior = _prior()
+    drifting = _thermal_archive("cold-drift", core_c=50.0, lateral_g=1.2)
+    fields = drifting["trace"]["fields"]
+    index = {name: i for i, name in enumerate(fields)}
+    samples = drifting["trace"]["samples"]
+    for row_i, sample in enumerate(samples):
+        # The first 100 rows establish the observed cold-start band; the remainder warm
+        # monotonically but stay below the car-true optimum. Hotter rows deliberately carry an
+        # unsafe-looking lateral value so the assertion proves they cannot lift the cold runtime
+        # projection.
+        progress = max(0, row_i - 99) / 500.0
+        core_c = 50.0 + 16.0 * progress
+        sample[index["accG_lat"]] = 1.2 if core_c <= 55.0 else 1.7
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
+
+    state = observe_lap_tyre_state(drifting)
+    assert state["fit_eligible"] is False
+    assert state["temperature_aware_fit_eligible"] is True
+
+    model, summary = ggv_from_lap_archives([drifting], prior)
+
+    assert model.uncertainty_aware
+    assert summary["thermal_fit"]["mode"] == "cold_side_temperature_tagged"
+    assert summary["thermal_fit"]["tagged_rows"] == len(samples)
+    assert summary["thermal_fit"]["cold_reference_rows"] >= 200
+    assert summary["thermal_fit"]["cold_reference_max_c"] == 55.0
+    assert summary["thermal_fit"]["hottest_used_wheel_c"] <= 55.0
+    assert model.uncertainty_bins[6]["lateral"]["mean_g"] < 1.4
+
+
+def test_lap_archive_temperature_drift_fit_fails_closed_across_optimum():
+    prior = _prior()
+    crossing = _thermal_archive("crossing", core_c=75.0, lateral_g=1.4)
+    fields = crossing["trace"]["fields"]
+    index = {name: i for i, name in enumerate(fields)}
+    for row_i, sample in enumerate(crossing["trace"]["samples"]):
+        core_c = 75.0 + 25.0 * row_i / 599.0
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
+
+    state = observe_lap_tyre_state(crossing)
+    assert state["fit_eligible"] is False
+    assert state["temperature_aware_fit_eligible"] is False
+    with pytest.raises(ValueError, match="no thermally consistent valid lap archives"):
+        ggv_from_lap_archives([crossing], prior)
+
+
+def test_temperature_drift_fit_sees_partial_row_crossing_and_rejects_oscillation():
+    partial = _thermal_archive("partial-crossing", core_c=50.0)
+    index = {name: i for i, name in enumerate(partial["trace"]["fields"])}
+    for row_i, sample in enumerate(partial["trace"]["samples"]):
+        core_c = 50.0 + 16.0 * max(0, row_i - 99) / 500.0
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
+    partial["trace"]["samples"][200][index["tyreCoreTemp_fl"]] = 95.0
+    partial["trace"]["samples"][200][index["tyreCoreTemp_fr"]] = 0.0
+    assert observe_lap_tyre_state(partial)["temperature_aware_fit_eligible"] is False
+
+    oscillating = _thermal_archive("oscillating", core_c=50.0)
+    index = {name: i for i, name in enumerate(oscillating["trace"]["fields"])}
+    for row_i, sample in enumerate(oscillating["trace"]["samples"]):
+        core_c = 50.0 if row_i % 2 == 0 else 66.0
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
+    state = observe_lap_tyre_state(oscillating)
+    assert state["fit_eligible"] is False
+    assert state["temperature_aware_fit_eligible"] is False
+
+    sparse_reversal = _thermal_archive("sparse-reversal", core_c=50.0)
+    index = {name: i for i, name in enumerate(sparse_reversal["trace"]["fields"])}
+    for row_i, sample in enumerate(sparse_reversal["trace"]["samples"]):
+        core_c = 50.0 + 16.0 * max(0, row_i - 99) / 500.0
+        if row_i == 350:
+            core_c -= 8.0
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
+    state = observe_lap_tyre_state(sparse_reversal)
+    assert state["fit_eligible"] is False
+    assert state["temperature_aware_fit_eligible"] is False
+
+    gradual_reversal = _thermal_archive("gradual-reversal", core_c=50.0)
+    index = {name: i for i, name in enumerate(gradual_reversal["trace"]["fields"])}
+    for row_i, sample in enumerate(gradual_reversal["trace"]["samples"]):
+        if row_i < 200:
+            core_c = 50.0 + 16.0 * row_i / 199.0
+        elif row_i < 300:
+            core_c = 66.0 - 10.0 * (row_i - 199) / 100.0
+        else:
+            core_c = 56.0 + 14.0 * (row_i - 299) / 300.0
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
+    state = observe_lap_tyre_state(gradual_reversal)
+    assert state["fit_eligible"] is False
+    assert state["temperature_aware_fit_eligible"] is False
+
+
+def test_temperature_drift_fit_does_not_admit_unattributed_probe_rows():
+    prior = _prior()
+    drifting = _thermal_archive("cold-drift-probes", core_c=50.0)
+    index = {name: i for i, name in enumerate(drifting["trace"]["fields"])}
+    for row_i, sample in enumerate(drifting["trace"]["samples"]):
+        core_c = 50.0 + 16.0 * max(0, row_i - 99) / 500.0
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
+    probes = [{**row, "probe_run_id": "run-749"} for row in _uncertainty_rows()]
+
+    model, summary = ggv_from_lap_archives(
+        [drifting], prior, probe_rows=probes, probe_run_id="run-749"
+    )
+
+    assert summary["thermal_fit"]["mode"] == "cold_side_temperature_tagged"
+    assert summary["probe_rows"] == 0
+    assert "temperature attribution" in summary["probe_attribution"]
+    assert model.uncertainty_bins[6]["brake"]["source"] == "prior"
+    assert model.uncertainty_bins[6]["drive"]["source"] == "prior"
 
 
 def test_lap_archive_passive_longitudinal_is_prior_until_probe_rows_exist():

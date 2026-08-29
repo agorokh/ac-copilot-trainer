@@ -1,34 +1,42 @@
-"""Optional MCP server import smoke (requires ``[knowledge]`` extra)."""
+"""Optional MCP v2 server smoke (requires the ``[knowledge]`` extra)."""
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
+import asyncio
+from importlib.metadata import PackageNotFoundError, version
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-REPO_MCP_NAMESPACE = (REPO_ROOT / "scripts" / "mcp").resolve()
+try:
+    version("mcp")
+except PackageNotFoundError:
+    pytest.skip("requires MCP SDK v2 from [knowledge]", allow_module_level=True)
+
+# Once an MCP distribution is installed, incompatible/missing v2 exports are a real failure. Do
+# not turn an installed v1 SDK into an optional-dependency skip (#764).
+from mcp import Client
+from mcp.server import MCPServer
+
+EXPECTED_TOOLS = {
+    "query_ci_failures",
+    "query_decisions",
+    "query_file_patterns",
+    "query_review_history",
+    "query_similar_issues",
+}
 
 
-def _fastmcp_available() -> bool:
-    spec = importlib.util.find_spec("mcp")
-    if spec is None:
-        return False
-    locations = [Path(p).resolve() for p in spec.submodule_search_locations or []]
-    if spec.origin is None and locations and all(p == REPO_MCP_NAMESPACE for p in locations):
-        return False
-    try:
-        return importlib.util.find_spec("mcp.server.fastmcp") is not None
-    except ModuleNotFoundError:
-        return False
+def test_mcp_server_exposes_repo_knowledge_tools_over_v2_protocol() -> None:
+    import tools.repo_knowledge.mcp_server as module
 
+    assert isinstance(module.mcp, MCPServer)
 
-if not _fastmcp_available():
-    pytest.skip("requires installed mcp.server.fastmcp from [knowledge]", allow_module_level=True)
+    async def inspect_server() -> tuple[str, set[str]]:
+        async with Client(module.mcp, raise_exceptions=True) as client:
+            assert client.server_info is not None
+            result = await client.list_tools()
+            return client.server_info.name, {tool.name for tool in result.tools}
 
-
-def test_mcp_server_module_imports() -> None:
-    import tools.repo_knowledge.mcp_server as m
-
-    assert m.mcp is not None
+    name, tools = asyncio.run(inspect_server())
+    assert name == "repo-knowledge"
+    assert tools == EXPECTED_TOOLS

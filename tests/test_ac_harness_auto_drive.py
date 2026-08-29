@@ -993,6 +993,86 @@ def test_sim_death_retries_full_launch_and_preserves_failed_attempt():
     assert all(controller.closed for controller in controllers)
 
 
+def test_sim_death_retry_retains_each_attempt_boundary_and_final_session(monkeypatch):
+    epochs = iter((1000.0, 2000.0))
+    monkeypatch.setattr("tools.ac_harness.auto_drive.time.time", lambda: next(epochs))
+    outcomes = iter(
+        [
+            DriveStats(drove=True, sim_dead=True, reason="first session died"),
+            DriveStats(drove=True, laps=1, total_distance_m=900.0),
+        ]
+    )
+    frame_sets = iter(
+        [
+            [
+                *CONTINUOUS,
+                {
+                    "type": "state.snapshot",
+                    "topic": "session",
+                    "payload": {"session_uuid": "failed-session"},
+                },
+                {
+                    "type": "state.snapshot",
+                    "topic": "lap",
+                    "payload": {"lap": 1, "last_lap_ms": 101000},
+                },
+            ],
+            [
+                *CONTINUOUS,
+                {
+                    "type": "state.snapshot",
+                    "topic": "session",
+                    "payload": {"session_uuid": "final-session"},
+                },
+                {
+                    "type": "state.snapshot",
+                    "topic": "lap",
+                    "payload": {"lap": 1, "last_lap_ms": 95000},
+                },
+            ],
+        ]
+    )
+
+    def _drive(controller, config, stop):  # noqa: ANN001
+        del controller, config
+        stop.wait(timeout=2.0)
+        return next(outcomes)
+
+    async def _tap(*args, **kwargs):  # noqa: ANN002, ANN003
+        del args, kwargs
+        return next(frame_sets)
+
+    report = asyncio.run(
+        run_auto_drive_with_sim_retries(
+            _cfg(wait_lap=True, target_laps=1, sim_death_retries=1),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive,
+            tap=_tap,
+        )
+    )
+
+    assert report.attempt_started_epoch == 2000.0
+    assert report.session_uuid == "final-session"
+    assert report.timed_laps == [{"lap_n": 1, "lap_ms": 95000}]
+    assert report.attempts[0]["attempt_started_epoch"] == 1000.0
+    assert report.attempts[0]["session_uuid"] == "failed-session"
+    assert report.attempts[1]["attempt_started_epoch"] == 2000.0
+    assert report.attempts[1]["session_uuid"] == "final-session"
+
+
+def test_timed_lap_identity_rejects_fractional_or_boolean_times() -> None:
+    import tools.ac_harness.auto_drive as auto_drive_module
+
+    frames = [
+        {"type": "state.snapshot", "topic": "lap", "payload": {"lap": 1, "last_lap_ms": 95000.9}},
+        {"type": "state.snapshot", "topic": "lap", "payload": {"lap": 2, "last_lap_ms": True}},
+        {"type": "state.snapshot", "topic": "lap", "payload": {"lap": 3, "last_lap_ms": 94000}},
+    ]
+
+    assert auto_drive_module._timed_laps_from_frames(frames) == [{"lap_n": 3, "lap_ms": 94000}]
+
+
 def test_sim_death_retry_transfers_prior_cleanup_holds_to_later_abort(monkeypatch):
     from tools.ac_harness import auto_drive
 
@@ -3909,6 +3989,221 @@ def test_collect_lap_archives_filters_by_mtime(tmp_path):
     os.utime(new, (2_000_000, 2_000_000))
     assert collect_lap_archives(laps, since_epoch=1_500_000) == [str(new)]
     assert collect_lap_archives(None, since_epoch=0) == []
+
+
+def _write_scoping_archive(
+    path: Path,
+    *,
+    session_uuid: str,
+    lap_n: int,
+    lap_ms: int,
+    car_id: str = "car_a",
+) -> str:
+    path.write_text(
+        json.dumps(
+            {
+                "session_uuid": session_uuid,
+                "car": {"id": car_id},
+                "track": {"id": "magione", "layout": None},
+                "lap": {"lap_n": lap_n, "lap_ms": lap_ms, "is_valid": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return str(path)
+
+
+def test_scope_lap_archives_keeps_exact_final_session_batch(tmp_path):
+    import tools.ac_harness.auto_drive as auto_drive_module
+
+    old_1 = _write_scoping_archive(
+        tmp_path / "lap_old_1.json", session_uuid="failed-session", lap_n=1, lap_ms=120000
+    )
+    old_2 = _write_scoping_archive(
+        tmp_path / "lap_old_2.json", session_uuid="failed-session", lap_n=2, lap_ms=110000
+    )
+    final_1 = _write_scoping_archive(
+        tmp_path / "final_1.json", session_uuid="final-session", lap_n=1, lap_ms=100000
+    )
+    final_2 = _write_scoping_archive(
+        tmp_path / "final_2.json", session_uuid="final-session", lap_n=2, lap_ms=95000
+    )
+    final_3 = _write_scoping_archive(
+        tmp_path / "final_3.json", session_uuid="final-session", lap_n=3, lap_ms=94000
+    )
+    extra = _write_scoping_archive(
+        tmp_path / "final_4.json", session_uuid="final-session", lap_n=4, lap_ms=93000
+    )
+    foreign = _write_scoping_archive(
+        tmp_path / "foreign.json",
+        session_uuid="final-session",
+        lap_n=1,
+        lap_ms=100000,
+        car_id="other-car",
+    )
+
+    scoped = auto_drive_module.scope_lap_archives(
+        [old_1, old_2, final_1, final_2, final_3, extra, foreign],
+        session_uuid="final-session",
+        expected_laps=[
+            {"lap_n": 1, "lap_ms": 100000},
+            {"lap_n": 2, "lap_ms": 95000},
+            {"lap_n": 3, "lap_ms": 94000},
+        ],
+        archive_predicate=lambda payload: payload.get("car", {}).get("id") == "car_a",
+    )
+
+    assert scoped == [final_1, final_2, final_3]
+    assert len(scoped) == 3
+
+
+def test_scope_lap_archives_fails_closed_on_malformed_same_session_claim(tmp_path):
+    import tools.ac_harness.auto_drive as auto_drive_module
+
+    malformed = _write_scoping_archive(
+        tmp_path / "malformed.json", session_uuid="final-session", lap_n=1, lap_ms=100000
+    )
+    payload = json.loads(Path(malformed).read_text(encoding="utf-8"))
+    payload["lap"]["lap_ms"] = "not-a-time"
+    Path(malformed).write_text(json.dumps(payload), encoding="utf-8")
+    valid = _write_scoping_archive(
+        tmp_path / "valid.json", session_uuid="final-session", lap_n=1, lap_ms=100000
+    )
+
+    assert (
+        auto_drive_module.scope_lap_archives(
+            [malformed, valid],
+            session_uuid="final-session",
+            expected_laps=[{"lap_n": 1, "lap_ms": 100000}],
+        )
+        == []
+    )
+
+
+def test_scope_lap_archives_never_returns_partial_expected_batch(tmp_path):
+    import tools.ac_harness.auto_drive as auto_drive_module
+
+    first = _write_scoping_archive(
+        tmp_path / "first.json", session_uuid="final-session", lap_n=1, lap_ms=100000
+    )
+
+    assert (
+        auto_drive_module.scope_lap_archives(
+            [first],
+            session_uuid="final-session",
+            expected_laps=[
+                {"lap_n": 1, "lap_ms": 100000},
+                {"lap_n": 2, "lap_ms": 95000},
+            ],
+        )
+        == []
+    )
+
+
+def test_main_wires_scoped_archives_to_report_and_handshake_refit() -> None:
+    import ast
+    import inspect
+    import textwrap
+
+    import tools.ac_harness.auto_drive as auto_drive_module
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(auto_drive_module._main_impl)))
+    collect_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "collect_lap_archives"
+    ]
+    assert len(collect_calls) == 1
+    selector = next(
+        keyword.value for keyword in collect_calls[0].keywords if keyword.arg == "archive_selector"
+    )
+    assert isinstance(selector, ast.Name) and selector.id == "archive_selector"
+
+    refit_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "refine_ggv_from_lap_archives"
+    ]
+    assert len(refit_calls) == 1
+    assert isinstance(refit_calls[0].args[1], ast.Name)
+    assert refit_calls[0].args[1].id == "lap_archives"
+
+    extras_assignments = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "extras" for target in node.targets)
+        and isinstance(node.value, ast.Dict)
+    ]
+    assert len(extras_assignments) == 1
+    extras = {
+        key.value: value.id
+        for key, value in zip(extras_assignments[0].keys, extras_assignments[0].values, strict=True)
+        if isinstance(key, ast.Constant)
+        and isinstance(key.value, str)
+        and isinstance(value, ast.Name)
+    }
+    assert extras["lap_archives"] == "lap_archives"
+    assert extras["lap_archives_all"] == "lap_archives_all"
+
+
+def test_collect_lap_archives_waits_for_scoped_final_attempt_count(tmp_path):
+    import tools.ac_harness.auto_drive as auto_drive_module
+
+    _write_scoping_archive(
+        tmp_path / "lap_old_1.json", session_uuid="failed-session", lap_n=1, lap_ms=120000
+    )
+    _write_scoping_archive(
+        tmp_path / "lap_old_2.json", session_uuid="failed-session", lap_n=2, lap_ms=110000
+    )
+    clock = {"t": 0.0}
+
+    def _sleep(dt: float) -> None:
+        clock["t"] += dt
+        if clock["t"] >= 1.0 and not (tmp_path / "lap_final_1.json").exists():
+            _write_scoping_archive(
+                tmp_path / "lap_final_1.json",
+                session_uuid="final-session",
+                lap_n=1,
+                lap_ms=100000,
+            )
+        if clock["t"] >= 2.0 and not (tmp_path / "lap_final_2.json").exists():
+            _write_scoping_archive(
+                tmp_path / "lap_final_2.json",
+                session_uuid="final-session",
+                lap_n=2,
+                lap_ms=95000,
+            )
+
+    def _selector(paths: list[str]) -> list[str]:
+        return auto_drive_module.scope_lap_archives(
+            paths,
+            session_uuid="final-session",
+            expected_laps=[
+                {"lap_n": 1, "lap_ms": 100000},
+                {"lap_n": 2, "lap_ms": 95000},
+            ],
+            archive_predicate=lambda payload: payload.get("car", {}).get("id") == "car_a",
+        )
+
+    scoped = collect_lap_archives(
+        tmp_path,
+        since_epoch=0,
+        wait_for_first=True,
+        min_count=2,
+        archive_selector=_selector,
+        timeout_s=5.0,
+        poll_s=0.5,
+        _clock=lambda: clock["t"],
+        _sleep=_sleep,
+    )
+
+    assert [Path(path).name for path in scoped] == ["lap_final_1.json", "lap_final_2.json"]
+    assert clock["t"] >= 2.0
 
 
 def test_collect_lap_archives_no_wait_returns_immediately(tmp_path):

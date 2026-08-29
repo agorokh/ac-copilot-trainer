@@ -153,14 +153,26 @@ def meta_priors(
 ) -> list[dict[str, Any]]:
     """Falsified qualitative constraints transferable to any combo sharing ``scope``'s META key.
 
-    Legacy ledger rows that only carry ``scope_key`` remain usable; newer rows may also carry
-    ``scope`` / ``combo`` for provenance. One bookkeeping store — the experiments ledger.
+    A falsification suppresses a retry only when the durable row proves that both arms contained
+    at least two flying laps after their out-laps were removed. Under-evidenced legacy rows stay
+    immutable and retryable. Rows may omit ``scope`` / ``combo`` provenance, but never evidence.
     """
     scoped = scope_key(scope)
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for row in ledger:
         if row.get("scope_key") != scoped or row.get("verdict") != "falsified":
+            continue
+        baseline_flying_laps = row.get("baseline_flying_laps")
+        candidate_flying_laps = row.get("candidate_flying_laps")
+        if (
+            not isinstance(baseline_flying_laps, int)
+            or isinstance(baseline_flying_laps, bool)
+            or not isinstance(candidate_flying_laps, int)
+            or isinstance(candidate_flying_laps, bool)
+            or baseline_flying_laps < 2
+            or candidate_flying_laps < 2
+        ):
             continue
         constraint = str(row.get("constraint_key") or "")
         if not constraint or constraint in seen:
@@ -565,12 +577,48 @@ def evaluate_experiment(
         "verdict": "rejected",
         "promoted": False,
     }
+
+    def _lap_numbers(payloads: list[Mapping[str, Any]]) -> list[int] | None:
+        out: list[int] = []
+        for payload in payloads:
+            lap = payload.get("lap")
+            lap_n = lap.get("lap_n") if isinstance(lap, Mapping) else None
+            if not isinstance(lap_n, int) or isinstance(lap_n, bool) or lap_n < 1 or lap_n in out:
+                return None
+            out.append(lap_n)
+        return out
+
+    baseline_lap_numbers = _lap_numbers(baseline_payloads)
+    candidate_lap_numbers = _lap_numbers(candidate_payloads)
+    if baseline_lap_numbers is None or candidate_lap_numbers is None:
+        result["reason"] = "candidate_batch_lap_n_invalid"
+        return result
+    baseline_out_lap = min(baseline_lap_numbers) if baseline_lap_numbers else None
+    candidate_out_lap = min(candidate_lap_numbers) if candidate_lap_numbers else None
+    baseline_flying = [
+        payload
+        for payload, lap_n in zip(baseline_payloads, baseline_lap_numbers, strict=True)
+        if lap_n != baseline_out_lap
+    ]
+    candidate_flying = [
+        payload
+        for payload, lap_n in zip(candidate_payloads, candidate_lap_numbers, strict=True)
+        if lap_n != candidate_out_lap
+    ]
+    result["baseline_out_lap_n"] = baseline_out_lap
+    result["candidate_out_lap_n"] = candidate_out_lap
+    result["baseline_flying_laps"] = len(baseline_flying)
+    result["candidate_flying_laps"] = len(candidate_flying)
+    if len(baseline_flying) < 2 or len(candidate_flying) < 2:
+        result["reason"] = "insufficient_flying_laps"
+        result["verdict"] = "no_verdict"
+        return result
     if not candidate_valid:
         result["reason"] = "candidate_batch_invalid"
         return result
     try:
-        baseline = [record_from_lap_archive(dict(payload)) for payload in baseline_payloads]
-        candidate = [record_from_lap_archive(dict(payload)) for payload in candidate_payloads]
+        baseline = [record_from_lap_archive(dict(payload)) for payload in baseline_flying]
+        candidate = [record_from_lap_archive(dict(payload)) for payload in candidate_flying]
     except SetupExperimentError as exc:
         result["reason"] = f"candidate_batch_unrecordable:{exc}"
         return result
@@ -664,6 +712,8 @@ def persist_completed_run(
         plan.get("combo") if isinstance(plan.get("combo"), Mapping) else None
     )
     for index, outcome in enumerate(outcomes):
+        if outcome.get("verdict") == "no_verdict":
+            continue
         row: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "experiment_id": f"{run_id}:{index}",
@@ -675,6 +725,8 @@ def persist_completed_run(
             "verdict": outcome.get("verdict"),
             "promoted": bool(outcome.get("promoted")),
             "reason": outcome.get("reason"),
+            "baseline_flying_laps": outcome.get("baseline_flying_laps"),
+            "candidate_flying_laps": outcome.get("candidate_flying_laps"),
         }
         if scope_payload is not None:
             row["scope"] = scope_payload

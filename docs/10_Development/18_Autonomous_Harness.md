@@ -112,6 +112,14 @@ python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track ma
   in one compound/setup/tag cohort
   and within ±5 °C / ±2 psi of that cohort are fitted. The per-lap tag and selected UUIDs remain in
   `report.json` under `extras.handshake.ggv.tyre_states`.
+- A monotonically warming lap may use the temperature-tagged cold-side path without weakening that
+  stable-lap gate. It must retain complete four-wheel core-temperature attribution, stay entirely
+  at or below `optimalTempC`, and satisfy the same identity, coverage, validity, and wheel-spread
+  gates. The fitter records every row's thermal state but builds the static runtime envelope only
+  from the globally coldest observed 5 C band. Hotter rows cannot raise a cold-start assumption;
+  crossing the optimum or lacking enough cold-band rows fails closed and preserves the prior plant.
+  The accepted rationale and rejected alternatives are recorded in
+  `docs/01_Vault/AcCopilotTrainer/01_Decisions/cold-side-temperature-tagged-friction-refit-2026-08-28.md`.
 - The promoted model carries 10 km/h bins from 0–300 km/h. Each lateral/brake/drive bin records a
   Bayesian posterior mean, epistemic standard deviation, lower confidence bound, sample count, and
   `measured`/`prior` provenance. The QSS always consumes `min(point estimate, lower bound)`.
@@ -181,13 +189,15 @@ text write access to setup files:
 ```bash
 python -m tools.ac_harness.auto_alien \
   --car ks_porsche_911_gt3_r_2016 --track magione \
-  --setup Copilot_Balanced_Fast --laps 2 --iterations 2 \
+  --setup Copilot_Balanced_Fast --laps 3 --iterations 2 \
   --scientist --scientist-trigger pace_plateau
 ```
 
 - `--scientist` requires a resolved baseline setup, at least one self-play iteration, and at least
-  two timed laps per batch. It starts only from the newest batch that passes the normal auto-alien
-  validity oracle (timed, archived, AC-valid, zero recoveries).
+  three timed laps per arm. The lowest `lap_n` in each arm is its out-lap and is excluded from the
+  setup comparison, leaving at least two flying laps per arm for the uncertainty test. It starts
+  only from the newest batch that passes the normal auto-alien validity oracle (timed, archived,
+  AC-valid, zero recoveries).
 - A proposal is at most three physical hypotheses. The deterministic planner validates bounded
   identifiers, a named mechanism, direction, current setup value, checked-in per-car spinner schema,
   range, step, and read-only status. Each experiment changes exactly one `SECTION.VALUE`. Optional
@@ -198,8 +208,12 @@ python -m tools.ac_harness.auto_alien \
   never overwritten. Each candidate goes through a nested normal auto-alien pipeline, including
   identification, line/profile verification, and the same lap-validity oracle.
 - Promotion requires a single-parameter, unconfounded candidate batch that is faster with the
-  setup optimizer's measured uncertainty test. Invalid, confounded, or inconclusive batches keep
-  the previous setup. The report names the rejection and only a promoted result exposes
+  setup optimizer's measured uncertainty test. If either arm has fewer than two flying laps after
+  removing its out-lap, the run records an explicit `no_verdict` for audit but appends no durable
+  promotion, falsification, or suppression row. Invalid, confounded, or inconclusive batches keep
+  the previous setup. Only falsifications whose ledger rows prove at least two flying laps in both
+  arms can suppress a later retry; older under-evidenced rows stay untouched and are ignored. The
+  report names the rejection and only a promoted result exposes
   `recommended_setup`.
 - Completed plan, outcomes, and verdict persist under
   `<AC user data>/journal/alien_scientist/runs/`; the append-only

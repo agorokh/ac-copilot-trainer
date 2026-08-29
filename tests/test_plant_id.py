@@ -1437,6 +1437,31 @@ def test_selfplay_refine_merges_monotonically_and_strips_stale_meta(tmp_path):
     assert artifact["ggv"]["reason"] == "ok"
 
 
+def test_selfplay_refine_compounds_from_temperature_tagged_cold_side_batch():
+    from tools.ac_harness.plant_id import selfplay_refine_result
+
+    artifact = _selfplay_artifact()
+    archives = [
+        _selfplay_thermal_archive("cold-drift-1", lateral_g=1.5, lap_n=1),
+        _selfplay_thermal_archive("cold-drift-2", lateral_g=1.5, lap_n=2),
+    ]
+    for archive in archives:
+        index = {name: i for i, name in enumerate(archive["trace"]["fields"])}
+        for row_i, sample in enumerate(archive["trace"]["samples"]):
+            progress = max(0, row_i - 99) / 500.0
+            core_c = 50.0 + 16.0 * progress
+            for wheel in ("fl", "fr", "rl", "rr"):
+                sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
+
+    result, block = selfplay_refine_result(artifact, archives, generic_gt3_ggv())
+
+    assert result is not None
+    assert block["ok"] is True
+    assert block["thermal_fit"]["mode"] == "cold_side_temperature_tagged"
+    merge = block["selfplay_merge"]
+    assert merge["lateral_bins_adopted"] + merge["lateral_bins_raised"] >= 1
+
+
 def test_selfplay_refine_owns_the_caller_resolved_setup_identity(tmp_path):
     from tools.ac_harness.plant_id import selfplay_refine_result
 
