@@ -894,6 +894,7 @@ def observe_lap_tyre_state(
 
     core_means: list[float] = []
     trajectory_core_means: list[float] = []
+    trajectory_core_rows: list[tuple[float, ...]] = []
     core_rows: list[list[float]] = []
     pressure_means: list[float] = []
     surface_means: list[float] = []
@@ -914,6 +915,7 @@ def observe_lap_tyre_state(
         observed_core_values.extend(core)
         pressure = row_values(row, pressure_names)
         if len(core) == len(_WHEELS):
+            trajectory_core_rows.append(tuple(core))
             core_mean = statistics.fmean(core)
             trajectory_core_means.append(core_mean)
         if len(core) == len(_WHEELS) and len(pressure) == len(_WHEELS):
@@ -987,11 +989,18 @@ def observe_lap_tyre_state(
         if warming_steps
         else (1.0 if trajectory_core_means else 0.0)
     )
-    running_peak_c = float("-inf")
+    running_peak_by_wheel_c = [float("-inf")] * len(_WHEELS)
     max_cooling_reversal_c = 0.0
-    for core_mean in trajectory_core_means:
-        running_peak_c = max(running_peak_c, core_mean)
-        max_cooling_reversal_c = max(max_cooling_reversal_c, running_peak_c - core_mean)
+    for core_row in trajectory_core_rows:
+        for wheel_i, core_value in enumerate(core_row):
+            running_peak_by_wheel_c[wheel_i] = max(running_peak_by_wheel_c[wheel_i], core_value)
+            max_cooling_reversal_c = max(
+                max_cooling_reversal_c,
+                running_peak_by_wheel_c[wheel_i] - core_value,
+            )
+    cold_side_min_hottest_wheel_c = min(
+        (max(core_row) for core_row in trajectory_core_rows), default=None
+    )
     cold_side_temperature_aware = (
         is_valid
         and (compound_index is not None or compound_name is not None)
@@ -1052,6 +1061,11 @@ def observe_lap_tyre_state(
         "wheel_spread_c": round(wheel_spread, 3) if wheel_spread is not None else None,
         "cold_side_max_core_temp_c": (
             round(hottest_observed_core_c, 3) if hottest_observed_core_c is not None else None
+        ),
+        "cold_side_min_hottest_wheel_c": (
+            round(cold_side_min_hottest_wheel_c, 3)
+            if cold_side_min_hottest_wheel_c is not None
+            else None
         ),
         "thermal_warming_step_fraction": round(warming_step_fraction, 6),
         "thermal_max_cooling_reversal_c": round(max_cooling_reversal_c, 3),
@@ -1169,10 +1183,15 @@ def ggv_from_lap_archives(
             tagged_rows.append(row)
     cold_reference_max_c: float | None = None
     if thermal_fit_mode == "cold_side_temperature_tagged" and tagged_rows:
-        cold_reference_max_c = (
-            min(float(row["thermal_hottest_wheel_c"]) for row in tagged_rows)
-            + DEFAULT_THERMAL_STABILITY_HALF_WIDTH_C
-        )
+        thermal_anchors = [
+            float(state["cold_side_min_hottest_wheel_c"])
+            for _, state in selected
+            if isinstance(state.get("cold_side_min_hottest_wheel_c"), int | float)
+            and not isinstance(state.get("cold_side_min_hottest_wheel_c"), bool)
+        ]
+        if len(thermal_anchors) != len(selected):
+            raise ValueError("cold-side cohort lacks a complete thermal reference anchor")
+        cold_reference_max_c = min(thermal_anchors) + DEFAULT_THERMAL_STABILITY_HALF_WIDTH_C
         rows = [
             row
             for row in tagged_rows

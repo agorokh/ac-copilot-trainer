@@ -18,14 +18,18 @@ preserving the existing thermally stable cohort path unchanged.
 A non-stationary lap is eligible only when it is valid, has a known compound and setup, meets the
 existing channel-coverage and cross-wheel-spread gates, and every retained friction row has four
 finite non-zero core-temperature measurements. The complete observed trajectory must remain at or
-below the car's declared `optimalTempC`. Evidence that crosses the optimum fails closed because the
-archive does not persist a trustworthy post-peak tyre curve.
+below the car's declared `optimalTempC`, and each wheel's trajectory must independently avoid a
+cooling reversal greater than 0.5 C. Evidence that crosses the optimum or hides one cooling wheel
+behind the other wheels' rising mean fails closed because the archive does not persist a trustworthy
+post-peak tyre curve.
 
 The static QSS runtime has no live tyre-temperature input. Therefore it never consumes the hotter
 part of a warming lap as a cold-start assumption. The fitter tags every usable row with all four
-wheel temperatures, identifies the globally coldest observed hottest-wheel value, and fits the
-runtime projection only from rows within the existing 5 C stability half-width of that value. Hotter
-rows remain diagnostic evidence. A speed bin without enough cold-band support stays on its prior.
+wheel temperatures, identifies the globally coldest observed hottest-wheel value from every
+four-wheel thermal observation (including samples without usable friction channels), and fits the
+runtime projection only from friction rows within the existing 5 C stability half-width of that
+value. Hotter rows remain diagnostic evidence. A speed bin without enough cold-band support stays
+on its prior.
 
 The normal raise-only self-play merge remains the only route by which this conservative projection
 can lift an already-refined plant. Adoption counters therefore continue to describe bins that the

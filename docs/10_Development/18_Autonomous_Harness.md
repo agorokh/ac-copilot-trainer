@@ -115,9 +115,11 @@ python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track ma
 - A monotonically warming lap may use the temperature-tagged cold-side path without weakening that
   stable-lap gate. It must retain complete four-wheel core-temperature attribution, stay entirely
   at or below `optimalTempC`, and satisfy the same identity, coverage, validity, and wheel-spread
-  gates. The fitter records every row's thermal state but builds the static runtime envelope only
-  from the globally coldest observed 5 C band. Hotter rows cannot raise a cold-start assumption;
-  crossing the optimum or lacking enough cold-band rows fails closed and preserves the prior plant.
+  gates. A cooling reversal greater than 0.5 C on any individual wheel fails closed. The fitter
+  records every row's thermal state but builds the static runtime envelope only from the globally
+  coldest observed 5 C band, anchored by every complete four-wheel thermal observation even when a
+  sample lacks usable friction channels. Hotter rows cannot raise a cold-start assumption; crossing
+  the optimum or lacking enough cold-band rows fails closed and preserves the prior plant.
   The accepted rationale and rejected alternatives are recorded in
   `docs/01_Vault/AcCopilotTrainer/01_Decisions/cold-side-temperature-tagged-friction-refit-2026-08-28.md`.
 - The promoted model carries 10 km/h bins from 0–300 km/h. Each lateral/brake/drive bin records a

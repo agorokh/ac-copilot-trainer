@@ -773,6 +773,17 @@ def test_temperature_drift_fit_sees_partial_row_crossing_and_rejects_oscillation
     assert state["fit_eligible"] is False
     assert state["temperature_aware_fit_eligible"] is False
 
+    offsetting_wheels = _thermal_archive("offsetting-wheels", core_c=50.0)
+    index = {name: i for i, name in enumerate(offsetting_wheels["trace"]["fields"])}
+    for row_i, sample in enumerate(offsetting_wheels["trace"]["samples"]):
+        progress = row_i / 599.0
+        sample[index["tyreCoreTemp_fl"]] = 60.0 - 10.0 * progress
+        for wheel in ("fr", "rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = 50.0 + 14.0 * progress
+    state = observe_lap_tyre_state(offsetting_wheels)
+    assert state["fit_eligible"] is False
+    assert state["temperature_aware_fit_eligible"] is False
+
     pressure_gap_reversal = _thermal_archive("pressure-gap-reversal", core_c=50.0)
     index = {name: i for i, name in enumerate(pressure_gap_reversal["trace"]["fields"])}
     for row_i, sample in enumerate(pressure_gap_reversal["trace"]["samples"]):
@@ -834,6 +845,25 @@ def test_temperature_drift_fit_does_not_admit_unattributed_probe_rows():
     assert "temperature attribution" in summary["probe_attribution"]
     assert model.uncertainty_bins[6]["brake"]["source"] == "prior"
     assert model.uncertainty_bins[6]["drive"]["source"] == "prior"
+
+
+def test_cold_reference_anchor_includes_thermal_rows_without_friction_channels():
+    prior = _prior()
+    drifting = _thermal_archive("cold-anchor", core_c=50.0)
+    index = {name: i for i, name in enumerate(drifting["trace"]["fields"])}
+    for row_i, sample in enumerate(drifting["trace"]["samples"]):
+        core_c = 50.0 + 16.0 * max(0, row_i - 99) / 500.0
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
+        if row_i < 256:
+            sample[index["speed"]] = float("nan")
+
+    state = observe_lap_tyre_state(drifting)
+    assert state["temperature_aware_fit_eligible"] is True
+    with pytest.raises(
+        ValueError, match="insufficient thermally consistent cold-reference friction rows"
+    ):
+        ggv_from_lap_archives([drifting], prior, min_friction_rows=100)
 
 
 def test_stable_fit_keeps_friction_rows_with_missing_core_samples():
