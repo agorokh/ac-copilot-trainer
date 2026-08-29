@@ -2171,6 +2171,53 @@ def test_run_auto_drive_handshake_drive_outlives_the_tap():
     assert report.drive is not None and report.drive.drove is True
 
 
+def test_run_auto_drive_handshake_tap_captures_identity_through_drive_completion():
+    import time
+
+    from tools.ac_harness.auto_drive import DriveStats, run_auto_drive
+
+    async def tap(url, *, seconds, wait_for_lap, stop_event, **kwargs):  # noqa: ANN001
+        del url, seconds, wait_for_lap, kwargs
+        await asyncio.wait_for(stop_event.wait(), timeout=1.0)
+        return [
+            *CONTINUOUS,
+            {
+                "type": "state.snapshot",
+                "topic": "session",
+                "payload": {"session_uuid": "handshake-session"},
+            },
+            {
+                "type": "state.snapshot",
+                "topic": "lap",
+                "payload": {"lap": 2, "last_lap_ms": 95000},
+            },
+        ]
+
+    def drive(controller, config, stop):  # noqa: ANN001
+        del controller, config, stop
+        time.sleep(0.05)
+        return DriveStats(
+            drove=True,
+            laps=1,
+            max_speed_kmh=90.0,
+            total_distance_m=500.0,
+            payload={"result": {"laps_used": 1}},
+        )
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(driver="handshake", skip_launch=True),
+            launch=lambda c: (True, "ok"),
+            hijack=lambda c: FakeController(),
+            drive=drive,
+            tap=tap,
+        )
+    )
+
+    assert report.session_uuid == "handshake-session"
+    assert report.timed_laps == [{"lap_n": 2, "lap_ms": 95000}]
+
+
 def test_run_auto_drive_handshake_stops_on_pipeline_failure():
     # #532 Codex: a FAILED pipeline (seq_ok False — e.g. missing continuous topics) must stop the
     # handshake drive instead of burning the whole drive_seconds budget.

@@ -325,12 +325,15 @@ async def tap_frames(
     lap_timeout: float = 180.0,
     lap_count: int | None = None,
     client_class: str | None = None,
+    stop_event: asyncio.Event | None = None,
 ) -> list[dict]:
     """Tap the sidecar and return the frames received (live; needs AC driving).
 
-    Default: a fixed ``seconds`` window. With ``wait_for_lap=True`` the tap first waits (up to
-    ``settle_timeout``) for the car to be on track, then waits (up to ``lap_timeout``) for a ``lap``
-    frame — so a slow real lap is captured rather than false-failing a fixed 20 s window.
+    Default: a fixed ``seconds`` window. When ``stop_event`` is supplied, the fixed window instead
+    returns when that event is set, bounded by ``seconds``. With ``wait_for_lap=True`` the tap first
+    waits (up to ``settle_timeout``) for the car to be on track, then waits (up to ``lap_timeout``)
+    for a ``lap`` frame — so a slow real lap is captured rather than false-failing a fixed 20 s
+    window.
 
     ``lap_count`` (#577 flying-lap windows): an explicit N >= 1 keeps the window open until that
     many TIMED lap boundaries (``payload.last_lap_ms > 0``) arrive — including N == 1, so a
@@ -384,7 +387,13 @@ async def tap_frames(
                         break
                     seen += 1
         else:
-            await asyncio.sleep(seconds)
+            if stop_event is None:
+                await asyncio.sleep(seconds)
+            else:
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=seconds)
+                except TimeoutError:
+                    pass
         return list(hc.frames)
     finally:
         await hc.close()

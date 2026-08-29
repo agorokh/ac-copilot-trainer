@@ -824,6 +824,7 @@ def observe_lap_tyre_state(
         "sample_coverage_fraction": 0.0,
         "wheel_core_temp_c": None,
         "wheel_spread_c": None,
+        "cold_side_max_wheel_spread_c": None,
         "temperature_aware_fit_eligible": False,
         "thermal_warming_step_fraction": 0.0,
     }
@@ -957,6 +958,9 @@ def observe_lap_tyre_state(
     )
     stability = stable_rows / len(core_rows) if core_rows else 0.0
     wheel_spread = max(wheel_centers) - min(wheel_centers) if wheel_centers else None
+    cold_side_max_wheel_spread = max(
+        (max(core_row) - min(core_row) for core_row in trajectory_core_rows), default=None
+    )
     mean_core = statistics.fmean(core_means) if core_means else None
     mean_pressure = statistics.fmean(pressure_means) if pressure_means else None
     tag = "unknown"
@@ -1011,8 +1015,8 @@ def observe_lap_tyre_state(
         and (compound_index is not None or compound_name is not None)
         and setup_hash is not None
         and coverage >= min_coverage_fraction
-        and wheel_spread is not None
-        and wheel_spread <= max_wheel_spread_c
+        and cold_side_max_wheel_spread is not None
+        and cold_side_max_wheel_spread <= max_wheel_spread_c
         and hottest_observed_core_c is not None
         and hottest_observed_core_c <= optimal
         and max_cooling_reversal_c <= 0.5
@@ -1064,6 +1068,9 @@ def observe_lap_tyre_state(
             else None
         ),
         "wheel_spread_c": round(wheel_spread, 3) if wheel_spread is not None else None,
+        "cold_side_max_wheel_spread_c": (
+            round(cold_side_max_wheel_spread, 3) if cold_side_max_wheel_spread is not None else None
+        ),
         "cold_side_max_core_temp_c": (
             round(hottest_observed_core_c, 3) if hottest_observed_core_c is not None else None
         ),
@@ -1146,16 +1153,21 @@ def ggv_from_lap_archives(
             cohort_first_index[item[0]],
         ),
     )[0]
-    core_center = statistics.median(_cohort_core_temp(state) for _, state in eligible)
+    core_center = (
+        min(_cohort_core_temp(state) for _, state in eligible)
+        if thermal_fit_mode == "cold_side_temperature_tagged"
+        else statistics.median(_cohort_core_temp(state) for _, state in eligible)
+    )
     pressure_center = statistics.median(float(state["pressure_psi"]) for _, state in eligible)
     for state in states:
         state["cohort_consistent"] = False
     selected: list[tuple[dict, dict]] = []
     for archive, state in eligible:
-        cohort_ok = (
-            abs(_cohort_core_temp(state) - core_center) <= 5.0
-            and abs(float(state["pressure_psi"]) - pressure_center) <= 2.0
+        core_ok = (
+            thermal_fit_mode == "cold_side_temperature_tagged"
+            or abs(_cohort_core_temp(state) - core_center) <= 5.0
         )
+        cohort_ok = core_ok and abs(float(state["pressure_psi"]) - pressure_center) <= 2.0
         state["cohort_consistent"] = cohort_ok
         if cohort_ok:
             selected.append((archive, state))

@@ -1403,6 +1403,13 @@ async def run_auto_drive(
             drive_seconds=tap_settle_s + lap_deadline + config.lap_finalize_grace_s,
         )
     drive_task = asyncio.create_task(asyncio.to_thread(drive, controller, drive_config, stop))
+    handshake_drive_done = asyncio.Event()
+    if config.driver == "handshake":
+        # The handshake self-terminates after its final probe/timed lap. Keep the observer tap
+        # alive through that exact boundary so the report retains the session/lap identity needed
+        # to scope the asynchronously written archives. A fixed 30 s tap can otherwise finish
+        # before the handshake and leave a successful plant run with timed_laps=[] (#764 review).
+        drive_task.add_done_callback(lambda _future: handshake_drive_done.set())
     stats = DriveStats(reason="drive did not run")
     seq_ok: bool | None = None
     counts: dict[str, int] = {}
@@ -1430,6 +1437,9 @@ async def run_auto_drive(
             wait_for_lap=config.wait_lap,
             client_class=CLIENT_CLASS_OBSERVER,
         )
+        if config.driver == "handshake" and not config.wait_lap:
+            tap_kwargs["seconds"] = max(config.tap_seconds, config.drive_seconds)
+            tap_kwargs["stop_event"] = handshake_drive_done
         if config.wait_lap:
             # The SAME settle + lap deadline the drive budget is sized to (above), so the tap never
             # waits past what the drive thread can still drive (a full lap at pace can exceed
