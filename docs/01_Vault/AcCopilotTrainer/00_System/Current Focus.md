@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-08-10T11:45:00Z
+last_updated: 2026-08-29T05:14:21Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-08-29-051421Z-c1-pr766-blocked-a74c1e.md
   - AcCopilotTrainer/03_Investigations/issue-746-749-repeatability-and-thermal-gate-2026-08-10.md
   - AcCopilotTrainer/03_Investigations/issue-738-cm-csp-dialog-skip-2026-08-09.md
   - AcCopilotTrainer/03_Investigations/issue-737-setup-race-retry-2026-08-09.md
@@ -63,6 +64,15 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Blocked (2026-08-29): delivery block C1 (#749, #750, #751, #764) remains indivisible.** PR
+[#766](https://github.com/agorokh/ac-copilot-trainer/pull/766) is open at terminal candidate
+`5ba41fd`. Required CI is green and the exact-head independent review is clean, but round-12 Codex
+P1 [discussion_r3885656521](https://github.com/agorokh/ac-copilot-trainer/pull/766#discussion_r3885656521)
+is verified: cold-reference pressure attribution still includes friction-invalid rows. The scope
+contract therefore forbids merge, round 13, a new issue, or a split without explicit operator
+authority. The Windows rig is also offline, last seen 18 days ago, so #749/#750 live acceptance is
+not available. Resume from [[2026-08-29-051421Z-c1-pr766-blocked-a74c1e]].
 
 **Delivered (2026-08-10):** `/autonomous-deliver 529` — **#746 CLOSED** by PR
 [#748](https://github.com/agorokh/ac-copilot-trainer/pull/748) (MERGED `c9ec97c`): the self-play
