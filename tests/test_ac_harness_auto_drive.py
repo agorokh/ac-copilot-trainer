@@ -4220,6 +4220,14 @@ def test_archive_poll_contract_never_waits_for_unobserved_handshake_laps() -> No
     assert auto_drive_module._archive_poll_requirements(empty, batch_mode=True) == (False, 0)
     assert auto_drive_module._archive_poll_requirements(partial, batch_mode=False) == (False, 0)
 
+    grace = AutoDriveReport(
+        ok=True,
+        stage="done",
+        timed_laps=[{"lap_n": 1, "lap_ms": 95000}],
+        lap_grace_applied=True,
+    )
+    assert auto_drive_module._archive_poll_requirements(grace, batch_mode=False) == (True, 1)
+
 
 def test_collect_lap_archives_no_wait_returns_immediately(tmp_path):
     # A run that produced no lap must NOT poll — return the (empty) scan immediately, no sleeping.

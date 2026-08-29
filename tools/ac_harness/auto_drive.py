@@ -2793,7 +2793,9 @@ def _archive_poll_requirements(report: AutoDriveReport, *, batch_mode: bool) -> 
     impossible and merely burns the full timeout. The later handshake completeness gate still
     compares the scoped count with ``laps_used`` and refuses a partial model.
     """
-    expected = len(report.timed_laps) if batch_mode else 0
+    if not batch_mode:
+        return report.lap_grace_applied, 1 if report.lap_grace_applied else 0
+    expected = len(report.timed_laps)
     return expected > 0, expected
 
 
@@ -4959,7 +4961,9 @@ def _main_impl(
         # combo-matched count (validity-agnostic): the multi-dir resolver can see another
         # app/combo's fresh archives, which must not satisfy the batch before this combo's own
         # writer finishes (#579 Codex P2).
-        min_valid_count=handshake_laps_used if handshake_laps_used > 0 else None,
+        min_valid_count=(
+            expected_archives if handshake_laps_used > 0 and expected_archives > 0 else None
+        ),
         # The combo gate needs a car identity to match against: a preset-only run (--cm-preset
         # without --car) has none, so the predicate could never match and the poll would always
         # burn its full timeout (#579 Qodo perf).
