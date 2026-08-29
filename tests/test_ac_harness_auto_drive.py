@@ -4100,6 +4100,26 @@ def test_scope_lap_archives_never_returns_partial_expected_batch(tmp_path):
     )
 
 
+def test_scope_report_lap_archives_filters_legacy_wait_lap_by_session(tmp_path):
+    import tools.ac_harness.auto_drive as auto_drive_module
+
+    current = _write_scoping_archive(
+        tmp_path / "current.json", session_uuid="final-session", lap_n=1, lap_ms=100000
+    )
+    foreign = _write_scoping_archive(
+        tmp_path / "foreign.json", session_uuid="foreign-session", lap_n=1, lap_ms=100000
+    )
+    report = AutoDriveReport(
+        ok=True,
+        stage="done",
+        session_uuid="final-session",
+        timed_laps=[{"lap_n": 1, "lap_ms": 100000}],
+        lap_grace_applied=True,
+    )
+
+    assert auto_drive_module._scope_report_lap_archives([foreign, current], report) == [current]
+
+
 def test_main_wires_scoped_archives_to_report_and_handshake_refit() -> None:
     import ast
     import inspect
@@ -4120,6 +4140,15 @@ def test_main_wires_scoped_archives_to_report_and_handshake_refit() -> None:
         keyword.value for keyword in collect_calls[0].keywords if keyword.arg == "archive_selector"
     )
     assert isinstance(selector, ast.Name) and selector.id == "archive_selector"
+
+    report_scope_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_scope_report_lap_archives"
+    ]
+    assert len(report_scope_calls) == 1
 
     refit_calls = [
         node

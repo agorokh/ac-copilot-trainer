@@ -2785,6 +2785,21 @@ def scope_lap_archives(
     return scoped if len(scoped) == len(expected) else []
 
 
+def _scope_report_lap_archives(
+    paths: list[str],
+    report: AutoDriveReport,
+    *,
+    archive_predicate: Callable[[dict], bool] | None = None,
+) -> list[str]:
+    """Scope published evidence to one report, including legacy single-lap runs."""
+    return scope_lap_archives(
+        paths,
+        session_uuid=report.session_uuid,
+        expected_laps=report.timed_laps,
+        archive_predicate=archive_predicate,
+    )
+
+
 def _archive_poll_requirements(report: AutoDriveReport, *, batch_mode: bool) -> tuple[bool, int]:
     """Return whether to poll and the exact attainable final-attempt archive count.
 
@@ -4934,18 +4949,15 @@ def _main_impl(
     # timed (lap_n, lap_ms) batch. Applying the selector inside each poll prevents earlier retry
     # files from satisfying min_count before the final attempt's async writer finishes.
     archive_since_epoch = report.attempt_started_epoch or run_started_epoch
-    archive_selector: Callable[[list[str]], list[str]] | None = None
-    if batch_mode:
 
-        def _scope_attempt_archives(paths: list[str]) -> list[str]:
-            return scope_lap_archives(
-                paths,
-                session_uuid=report.session_uuid,
-                expected_laps=report.timed_laps,
-                archive_predicate=_combo_predicate if config.car_id else None,
-            )
+    def _scope_attempt_archives(paths: list[str]) -> list[str]:
+        return _scope_report_lap_archives(
+            paths,
+            report,
+            archive_predicate=_combo_predicate if config.car_id else None,
+        )
 
-        archive_selector = _scope_attempt_archives
+    archive_selector: Callable[[list[str]], list[str]] = _scope_attempt_archives
 
     lap_archives = collect_lap_archives(
         None,
