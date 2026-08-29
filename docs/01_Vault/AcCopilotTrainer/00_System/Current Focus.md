@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-08-29T19:06:23Z
+last_updated: 2026-08-29T19:54:00Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-08-29-195400Z-c1-issue750-rig-gated-59f02b.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-29-190623Z-post-merge-pr770-c1-pressure-a91f02.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-29-152241Z-c1-pr766-post-merge-gated-6ed54b.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-29-051421Z-c1-pr766-blocked-a74c1e.md
@@ -67,13 +68,13 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**C1 off-rig correctness shipped (2026-08-29): PR [#770](https://github.com/agorokh/ac-copilot-trainer/pull/770) MERGED `b636830`.**
-Cold-side pressure cohorting now uses the same finite friction rows that enter `tagged_rows`. The
-#766 P1 inverse-validity case refuses on merged `main` (independent recompute: 20 vs 30 psi). Codex
-and the cursor lens were clean; the advisory antigravity HIGH (shadowed test names) was a false
-positive — 80 unique tests collected. Delivery block C1 (#749, #750, #751, #764) stays open: the
-Windows rig `100.75.251.87` is still offline, so retained live acceptance has not run. No new issue
-or split. Resume from [[2026-08-29-190623Z-post-merge-pr770-c1-pressure-a91f02]].
+**C1 live acceptance still BLOCKED (2026-08-29T19:54Z): `/autonomous-deliver 750` re-probed the
+rig and it is still unreachable.** Off-rig scientist contract remains on `main` (`ffa4482`);
+`tests/test_alien_scientist.py` is 32 passed. Tailscale `pc` last seen 18d; Prometheus
+`windows-exporter` and `governance-harness-metrics-pc` are `down` (scrape deadline). Do not
+treat LAN `192.168.4.26` as AG_PC (TI NIC, no SSH). Delivery block C1 (#749, #750, #751, #764)
+stays open. No new issue or split. Resume from
+[[2026-08-29-195400Z-c1-issue750-rig-gated-59f02b]].
 
 **Delivered (2026-08-10):** `/autonomous-deliver 529` — **#746 CLOSED** by PR
 [#748](https://github.com/agorokh/ac-copilot-trainer/pull/748) (MERGED `c9ec97c`): the self-play
