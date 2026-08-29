@@ -42,7 +42,8 @@ mining-semantic = [
   "numpy>=2.4.4",
 ]
 knowledge = [
-    "mcp>=1.27.0",
+    # MCP v2 renamed FastMCP to MCPServer; cap the next breaking major (#764).
+    "mcp>=2.1.1,<3",
 ]
 bootstrap = [
     "copier>=9.14.3,<10",

@@ -824,6 +824,9 @@ def observe_lap_tyre_state(
         "sample_coverage_fraction": 0.0,
         "wheel_core_temp_c": None,
         "wheel_spread_c": None,
+        "cold_side_max_wheel_spread_c": None,
+        "temperature_aware_fit_eligible": False,
+        "thermal_warming_step_fraction": 0.0,
     }
     if not isinstance(fields, list) or not isinstance(samples, list) or not samples:
         return base
@@ -891,10 +894,14 @@ def observe_lap_tyre_state(
         return out
 
     core_means: list[float] = []
+    trajectory_core_means: list[float] = []
+    trajectory_core_rows: list[tuple[float, ...]] = []
+    trajectory_core_by_wheel: list[list[float]] = [[] for _ in _WHEELS]
     core_rows: list[list[float]] = []
     pressure_means: list[float] = []
     surface_means: list[float] = []
     grip_mu: list[float] = []
+    observed_core_values: list[float] = []
     in_window = 0
     surface_names = [
         f"tyreTemp{band}_{wheel}"
@@ -907,7 +914,16 @@ def observe_lap_tyre_state(
         if not isinstance(row, (list, tuple)):
             continue
         core = row_values(row, core_names)
+        observed_core_values.extend(core)
+        for wheel_i, name in enumerate(core_names):
+            wheel_value = row_values(row, [name])
+            if wheel_value:
+                trajectory_core_by_wheel[wheel_i].append(wheel_value[0])
         pressure = row_values(row, pressure_names)
+        if len(core) == len(_WHEELS):
+            trajectory_core_rows.append(tuple(core))
+            core_mean = statistics.fmean(core)
+            trajectory_core_means.append(core_mean)
         if len(core) == len(_WHEELS) and len(pressure) == len(_WHEELS):
             core_mean = statistics.fmean(core)
             core_means.append(core_mean)
@@ -942,6 +958,9 @@ def observe_lap_tyre_state(
     )
     stability = stable_rows / len(core_rows) if core_rows else 0.0
     wheel_spread = max(wheel_centers) - min(wheel_centers) if wheel_centers else None
+    cold_side_max_wheel_spread = max(
+        (max(core_row) - min(core_row) for core_row in trajectory_core_rows), default=None
+    )
     mean_core = statistics.fmean(core_means) if core_means else None
     mean_pressure = statistics.fmean(pressure_means) if pressure_means else None
     tag = "unknown"
@@ -963,6 +982,47 @@ def observe_lap_tyre_state(
         and wheel_spread <= max_wheel_spread_c
         and tag != "unknown"
     )
+    # A monotonically warming cold lap is not thermally stationary, but its individual friction
+    # rows can still be used safely when every row is attributed to all four core temperatures and
+    # the complete trajectory remains on the increasing (below-optimum) side of the tyre curve.
+    # The fitter below projects only the globally coldest observed band into the static runtime
+    # envelope. Crossing the optimum is deliberately unsupported because the available archive
+    # metadata does not describe the tyre's post-peak curve.
+    hottest_observed_core_c = max(observed_core_values, default=None)
+    warming_steps = [
+        later >= earlier - 0.5
+        for earlier, later in zip(trajectory_core_means, trajectory_core_means[1:], strict=False)
+    ]
+    warming_step_fraction = (
+        sum(warming_steps) / len(warming_steps)
+        if warming_steps
+        else (1.0 if trajectory_core_means else 0.0)
+    )
+    max_cooling_reversal_c = 0.0
+    for wheel_trajectory in trajectory_core_by_wheel:
+        running_peak_c = float("-inf")
+        for core_value in wheel_trajectory:
+            running_peak_c = max(running_peak_c, core_value)
+            max_cooling_reversal_c = max(
+                max_cooling_reversal_c,
+                running_peak_c - core_value,
+            )
+    cold_side_min_hottest_wheel_c = min(
+        (max(core_row) for core_row in trajectory_core_rows), default=None
+    )
+    cold_side_temperature_aware = (
+        is_valid
+        and (compound_index is not None or compound_name is not None)
+        and setup_hash is not None
+        and coverage >= min_coverage_fraction
+        and cold_side_max_wheel_spread is not None
+        and cold_side_max_wheel_spread <= max_wheel_spread_c
+        and hottest_observed_core_c is not None
+        and hottest_observed_core_c <= optimal
+        and max_cooling_reversal_c <= 0.5
+        and bool(trajectory_core_means)
+        and trajectory_core_means[-1] >= trajectory_core_means[0] - 0.5
+    )
     grip_multiplier = None
     if grip_mu:
         peak = _pct(grip_mu, 0.95)
@@ -976,6 +1036,7 @@ def observe_lap_tyre_state(
         "lap_uuid": base["lap_uuid"],
         "tag": tag,
         "fit_eligible": eligible,
+        "temperature_aware_fit_eligible": cold_side_temperature_aware,
         "reason": (
             "thermally consistent"
             if eligible
@@ -1007,6 +1068,19 @@ def observe_lap_tyre_state(
             else None
         ),
         "wheel_spread_c": round(wheel_spread, 3) if wheel_spread is not None else None,
+        "cold_side_max_wheel_spread_c": (
+            round(cold_side_max_wheel_spread, 3) if cold_side_max_wheel_spread is not None else None
+        ),
+        "cold_side_max_core_temp_c": (
+            round(hottest_observed_core_c, 3) if hottest_observed_core_c is not None else None
+        ),
+        "cold_side_min_hottest_wheel_c": (
+            round(cold_side_min_hottest_wheel_c, 3)
+            if cold_side_min_hottest_wheel_c is not None
+            else None
+        ),
+        "thermal_warming_step_fraction": round(warming_step_fraction, 6),
+        "thermal_max_cooling_reversal_c": round(max_cooling_reversal_c, 3),
     }
 
 
@@ -1018,26 +1092,57 @@ def ggv_from_lap_archives(
     min_friction_rows: int = 200,
     probe_rows: list[dict] | None = None,
     probe_run_id: str | None = None,
+    _thermal_fit_mode: str | None = None,
 ) -> tuple[GGVModel, dict]:
     """Fit an uncertainty-aware GGV using only a thermally consistent lap cohort (#543)."""
     states = [observe_lap_tyre_state(archive) for archive in archives]
+    if _thermal_fit_mode not in {None, "thermally_stable", "cold_side_temperature_tagged"}:
+        raise ValueError(f"unsupported thermal fit mode: {_thermal_fit_mode}")
+    thermal_fit_mode = _thermal_fit_mode or "thermally_stable"
+    eligibility_key = (
+        "temperature_aware_fit_eligible"
+        if thermal_fit_mode == "cold_side_temperature_tagged"
+        else "fit_eligible"
+    )
     eligible = [
         (archive, state)
         for archive, state in zip(archives, states, strict=True)
-        if state.get("fit_eligible")
+        if state.get(eligibility_key)
     ]
+    if not eligible and _thermal_fit_mode is None:
+        eligible = [
+            (archive, state)
+            for archive, state in zip(archives, states, strict=True)
+            if state.get("temperature_aware_fit_eligible")
+        ]
+        thermal_fit_mode = "cold_side_temperature_tagged"
     if not eligible:
-        raise ValueError("no thermally consistent valid lap archives")
+        raise ValueError(
+            "no thermally consistent valid lap archives or cold-side temperature-tagged cohort"
+        )
 
     # A plant is per combo, which includes tyre compound and setup. A stale archive from the same
     # car/track session must not contaminate the posterior merely because its temperatures match.
+    def _cohort_core_temp(state: dict) -> float:
+        key = (
+            "cold_side_min_hottest_wheel_c"
+            if thermal_fit_mode == "cold_side_temperature_tagged"
+            else "core_temp_c"
+        )
+        return float(state[key])
+
     cohort_groups: dict[tuple[object, object, object], list[tuple[dict, dict]]] = {}
     cohort_first_index: dict[tuple[object, object, object], int] = {}
     for archive_index, (archive, state) in enumerate(eligible):
         compound = state.get("compound_index")
         if compound is None:
             compound = state.get("compound_name")
-        key = (compound, state.get("setup_hash"), state.get("tag"))
+        thermal_group = (
+            "cold_side_temperature_tagged"
+            if thermal_fit_mode == "cold_side_temperature_tagged"
+            else state.get("tag")
+        )
+        key = (compound, state.get("setup_hash"), thermal_group)
         cohort_groups.setdefault(key, []).append((archive, state))
         cohort_first_index.setdefault(key, archive_index)
     cohort_key, eligible = sorted(
@@ -1048,29 +1153,91 @@ def ggv_from_lap_archives(
             cohort_first_index[item[0]],
         ),
     )[0]
-    core_center = statistics.median(float(state["core_temp_c"]) for _, state in eligible)
-    pressure_center = statistics.median(float(state["pressure_psi"]) for _, state in eligible)
+    core_center = (
+        min(_cohort_core_temp(state) for _, state in eligible)
+        if thermal_fit_mode == "cold_side_temperature_tagged"
+        else statistics.median(_cohort_core_temp(state) for _, state in eligible)
+    )
+    cold_reference_max_c: float | None = None
+    pressure_key = "pressure_psi"
+    if thermal_fit_mode == "cold_side_temperature_tagged":
+        cold_reference_max_c = core_center + DEFAULT_THERMAL_STABILITY_HALF_WIDTH_C
+        pressure_key = "cold_side_reference_pressure_psi"
+        for archive, state in eligible:
+            trace = archive["trace"]
+            index = {name: i for i, name in enumerate(trace["fields"])}
+            core_names = [f"tyreCoreTemp_{wheel}" for wheel in _WHEELS]
+            pressure_names = [f"wheelsPressure_{wheel}" for wheel in _WHEELS]
+            retained_rows = 0
+            attributed_pressures: list[float] = []
+            for sample in trace["samples"]:
+                try:
+                    core = [float(sample[index[name]]) for name in core_names]
+                except (IndexError, KeyError, TypeError, ValueError):
+                    continue
+                if not _finite_ggv(*core) or any(value == 0.0 for value in core):
+                    continue
+                if max(core) > cold_reference_max_c:
+                    continue
+                retained_rows += 1
+                try:
+                    pressure = [float(sample[index[name]]) for name in pressure_names]
+                except (IndexError, KeyError, TypeError, ValueError):
+                    continue
+                if not _finite_ggv(*pressure) or any(value == 0.0 for value in pressure):
+                    continue
+                attributed_pressures.append(statistics.fmean(pressure))
+            pressure_coverage = len(attributed_pressures) / retained_rows if retained_rows else 0.0
+            state["cold_side_reference_pressure_coverage_fraction"] = round(pressure_coverage, 6)
+            state[pressure_key] = (
+                round(statistics.median(attributed_pressures), 3)
+                if attributed_pressures and pressure_coverage >= DEFAULT_THERMAL_COVERAGE_FRACTION
+                else None
+            )
+        pressure_values = [
+            float(state[pressure_key])
+            for _, state in eligible
+            if isinstance(state.get(pressure_key), int | float)
+            and not isinstance(state.get(pressure_key), bool)
+        ]
+        if not pressure_values:
+            raise ValueError("cold-reference pressure attribution is incomplete")
+        pressure_center = statistics.median(pressure_values)
+    else:
+        pressure_center = statistics.median(float(state[pressure_key]) for _, state in eligible)
     for state in states:
         state["cohort_consistent"] = False
     selected: list[tuple[dict, dict]] = []
     for archive, state in eligible:
+        core_ok = (
+            thermal_fit_mode == "cold_side_temperature_tagged"
+            or abs(_cohort_core_temp(state) - core_center) <= 5.0
+        )
+        pressure_value = state.get(pressure_key)
         cohort_ok = (
-            abs(float(state["core_temp_c"]) - core_center) <= 5.0
-            and abs(float(state["pressure_psi"]) - pressure_center) <= 2.0
+            core_ok
+            and isinstance(pressure_value, int | float)
+            and not isinstance(pressure_value, bool)
+            and abs(float(pressure_value) - pressure_center) <= 2.0
         )
         state["cohort_consistent"] = cohort_ok
         if cohort_ok:
             selected.append((archive, state))
     if not selected:
+        if thermal_fit_mode == "cold_side_temperature_tagged":
+            raise ValueError("cold-reference pressure observations do not form a consistent cohort")
         raise ValueError("thermally eligible laps do not form a consistent temp/pressure cohort")
 
-    rows: list[dict] = []
+    tagged_rows: list[dict] = []
+    requires_temperature_tags = thermal_fit_mode == "cold_side_temperature_tagged"
     for archive, state in selected:
         trace = archive["trace"]
         fields = trace["fields"]
         index = {name: i for i, name in enumerate(fields)}
         required = ("speed", "accG_lat", "accG_long", "brake", "throttle")
-        if any(name not in index for name in required):
+        core_names = [f"tyreCoreTemp_{wheel}" for wheel in _WHEELS]
+        required_fields = required + tuple(core_names) if requires_temperature_tags else required
+        if any(name not in index for name in required_fields):
             continue
         for sample in trace["samples"]:
             try:
@@ -1083,22 +1250,69 @@ def ggv_from_lap_archives(
                 continue
             if not _finite_ggv(speed, lateral, longitudinal, brake, throttle):
                 continue
-            rows.append(
-                {
-                    "speed_kmh": speed,
-                    "accg_lat": lateral,
-                    "accg_lon": longitudinal,
-                    # The lap schema does not persist the controller's active-probe state. Do not
-                    # infer it from brake/throttle alone (normal driving can look identical) and
-                    # accidentally unlock the lower 8-sample probe gate; archive rows use the
-                    # stricter passive threshold.
-                    "source": "passive",
-                    "thermal_lap_uuid": state.get("lap_uuid"),
-                }
-            )
+            row = {
+                "speed_kmh": speed,
+                "accg_lat": lateral,
+                "accg_lon": longitudinal,
+                # The lap schema does not persist the controller's active-probe state. Do not
+                # infer it from brake/throttle alone (normal driving can look identical) and
+                # accidentally unlock the lower 8-sample probe gate; archive rows use the
+                # stricter passive threshold.
+                "source": "passive",
+                "thermal_lap_uuid": state.get("lap_uuid"),
+            }
+            if requires_temperature_tags:
+                try:
+                    wheel_core_temp_c = tuple(float(sample[index[name]]) for name in core_names)
+                except (IndexError, TypeError, ValueError):
+                    continue
+                if not _finite_ggv(*wheel_core_temp_c) or any(
+                    value == 0.0 for value in wheel_core_temp_c
+                ):
+                    continue
+                row["thermal_wheel_core_temp_c"] = wheel_core_temp_c
+                row["thermal_hottest_wheel_c"] = max(wheel_core_temp_c)
+            tagged_rows.append(row)
+    if thermal_fit_mode == "cold_side_temperature_tagged" and tagged_rows:
+        if cold_reference_max_c is None:
+            raise ValueError("cold-side cohort lacks a complete thermal reference anchor")
+        rows = [
+            row
+            for row in tagged_rows
+            if float(row["thermal_hottest_wheel_c"]) <= cold_reference_max_c
+        ]
+    else:
+        rows = tagged_rows
     if len(rows) < min_friction_rows:
+        if thermal_fit_mode == "thermally_stable":
+            cold_side_archives = [
+                archive
+                for archive, state in zip(archives, states, strict=True)
+                if state.get("temperature_aware_fit_eligible")
+            ]
+            if cold_side_archives:
+                model, summary = ggv_from_lap_archives(
+                    cold_side_archives,
+                    prior,
+                    prior_name=prior_name,
+                    min_friction_rows=min_friction_rows,
+                    probe_rows=probe_rows,
+                    probe_run_id=probe_run_id,
+                    _thermal_fit_mode="cold_side_temperature_tagged",
+                )
+                selected_lap_uuids = set(summary["selected_lap_uuids"])
+                for state in states:
+                    state["cohort_consistent"] = state.get("lap_uuid") in selected_lap_uuids
+                summary["tyre_states"] = states
+                summary["thermal_fit"]["fallback_from"] = "thermally_stable"
+                return model, summary
+        evidence_name = (
+            "thermally consistent cold-reference"
+            if requires_temperature_tags
+            else "thermally consistent"
+        )
         raise ValueError(
-            f"insufficient thermally consistent friction rows: {len(rows)} < {min_friction_rows}"
+            f"insufficient {evidence_name} friction rows: {len(rows)} < {min_friction_rows}"
         )
     # The immutable archive proves the thermal state and supplies passive cornering. In the live
     # harness, archives are filtered to files written after this exact run began and the controller
@@ -1138,6 +1352,11 @@ def ggv_from_lap_archives(
             and int(row["lap_number"]) in selected_lap_numbers
         ]
         probe_attribution = "archive lap number"
+    if thermal_fit_mode == "cold_side_temperature_tagged":
+        # Probe rows are emitted separately and do not carry the archive row's four-wheel thermal
+        # attribution. They cannot bypass the cold-reference filter and become runtime-bearing.
+        thermal_probe_rows = []
+        probe_attribution = "rejected: missing cold-band temperature attribution"
     combined_rows = rows + thermal_probe_rows
     measured = ggv_from_telemetry(combined_rows, allow_passive_longitudinal=False)
     point_model = blend_ggv_safe(measured, prior, prior_name=prior_name)
@@ -1149,6 +1368,24 @@ def ggv_from_lap_archives(
         "probe_attribution": probe_attribution,
         "tyre_states": states,
         "selected_lap_uuids": [state.get("lap_uuid") for _, state in selected],
+        "thermal_fit": {
+            "mode": thermal_fit_mode,
+            "tagged_rows": len(tagged_rows),
+            "cold_reference_rows": len(rows),
+            "cold_reference_max_c": (
+                round(cold_reference_max_c, 3) if cold_reference_max_c is not None else None
+            ),
+            "hottest_used_wheel_c": (
+                round(max(float(row["thermal_hottest_wheel_c"]) for row in rows), 3)
+                if requires_temperature_tags and rows
+                else None
+            ),
+            "runtime_projection": (
+                "globally coldest observed band only"
+                if thermal_fit_mode == "cold_side_temperature_tagged"
+                else "thermally stable cohort"
+            ),
+        },
         "thermal_cohort": {
             "core_temp_c": round(core_center, 3),
             "pressure_psi": round(pressure_center, 3),

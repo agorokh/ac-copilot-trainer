@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 # One import block (Ruff isort otherwise splits aliases across multiple statements).
 from tools.repo_knowledge.query import (
@@ -20,7 +20,7 @@ from tools.repo_knowledge.query import (
     rows_to_json,
 )
 
-mcp = FastMCP("repo-knowledge")
+mcp = MCPServer("repo-knowledge")
 
 
 def _db_path() -> Path:

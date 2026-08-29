@@ -712,6 +712,7 @@ def test_stage_outcome_readers_round_trip(tmp_path):
     stage = tmp_path / "drive"
     stage.mkdir()
     payload = _stage_outcome([95000], archives=[tmp_path / "lap_1.json"])
+    payload["lap_archives_all"] = [str(tmp_path / "lap_failed_attempt.json")]
     (stage / "report.json").write_text(_json.dumps(payload), encoding="utf-8")
     outcome = load_stage_outcome(stage)
     assert stage_lap_times_ms(outcome) == [95000]
@@ -763,6 +764,20 @@ def test_pipeline_rejects_bad_selfplay_flags(monkeypatch, tmp_path):
                 "1",
                 "--laps",
                 "1",
+            ),
+            run_stage=_Runner([0]),
+        )
+    with pytest.raises(ValueError, match=r"--laps >= 3"):
+        run_pipeline(
+            _args(
+                tmp_path,
+                "--scientist",
+                "--setup",
+                "baseline",
+                "--iterations",
+                "1",
+                "--laps",
+                "2",
             ),
             run_stage=_Runner([0]),
         )
@@ -1633,8 +1648,12 @@ def test_scientist_is_skipped_when_the_ladder_needs_a_peer_rebase(monkeypatch, t
         monkeypatch,
         tmp_path,
         stage_specs=[
-            (0, [95000, 96000], [True, True]),  # base drive
-            (0, [93000, 94000], [True, True]),  # iteration 1: peer swaps between load and save
+            (0, [105000, 95000, 96000], [True, True, True]),  # base drive
+            (
+                0,
+                [103000, 93000, 94000],
+                [True, True, True],
+            ),  # iteration 1: peer swaps between load and save
         ],
         mutate_plant_during_refine=True,  # forces the peer save_skipped path
     )
@@ -1649,7 +1668,7 @@ def test_scientist_is_skipped_when_the_ladder_needs_a_peer_rebase(monkeypatch, t
         "--evidence-dir",
         str(tmp_path / "ev"),
         "--laps",
-        "2",
+        "3",
         "--iterations",
         "1",
         "--setup",
@@ -1715,7 +1734,7 @@ def test_selfplay_failed_unattributable_step_also_requires_a_rebase(monkeypatch,
         monkeypatch,
         tmp_path,
         stage_specs=[
-            (0, [95000, 96000], [True, True]),  # base drive
+            (0, [105000, 95000, 96000], [True, True, True]),  # base drive
             (0, [94000], [False]),  # iteration 1: AC-invalid AND the plant is swapped under it
         ],
     )
@@ -1740,7 +1759,7 @@ def test_selfplay_failed_unattributable_step_also_requires_a_rebase(monkeypatch,
         "--evidence-dir",
         str(tmp_path / "ev"),
         "--laps",
-        "2",
+        "3",
         "--iterations",
         "1",
         "--setup",
@@ -2041,7 +2060,7 @@ def test_selfplay_skipped_rollback_requires_a_rebase(monkeypatch, tmp_path):
         monkeypatch,
         tmp_path,
         stage_specs=[
-            (0, [95000, 96000], [True, True]),  # base drive
+            (0, [105000, 95000, 96000], [True, True, True]),  # base drive
             (0, [94000], [False]),  # iteration 1: falsified, and a peer owns the artifact by then
         ],
     )
@@ -2066,7 +2085,7 @@ def test_selfplay_skipped_rollback_requires_a_rebase(monkeypatch, tmp_path):
         "--evidence-dir",
         str(tmp_path / "ev"),
         "--laps",
-        "2",
+        "3",
         "--iterations",
         "1",
         "--setup",
@@ -2520,9 +2539,21 @@ def test_selfplay_late_persist_error_cannot_return_green(monkeypatch, tmp_path):
 @pytest.mark.parametrize(
     ("baseline_laps", "candidate_laps", "expected_error"),
     [
-        (((1, 100_000), (2, 101_000)), ((1, 90_000), (2, 91_000)), None),
-        (((1, 100_000), (2, 101_000)), ((1, 90_000),), "candidate_batch_incomplete"),
-        (((1, 100_000),), ((1, 90_000), (2, 91_000)), "baseline_batch_unverifiable"),
+        (
+            ((1, 110_000), (2, 100_000), (3, 101_000)),
+            ((1, 100_000), (2, 90_000), (3, 91_000)),
+            None,
+        ),
+        (
+            ((1, 110_000), (2, 100_000), (3, 101_000)),
+            ((1, 100_000), (2, 90_000)),
+            "candidate_batch_incomplete",
+        ),
+        (
+            ((1, 110_000), (2, 100_000)),
+            ((1, 100_000), (2, 90_000), (3, 91_000)),
+            "baseline_batch_unverifiable",
+        ),
     ],
 )
 def test_scientist_requires_requested_laps_before_persisting(
@@ -2614,7 +2645,7 @@ def test_scientist_requires_requested_laps_before_persisting(
         "--setup",
         str(baseline_setup),
         "--laps",
-        "2",
+        "3",
         "--iterations",
         "1",
         "--scientist",
@@ -2663,7 +2694,7 @@ def _scientist_lap_payload(lap_n: int, lap_ms: int, *, wing: int, path: Path) ->
 
 
 def _scientist_batch_env(monkeypatch, tmp_path):
-    """Schema + verifiable 2-lap baseline batch shared by the #737 candidate-retry tests."""
+    """Schema + verifiable 3-lap baseline batch shared by the #737 candidate-retry tests."""
     from tools.ai_sidecar import car_schema
     from tools.ai_sidecar.car_schema import CarSetupSchema
 
@@ -2681,7 +2712,7 @@ def _scientist_batch_env(monkeypatch, tmp_path):
     monkeypatch.setattr(car_schema, "load_latest_schema", lambda car: schema)
 
     baseline_paths = []
-    for lap_n, lap_ms in ((1, 100_000), (2, 101_000)):
+    for lap_n, lap_ms in ((1, 110_000), (2, 100_000), (3, 101_000)):
         path = tmp_path / f"baseline_lap_{lap_n}.json"
         path.write_text(
             _json.dumps(_scientist_lap_payload(lap_n, lap_ms, wing=10, path=baseline_setup)),
@@ -2689,7 +2720,7 @@ def _scientist_batch_env(monkeypatch, tmp_path):
         )
         baseline_paths.append(str(path))
     base_outcome = {
-        "report": {"lap_times_ms": [100_000, 101_000], "drive": {"recoveries": 0}},
+        "report": {"lap_times_ms": [110_000, 100_000, 101_000], "drive": {"recoveries": 0}},
         "lap_archives": baseline_paths,
     }
     return user_dir, baseline_setup, base_outcome
@@ -2723,7 +2754,7 @@ def _run_scientist_with_fake_pipeline(monkeypatch, tmp_path, fake_nested_pipelin
     user_dir, baseline_setup, base_outcome = _scientist_batch_env(monkeypatch, tmp_path)
     monkeypatch.setattr(auto_alien, "run_pipeline", fake_nested_pipeline)
     args = _args(
-        user_dir, "--setup", str(baseline_setup), "--laps", "2", "--iterations", "1", "--scientist"
+        user_dir, "--setup", str(baseline_setup), "--laps", "3", "--iterations", "1", "--scientist"
     )
     result = run_scientist(
         args,
@@ -2738,11 +2769,11 @@ def _run_scientist_with_fake_pipeline(monkeypatch, tmp_path, fake_nested_pipelin
 
 
 def _successful_candidate_pipeline_result(candidate_args) -> tuple[int, dict]:
-    """A complete 2-lap candidate batch faster than the baseline (promotable)."""
+    """A complete 3-lap candidate batch faster than the baseline (promotable)."""
     drive_dir = Path(candidate_args.evidence_dir) / "drive"
     drive_dir.mkdir(parents=True)
     paths = []
-    for lap_n, lap_ms in ((1, 90_000), (2, 91_000)):
+    for lap_n, lap_ms in ((1, 100_000), (2, 90_000), (3, 91_000)):
         path = drive_dir / f"lap_{lap_n}.json"
         path.write_text(
             _json.dumps(
@@ -2754,7 +2785,10 @@ def _successful_candidate_pipeline_result(candidate_args) -> tuple[int, dict]:
     (drive_dir / "report.json").write_text(
         _json.dumps(
             {
-                "report": {"lap_times_ms": [90_000, 91_000], "drive": {"recoveries": 0}},
+                "report": {
+                    "lap_times_ms": [100_000, 90_000, 91_000],
+                    "drive": {"recoveries": 0},
+                },
                 "lap_archives": paths,
             }
         ),
@@ -2851,7 +2885,7 @@ def test_scientist_setup_race_retry_composes_boundedly_with_real_pipeline(monkey
         return 1
 
     args = _args(
-        user_dir, "--setup", str(baseline_setup), "--laps", "2", "--iterations", "1", "--scientist"
+        user_dir, "--setup", str(baseline_setup), "--laps", "3", "--iterations", "1", "--scientist"
     )
     result = run_scientist(
         args,

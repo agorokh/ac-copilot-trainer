@@ -461,6 +461,12 @@ class AutoDriveReport:
     # treats only this terminal state as worth a fresh launch cycle; wiring failures and
     # exhausted cached-session mismatches (#537) stay non-retryable.
     setup_race_suspected: bool = False
+    # #751: every full retry is a distinct AC session.  The outer CLI invocation timestamp spans
+    # all retries, so archive attribution keys on this per-attempt boundary and the session UUID
+    # replayed into the attempt's own WS tap instead.
+    attempt_started_epoch: float | None = None
+    session_uuid: str | None = None
+    timed_laps: list[dict[str, int]] = field(default_factory=list)
     # #596 Part B: complete per-attempt reports from the bounded sim-death retry wrapper.  The
     # final report stays at the top level for backward compatibility; this list makes a recovered
     # crash visible and preserves its control trace/checks instead of laundering it into PASS.
@@ -899,6 +905,52 @@ def _has_timed_lap(frames: list[dict]) -> bool:
     return False
 
 
+def _session_uuid_from_frames(frames: list[dict]) -> str | None:
+    """Latest non-empty session UUID replayed into one attempt's WS capture."""
+    found: str | None = None
+    for frame in frames:
+        if (
+            not isinstance(frame, dict)
+            or frame.get("type") != "state.snapshot"
+            or frame.get("topic") != "session"
+        ):
+            continue
+        payload = frame.get("payload")
+        value = payload.get("session_uuid") if isinstance(payload, dict) else None
+        if isinstance(value, str) and value.strip():
+            found = value.strip()
+    return found
+
+
+def _timed_laps_from_frames(frames: list[dict]) -> list[dict[str, int]]:
+    """Ordered lap-number/time identities from one attempt's timed lap snapshots."""
+    out: list[dict[str, int]] = []
+    for frame in frames:
+        if (
+            not isinstance(frame, dict)
+            or frame.get("type") != "state.snapshot"
+            or frame.get("topic") != "lap"
+        ):
+            continue
+        payload = frame.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        lap_n = payload.get("lap")
+        lap_ms = payload.get("last_lap_ms")
+        if not isinstance(lap_n, int) or isinstance(lap_n, bool) or lap_n < 1:
+            continue
+        if isinstance(lap_ms, bool):
+            continue
+        try:
+            lap_ms_value = float(lap_ms)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(lap_ms_value) or lap_ms_value <= 0 or not lap_ms_value.is_integer():
+            continue
+        out.append({"lap_n": lap_n, "lap_ms": int(lap_ms_value)})
+    return out
+
+
 async def run_auto_drive(
     config: AutoDriveConfig,
     *,
@@ -926,6 +978,7 @@ async def run_auto_drive(
     FAILS the run at ``stage="setup"`` — driving with the wrong setup is the "half-done run"
     this exists to prevent (#459 Part A).
     """
+    attempt_started_epoch = time.time()
     identity = dict(car_id=config.car_id, track_id=config.track_id or None)
     setup_requested = Path(config.setup).stem if config.setup else None
     setup_ack: dict | None = None
@@ -938,6 +991,7 @@ async def run_auto_drive(
             exc.retain_cleanup_controller(retained_controller)
 
     def finish(report: AutoDriveReport) -> AutoDriveReport:
+        report.attempt_started_epoch = attempt_started_epoch
         prior_notes = [note for note in launch_notes if note not in report.notes]
         report.notes[:0] = prior_notes
         for retained_controller in telemetry_cleanup_holds:
@@ -1349,6 +1403,13 @@ async def run_auto_drive(
             drive_seconds=tap_settle_s + lap_deadline + config.lap_finalize_grace_s,
         )
     drive_task = asyncio.create_task(asyncio.to_thread(drive, controller, drive_config, stop))
+    handshake_drive_done = asyncio.Event()
+    if config.driver == "handshake":
+        # The handshake self-terminates after its final probe/timed lap. Keep the observer tap
+        # alive through that exact boundary so the report retains the session/lap identity needed
+        # to scope the asynchronously written archives. A fixed 30 s tap can otherwise finish
+        # before the handshake and leave a successful plant run with timed_laps=[] (#764 review).
+        drive_task.add_done_callback(lambda _future: handshake_drive_done.set())
     stats = DriveStats(reason="drive did not run")
     seq_ok: bool | None = None
     counts: dict[str, int] = {}
@@ -1365,6 +1426,8 @@ async def run_auto_drive(
     error: str | None = None
     stage = "done"
     lap_times_ms: list[int] = []
+    session_uuid: str | None = None
+    timed_laps: list[dict[str, int]] = []
     try:
         # #531 Part D: the composed drive is the caller that needs intervention evidence, so it
         # explicitly opts into the 20 Hz tick fan-out. Keep generic ``tap_frames`` classless by
@@ -1374,6 +1437,37 @@ async def run_auto_drive(
             wait_for_lap=config.wait_lap,
             client_class=CLIENT_CLASS_OBSERVER,
         )
+        if config.driver == "handshake" and not config.wait_lap:
+
+            def _handshake_identity_complete(frames: list[dict]) -> bool:
+                if (
+                    not drive_task.done()
+                    or drive_task.cancelled()
+                    or drive_task.exception() is not None
+                ):
+                    return False
+                completed_stats = drive_task.result()
+                result = (
+                    completed_stats.payload.get("result")
+                    if isinstance(completed_stats.payload, dict)
+                    else None
+                )
+                laps_used = result.get("laps_used") if isinstance(result, dict) else None
+                required_laps = (
+                    laps_used
+                    if isinstance(laps_used, int)
+                    and not isinstance(laps_used, bool)
+                    and laps_used > 0
+                    else 1
+                )
+                return (
+                    bool(_session_uuid_from_frames(frames))
+                    and len(_timed_laps_from_frames(frames)) >= required_laps
+                )
+
+            tap_kwargs["seconds"] = max(config.tap_seconds, config.drive_seconds)
+            tap_kwargs["stop_event"] = handshake_drive_done
+            tap_kwargs["stop_condition"] = _handshake_identity_complete
         if config.wait_lap:
             # The SAME settle + lap deadline the drive budget is sized to (above), so the tap never
             # waits past what the drive thread can still drive (a full lap at pace can exceed
@@ -1388,6 +1482,8 @@ async def run_auto_drive(
                 # budget, whichever first" — so a shortfall ends honestly, never hangs.
                 tap_kwargs["lap_count"] = config.target_laps
         frames = await tap(config.sidecar_url, **tap_kwargs)
+        session_uuid = _session_uuid_from_frames(frames)
+        timed_laps = _timed_laps_from_frames(frames)
         # #531 Part D: derive the electronics-intervention evidence from the SAME captured stream
         # the pipeline checks read, so the tick evidence and the sequence verdict can never come
         # from two different windows.
@@ -1504,6 +1600,8 @@ async def run_auto_drive(
         checks=checks,
         lap_grace_applied=grace_applied,
         lap_times_ms=lap_times_ms,
+        session_uuid=session_uuid,
+        timed_laps=timed_laps,
         laps_requested=config.target_laps,
         intervention=intervention,
         counts=counts,
@@ -2646,6 +2744,114 @@ def _scan_lap_archives(dirs: list[Path], since_epoch: float) -> list[str]:
     return [p for _, p in sorted(hits, reverse=True)]
 
 
+def scope_lap_archives(
+    paths: list[str],
+    *,
+    session_uuid: str | None,
+    expected_laps: list[dict[str, int]],
+    archive_predicate: Callable[[dict], bool] | None = None,
+) -> list[str]:
+    """Select one attempt's exact timed batch from an unscoped archive scan.
+
+    Retry attempts restart lap numbering, so ``lap_n`` alone cannot distinguish the failed
+    attempt's files from the final attempt.  Require the final WS session UUID plus the exact
+    ``(lap_n, lap_ms)`` identities observed by that attempt.  Ambiguous duplicate identities fail
+    closed instead of choosing one by filesystem order.
+    """
+    if not isinstance(session_uuid, str) or not session_uuid.strip():
+        return []
+
+    expected: list[tuple[int, int]] = []
+    seen_lap_numbers: set[int] = set()
+    for item in expected_laps:
+        if not isinstance(item, dict):
+            return []
+        lap_n = item.get("lap_n")
+        lap_ms = item.get("lap_ms")
+        if (
+            not isinstance(lap_n, int)
+            or isinstance(lap_n, bool)
+            or lap_n < 1
+            or not isinstance(lap_ms, int)
+            or isinstance(lap_ms, bool)
+            or lap_ms < 1
+            or lap_n in seen_lap_numbers
+        ):
+            return []
+        seen_lap_numbers.add(lap_n)
+        expected.append((lap_n, lap_ms))
+
+    matches: dict[int, tuple[int, str]] = {}
+    claimed_lap_numbers: set[int] = set()
+    for item in paths:
+        try:
+            payload = json.loads(Path(item).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict) or payload.get("session_uuid") != session_uuid.strip():
+            continue
+        if archive_predicate is not None and not archive_predicate(payload):
+            continue
+        lap = payload.get("lap")
+        if not isinstance(lap, dict):
+            return []
+        lap_n = lap.get("lap_n")
+        lap_ms = lap.get("lap_ms")
+        if not isinstance(lap_n, int) or isinstance(lap_n, bool) or lap_n < 1:
+            return []
+        if lap_n not in seen_lap_numbers:
+            continue
+        if lap_n in claimed_lap_numbers:
+            return []
+        claimed_lap_numbers.add(lap_n)
+        if isinstance(lap_ms, bool):
+            return []
+        try:
+            lap_ms_value = float(lap_ms)
+        except (TypeError, ValueError, OverflowError):
+            return []
+        if not math.isfinite(lap_ms_value) or lap_ms_value <= 0 or not lap_ms_value.is_integer():
+            return []
+        matches[lap_n] = (int(lap_ms_value), item)
+
+    scoped: list[str] = []
+    for lap_n, lap_ms in expected:
+        match = matches.get(lap_n)
+        if match is None or match[0] != lap_ms:
+            return []
+        scoped.append(match[1])
+    return scoped if len(scoped) == len(expected) else []
+
+
+def _scope_report_lap_archives(
+    paths: list[str],
+    report: AutoDriveReport,
+    *,
+    archive_predicate: Callable[[dict], bool] | None = None,
+) -> list[str]:
+    """Scope published evidence to one report, including legacy single-lap runs."""
+    return scope_lap_archives(
+        paths,
+        session_uuid=report.session_uuid,
+        expected_laps=report.timed_laps,
+        archive_predicate=archive_predicate,
+    )
+
+
+def _archive_poll_requirements(report: AutoDriveReport, *, batch_mode: bool) -> tuple[bool, int]:
+    """Return whether to poll and the exact attainable final-attempt archive count.
+
+    A failed handshake can intend more laps than the tap actually observed. The selector can only
+    ever return identities in ``report.timed_laps``, so waiting for the intended handshake count is
+    impossible and merely burns the full timeout. The later handshake completeness gate still
+    compares the scoped count with ``laps_used`` and refuses a partial model.
+    """
+    if not batch_mode:
+        return report.lap_grace_applied, 1 if report.lap_grace_applied else 0
+    expected = len(report.timed_laps)
+    return expected > 0, expected
+
+
 def collect_lap_archives(
     journal_dir: Path | None,
     since_epoch: float,
@@ -2656,6 +2862,7 @@ def collect_lap_archives(
     min_valid_count: int | None = None,
     min_matching_count: int | None = None,
     valid_archive_predicate: Callable[[dict], bool] | None = None,
+    archive_selector: Callable[[list[str]], list[str]] | None = None,
     timeout_s: float = 8.0,
     poll_s: float = 0.5,
     _clock: Callable[[], float] = time.monotonic,
@@ -2725,13 +2932,17 @@ def collect_lap_archives(
             )
         )
 
-    found = _scan_lap_archives(_current(), since_epoch)
+    def _scan_selected() -> list[str]:
+        found = _scan_lap_archives(_current(), since_epoch)
+        return archive_selector(found) if archive_selector is not None else found
+
+    found = _scan_selected()
     if _enough(found) or not wait_for_first:
         return found
     deadline = _clock() + max(0.0, timeout_s)
     while _clock() < deadline:
         _sleep(max(0.0, poll_s))
-        found = _scan_lap_archives(_current(), since_epoch)
+        found = _scan_selected()
         if _enough(found):
             return found
     return found
@@ -4761,9 +4972,7 @@ def _main_impl(
     # A batch run must also WAIT for its archives even when the grace didn't fire (e.g.
     # --lap-finalize-grace-s 0): grace-or-handshake alone would skip the poll and falsely
     # falsify the iteration on missing evidence (#579 daemon HIGH).
-    wait_for_archives = report.lap_grace_applied or batch_mode
-    timed_laps_observed = len(report.lap_times_ms)
-    expected_archives = max(handshake_laps_used, timed_laps_observed)
+    wait_for_archives, expected_archives = _archive_poll_requirements(report, batch_mode=batch_mode)
 
     def _combo_predicate(payload: dict) -> bool:
         return archive_matches_combo(
@@ -4773,21 +4982,33 @@ def _main_impl(
             layout=config.track_layout,
         )
 
+    # #751: a full sim-death retry is a new AC session whose lap numbering starts at 1 again.
+    # Poll against the final attempt's own boundary and select by its WS session UUID plus exact
+    # timed (lap_n, lap_ms) batch. Applying the selector inside each poll prevents earlier retry
+    # files from satisfying min_count before the final attempt's async writer finishes.
+    archive_since_epoch = report.attempt_started_epoch or run_started_epoch
+
+    def _scope_attempt_archives(paths: list[str]) -> list[str]:
+        return _scope_report_lap_archives(
+            paths,
+            report,
+            archive_predicate=_combo_predicate if config.car_id else None,
+        )
+
+    archive_selector: Callable[[list[str]], list[str]] = _scope_attempt_archives
+
     lap_archives = collect_lap_archives(
         None,
-        run_started_epoch,
+        archive_since_epoch,
         resolve=lambda: candidate_journal_laps_dirs(user_dir),
         wait_for_first=wait_for_archives,
         min_count=max(1, expected_archives),
-        # Valid-count gating is HANDSHAKE-only (the fit must never promote from a partial valid
-        # set). A flying-lap batch must not gate on validity: an AC-invalid lap still writes its
-        # archive, that archive IS the falsification evidence the self-play verdict needs
-        # promptly, and no amount of waiting turns it valid — gating on it would stall the poll
-        # to full timeout on every falsified batch (#579 Qodo). The batch DOES gate on the
-        # combo-matched count (validity-agnostic): the multi-dir resolver can see another
-        # app/combo's fresh archives, which must not satisfy the batch before this combo's own
-        # writer finishes (#579 Codex P2).
-        min_valid_count=handshake_laps_used if handshake_laps_used > 0 else None,
+        # Poll only for the complete exact scoped batch. AC-invalid laps are immutable evidence:
+        # waiting cannot turn one valid, and later laps are outside report.timed_laps. The
+        # downstream handshake completeness gate rejects an invalid subset without burning the
+        # full timeout. collect_lap_archives retains its generic valid-count facility for callers
+        # that can actually gain evidence while polling.
+        min_valid_count=None,
         # The combo gate needs a car identity to match against: a preset-only run (--cm-preset
         # without --car) has none, so the predicate could never match and the poll would always
         # burn its full timeout (#579 Qodo perf).
@@ -4798,8 +5019,13 @@ def _main_impl(
         # ANY counting path (min_valid_count is handshake-only and handshake requires --car, so
         # this is unreachable today — kept consistent regardless; #579 daemon MEDIUM).
         valid_archive_predicate=_combo_predicate if config.car_id else None,
+        archive_selector=archive_selector,
         timeout_s=20.0 if batch_mode else 8.0,
     )
+    # Preserve the invocation-wide raw scan strictly as diagnostics. Consumers and refits use the
+    # scoped ``lap_archives`` above; the separate raw list makes retry contamination inspectable
+    # without accidentally promoting it as evidence.
+    lap_archives_all = _scan_lap_archives(candidate_journal_laps_dirs(user_dir), run_started_epoch)
     # Report the dir the archive was actually found in (correct even for a renamed install), so the
     # metadata matches the multi-dir scan, not the canonical-preferring discover (#516 review).
     journal_dir = (
@@ -4822,6 +5048,7 @@ def _main_impl(
         },
         "hud": hud,
         "lap_archives": lap_archives,
+        "lap_archives_all": lap_archives_all,
         "journal_dir": str(journal_dir) if journal_dir else None,
     }
     if config.driver == "handshake":

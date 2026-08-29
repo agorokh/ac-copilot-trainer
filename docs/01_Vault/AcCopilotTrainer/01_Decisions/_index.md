@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-03-28
-updated: 2026-07-25
+updated: 2026-08-28
 relates_to:
   - AcCopilotTrainer/00_System/Architecture Invariants.md
   - 00_Graph_Schema.md
@@ -31,3 +31,4 @@ Architecture Decision Records for this vault.
 - [voice-coach-architecture-2026-06-28](voice-coach-architecture-2026-06-28.md) — in-the-ear voice coach (issue #340): pre-rendered phrase bank (not live TTS) + urgency scheduler (barge-in/dedup/TTL/cooldown) speaking the same `Advisory` stream as the text HUD; stdlib core dep-free, audio deps behind the `voice` extra; headset pinned off the haptic DAC.
 - [voice-intensity-register-2026-06-28](voice-intensity-register-2026-06-28.md) — intensity-expressive coach (issue #368): a baked `register` tone tier (calm/firm/critical) as a 4th content-addressed manifest axis; severity→register in the observer w/ hysteresis; terse anticipatory cues (act ≤450 ms); ffmpeg prosody chain over Kokoro/say-expressive/ToneBackend; timing-report + voice benchmark. Corrects the stale "spline absent from live payload" comment.
 - [duckdb-over-clickhouse-storage-2026-06-29](duckdb-over-clickhouse-storage-2026-06-29.md) — why **embedded DuckDB** (not the fleet-default **ClickHouse**) for AC analytics storage: it's offline-only (NOT the voice/realtime path — voice is a baked phrase bank, no DB), there was no head-to-head trade study (ClickHouse absent from the repo), and the drivers are deployment topology + the data-immutability invariant (server-less single-rig, derived/disposable view over an immutable JSON corpus, ~375k-sample scale, CI-embeddable). See [[coaching-lakehouse-duckdb-2026-06-28]].
+- [cold-side-temperature-tagged-friction-refit-2026-08-28](cold-side-temperature-tagged-friction-refit-2026-08-28.md) — admit monotonically warming cold-side laps only through four-wheel row attribution and a globally coldest 5 C runtime projection (issue #749).

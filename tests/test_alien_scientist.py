@@ -94,6 +94,8 @@ def test_falsified_constraint_is_suppressed_for_same_platform_scope() -> None:
                     "scope_key": first["scope_key"],
                     "constraint_key": constraint,
                     "verdict": "falsified",
+                    "baseline_flying_laps": 2,
+                    "candidate_flying_laps": 2,
                 }
             ],
             proposed_hypotheses=[
@@ -129,6 +131,8 @@ def test_meta_prior_transfers_across_combos_sharing_scope_key() -> None:
             "verdict": "falsified",
             "experiment_id": "run:0",
             "reason": "candidate_not_significantly_faster",
+            "baseline_flying_laps": 2,
+            "candidate_flying_laps": 2,
         }
     ]
     priors = meta_priors(ledger, scope=_SCOPE)
@@ -213,6 +217,8 @@ def test_legacy_ledger_row_without_combo_still_suppresses() -> None:
                     "scope_key": first["scope_key"],
                     "constraint_key": first["experiments"][0]["constraint_key"],
                     "verdict": "falsified",
+                    "baseline_flying_laps": 2,
+                    "candidate_flying_laps": 2,
                 }
             ],
             proposed_hypotheses=[
@@ -224,6 +230,46 @@ def test_legacy_ledger_row_without_combo_still_suppresses() -> None:
                 }
             ],
         )
+
+
+def test_under_evidenced_legacy_falsification_is_retryable_without_ledger_mutation() -> None:
+    first = _plan()
+    legacy_row = {
+        "scope_key": first["scope_key"],
+        "constraint_key": first["experiments"][0]["constraint_key"],
+        "verdict": "falsified",
+        "experiment_id": "legacy-plateau-rear-wing",
+    }
+    ledger = [legacy_row]
+
+    rebuilt = build_plan(
+        trigger="pace plateau retry",
+        combo=_COMBO,
+        scope=_SCOPE,
+        baseline_payloads=[_lap("lap-1", 100_000)],
+        schema=_schema(),
+        ledger=ledger,
+    )
+
+    assert rebuilt["experiments"][0]["constraint_key"] == legacy_row["constraint_key"]
+    assert rebuilt["meta_priors"] == []
+    assert rebuilt["suppressed"] == []
+    assert ledger == [legacy_row]
+
+
+@pytest.mark.parametrize("bad_count", [True, 2.5, "2"])
+def test_malformed_flying_lap_counts_cannot_create_suppressing_prior(bad_count) -> None:
+    first = _plan()
+    ledger = [
+        {
+            "scope_key": first["scope_key"],
+            "constraint_key": first["experiments"][0]["constraint_key"],
+            "verdict": "falsified",
+            "baseline_flying_laps": bad_count,
+            "candidate_flying_laps": 2,
+        }
+    ]
+    assert meta_priors(ledger, scope=_SCOPE) == []
 
 
 def test_rejected_batch_does_not_suppress_unmeasured_constraint() -> None:
@@ -373,10 +419,18 @@ def test_measured_significant_single_parameter_gain_is_promoted() -> None:
     outcome = evaluate_experiment(
         plan=plan,
         experiment=plan["experiments"][0],
-        baseline_payloads=[_lap("lap-1", 100_000), _lap("lap-2", 101_000)],
-        candidate_payloads=[_lap("lap-3", 90_000, wing=9), _lap("lap-4", 91_000, wing=9)],
+        baseline_payloads=[
+            _lap("lap-1", 110_000),
+            _lap("lap-2", 100_000),
+            _lap("lap-3", 101_000),
+        ],
+        candidate_payloads=[
+            _lap("lap-4", 100_000, wing=9),
+            _lap("lap-5", 90_000, wing=9),
+            _lap("lap-6", 91_000, wing=9),
+        ],
         candidate_valid=True,
-        candidate_reason="two valid laps",
+        candidate_reason="three valid laps",
     )
 
     assert outcome["verdict"] == "promoted"
@@ -384,18 +438,106 @@ def test_measured_significant_single_parameter_gain_is_promoted() -> None:
     assert outcome["comparison"]["significant"] is True
 
 
+def test_experiment_excludes_each_arms_lowest_lap_n_from_comparison() -> None:
+    plan = _plan()
+    outcome = evaluate_experiment(
+        plan=plan,
+        experiment=plan["experiments"][0],
+        baseline_payloads=[
+            _lap("baseline-1", 10_000),
+            _lap("baseline-2", 100_000),
+            _lap("baseline-3", 100_100),
+        ],
+        candidate_payloads=[
+            _lap("candidate-1", 400_000, wing=9),
+            _lap("candidate-2", 90_000, wing=9),
+            _lap("candidate-3", 90_100, wing=9),
+        ],
+        candidate_valid=True,
+        candidate_reason="three valid laps",
+    )
+
+    assert outcome["verdict"] == "promoted"
+    assert outcome["baseline_records"] == 2
+    assert outcome["candidate_records"] == 2
+    assert outcome["comparison"]["baseline"] == {
+        "n": 2,
+        "mean_ms": 100_050.0,
+        "stdev_ms": pytest.approx(70.711),
+    }
+    assert outcome["comparison"]["candidate"] == {
+        "n": 2,
+        "mean_ms": 90_050.0,
+        "stdev_ms": pytest.approx(70.711),
+    }
+
+
+def test_experiment_with_one_flying_lap_per_arm_returns_no_verdict() -> None:
+    plan = _plan()
+    outcome = evaluate_experiment(
+        plan=plan,
+        experiment=plan["experiments"][0],
+        baseline_payloads=[_lap("baseline-1", 110_000), _lap("baseline-2", 100_000)],
+        candidate_payloads=[
+            _lap("candidate-1", 120_000, wing=9),
+            _lap("candidate-2", 90_000, wing=9),
+        ],
+        candidate_valid=True,
+        candidate_reason="two valid laps",
+    )
+
+    assert outcome["verdict"] == "no_verdict"
+    assert outcome["promoted"] is False
+    assert outcome["reason"] == "insufficient_flying_laps"
+    assert outcome["baseline_flying_laps"] == 1
+    assert outcome["candidate_flying_laps"] == 1
+    assert "comparison" not in outcome
+
+
+@pytest.mark.parametrize("bad_lap_n", [True, 1.5, "2", 2])
+def test_experiment_rejects_malformed_or_duplicate_lap_numbers(bad_lap_n) -> None:
+    plan = _plan()
+    baseline = [
+        _lap("baseline-1", 110_000),
+        _lap("baseline-2", 100_000),
+        _lap("baseline-3", 101_000),
+    ]
+    baseline[-1]["lap"]["lap_n"] = bad_lap_n
+
+    outcome = evaluate_experiment(
+        plan=plan,
+        experiment=plan["experiments"][0],
+        baseline_payloads=baseline,
+        candidate_payloads=[
+            _lap("candidate-1", 100_000, wing=9),
+            _lap("candidate-2", 90_000, wing=9),
+            _lap("candidate-3", 91_000, wing=9),
+        ],
+        candidate_valid=True,
+        candidate_reason="three valid laps",
+    )
+
+    assert outcome["verdict"] == "rejected"
+    assert outcome["reason"] == "candidate_batch_lap_n_invalid"
+
+
 def test_confounded_or_invalid_batch_keeps_last_valid_setup() -> None:
     plan = _plan()
     confounded = evaluate_experiment(
         plan=plan,
         experiment=plan["experiments"][0],
-        baseline_payloads=[_lap("lap-1", 100_000), _lap("lap-2", 101_000)],
+        baseline_payloads=[
+            _lap("lap-1", 110_000),
+            _lap("lap-2", 100_000),
+            _lap("lap-3", 101_000),
+        ],
         candidate_payloads=[
-            _lap("lap-3", 90_000, wing=9, bias=61),
-            _lap("lap-4", 91_000, wing=9, bias=61),
+            _lap("lap-4", 100_000, wing=9, bias=61),
+            _lap("lap-5", 90_000, wing=9, bias=61),
+            _lap("lap-6", 91_000, wing=9, bias=61),
         ],
         candidate_valid=True,
-        candidate_reason="two valid laps",
+        candidate_reason="three valid laps",
     )
     invalid = evaluate_experiment(
         plan=plan,
@@ -408,7 +550,8 @@ def test_confounded_or_invalid_batch_keeps_last_valid_setup() -> None:
 
     assert confounded["reason"] == "candidate_batch_confounded"
     assert confounded["promoted"] is False
-    assert invalid["verdict"] == "rejected"
+    assert invalid["verdict"] == "no_verdict"
+    assert invalid["reason"] == "insufficient_flying_laps"
     assert invalid["promoted"] is False
 
 
@@ -419,6 +562,8 @@ def test_completed_run_persists_plan_outcomes_and_append_only_ledger(tmp_path: P
         "verdict": "falsified",
         "promoted": False,
         "reason": "candidate_not_significantly_faster",
+        "baseline_flying_laps": 2,
+        "candidate_flying_laps": 2,
     }
 
     run_path = persist_completed_run(
@@ -436,6 +581,8 @@ def test_completed_run_persists_plan_outcomes_and_append_only_ledger(tmp_path: P
     assert ledger[0]["scope"] == _SCOPE
     assert ledger[0]["combo"] == _COMBO
     assert ledger[0]["scope_key"] == plan["scope_key"]
+    assert ledger[0]["baseline_flying_laps"] == 2
+    assert ledger[0]["candidate_flying_laps"] == 2
     with pytest.raises(ScientistError, match="scientist_experiment_already_recorded"):
         append_ledger(tmp_path / "journal" / "alien_scientist" / "experiments.jsonl", ledger[0])
 
@@ -446,6 +593,30 @@ def test_completed_run_persists_plan_outcomes_and_append_only_ledger(tmp_path: P
             outcomes=[outcome],
             created_utc="20260722T000000Z",
         )
+
+
+def test_no_verdict_run_is_audited_without_mutating_the_ledger(tmp_path: Path) -> None:
+    plan = _plan()
+    outcome = {
+        "constraint_key": plan["experiments"][0]["constraint_key"],
+        "verdict": "no_verdict",
+        "promoted": False,
+        "reason": "insufficient_flying_laps",
+        "baseline_flying_laps": 1,
+        "candidate_flying_laps": 1,
+    }
+
+    run_path = persist_completed_run(
+        tmp_path,
+        plan=plan,
+        outcomes=[outcome],
+        created_utc="20260722T000003Z",
+    )
+
+    payload = json.loads(run_path.read_text(encoding="utf-8"))
+    assert payload["outcomes"] == [outcome]
+    ledger_path = tmp_path / "journal" / "alien_scientist" / "experiments.jsonl"
+    assert not ledger_path.exists()
 
 
 def test_completed_run_rejects_unsafe_timestamp_and_empty_outcomes(tmp_path: Path) -> None:

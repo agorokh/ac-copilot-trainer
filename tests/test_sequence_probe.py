@@ -326,3 +326,62 @@ def test_tap_frames_is_classless_by_default_and_allows_explicit_opt_in(monkeypat
     asyncio.run(tap_frames(seconds=0))
     asyncio.run(tap_frames(seconds=0, client_class="observer"))
     assert seen == [None, "observer"]
+
+
+def test_tap_frames_waits_for_post_stop_identity_replay(monkeypatch) -> None:
+    class _FakeHarnessClient:
+        def __init__(self, url: str, *, client_class: str | None = None) -> None:
+            del url, client_class
+            self.frames: list[dict] = []
+
+        async def connect(self, **kwargs) -> None:  # noqa: ANN003
+            del kwargs
+
+        async def hello(self, **kwargs) -> dict:  # noqa: ANN003
+            del kwargs
+            return {"type": "hello_ack"}
+
+        async def subscribe(self, topics: list[str]) -> None:
+            del topics
+
+            async def replay_after_subscribe() -> None:
+                await asyncio.sleep(0.02)
+                self.frames.extend(
+                    [
+                        {
+                            "type": "state.snapshot",
+                            "topic": "session",
+                            "payload": {"session_uuid": "late-session"},
+                        },
+                        {
+                            "type": "state.snapshot",
+                            "topic": "lap",
+                            "payload": {"lap": 1, "last_lap_ms": 90000},
+                        },
+                    ]
+                )
+
+            asyncio.create_task(replay_after_subscribe())
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "tools.ai_sidecar.harness_client.HarnessClient",
+        _FakeHarnessClient,
+    )
+
+    async def run() -> list[dict]:
+        stop_event = asyncio.Event()
+        stop_event.set()
+        return await tap_frames(
+            seconds=0.2,
+            stop_event=stop_event,
+            stop_condition=lambda frames: (
+                {frame.get("topic") for frame in frames} >= {"session", "lap"}
+            ),
+            stop_settle_timeout=0.1,
+        )
+
+    frames = asyncio.run(run())
+    assert {frame["topic"] for frame in frames} == {"session", "lap"}
