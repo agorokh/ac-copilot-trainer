@@ -3,7 +3,7 @@ type: decision
 status: accepted
 memory_tier: canonical
 created: 2026-08-28
-updated: 2026-08-28
+updated: 2026-08-29
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-746-749-repeatability-and-thermal-gate-2026-08-10.md
 ---
@@ -29,7 +29,9 @@ wheel temperatures, identifies the globally coldest observed hottest-wheel value
 four-wheel thermal observation (including samples without usable friction channels), and fits the
 runtime projection only from friction rows within the existing 5 C stability half-width of that
 value. Hotter rows remain diagnostic evidence. A speed bin without enough cold-band support stays
-on its prior.
+on its prior. Cold-band pressure cohorting uses that same retained-friction row set: thermal-only
+or friction-invalid samples can set the temperature anchor, but they cannot equalize cohort
+pressure across incompatible usable-grip regimes.
 
 The normal raise-only self-play merge remains the only route by which this conservative projection
 can lift an already-refined plant. Adoption counters therefore continue to describe bins that the
