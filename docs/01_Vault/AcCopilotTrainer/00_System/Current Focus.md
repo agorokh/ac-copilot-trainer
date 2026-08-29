@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-08-29T19:54:00Z
+last_updated: 2026-08-29T21:02:00Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-08-29-210200Z-c1-issue764-mcp-verified-4b119a.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-29-195400Z-c1-issue750-rig-gated-59f02b.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-29-190623Z-post-merge-pr770-c1-pressure-a91f02.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-29-152241Z-c1-pr766-post-merge-gated-6ed54b.md
@@ -68,13 +69,14 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**C1 live acceptance still BLOCKED (2026-08-29T19:54Z): `/autonomous-deliver 750` re-probed the
-rig and it is still unreachable.** Off-rig scientist contract remains on `main` (`ffa4482`);
-`tests/test_alien_scientist.py` is 32 passed. Tailscale `pc` last seen 18d; Prometheus
-`windows-exporter` and `governance-harness-metrics-pc` are `down` (scrape deadline). Do not
-treat LAN `192.168.4.26` as AG_PC (TI NIC, no SSH). Delivery block C1 (#749, #750, #751, #764)
-stays open. No new issue or split. Resume from
-[[2026-08-29-195400Z-c1-issue750-rig-gated-59f02b]].
+**C1 still BLOCKED (2026-08-29T21:02Z): `/autonomous-deliver 764` re-verified the MCP
+outcome and re-probed the rig.** Off-rig #764 is on `main` (`mcp 2.1.1`, `MCPServer`,
+in-process Client lists and calls the five repo-knowledge tools; Ubuntu `make ci-fast`
+green on merge `57f01a6`). AG_PC / Tailscale `pc` remains offline (`LastSeen`
+2026-08-10T22:37:24Z); Prometheus `windows-exporter` and
+`governance-harness-metrics-pc` are `down`. Do not close #764 alone. Delivery block
+C1 (#749, #750, #751, #764) stays open. No new issue or split. Resume from
+[[2026-08-29-210200Z-c1-issue764-mcp-verified-4b119a]].
 
 **Delivered (2026-08-10):** `/autonomous-deliver 529` — **#746 CLOSED** by PR
 [#748](https://github.com/agorokh/ac-copilot-trainer/pull/748) (MERGED `c9ec97c`): the self-play
