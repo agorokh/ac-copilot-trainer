@@ -1,0 +1,12 @@
+# Tier-3 ingest exclusions for the AcCopilotTrainer vault.
+# Patterns are fnmatch globs matched against vault-relative paths
+# (agent-factory tools/hermes_adapter/lightrag_ingest.py::_matches_vault_ignore).
+#
+# Per-session dated handoff nodes are Tier-2 session state, read from disk at
+# LOAD — never from the graph. Ingesting them crowds durable ADR/investigation
+# retrieval (agent-factory#1449/#1451; 2026-08-29 fleet incident: memory-doctor
+# red hourly on the shared workspace because the newest handoff note could not
+# out-rank its near-identical ingested siblings — workstation-ops#3002).
+# Already-ingested handoff docs are evicted operationally on the producer host
+# (an ignore only prevents future uploads; agent-factory#1811 pattern).
+AcCopilotTrainer/00_System/handoffs/
