@@ -64,6 +64,7 @@ DEFAULT_THERMAL_STABILITY_FRACTION = 0.80
 DEFAULT_THERMAL_STABILITY_HALF_WIDTH_C = 5.0
 DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C = 15.0
 _WHEELS = ("fl", "fr", "rl", "rr")
+_FRICTION_CHANNEL_NAMES = ("speed", "accG_lat", "accG_long", "brake", "throttle")
 
 
 # ---------------------------------------------------------------------------
@@ -1179,6 +1180,8 @@ def ggv_from_lap_archives(
                     continue
                 if max(core) > cold_reference_max_c:
                     continue
+                if _finite_friction_channels(sample, index) is None:
+                    continue
                 retained_rows += 1
                 try:
                     pressure = [float(sample[index[name]]) for name in pressure_names]
@@ -1234,22 +1237,16 @@ def ggv_from_lap_archives(
         trace = archive["trace"]
         fields = trace["fields"]
         index = {name: i for i, name in enumerate(fields)}
-        required = ("speed", "accG_lat", "accG_long", "brake", "throttle")
+        required = _FRICTION_CHANNEL_NAMES
         core_names = [f"tyreCoreTemp_{wheel}" for wheel in _WHEELS]
         required_fields = required + tuple(core_names) if requires_temperature_tags else required
         if any(name not in index for name in required_fields):
             continue
         for sample in trace["samples"]:
-            try:
-                speed = float(sample[index["speed"]])
-                lateral = float(sample[index["accG_lat"]])
-                longitudinal = float(sample[index["accG_long"]])
-                brake = float(sample[index["brake"]])
-                throttle = float(sample[index["throttle"]])
-            except (IndexError, TypeError, ValueError):
+            channels = _finite_friction_channels(sample, index)
+            if channels is None:
                 continue
-            if not _finite_ggv(speed, lateral, longitudinal, brake, throttle):
-                continue
+            speed, lateral, longitudinal = channels[:3]
             row = {
                 "speed_kmh": speed,
                 "accg_lat": lateral,
@@ -1655,6 +1652,25 @@ def _brake_curve_is_supported(
 
 def _finite_ggv(*values: float) -> bool:
     return all(isinstance(v, (int, float)) and math.isfinite(v) for v in values)
+
+
+def _finite_friction_channels(
+    sample: list, index: Mapping[str, int]
+) -> tuple[float, float, float, float, float] | None:
+    """Return speed/lat/long/brake/throttle when they would enter ``tagged_rows``."""
+    try:
+        values = (
+            float(sample[index["speed"]]),
+            float(sample[index["accG_lat"]]),
+            float(sample[index["accG_long"]]),
+            float(sample[index["brake"]]),
+            float(sample[index["throttle"]]),
+        )
+    except (IndexError, KeyError, TypeError, ValueError):
+        return None
+    if not _finite_ggv(*values):
+        return None
+    return values
 
 
 def _freeze_supported_longitudinal(supported: Mapping) -> MappingProxyType:

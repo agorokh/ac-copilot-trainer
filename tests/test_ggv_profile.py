@@ -876,9 +876,7 @@ def test_cold_reference_anchor_includes_thermal_rows_without_friction_channels()
 
     state = observe_lap_tyre_state(drifting)
     assert state["temperature_aware_fit_eligible"] is True
-    with pytest.raises(
-        ValueError, match="insufficient thermally consistent cold-reference friction rows"
-    ):
+    with pytest.raises(ValueError, match="cold-reference pressure attribution is incomplete"):
         ggv_from_lap_archives([drifting], prior, min_friction_rows=100)
 
 
@@ -1012,6 +1010,35 @@ def test_cold_side_cohort_uses_pressure_from_retained_cold_rows():
                 sample[index[f"wheelsPressure_{wheel}"]] = pressure
 
     states = [observe_lap_tyre_state(archive) for archive in archives]
+    assert all(state["pressure_psi"] == 25.0 for state in states)
+
+    with pytest.raises(ValueError, match="cold-reference pressure"):
+        ggv_from_lap_archives(archives, _prior())
+
+
+def test_cold_side_cohort_rejects_inverse_friction_validity_pressure():
+    archives = [
+        _thermal_archive("usable-20-invalid-30", core_c=50.0),
+        _thermal_archive("usable-30-invalid-20", core_c=50.0),
+    ]
+    friction_valid_pressures = (20.0, 30.0)
+    for archive, usable_psi in zip(archives, friction_valid_pressures, strict=True):
+        index = {name: i for i, name in enumerate(archive["trace"]["fields"])}
+        inverse_psi = 50.0 - usable_psi
+        for row_i, sample in enumerate(archive["trace"]["samples"]):
+            progress = row_i / 599.0
+            core_c = 50.0 + 15.0 * progress
+            friction_valid = row_i % 2 == 0
+            pressure = usable_psi if friction_valid else inverse_psi
+            for wheel in ("fl", "fr", "rl", "rr"):
+                sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
+                sample[index[f"wheelsPressure_{wheel}"]] = pressure
+            if not friction_valid:
+                sample[index["speed"]] = float("nan")
+
+    states = [observe_lap_tyre_state(archive) for archive in archives]
+    assert all(state["temperature_aware_fit_eligible"] for state in states)
+    assert all(not state["fit_eligible"] for state in states)
     assert all(state["pressure_psi"] == 25.0 for state in states)
 
     with pytest.raises(ValueError, match="cold-reference pressure"):
