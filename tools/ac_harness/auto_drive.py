@@ -2785,6 +2785,18 @@ def scope_lap_archives(
     return scoped if len(scoped) == len(expected) else []
 
 
+def _archive_poll_requirements(report: AutoDriveReport, *, batch_mode: bool) -> tuple[bool, int]:
+    """Return whether to poll and the exact attainable final-attempt archive count.
+
+    A failed handshake can intend more laps than the tap actually observed. The selector can only
+    ever return identities in ``report.timed_laps``, so waiting for the intended handshake count is
+    impossible and merely burns the full timeout. The later handshake completeness gate still
+    compares the scoped count with ``laps_used`` and refuses a partial model.
+    """
+    expected = len(report.timed_laps) if batch_mode else 0
+    return expected > 0, expected
+
+
 def collect_lap_archives(
     journal_dir: Path | None,
     since_epoch: float,
@@ -4905,9 +4917,7 @@ def _main_impl(
     # A batch run must also WAIT for its archives even when the grace didn't fire (e.g.
     # --lap-finalize-grace-s 0): grace-or-handshake alone would skip the poll and falsely
     # falsify the iteration on missing evidence (#579 daemon HIGH).
-    wait_for_archives = report.lap_grace_applied or batch_mode
-    timed_laps_observed = len(report.lap_times_ms)
-    expected_archives = max(handshake_laps_used, timed_laps_observed)
+    wait_for_archives, expected_archives = _archive_poll_requirements(report, batch_mode=batch_mode)
 
     def _combo_predicate(payload: dict) -> bool:
         return archive_matches_combo(

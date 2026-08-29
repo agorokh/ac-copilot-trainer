@@ -4206,6 +4206,21 @@ def test_collect_lap_archives_waits_for_scoped_final_attempt_count(tmp_path):
     assert clock["t"] >= 2.0
 
 
+def test_archive_poll_contract_never_waits_for_unobserved_handshake_laps() -> None:
+    import tools.ac_harness.auto_drive as auto_drive_module
+
+    partial = AutoDriveReport(
+        ok=False,
+        stage="drive",
+        timed_laps=[{"lap_n": 1, "lap_ms": 95000}],
+    )
+    assert auto_drive_module._archive_poll_requirements(partial, batch_mode=True) == (True, 1)
+
+    empty = AutoDriveReport(ok=False, stage="drive", timed_laps=[])
+    assert auto_drive_module._archive_poll_requirements(empty, batch_mode=True) == (False, 0)
+    assert auto_drive_module._archive_poll_requirements(partial, batch_mode=False) == (False, 0)
+
+
 def test_collect_lap_archives_no_wait_returns_immediately(tmp_path):
     # A run that produced no lap must NOT poll — return the (empty) scan immediately, no sleeping.
     laps = tmp_path / "laps"
