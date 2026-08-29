@@ -4140,6 +4140,10 @@ def test_main_wires_scoped_archives_to_report_and_handshake_refit() -> None:
         keyword.value for keyword in collect_calls[0].keywords if keyword.arg == "archive_selector"
     )
     assert isinstance(selector, ast.Name) and selector.id == "archive_selector"
+    valid_count = next(
+        keyword.value for keyword in collect_calls[0].keywords if keyword.arg == "min_valid_count"
+    )
+    assert isinstance(valid_count, ast.Constant) and valid_count.value is None
 
     report_scope_calls = [
         node

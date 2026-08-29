@@ -4965,17 +4965,12 @@ def _main_impl(
         resolve=lambda: candidate_journal_laps_dirs(user_dir),
         wait_for_first=wait_for_archives,
         min_count=max(1, expected_archives),
-        # Valid-count gating is HANDSHAKE-only (the fit must never promote from a partial valid
-        # set). A flying-lap batch must not gate on validity: an AC-invalid lap still writes its
-        # archive, that archive IS the falsification evidence the self-play verdict needs
-        # promptly, and no amount of waiting turns it valid — gating on it would stall the poll
-        # to full timeout on every falsified batch (#579 Qodo). The batch DOES gate on the
-        # combo-matched count (validity-agnostic): the multi-dir resolver can see another
-        # app/combo's fresh archives, which must not satisfy the batch before this combo's own
-        # writer finishes (#579 Codex P2).
-        min_valid_count=(
-            expected_archives if handshake_laps_used > 0 and expected_archives > 0 else None
-        ),
+        # Poll only for the complete exact scoped batch. AC-invalid laps are immutable evidence:
+        # waiting cannot turn one valid, and later laps are outside report.timed_laps. The
+        # downstream handshake completeness gate rejects an invalid subset without burning the
+        # full timeout. collect_lap_archives retains its generic valid-count facility for callers
+        # that can actually gain evidence while polling.
+        min_valid_count=None,
         # The combo gate needs a car identity to match against: a preset-only run (--cm-preset
         # without --car) has none, so the predicate could never match and the poll would always
         # burn its full timeout (#579 Qodo perf).

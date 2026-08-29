@@ -930,6 +930,28 @@ def test_row_insufficient_stable_fit_falls_back_to_cold_side_cohort():
     }
 
 
+def test_cold_side_cohort_uses_retained_band_not_whole_lap_mean():
+    prior = _prior()
+    moderate = _thermal_archive("moderate-warming", core_c=50.0)
+    steep = _thermal_archive("steep-warming", core_c=50.0)
+    for archive, end_c in ((moderate, 66.0), (steep, 88.0)):
+        index = {name: i for i, name in enumerate(archive["trace"]["fields"])}
+        for row_i, sample in enumerate(archive["trace"]["samples"]):
+            core_c = 50.0 + (end_c - 50.0) * row_i / 599.0
+            for wheel in ("fl", "fr", "rl", "rr"):
+                sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
+
+    states = [observe_lap_tyre_state(archive) for archive in (moderate, steep)]
+    assert all(state["temperature_aware_fit_eligible"] for state in states)
+    assert abs(states[0]["core_temp_c"] - states[1]["core_temp_c"]) > 10.0
+
+    model, summary = ggv_from_lap_archives([moderate, steep], prior)
+
+    assert model.uncertainty_aware
+    assert summary["thermal_fit"]["mode"] == "cold_side_temperature_tagged"
+    assert summary["selected_lap_uuids"] == ["moderate-warming", "steep-warming"]
+
+
 def test_lap_archive_passive_longitudinal_is_prior_until_probe_rows_exist():
     prior = _prior()
     warm = _thermal_archive("warm", core_c=90.0)

@@ -1116,13 +1116,26 @@ def ggv_from_lap_archives(
 
     # A plant is per combo, which includes tyre compound and setup. A stale archive from the same
     # car/track session must not contaminate the posterior merely because its temperatures match.
+    def _cohort_core_temp(state: dict) -> float:
+        key = (
+            "cold_side_min_hottest_wheel_c"
+            if thermal_fit_mode == "cold_side_temperature_tagged"
+            else "core_temp_c"
+        )
+        return float(state[key])
+
     cohort_groups: dict[tuple[object, object, object], list[tuple[dict, dict]]] = {}
     cohort_first_index: dict[tuple[object, object, object], int] = {}
     for archive_index, (archive, state) in enumerate(eligible):
         compound = state.get("compound_index")
         if compound is None:
             compound = state.get("compound_name")
-        key = (compound, state.get("setup_hash"), state.get("tag"))
+        thermal_group = (
+            "cold_side_temperature_tagged"
+            if thermal_fit_mode == "cold_side_temperature_tagged"
+            else state.get("tag")
+        )
+        key = (compound, state.get("setup_hash"), thermal_group)
         cohort_groups.setdefault(key, []).append((archive, state))
         cohort_first_index.setdefault(key, archive_index)
     cohort_key, eligible = sorted(
@@ -1133,14 +1146,14 @@ def ggv_from_lap_archives(
             cohort_first_index[item[0]],
         ),
     )[0]
-    core_center = statistics.median(float(state["core_temp_c"]) for _, state in eligible)
+    core_center = statistics.median(_cohort_core_temp(state) for _, state in eligible)
     pressure_center = statistics.median(float(state["pressure_psi"]) for _, state in eligible)
     for state in states:
         state["cohort_consistent"] = False
     selected: list[tuple[dict, dict]] = []
     for archive, state in eligible:
         cohort_ok = (
-            abs(float(state["core_temp_c"]) - core_center) <= 5.0
+            abs(_cohort_core_temp(state) - core_center) <= 5.0
             and abs(float(state["pressure_psi"]) - pressure_center) <= 2.0
         )
         state["cohort_consistent"] = cohort_ok
