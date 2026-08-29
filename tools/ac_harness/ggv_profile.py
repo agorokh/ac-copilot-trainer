@@ -895,6 +895,7 @@ def observe_lap_tyre_state(
     core_means: list[float] = []
     trajectory_core_means: list[float] = []
     trajectory_core_rows: list[tuple[float, ...]] = []
+    trajectory_core_by_wheel: list[list[float]] = [[] for _ in _WHEELS]
     core_rows: list[list[float]] = []
     pressure_means: list[float] = []
     surface_means: list[float] = []
@@ -913,6 +914,10 @@ def observe_lap_tyre_state(
             continue
         core = row_values(row, core_names)
         observed_core_values.extend(core)
+        for wheel_i, name in enumerate(core_names):
+            wheel_value = row_values(row, [name])
+            if wheel_value:
+                trajectory_core_by_wheel[wheel_i].append(wheel_value[0])
         pressure = row_values(row, pressure_names)
         if len(core) == len(_WHEELS):
             trajectory_core_rows.append(tuple(core))
@@ -989,14 +994,14 @@ def observe_lap_tyre_state(
         if warming_steps
         else (1.0 if trajectory_core_means else 0.0)
     )
-    running_peak_by_wheel_c = [float("-inf")] * len(_WHEELS)
     max_cooling_reversal_c = 0.0
-    for core_row in trajectory_core_rows:
-        for wheel_i, core_value in enumerate(core_row):
-            running_peak_by_wheel_c[wheel_i] = max(running_peak_by_wheel_c[wheel_i], core_value)
+    for wheel_trajectory in trajectory_core_by_wheel:
+        running_peak_c = float("-inf")
+        for core_value in wheel_trajectory:
+            running_peak_c = max(running_peak_c, core_value)
             max_cooling_reversal_c = max(
                 max_cooling_reversal_c,
-                running_peak_by_wheel_c[wheel_i] - core_value,
+                running_peak_c - core_value,
             )
     cold_side_min_hottest_wheel_c = min(
         (max(core_row) for core_row in trajectory_core_rows), default=None

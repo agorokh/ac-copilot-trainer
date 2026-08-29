@@ -784,6 +784,22 @@ def test_temperature_drift_fit_sees_partial_row_crossing_and_rejects_oscillation
     assert state["fit_eligible"] is False
     assert state["temperature_aware_fit_eligible"] is False
 
+    partial_wheel_reversal = _thermal_archive("partial-wheel-reversal", core_c=50.0)
+    index = {name: i for i, name in enumerate(partial_wheel_reversal["trace"]["fields"])}
+    for row_i, sample in enumerate(partial_wheel_reversal["trace"]["samples"]):
+        core_c = 50.0 + 16.0 * max(0, row_i - 99) / 500.0
+        if row_i == 350:
+            sample[index["tyreCoreTemp_fl"]] = core_c - 8.0
+            sample[index["tyreCoreTemp_fr"]] = 0.0
+        else:
+            for wheel in ("fl", "fr"):
+                sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
+        for wheel in ("rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
+    state = observe_lap_tyre_state(partial_wheel_reversal)
+    assert state["sample_coverage_fraction"] >= 0.99
+    assert state["temperature_aware_fit_eligible"] is False
+
     pressure_gap_reversal = _thermal_archive("pressure-gap-reversal", core_c=50.0)
     index = {name: i for i, name in enumerate(pressure_gap_reversal["trace"]["fields"])}
     for row_i, sample in enumerate(pressure_gap_reversal["trace"]["samples"]):
