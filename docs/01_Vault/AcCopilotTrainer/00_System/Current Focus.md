@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-08-29T21:02:00Z
+last_updated: 2026-08-29T21:06:00Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-08-29-210600Z-c1-issue750-wol-failed-596c29.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-29-210200Z-c1-issue764-mcp-verified-4b119a.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-29-195400Z-c1-issue750-rig-gated-59f02b.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-29-190623Z-post-merge-pr770-c1-pressure-a91f02.md
@@ -69,14 +70,15 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**C1 still BLOCKED (2026-08-29T21:02Z): `/autonomous-deliver 764` re-verified the MCP
-outcome and re-probed the rig.** Off-rig #764 is on `main` (`mcp 2.1.1`, `MCPServer`,
-in-process Client lists and calls the five repo-knowledge tools; Ubuntu `make ci-fast`
-green on merge `57f01a6`). AG_PC / Tailscale `pc` remains offline (`LastSeen`
-2026-08-10T22:37:24Z); Prometheus `windows-exporter` and
-`governance-harness-metrics-pc` are `down`. Do not close #764 alone. Delivery block
-C1 (#749, #750, #751, #764) stays open. No new issue or split. Resume from
-[[2026-08-29-210200Z-c1-issue764-mcp-verified-4b119a]].
+**C1 still BLOCKED (2026-08-29T21:06Z): `/autonomous-deliver 750` sent documented
+WoL and the host stayed dark.** Official `make windows-runner-wake` on
+`m4max-studio` SENT twice (`6c:29:95:43:76:b9` + `70:85:c2:df:d7:1d` @
+`192.168.7.255:9`); same-LAN packets from `192.168.4.20`; 300s SSH/Tailscale
+poll still `offline, last seen 18d`; `pc-workstation-ops` runner is **absent**
+from GitHub. Off-rig #750 remains on `main` (`insufficient_flying_laps`,
+`tests/test_alien_scientist.py` 32 passed). Do not retry WoL-only. Delivery
+block C1 (#749, #750, #751, #764) stays open. No new issue or split. Resume
+from [[2026-08-29-210600Z-c1-issue750-wol-failed-596c29]] after physical power-on.
 
 **Delivered (2026-08-10):** `/autonomous-deliver 529` — **#746 CLOSED** by PR
 [#748](https://github.com/agorokh/ac-copilot-trainer/pull/748) (MERGED `c9ec97c`): the self-play
