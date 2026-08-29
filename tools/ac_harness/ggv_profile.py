@@ -1085,16 +1085,24 @@ def ggv_from_lap_archives(
     min_friction_rows: int = 200,
     probe_rows: list[dict] | None = None,
     probe_run_id: str | None = None,
+    _thermal_fit_mode: str | None = None,
 ) -> tuple[GGVModel, dict]:
     """Fit an uncertainty-aware GGV using only a thermally consistent lap cohort (#543)."""
     states = [observe_lap_tyre_state(archive) for archive in archives]
+    if _thermal_fit_mode not in {None, "thermally_stable", "cold_side_temperature_tagged"}:
+        raise ValueError(f"unsupported thermal fit mode: {_thermal_fit_mode}")
+    thermal_fit_mode = _thermal_fit_mode or "thermally_stable"
+    eligibility_key = (
+        "temperature_aware_fit_eligible"
+        if thermal_fit_mode == "cold_side_temperature_tagged"
+        else "fit_eligible"
+    )
     eligible = [
         (archive, state)
         for archive, state in zip(archives, states, strict=True)
-        if state.get("fit_eligible")
+        if state.get(eligibility_key)
     ]
-    thermal_fit_mode = "thermally_stable"
-    if not eligible:
+    if not eligible and _thermal_fit_mode is None:
         eligible = [
             (archive, state)
             for archive, state in zip(archives, states, strict=True)
@@ -1209,7 +1217,7 @@ def ggv_from_lap_archives(
             cold_side_archives = [
                 archive
                 for archive, state in zip(archives, states, strict=True)
-                if state.get("temperature_aware_fit_eligible") and not state.get("fit_eligible")
+                if state.get("temperature_aware_fit_eligible")
             ]
             if cold_side_archives:
                 model, summary = ggv_from_lap_archives(
@@ -1219,6 +1227,7 @@ def ggv_from_lap_archives(
                     min_friction_rows=min_friction_rows,
                     probe_rows=probe_rows,
                     probe_run_id=probe_run_id,
+                    _thermal_fit_mode="cold_side_temperature_tagged",
                 )
                 selected_lap_uuids = set(summary["selected_lap_uuids"])
                 for state in states:
