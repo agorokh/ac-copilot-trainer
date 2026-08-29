@@ -1158,7 +1158,53 @@ def ggv_from_lap_archives(
         if thermal_fit_mode == "cold_side_temperature_tagged"
         else statistics.median(_cohort_core_temp(state) for _, state in eligible)
     )
-    pressure_center = statistics.median(float(state["pressure_psi"]) for _, state in eligible)
+    cold_reference_max_c: float | None = None
+    pressure_key = "pressure_psi"
+    if thermal_fit_mode == "cold_side_temperature_tagged":
+        cold_reference_max_c = core_center + DEFAULT_THERMAL_STABILITY_HALF_WIDTH_C
+        pressure_key = "cold_side_reference_pressure_psi"
+        for archive, state in eligible:
+            trace = archive["trace"]
+            index = {name: i for i, name in enumerate(trace["fields"])}
+            core_names = [f"tyreCoreTemp_{wheel}" for wheel in _WHEELS]
+            pressure_names = [f"wheelsPressure_{wheel}" for wheel in _WHEELS]
+            retained_rows = 0
+            attributed_pressures: list[float] = []
+            for sample in trace["samples"]:
+                try:
+                    core = [float(sample[index[name]]) for name in core_names]
+                except (IndexError, KeyError, TypeError, ValueError):
+                    continue
+                if not _finite_ggv(*core) or any(value == 0.0 for value in core):
+                    continue
+                if max(core) > cold_reference_max_c:
+                    continue
+                retained_rows += 1
+                try:
+                    pressure = [float(sample[index[name]]) for name in pressure_names]
+                except (IndexError, KeyError, TypeError, ValueError):
+                    continue
+                if not _finite_ggv(*pressure) or any(value == 0.0 for value in pressure):
+                    continue
+                attributed_pressures.append(statistics.fmean(pressure))
+            pressure_coverage = len(attributed_pressures) / retained_rows if retained_rows else 0.0
+            state["cold_side_reference_pressure_coverage_fraction"] = round(pressure_coverage, 6)
+            state[pressure_key] = (
+                round(statistics.median(attributed_pressures), 3)
+                if attributed_pressures and pressure_coverage >= DEFAULT_THERMAL_COVERAGE_FRACTION
+                else None
+            )
+        pressure_values = [
+            float(state[pressure_key])
+            for _, state in eligible
+            if isinstance(state.get(pressure_key), int | float)
+            and not isinstance(state.get(pressure_key), bool)
+        ]
+        if not pressure_values:
+            raise ValueError("cold-reference pressure attribution is incomplete")
+        pressure_center = statistics.median(pressure_values)
+    else:
+        pressure_center = statistics.median(float(state[pressure_key]) for _, state in eligible)
     for state in states:
         state["cohort_consistent"] = False
     selected: list[tuple[dict, dict]] = []
@@ -1167,11 +1213,19 @@ def ggv_from_lap_archives(
             thermal_fit_mode == "cold_side_temperature_tagged"
             or abs(_cohort_core_temp(state) - core_center) <= 5.0
         )
-        cohort_ok = core_ok and abs(float(state["pressure_psi"]) - pressure_center) <= 2.0
+        pressure_value = state.get(pressure_key)
+        cohort_ok = (
+            core_ok
+            and isinstance(pressure_value, int | float)
+            and not isinstance(pressure_value, bool)
+            and abs(float(pressure_value) - pressure_center) <= 2.0
+        )
         state["cohort_consistent"] = cohort_ok
         if cohort_ok:
             selected.append((archive, state))
     if not selected:
+        if thermal_fit_mode == "cold_side_temperature_tagged":
+            raise ValueError("cold-reference pressure observations do not form a consistent cohort")
         raise ValueError("thermally eligible laps do not form a consistent temp/pressure cohort")
 
     tagged_rows: list[dict] = []
@@ -1219,17 +1273,9 @@ def ggv_from_lap_archives(
                 row["thermal_wheel_core_temp_c"] = wheel_core_temp_c
                 row["thermal_hottest_wheel_c"] = max(wheel_core_temp_c)
             tagged_rows.append(row)
-    cold_reference_max_c: float | None = None
     if thermal_fit_mode == "cold_side_temperature_tagged" and tagged_rows:
-        thermal_anchors = [
-            float(state["cold_side_min_hottest_wheel_c"])
-            for _, state in selected
-            if isinstance(state.get("cold_side_min_hottest_wheel_c"), int | float)
-            and not isinstance(state.get("cold_side_min_hottest_wheel_c"), bool)
-        ]
-        if len(thermal_anchors) != len(selected):
+        if cold_reference_max_c is None:
             raise ValueError("cold-side cohort lacks a complete thermal reference anchor")
-        cold_reference_max_c = min(thermal_anchors) + DEFAULT_THERMAL_STABILITY_HALF_WIDTH_C
         rows = [
             row
             for row in tagged_rows

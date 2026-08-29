@@ -1438,8 +1438,36 @@ async def run_auto_drive(
             client_class=CLIENT_CLASS_OBSERVER,
         )
         if config.driver == "handshake" and not config.wait_lap:
+
+            def _handshake_identity_complete(frames: list[dict]) -> bool:
+                if (
+                    not drive_task.done()
+                    or drive_task.cancelled()
+                    or drive_task.exception() is not None
+                ):
+                    return False
+                completed_stats = drive_task.result()
+                result = (
+                    completed_stats.payload.get("result")
+                    if isinstance(completed_stats.payload, dict)
+                    else None
+                )
+                laps_used = result.get("laps_used") if isinstance(result, dict) else None
+                required_laps = (
+                    laps_used
+                    if isinstance(laps_used, int)
+                    and not isinstance(laps_used, bool)
+                    and laps_used > 0
+                    else 1
+                )
+                return (
+                    bool(_session_uuid_from_frames(frames))
+                    and len(_timed_laps_from_frames(frames)) >= required_laps
+                )
+
             tap_kwargs["seconds"] = max(config.tap_seconds, config.drive_seconds)
             tap_kwargs["stop_event"] = handshake_drive_done
+            tap_kwargs["stop_condition"] = _handshake_identity_complete
         if config.wait_lap:
             # The SAME settle + lap deadline the drive budget is sized to (above), so the tap never
             # waits past what the drive thread can still drive (a full lap at pace can exceed

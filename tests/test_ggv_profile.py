@@ -995,6 +995,29 @@ def test_cold_side_gate_covers_pressure_missing_complete_core_rows():
     assert state["temperature_aware_fit_eligible"] is False
 
 
+def test_cold_side_cohort_uses_pressure_from_retained_cold_rows():
+    archives = [
+        _thermal_archive("cold-low-pressure", core_c=50.0),
+        _thermal_archive("cold-high-pressure", core_c=50.0),
+    ]
+    pressure_ranges = ((20.0, 30.0), (35.0, 15.0))
+    for archive, (pressure_start, pressure_end) in zip(archives, pressure_ranges, strict=True):
+        index = {name: i for i, name in enumerate(archive["trace"]["fields"])}
+        for row_i, sample in enumerate(archive["trace"]["samples"]):
+            progress = row_i / 599.0
+            core_c = 50.0 + 15.0 * progress
+            pressure = pressure_start + (pressure_end - pressure_start) * progress
+            for wheel in ("fl", "fr", "rl", "rr"):
+                sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
+                sample[index[f"wheelsPressure_{wheel}"]] = pressure
+
+    states = [observe_lap_tyre_state(archive) for archive in archives]
+    assert all(state["pressure_psi"] == 25.0 for state in states)
+
+    with pytest.raises(ValueError, match="cold-reference pressure"):
+        ggv_from_lap_archives(archives, _prior())
+
+
 def test_lap_archive_passive_longitudinal_is_prior_until_probe_rows_exist():
     prior = _prior()
     warm = _thermal_archive("warm", core_c=90.0)
