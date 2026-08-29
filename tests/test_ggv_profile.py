@@ -773,6 +773,20 @@ def test_temperature_drift_fit_sees_partial_row_crossing_and_rejects_oscillation
     assert state["fit_eligible"] is False
     assert state["temperature_aware_fit_eligible"] is False
 
+    pressure_gap_reversal = _thermal_archive("pressure-gap-reversal", core_c=50.0)
+    index = {name: i for i, name in enumerate(pressure_gap_reversal["trace"]["fields"])}
+    for row_i, sample in enumerate(pressure_gap_reversal["trace"]["samples"]):
+        core_c = 50.0 + 16.0 * max(0, row_i - 99) / 500.0
+        if row_i == 350:
+            core_c -= 8.0
+            sample[index["wheelsPressure_fl"]] = 0.0
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
+    state = observe_lap_tyre_state(pressure_gap_reversal)
+    assert state["sample_coverage_fraction"] >= 0.8
+    assert state["fit_eligible"] is False
+    assert state["temperature_aware_fit_eligible"] is False
+
     sparse_reversal = _thermal_archive("sparse-reversal", core_c=50.0)
     index = {name: i for i, name in enumerate(sparse_reversal["trace"]["fields"])}
     for row_i, sample in enumerate(sparse_reversal["trace"]["samples"]):
@@ -820,6 +834,23 @@ def test_temperature_drift_fit_does_not_admit_unattributed_probe_rows():
     assert "temperature attribution" in summary["probe_attribution"]
     assert model.uncertainty_bins[6]["brake"]["source"] == "prior"
     assert model.uncertainty_bins[6]["drive"]["source"] == "prior"
+
+
+def test_stable_fit_keeps_friction_rows_with_missing_core_samples():
+    prior = _prior()
+    stable = _thermal_archive("stable-partial-core", core_c=90.0)
+    index = {name: i for i, name in enumerate(stable["trace"]["fields"])}
+    for sample in stable["trace"]["samples"][:120]:
+        sample[index["tyreCoreTemp_fl"]] = 0.0
+
+    state = observe_lap_tyre_state(stable)
+    assert state["fit_eligible"] is True
+    assert state["sample_coverage_fraction"] == 0.8
+
+    model, summary = ggv_from_lap_archives([stable], prior, min_friction_rows=550)
+
+    assert model.uncertainty_aware
+    assert summary["thermal_fit"]["mode"] == "thermally_stable"
 
 
 def test_lap_archive_passive_longitudinal_is_prior_until_probe_rows_exist():

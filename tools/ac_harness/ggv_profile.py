@@ -893,6 +893,7 @@ def observe_lap_tyre_state(
         return out
 
     core_means: list[float] = []
+    trajectory_core_means: list[float] = []
     core_rows: list[list[float]] = []
     pressure_means: list[float] = []
     surface_means: list[float] = []
@@ -912,6 +913,9 @@ def observe_lap_tyre_state(
         core = row_values(row, core_names)
         observed_core_values.extend(core)
         pressure = row_values(row, pressure_names)
+        if len(core) == len(_WHEELS):
+            core_mean = statistics.fmean(core)
+            trajectory_core_means.append(core_mean)
         if len(core) == len(_WHEELS) and len(pressure) == len(_WHEELS):
             core_mean = statistics.fmean(core)
             core_means.append(core_mean)
@@ -975,14 +979,17 @@ def observe_lap_tyre_state(
     # metadata does not describe the tyre's post-peak curve.
     hottest_observed_core_c = max(observed_core_values, default=None)
     warming_steps = [
-        later >= earlier - 0.5 for earlier, later in zip(core_means, core_means[1:], strict=False)
+        later >= earlier - 0.5
+        for earlier, later in zip(trajectory_core_means, trajectory_core_means[1:], strict=False)
     ]
     warming_step_fraction = (
-        sum(warming_steps) / len(warming_steps) if warming_steps else (1.0 if core_means else 0.0)
+        sum(warming_steps) / len(warming_steps)
+        if warming_steps
+        else (1.0 if trajectory_core_means else 0.0)
     )
     running_peak_c = float("-inf")
     max_cooling_reversal_c = 0.0
-    for core_mean in core_means:
+    for core_mean in trajectory_core_means:
         running_peak_c = max(running_peak_c, core_mean)
         max_cooling_reversal_c = max(max_cooling_reversal_c, running_peak_c - core_mean)
     cold_side_temperature_aware = (
@@ -995,8 +1002,8 @@ def observe_lap_tyre_state(
         and hottest_observed_core_c is not None
         and hottest_observed_core_c <= optimal
         and max_cooling_reversal_c <= 0.5
-        and bool(core_means)
-        and core_means[-1] >= core_means[0] - 0.5
+        and bool(trajectory_core_means)
+        and trajectory_core_means[-1] >= trajectory_core_means[0] - 0.5
     )
     grip_multiplier = None
     if grip_mu:
@@ -1116,13 +1123,15 @@ def ggv_from_lap_archives(
         raise ValueError("thermally eligible laps do not form a consistent temp/pressure cohort")
 
     tagged_rows: list[dict] = []
+    requires_temperature_tags = thermal_fit_mode == "cold_side_temperature_tagged"
     for archive, state in selected:
         trace = archive["trace"]
         fields = trace["fields"]
         index = {name: i for i, name in enumerate(fields)}
         required = ("speed", "accG_lat", "accG_long", "brake", "throttle")
         core_names = [f"tyreCoreTemp_{wheel}" for wheel in _WHEELS]
-        if any(name not in index for name in required + tuple(core_names)):
+        required_fields = required + tuple(core_names) if requires_temperature_tags else required
+        if any(name not in index for name in required_fields):
             continue
         for sample in trace["samples"]:
             try:
@@ -1131,28 +1140,33 @@ def ggv_from_lap_archives(
                 longitudinal = float(sample[index["accG_long"]])
                 brake = float(sample[index["brake"]])
                 throttle = float(sample[index["throttle"]])
-                wheel_core_temp_c = tuple(float(sample[index[name]]) for name in core_names)
             except (IndexError, TypeError, ValueError):
                 continue
-            if not _finite_ggv(
-                speed, lateral, longitudinal, brake, throttle, *wheel_core_temp_c
-            ) or any(value == 0.0 for value in wheel_core_temp_c):
+            if not _finite_ggv(speed, lateral, longitudinal, brake, throttle):
                 continue
-            tagged_rows.append(
-                {
-                    "speed_kmh": speed,
-                    "accg_lat": lateral,
-                    "accg_lon": longitudinal,
-                    # The lap schema does not persist the controller's active-probe state. Do not
-                    # infer it from brake/throttle alone (normal driving can look identical) and
-                    # accidentally unlock the lower 8-sample probe gate; archive rows use the
-                    # stricter passive threshold.
-                    "source": "passive",
-                    "thermal_lap_uuid": state.get("lap_uuid"),
-                    "thermal_wheel_core_temp_c": wheel_core_temp_c,
-                    "thermal_hottest_wheel_c": max(wheel_core_temp_c),
-                }
-            )
+            row = {
+                "speed_kmh": speed,
+                "accg_lat": lateral,
+                "accg_lon": longitudinal,
+                # The lap schema does not persist the controller's active-probe state. Do not
+                # infer it from brake/throttle alone (normal driving can look identical) and
+                # accidentally unlock the lower 8-sample probe gate; archive rows use the
+                # stricter passive threshold.
+                "source": "passive",
+                "thermal_lap_uuid": state.get("lap_uuid"),
+            }
+            if requires_temperature_tags:
+                try:
+                    wheel_core_temp_c = tuple(float(sample[index[name]]) for name in core_names)
+                except (IndexError, TypeError, ValueError):
+                    continue
+                if not _finite_ggv(*wheel_core_temp_c) or any(
+                    value == 0.0 for value in wheel_core_temp_c
+                ):
+                    continue
+                row["thermal_wheel_core_temp_c"] = wheel_core_temp_c
+                row["thermal_hottest_wheel_c"] = max(wheel_core_temp_c)
+            tagged_rows.append(row)
     cold_reference_max_c: float | None = None
     if thermal_fit_mode == "cold_side_temperature_tagged" and tagged_rows:
         cold_reference_max_c = (
@@ -1167,9 +1181,13 @@ def ggv_from_lap_archives(
     else:
         rows = tagged_rows
     if len(rows) < min_friction_rows:
+        evidence_name = (
+            "thermally consistent cold-reference"
+            if requires_temperature_tags
+            else "thermally consistent"
+        )
         raise ValueError(
-            "insufficient thermally consistent cold-reference friction rows: "
-            f"{len(rows)} < {min_friction_rows}"
+            f"insufficient {evidence_name} friction rows: {len(rows)} < {min_friction_rows}"
         )
     # The immutable archive proves the thermal state and supplies passive cornering. In the live
     # harness, archives are filtered to files written after this exact run began and the controller
@@ -1234,7 +1252,7 @@ def ggv_from_lap_archives(
             ),
             "hottest_used_wheel_c": (
                 round(max(float(row["thermal_hottest_wheel_c"]) for row in rows), 3)
-                if rows
+                if requires_temperature_tags and rows
                 else None
             ),
             "runtime_projection": (
