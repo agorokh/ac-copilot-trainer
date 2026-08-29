@@ -1205,6 +1205,27 @@ def ggv_from_lap_archives(
     else:
         rows = tagged_rows
     if len(rows) < min_friction_rows:
+        if thermal_fit_mode == "thermally_stable":
+            cold_side_archives = [
+                archive
+                for archive, state in zip(archives, states, strict=True)
+                if state.get("temperature_aware_fit_eligible") and not state.get("fit_eligible")
+            ]
+            if cold_side_archives:
+                model, summary = ggv_from_lap_archives(
+                    cold_side_archives,
+                    prior,
+                    prior_name=prior_name,
+                    min_friction_rows=min_friction_rows,
+                    probe_rows=probe_rows,
+                    probe_run_id=probe_run_id,
+                )
+                selected_lap_uuids = set(summary["selected_lap_uuids"])
+                for state in states:
+                    state["cohort_consistent"] = state.get("lap_uuid") in selected_lap_uuids
+                summary["tyre_states"] = states
+                summary["thermal_fit"]["fallback_from"] = "thermally_stable"
+                return model, summary
         evidence_name = (
             "thermally consistent cold-reference"
             if requires_temperature_tags

@@ -899,6 +899,35 @@ def test_stable_fit_keeps_friction_rows_with_missing_core_samples():
     assert summary["thermal_fit"]["mode"] == "thermally_stable"
 
 
+def test_row_insufficient_stable_fit_falls_back_to_cold_side_cohort():
+    prior = _prior()
+    stable = _thermal_archive("stable-insufficient", core_c=90.0)
+    stable_index = {name: i for i, name in enumerate(stable["trace"]["fields"])}
+    for sample in stable["trace"]["samples"][:450]:
+        sample[stable_index["speed"]] = float("nan")
+
+    warming = _thermal_archive("warming-sufficient", core_c=50.0)
+    warming_index = {name: i for i, name in enumerate(warming["trace"]["fields"])}
+    for row_i, sample in enumerate(warming["trace"]["samples"]):
+        core_c = 50.0 + 16.0 * max(0, row_i - 99) / 500.0
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[warming_index[f"tyreCoreTemp_{wheel}"]] = core_c
+
+    states = [observe_lap_tyre_state(archive) for archive in (stable, warming)]
+    assert states[0]["fit_eligible"] is True
+    assert states[1]["temperature_aware_fit_eligible"] is True
+
+    model, summary = ggv_from_lap_archives([stable, warming], prior)
+
+    assert model.uncertainty_aware
+    assert summary["thermal_fit"]["mode"] == "cold_side_temperature_tagged"
+    assert summary["selected_lap_uuids"] == ["warming-sufficient"]
+    assert {state["lap_uuid"] for state in summary["tyre_states"]} == {
+        "stable-insufficient",
+        "warming-sufficient",
+    }
+
+
 def test_lap_archive_passive_longitudinal_is_prior_until_probe_rows_exist():
     prior = _prior()
     warm = _thermal_archive("warm", core_c=90.0)
