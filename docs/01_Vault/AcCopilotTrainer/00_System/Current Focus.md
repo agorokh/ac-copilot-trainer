@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-08-30T00:58:29Z
+last_updated: 2026-08-30T01:46:36Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-08-30-014457Z-c1-issue749-rig-offline-fa5727.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-30-005829Z-post-merge-pr776-c1-cycle-278fb1.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-30-004200Z-c1-issue749-cycle-admit-776-a91c04.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-29-211112Z-c1-issue751-offrig-verified-b495c3.md
@@ -73,14 +74,15 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**C1 still BLOCKED (2026-08-30T00:58Z): `/autonomous-deliver 749` merged
+**C1 still BLOCKED (rechecked 2026-08-30T01:44Z): `/autonomous-deliver 749` merged
 PR [#776](https://github.com/agorokh/ac-copilot-trainer/pull/776)** at
 `278fb1a` (vetted head `e3071d2`). Below-optimum track-load cycles now admit
 into the cold-band refit; reconstruction raises 5 lateral bins. Off-rig
-`make ci-fast` 4105 passed. Live second-session ladder still needs AG_PC
-powered on; do not retry WoL-only. C1 (#749, #750, #751, #764) stays open
+`make ci-fast` 4105 passed. Fresh Tailscale, ping, and SSH probes still find AG_PC offline;
+do not retry WoL-only. An hourly thread heartbeat now waits for physical power-on and will resume
+the #749 and #750 live proofs when the host reconnects. C1 (#749, #750, #751, #764) stays open
 together. Resume from
-[[2026-08-30-005829Z-post-merge-pr776-c1-cycle-278fb1]].
+[[2026-08-30-014457Z-c1-issue749-rig-offline-fa5727]].
 
 **Delivered (2026-08-10):** `/autonomous-deliver 529` — **#746 CLOSED** by PR
 [#748](https://github.com/agorokh/ac-copilot-trainer/pull/748) (MERGED `c9ec97c`): the self-play
