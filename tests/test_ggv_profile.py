@@ -752,7 +752,7 @@ def test_lap_archive_temperature_drift_fit_fails_closed_across_optimum():
         ggv_from_lap_archives([crossing], prior)
 
 
-def test_temperature_drift_fit_sees_partial_row_crossing_and_rejects_oscillation():
+def test_temperature_drift_fit_rejects_partial_row_crossing_not_below_opt_cycles():
     partial = _thermal_archive("partial-crossing", core_c=50.0)
     index = {name: i for i, name in enumerate(partial["trace"]["fields"])}
     for row_i, sample in enumerate(partial["trace"]["samples"]):
@@ -763,6 +763,9 @@ def test_temperature_drift_fit_sees_partial_row_crossing_and_rejects_oscillation
     partial["trace"]["samples"][200][index["tyreCoreTemp_fr"]] = 0.0
     assert observe_lap_tyre_state(partial)["temperature_aware_fit_eligible"] is False
 
+    # Below-optimum track-load cycles (and even a square-wave stand-in) stay eligible.
+    # The 0.5 C reversal veto was the flat-track filter that refused huracan@spa 2026-08-10.
+    # Safety is the cold-band projection plus the optimum ceiling, not intra-lap cooling.
     oscillating = _thermal_archive("oscillating", core_c=50.0)
     index = {name: i for i, name in enumerate(oscillating["trace"]["fields"])}
     for row_i, sample in enumerate(oscillating["trace"]["samples"]):
@@ -771,7 +774,7 @@ def test_temperature_drift_fit_sees_partial_row_crossing_and_rejects_oscillation
             sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
     state = observe_lap_tyre_state(oscillating)
     assert state["fit_eligible"] is False
-    assert state["temperature_aware_fit_eligible"] is False
+    assert state["temperature_aware_fit_eligible"] is True
 
     offsetting_wheels = _thermal_archive("offsetting-wheels", core_c=50.0)
     index = {name: i for i, name in enumerate(offsetting_wheels["trace"]["fields"])}
@@ -782,7 +785,7 @@ def test_temperature_drift_fit_sees_partial_row_crossing_and_rejects_oscillation
             sample[index[f"tyreCoreTemp_{wheel}"]] = 50.0 + 14.0 * progress
     state = observe_lap_tyre_state(offsetting_wheels)
     assert state["fit_eligible"] is False
-    assert state["temperature_aware_fit_eligible"] is False
+    assert state["temperature_aware_fit_eligible"] is True
 
     partial_wheel_reversal = _thermal_archive("partial-wheel-reversal", core_c=50.0)
     index = {name: i for i, name in enumerate(partial_wheel_reversal["trace"]["fields"])}
@@ -798,7 +801,7 @@ def test_temperature_drift_fit_sees_partial_row_crossing_and_rejects_oscillation
             sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
     state = observe_lap_tyre_state(partial_wheel_reversal)
     assert state["sample_coverage_fraction"] >= 0.99
-    assert state["temperature_aware_fit_eligible"] is False
+    assert state["temperature_aware_fit_eligible"] is True
 
     pressure_gap_reversal = _thermal_archive("pressure-gap-reversal", core_c=50.0)
     index = {name: i for i, name in enumerate(pressure_gap_reversal["trace"]["fields"])}
@@ -812,7 +815,8 @@ def test_temperature_drift_fit_sees_partial_row_crossing_and_rejects_oscillation
     state = observe_lap_tyre_state(pressure_gap_reversal)
     assert state["sample_coverage_fraction"] >= 0.8
     assert state["fit_eligible"] is False
-    assert state["temperature_aware_fit_eligible"] is False
+    # The pressure-incomplete row has zero wheel split, so it does not hide spread.
+    assert state["temperature_aware_fit_eligible"] is True
 
     sparse_reversal = _thermal_archive("sparse-reversal", core_c=50.0)
     index = {name: i for i, name in enumerate(sparse_reversal["trace"]["fields"])}
@@ -824,7 +828,7 @@ def test_temperature_drift_fit_sees_partial_row_crossing_and_rejects_oscillation
             sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
     state = observe_lap_tyre_state(sparse_reversal)
     assert state["fit_eligible"] is False
-    assert state["temperature_aware_fit_eligible"] is False
+    assert state["temperature_aware_fit_eligible"] is True
 
     gradual_reversal = _thermal_archive("gradual-reversal", core_c=50.0)
     index = {name: i for i, name in enumerate(gradual_reversal["trace"]["fields"])}
@@ -839,7 +843,7 @@ def test_temperature_drift_fit_sees_partial_row_crossing_and_rejects_oscillation
             sample[index[f"tyreCoreTemp_{wheel}"]] = core_c
     state = observe_lap_tyre_state(gradual_reversal)
     assert state["fit_eligible"] is False
-    assert state["temperature_aware_fit_eligible"] is False
+    assert state["temperature_aware_fit_eligible"] is True
 
 
 def test_temperature_drift_fit_does_not_admit_unattributed_probe_rows():
@@ -990,7 +994,127 @@ def test_cold_side_gate_covers_pressure_missing_complete_core_rows():
     assert state["sample_coverage_fraction"] == 0.9
     assert state["wheel_spread_c"] == 0.0
     assert state["cold_side_max_wheel_spread_c"] == 20.0
+    assert state["cold_side_hidden_pressure_spread_c"] == 20.0
     assert state["temperature_aware_fit_eligible"] is False
+
+
+def _huracan_spa_it1_cycle_archive(
+    lap_uuid: str,
+    *,
+    start_c: float = 71.7,
+    end_c: float = 74.7,
+    spread_c: float = 12.0,
+    amplitude_c: float = 5.0,
+    lap_n: int = 2,
+    lateral_g: float = 1.5,
+    optimal_temp_c: float = 95.0,
+) -> dict:
+    """Reconstruct the 2026-08-10 huracan@spa it1 track-load cycle (#749).
+
+    Measured: 4-wheel mean 71.7→74.7 C, median-center spread 12 C, stability 0.53,
+    all samples below the 95 C optimum. Individual wheels oscillate around those
+    medians (corners heat, straights cool). The old 0.5 C reversal veto refused
+    this shape; the cold-band path must admit it.
+    """
+    fields = list(TRACE_FIELDS)
+    n = 600
+    offsets = (-spread_c / 2.0, -spread_c / 6.0, spread_c / 6.0, spread_c / 2.0)
+    phases = (0.0, math.pi / 2.0, math.pi, 3.0 * math.pi / 2.0)
+    samples = []
+    for i in range(n):
+        values = dict.fromkeys(fields, 0.0)
+        progress = i / (n - 1)
+        mean_c = start_c + (end_c - start_c) * progress
+        speed = 50.0 + float((i // 50) % 11) * 10.0
+        braking = i % 2 == 0
+        values.update(
+            {
+                "spline": progress,
+                "speed": speed,
+                "eMs": i * 10.0,
+                "brake": 0.8 if braking else 0.0,
+                "throttle": 0.0 if braking else 1.0,
+                "accG_lat": lateral_g,
+                "accG_long": -1.25 if braking else 0.75,
+            }
+        )
+        for wheel, offset, phase in zip(("fl", "fr", "rl", "rr"), offsets, phases, strict=True):
+            core_c = (
+                mean_c + offset + amplitude_c * math.sin(2.0 * math.pi * 4.0 * progress + phase)
+            )
+            values[f"tyreCoreTemp_{wheel}"] = core_c
+            values[f"tyreTempInner_{wheel}"] = core_c + 2.0
+            values[f"tyreTempMid_{wheel}"] = core_c
+            values[f"tyreTempOuter_{wheel}"] = core_c - 2.0
+            values[f"wheelsPressure_{wheel}"] = 27.0
+            values[f"dy_{wheel}"] = 1.5
+        samples.append([values[field] for field in fields])
+    return {
+        "schema_version": 1,
+        "source": "in_game",
+        "lap_uuid": lap_uuid,
+        "car": {"id": "ks_lamborghini_huracan_gt3"},
+        "track": {"id": "spa", "layout": None},
+        "lap": {"lap_n": lap_n, "lap_ms": 167300 if lap_n == 2 else 167470, "is_valid": True},
+        "setup": {"hash": "snapshot-sha256:" + "ab" * 32},
+        "tyres": {"compoundIndex": 1, "name": "Slick Medium (M)", "optimalTempC": optimal_temp_c},
+        "trace": {"fields": fields, "samples": samples, "samples_count": n},
+    }
+
+
+def test_huracan_spa_it1_track_load_cycle_is_temperature_aware_and_does_not_leak_hot_grip():
+    prior = _prior()
+    archives = [
+        _huracan_spa_it1_cycle_archive("it1-lap2", lap_n=2),
+        _huracan_spa_it1_cycle_archive(
+            "it1-lap3", start_c=71.6, end_c=74.5, spread_c=11.7, lap_n=3
+        ),
+    ]
+    states = [observe_lap_tyre_state(archive) for archive in archives]
+    for state in states:
+        assert state["fit_eligible"] is False
+        assert state["temperature_aware_fit_eligible"] is True
+        assert state["tag"] == "cold"
+        assert state["thermal_stability_fraction"] < 0.80
+        assert state["wheel_spread_c"] <= 15.0
+        assert state["cold_side_max_core_temp_c"] <= 95.0
+        assert state["thermal_max_cooling_reversal_c"] > 0.5
+
+    model, summary = ggv_from_lap_archives(archives, prior)
+    assert summary["thermal_fit"]["mode"] == "cold_side_temperature_tagged"
+    assert summary["selected_lap_uuids"] == ["it1-lap2", "it1-lap3"]
+    assert (
+        summary["thermal_fit"]["hottest_used_wheel_c"]
+        <= (summary["thermal_fit"]["cold_reference_max_c"])
+    )
+    # Hotter corner samples must not lift the cold-start envelope above a conservative band.
+    assert model.uncertainty_bins[6]["lateral"]["mean_g"] < 1.6
+
+
+def test_selfplay_refine_compounds_from_huracan_spa_it1_track_load_cycle():
+    """#749 AC: a second-session batch with the measured 2026-08-10 cycle adopts a bin."""
+    from tests.test_plant_id import _selfplay_artifact
+    from tools.ac_harness.auto_drive import generic_gt3_ggv
+    from tools.ac_harness.plant_id import selfplay_refine_result
+
+    artifact = _selfplay_artifact()
+    archives = [
+        _huracan_spa_it1_cycle_archive("it1-lap2", lap_n=2),
+        _huracan_spa_it1_cycle_archive(
+            "it1-lap3", start_c=71.6, end_c=74.5, spread_c=11.7, lap_n=3
+        ),
+    ]
+    for archive in archives:
+        archive["car"] = {"id": "test_car"}
+        archive["track"] = {"id": "test_oval", "layout": None}
+
+    result, block = selfplay_refine_result(artifact, archives, generic_gt3_ggv())
+
+    assert result is not None
+    assert block["ok"] is True
+    assert block["thermal_fit"]["mode"] == "cold_side_temperature_tagged"
+    merge = block["selfplay_merge"]
+    assert merge["lateral_bins_adopted"] + merge["lateral_bins_raised"] >= 1
 
 
 def test_cold_side_cohort_uses_pressure_from_retained_cold_rows():

@@ -795,7 +795,12 @@ def observe_lap_tyre_state(
 
     The observer reads the canonical #488 archive channels. ``fit_eligible`` is deliberately strict:
     a valid lap, all four core-temperature and hot-pressure channels, a car-true optimum, and a
-    stable within-lap per-wheel thermal state. ``tag`` still reports cold/optimal/hot relative to
+    stable within-lap per-wheel thermal state. ``temperature_aware_fit_eligible`` is the below-
+    optimum fallback (#749): same identity/coverage/validity and the existing median-center
+    wheel-spread cap, plus fail-closed when any sample exceeds the car-true optimum or when a
+    pressure-incomplete row hides a larger wheel split. Intra-lap cooling is allowed while the
+    trajectory stays at or below optimum — the fitter's cold-band projection is the safety
+    mechanism, not a 0.5 C reversal veto. ``tag`` still reports cold/optimal/hot relative to
     the car's optimum; a stable cold lap is usable as a conservative, explicitly tagged cohort.
     Surface temperatures and CSP ``dy`` peak-mu are reported when present; they do not fabricate
     eligibility when core/pressure evidence is missing.
@@ -826,6 +831,7 @@ def observe_lap_tyre_state(
         "wheel_core_temp_c": None,
         "wheel_spread_c": None,
         "cold_side_max_wheel_spread_c": None,
+        "cold_side_hidden_pressure_spread_c": None,
         "temperature_aware_fit_eligible": False,
         "thermal_warming_step_fraction": 0.0,
     }
@@ -897,6 +903,7 @@ def observe_lap_tyre_state(
     core_means: list[float] = []
     trajectory_core_means: list[float] = []
     trajectory_core_rows: list[tuple[float, ...]] = []
+    trajectory_pressure_complete: list[bool] = []
     trajectory_core_by_wheel: list[list[float]] = [[] for _ in _WHEELS]
     core_rows: list[list[float]] = []
     pressure_means: list[float] = []
@@ -923,6 +930,7 @@ def observe_lap_tyre_state(
         pressure = row_values(row, pressure_names)
         if len(core) == len(_WHEELS):
             trajectory_core_rows.append(tuple(core))
+            trajectory_pressure_complete.append(len(pressure) == len(_WHEELS))
             core_mean = statistics.fmean(core)
             trajectory_core_means.append(core_mean)
         if len(core) == len(_WHEELS) and len(pressure) == len(_WHEELS):
@@ -983,12 +991,18 @@ def observe_lap_tyre_state(
         and wheel_spread <= max_wheel_spread_c
         and tag != "unknown"
     )
-    # A monotonically warming cold lap is not thermally stationary, but its individual friction
-    # rows can still be used safely when every row is attributed to all four core temperatures and
-    # the complete trajectory remains on the increasing (below-optimum) side of the tyre curve.
-    # The fitter below projects only the globally coldest observed band into the static runtime
-    # envelope. Crossing the optimum is deliberately unsupported because the available archive
-    # metadata does not describe the tyre's post-peak curve.
+    # A below-optimum lap is not thermally stationary — huracan@spa 2026-08-10 it1 was a
+    # track-load *cycle* (wheels heat in corners and cool on straights; 4-wheel mean +3 C,
+    # stability 0.53). Individual friction rows are still usable when every retained row has
+    # four-wheel core attribution and the complete trajectory stays on the increasing side of
+    # the tyre curve (hottest observed sample ≤ optimum). The fitter projects only the globally
+    # coldest observed band into the static runtime envelope, so intra-lap cooling cannot leak
+    # late-lap grip into a cold start. A 0.5 C per-wheel cooling-reversal veto is *not* applied
+    # here: that threshold is a flat-track filter and is what kept the measured cycle refused.
+    # Crossing the optimum stays unsupported because the archive does not describe the post-peak
+    # curve. Instantaneous per-row spread is diagnostic; the eligibility spread gate is the
+    # existing #543 median-center cap. Pressure-incomplete rows can hide a larger split, so
+    # those rows keep their own fail-closed spread check.
     hottest_observed_core_c = max(observed_core_values, default=None)
     warming_steps = [
         later >= earlier - 0.5
@@ -1011,18 +1025,28 @@ def observe_lap_tyre_state(
     cold_side_min_hottest_wheel_c = min(
         (max(core_row) for core_row in trajectory_core_rows), default=None
     )
+    hidden_pressure_spreads = [
+        max(core_row) - min(core_row)
+        for core_row, pressure_complete in zip(
+            trajectory_core_rows, trajectory_pressure_complete, strict=True
+        )
+        if not pressure_complete
+    ]
+    hidden_pressure_spread = max(hidden_pressure_spreads, default=None)
+    hidden_spread_ok = (
+        hidden_pressure_spread is None or hidden_pressure_spread <= max_wheel_spread_c
+    )
     cold_side_temperature_aware = (
         is_valid
         and (compound_index is not None or compound_name is not None)
         and setup_hash is not None
         and coverage >= min_coverage_fraction
-        and cold_side_max_wheel_spread is not None
-        and cold_side_max_wheel_spread <= max_wheel_spread_c
+        and wheel_spread is not None
+        and wheel_spread <= max_wheel_spread_c
+        and hidden_spread_ok
         and hottest_observed_core_c is not None
         and hottest_observed_core_c <= optimal
-        and max_cooling_reversal_c <= 0.5
         and bool(trajectory_core_means)
-        and trajectory_core_means[-1] >= trajectory_core_means[0] - 0.5
     )
     grip_multiplier = None
     if grip_mu:
@@ -1071,6 +1095,9 @@ def observe_lap_tyre_state(
         "wheel_spread_c": round(wheel_spread, 3) if wheel_spread is not None else None,
         "cold_side_max_wheel_spread_c": (
             round(cold_side_max_wheel_spread, 3) if cold_side_max_wheel_spread is not None else None
+        ),
+        "cold_side_hidden_pressure_spread_c": (
+            round(hidden_pressure_spread, 3) if hidden_pressure_spread is not None else None
         ),
         "cold_side_max_core_temp_c": (
             round(hottest_observed_core_c, 3) if hottest_observed_core_c is not None else None
