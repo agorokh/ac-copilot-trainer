@@ -50,6 +50,9 @@ project environment: **7 passed in 0.53 s**. This covers exact final-session sco
 partial-batch fail-closed behavior, report/refit wiring, polling to the final expected count,
 mixed-session falsification, and stage-outcome round-trip behavior.
 
+Full local parity also passed after this handoff edit: **4,105 passed, 75 skipped**, 87.21%
+coverage, with format, lint, security, secrets, policy, agent-proof, and CSP checks green.
+
 The live rig gate remains external and unchanged:
 
 ```text
