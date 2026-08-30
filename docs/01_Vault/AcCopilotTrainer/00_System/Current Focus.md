@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-08-30T01:46:36Z
+last_updated: 2026-08-30T02:10:31Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-08-30-021031Z-c1-issue764-recheck-add813.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-30-014457Z-c1-issue749-rig-offline-fa5727.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-30-005829Z-post-merge-pr776-c1-cycle-278fb1.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-30-004200Z-c1-issue749-cycle-admit-776-a91c04.md
@@ -74,15 +75,14 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**C1 still BLOCKED (rechecked 2026-08-30T01:44Z): `/autonomous-deliver 749` merged
-PR [#776](https://github.com/agorokh/ac-copilot-trainer/pull/776)** at
-`278fb1a` (vetted head `e3071d2`). Below-optimum track-load cycles now admit
-into the cold-band refit; reconstruction raises 5 lateral bins. Off-rig
-`make ci-fast` 4105 passed. Fresh Tailscale, ping, and SSH probes still find AG_PC offline;
-do not retry WoL-only. An hourly thread heartbeat now waits for physical power-on and will resume
-the #749 and #750 live proofs when the host reconnects. C1 (#749, #750, #751, #764) stays open
-together. Resume from
-[[2026-08-30-014457Z-c1-issue749-rig-offline-fa5727]].
+**C1 still BLOCKED (rechecked 2026-08-30T02:10Z): `/autonomous-deliver 764` reverified the
+MCP 2.1.1 consumer path on current `origin/main` `11b30c0`**: focused protocol test passed, all
+five tools enumerated, and `query_file_patterns` returned without error. A clean full local parity
+run passed with 4105 tests, 75 skips, and 87.21% coverage. Fresh Tailscale, ping, and SSH probes
+still find AG_PC offline; do not retry WoL-only. An hourly thread heartbeat waits for physical
+power-on and will resume the #749 and #750 live proofs when the host reconnects. C1 (#749, #750,
+#751, #764) stays open together. Resume from
+[[2026-08-30-021031Z-c1-issue764-recheck-add813]].
 
 **Delivered (2026-08-10):** `/autonomous-deliver 529` — **#746 CLOSED** by PR
 [#748](https://github.com/agorokh/ac-copilot-trainer/pull/748) (MERGED `c9ec97c`): the self-play
