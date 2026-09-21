@@ -902,8 +902,12 @@ def resolve_memory_endpoints(
     # (priority, source, scheme, host, port)
     raw: list[tuple[int, str, str, str, int]] = []
     registry_hosts: set[str] = set()
-    # SNI from the first registry row that named each (scheme, host, port).
+    # SNI from the first trusted registry row that named each endpoint.  Keep
+    # manifest SNI separate: the operated repo is branch-controlled, so its TLS
+    # virtual-host choice must never bleed into a higher-priority registry or
+    # host-owned bridge candidate that happens to share the same URL.
     sni_by_key: dict[tuple[str, str, int], str] = {}
+    manifest_sni_by_key: dict[tuple[str, str, int], str] = {}
 
     sources = _registry_sources(env) if registry_sources is None else registry_sources
     for index, (path, label) in enumerate(sources):
@@ -965,22 +969,16 @@ def resolve_memory_endpoints(
             # they are never reachable and must not seed base_port or candidates.
             if parsed and parsed[2] not in _PLACEHOLDER_PORTS:
                 mf_scheme, mf_host, mf_port = parsed
-                # SNI for a manifest-declared endpoint. Without this, the
-                # host-level ``tls_server_name`` the parser reads above is
-                # dropped on the floor: ``sni_by_key`` was filled ONLY from
-                # registry rows, so a manifest-only raw-IP HTTPS candidate got
-                # ``tls_server_name=None`` and died in the handshake — the
-                # exact case governance-hub#473 added the field for.
-                #
-                # ``setdefault`` keeps registry precedence: the trusted
-                # ~/.config registries rank above the operated repo's tree.
-                # Safety: this only ever reaches a candidate that already
-                # survived the non-loopback allowlist + HTTPS filter below, so
-                # a manifest cannot name SNI for a host it could not already
-                # name as an endpoint.
+                # SNI for a manifest-declared endpoint.  Store it in a
+                # source-scoped map rather than the registry map: endpoint
+                # allowlisting constrains the TCP destination, but SNI can
+                # still select a different virtual service on that IP/port.
+                # A branch-controlled manifest therefore must not retarget a
+                # trusted registry or host-owned bridge candidate merely
+                # because their URLs are identical.
                 mf_sni = _row_tls_server_name(manifest_workspace)
                 if mf_sni:
-                    sni_by_key.setdefault(parsed, mf_sni)
+                    manifest_sni_by_key.setdefault(parsed, mf_sni)
                 if _is_loopback_host(mf_host):
                     # SECURITY (#7 SSRF, 2026-06-03 scan): the manifest ``endpoint`` is read
                     # from the OPERATED repo's tree (attacker-controllable). A loopback host
@@ -1096,7 +1094,11 @@ def resolve_memory_endpoints(
                 port,
                 source,
                 priority,
-                tls_server_name=sni_by_key.get((scheme, host, port)),
+                tls_server_name=(
+                    manifest_sni_by_key.get((scheme, host, port))
+                    if source == "manifest"
+                    else sni_by_key.get((scheme, host, port))
+                ),
             )
         )
     return out
