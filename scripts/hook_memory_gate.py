@@ -4,11 +4,13 @@
 This file is installed into a spoke repo's ``scripts/<hook_name>.py`` IN PLACE of
 the vendored hook logic. It carries NO guard logic itself: it resolves the
 canonical implementation in the fleet governance hub (by its own filename) and
-delegates. Before ``runpy`` delegation it establishes ``CLAUDE_PROJECT_DIR`` as
-the spoke repository root derived from *this* installed shim path, unless a
-trusted harness already supplied a non-empty ``CLAUDE_PROJECT_DIR`` (sandbox /
-worktree) — that explicit value remains authoritative (#268). A fix lands ONCE
-in the hub and every spoke picks it up; security scanners see one copy.
+delegates. Before any non-break-glass audit or ``runpy`` delegation it establishes
+``CLAUDE_PROJECT_DIR`` as the spoke repository root derived from *this* installed
+shim path, unless a trusted harness already supplied a non-empty
+``CLAUDE_PROJECT_DIR`` (sandbox / worktree) — that explicit value remains
+authoritative (#268). Break-glass attempts the same binding on a best-effort basis,
+but an attribution failure cannot block the human escape. A fix lands ONCE in the
+hub and every spoke picks it up; security scanners see one copy.
 
 Resolution order for the hub (TRUSTED, configured locations only):
   1. ``$FLEET_GOVERNANCE_ROOT`` (explicit operator config)
@@ -58,6 +60,54 @@ _FAIL_CLOSED_HOOKS = frozenset(
         "hook_protect_main_impl.py",
     }
 )
+
+# Hooks whose fail posture is CONDITIONAL on an armed env toggle (gov-hub#418, agent-factory#1736
+# round-1 Codex P1): the write-lock gate is advisory while report-only, but once the operator arms
+# WRITE_LOCK_ENFORCE the staged enforcement must not silently vanish on hub drift or a runtime
+# error — an armed gate that fails open is the exact "enforcement theater" failure mode.
+# Entries: hook name -> (enforce env key, accepted armed values, disable env key). The posture is
+# EFFECTIVE arming, not mere presence (round-5 Codex P2): `WRITE_LOCK_ENFORCE=0`/`off`/a typo does
+# not arm the hook, so it must not fail closed either, and the hook's advertised operator bypass
+# (`WRITE_LOCK_DISABLE`, any non-empty value) disarms the posture entirely.
+_ENV_CONDITIONAL_FAIL_CLOSED = {
+    "hook_write_lock.py": ("WRITE_LOCK_ENFORCE", ("issue", "repo"), "WRITE_LOCK_DISABLE"),
+}
+
+
+def _argv_declared_event() -> str:
+    """The hook event declared on argv (``--event <name>`` / ``--event=<name>``), or ""."""
+    argv = sys.argv[1:]
+    for i, arg in enumerate(argv):
+        if arg == "--event" and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--event="):
+            return arg.split("=", 1)[1]
+    return ""
+
+
+def _conditional_armed(name: str) -> bool:
+    """Whether this hook's env-conditional posture is EFFECTIVELY armed (event-agnostic)."""
+    entry = _ENV_CONDITIONAL_FAIL_CLOSED.get(name)
+    if not entry:
+        return False
+    enforce_key, armed_values, disable_key = entry
+    if os.environ.get(disable_key, "") != "":
+        return False
+    return os.environ.get(enforce_key, "").strip().lower() in armed_values
+
+
+def _fails_closed(name: str, payload_event: str = "") -> bool:
+    """Posture for the runtime-error and hub-missing branches. A declared non-write event
+    (SessionStart report, etc.) inspects no mutation and stays advisory even while armed
+    (gov-hub#419 rounds 15-16): the event comes from argv when declared, else from the payload
+    when the caller could safely read it (hub-missing branch only — no delegation follows)."""
+    if name in _FAIL_CLOSED_HOOKS:
+        return True
+    if not _conditional_armed(name):
+        return False
+    event = _argv_declared_event() or payload_event
+    return event in ("", "PreToolUse")
+
 
 # RECOVERY allowlist for the hub-MISSING hard-gate branch (Council 2026-06-03 round-3). EXACT,
 # anchored matches only — NO substring matching, NO shell metacharacters, NO chaining/redirection,
@@ -163,15 +213,116 @@ def _audit(event: str, name: str, reason: str) -> None:
         pass
 
 
-def _recovery_command_from_stdin() -> str | None:
-    """Return the Bash command from the PreToolUse payload IFF it matches the recovery allowlist.
+_SHIM_MAX_STDIN_BYTES = 4 * 1024 * 1024
+_SHIM_STDIN_DEADLINE_S = 5.0
 
-    Only called in the hub-MISSING hard-gate branch, where there is no delegation — so consuming
-    stdin here cannot starve a downstream hook. Returns None when stdin is not a Bash payload, is
-    unreadable, or the command is not an exact recovery command."""
+
+def _read_stdin_bounded_shim() -> str | None:
+    """Byte-capped, deadline-bounded stdin read without locking buffered stdin at exit."""
+    import io
+    import threading
+
     try:
-        raw = sys.stdin.read()
-    except (OSError, ValueError):
+        stdin_fd = sys.stdin.fileno()
+    except (OSError, ValueError, AttributeError):
+        stdin_fd = None
+    if stdin_fd is None:
+        # The only supported descriptor-less inputs are bounded in-memory streams used when
+        # this shim re-feeds an already captured payload. An arbitrary stream with no fileno()
+        # cannot be deadline-bounded or cancelled safely in CPython, so fail safe instead of
+        # starting another buffered daemon that could recreate the shutdown abort below.
+        try:
+            if isinstance(sys.stdin, io.StringIO):
+                return sys.stdin.read(_SHIM_MAX_STDIN_BYTES)
+            buffer = getattr(sys.stdin, "buffer", None)
+            if isinstance(buffer, io.BytesIO):
+                return buffer.read(_SHIM_MAX_STDIN_BYTES).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 — unreadable in-memory stdin is no payload
+            return None
+        return None
+
+    chunks: list[bytes] = []
+    done = threading.Event()
+
+    def _reader() -> None:
+        try:
+            while sum(len(c) for c in chunks) < _SHIM_MAX_STDIN_BYTES:
+                remaining = _SHIM_MAX_STDIN_BYTES - sum(len(c) for c in chunks)
+                # Read the descriptor directly. A host may keep the pipe open after one complete
+                # JSON object; leaving a daemon blocked in BufferedReader.read1() then aborts
+                # CPython during finalization because it owns the stdin buffer lock. os.read()
+                # holds no Python buffered-I/O lock, so the daemon can be abandoned safely once
+                # the main thread recognizes complete JSON.
+                chunk = os.read(stdin_fd, min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        except Exception:  # noqa: BLE001 — whatever arrived is the payload
+            pass
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=_reader, daemon=True)
+    thread.start()
+    import time as _time
+
+    deadline = _time.monotonic() + _SHIM_STDIN_DEADLINE_S
+    validated_snapshot: bytes | None = None
+    while not done.wait(0.05) and _time.monotonic() < deadline:
+        snapshot = b"".join(chunks)
+        if snapshot:
+            try:
+                json.loads(snapshot.decode("utf-8", "replace"))
+            except ValueError:
+                continue
+            validated_snapshot = snapshot
+            break  # complete JSON payload: stop waiting for EOF (gov-hub#419 round-34)
+    result = validated_snapshot if validated_snapshot is not None else b"".join(chunks)
+    return result.decode("utf-8", "replace")
+
+
+def _normalise_recovery_field(value: object) -> str | None:
+    """Turn a ``command``/``cmd`` payload value into the string the allowlist matches.
+
+    List values are accepted only as bare-word argv (plain-space join, NOT shlex.quote:
+    quoting ``~/.fleet-governance`` would make the documented payload fail to match). A
+    list that cannot be joined unambiguously — empty element, whitespace, or a shell
+    metacharacter in any element — is None, as is any non-string non-list value.
+    """
+    if isinstance(value, list) and all(isinstance(t, str) for t in value):
+        if any((not t) or any(c.isspace() or c in "\"'`$\\|&;<>()" for c in t) for t in value):
+            return None
+        value = " ".join(value)
+    if not isinstance(value, str):
+        return None
+    return value.strip()
+
+
+def _recovery_command_from_stdin(raw: str | None = None) -> str | None:
+    """Return the recovery command from the PreToolUse payload IFF it matches the allowlist.
+
+    Called from two fail-closed branches in ``_run()``:
+      * hub-MISSING (after ``_canonical(name)`` returns None)
+      * attribution-failure (the ``except Exception`` around ``_ensure_project_dir()``, #500)
+
+    Returns None when stdin is not a usable payload, the surviving command is not an exact
+    recovery command, or ``command`` and ``cmd`` are both present and are not string-equal
+    after argv normalisation. Residual: a harness that forwards both keys with equivalent
+    values is treated as one command (the executed and allowlisted strings are the same). A
+    harness that forwards both keys with disagreeing values is refused — the shim never
+    allowlists a field the host will not execute. The parser does not read ``tool_name``.
+
+    Codex's ``exec_command`` supplies the command as ``cmd`` (gov-hub#419 round-68). A
+    single-key payload on either ``command`` or ``cmd`` still matches; do not select the
+    field from ``tool_name`` (that would invert the round-68 pin that ``exec_command`` +
+    ``command`` must still match).
+
+    BOUNDED (gov-hub#419 round-13): a host that writes the payload but keeps the pipe open must
+    not hang the fail-closed verdict, and an oversized payload must not exhaust memory — the read
+    runs in a daemon thread with a hard deadline and a byte cap."""
+    if raw is None:
+        raw = _read_stdin_bounded_shim()
+    if raw is None:
         return None
     if not raw.strip():
         return None
@@ -180,13 +331,25 @@ def _recovery_command_from_stdin() -> str | None:
     except (json.JSONDecodeError, ValueError):
         return None
     tool_input = payload.get("tool_input") or payload.get("toolInput") or {}
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    if not isinstance(command, str):
+    if not isinstance(tool_input, dict):
         return None
-    cmd = command.strip()
+    has_command = "command" in tool_input
+    has_cmd = "cmd" in tool_input
+    if not has_command and not has_cmd:
+        return None
+    command_n = _normalise_recovery_field(tool_input.get("command")) if has_command else None
+    cmd_n = _normalise_recovery_field(tool_input.get("cmd")) if has_cmd else None
+    if has_command and has_cmd:
+        if command_n is None or cmd_n is None or command_n != cmd_n:
+            return None
+        command = command_n
+    else:
+        command = command_n if has_command else cmd_n
+    if not command:
+        return None
     for pattern in _RECOVERY_PATTERNS:
-        if pattern.match(cmd):
-            return cmd
+        if pattern.match(command):
+            return command
     return None
 
 
@@ -238,13 +401,33 @@ def _delegate(canonical: Path, name: str) -> None:
     Sets ``CLAUDE_PROJECT_DIR`` to the spoke root when absent so the delegated hook operates on
     the spoke, not the hub install path (#268)."""
     _ensure_project_dir()
+    payload_event = ""
+    if name in _ENV_CONDITIONAL_FAIL_CLOSED and _conditional_armed(name) and not _argv_declared_event():
+        # Event-aware runtime-error posture (gov-hub#419 round-17): capture the payload BEFORE
+        # delegation and re-feed it through a StringIO stdin so the canonical hook still reads
+        # it. Scoped to armed conditional hooks only — every other hook keeps the untouched
+        # stdin passthrough.
+        try:
+            import io
+
+            raw = _read_stdin_bounded_shim() or ""
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    evt = data.get("hook_event_name") or data.get("hookEventName")
+                    payload_event = evt if isinstance(evt, str) else ""
+            except (ValueError, TypeError):
+                payload_event = ""
+            sys.stdin = io.StringIO(raw)
+        except Exception:  # noqa: BLE001 — capture failure: fall back to the blind posture
+            payload_event = ""
     try:
         runpy.run_path(str(canonical), run_name="__main__")
     except SystemExit:
         raise  # the hook's own exit code (0 allow / 2 block) is authoritative.
     except Exception as exc:  # noqa: BLE001 — degraded-mode contract below.
         detail = f"{type(exc).__name__}: {exc}"
-        if name in _FAIL_CLOSED_HOOKS:
+        if _fails_closed(name, payload_event):
             _audit("hub-runtime-error-failclosed", name, detail)
             sys.stderr.write(
                 f"BLOCK: governance-shim — canonical {name} errored at runtime; failing CLOSED "
@@ -264,15 +447,73 @@ def _run() -> None:
     delegation or call ``sys.exit`` — only running it as the hook does."""
     name = Path(__file__).name
     if os.environ.get("EMERGENCY_BYPASS_GOVERNANCE", "").strip() == "1":
+        try:
+            _ensure_project_dir()
+        except Exception:  # noqa: BLE001; attribution cannot make break-glass unreachable.
+            pass
         _audit("emergency-bypass", name, "EMERGENCY_BYPASS_GOVERNANCE=1 (human break-glass)")
+        sys.exit(0)
+    try:
+        _ensure_project_dir()
+    except Exception as exc:  # noqa: BLE001; preserve the named hook's degraded-mode posture.
+        detail = f"{type(exc).__name__}: {exc}"
+        payload_event = ""
+        raw_payload: str | None = None
+        if (
+            name in _ENV_CONDITIONAL_FAIL_CLOSED
+            and _conditional_armed(name)
+            and not _argv_declared_event()
+        ):
+            raw_payload = _read_stdin_bounded_shim()
+            try:
+                data = json.loads(raw_payload or "")
+                if isinstance(data, dict):
+                    evt = data.get("hook_event_name") or data.get("hookEventName")
+                    payload_event = evt if isinstance(evt, str) else ""
+            except (ValueError, TypeError):
+                payload_event = ""
+        if _fails_closed(name, payload_event):
+            recovery = _recovery_command_from_stdin(raw_payload)
+            if recovery is not None:
+                _audit(
+                    "recovery-allowed",
+                    name,
+                    f"project attribution failed; recovery command permitted: {recovery}",
+                )
+                return
+            _audit("project-dir-init-error-failclosed", name, detail)
+            sys.stderr.write(
+                f"BLOCK: governance-shim - {name} could not initialize project attribution; "
+                "failing CLOSED (hard gate). Use EMERGENCY_BYPASS_GOVERNANCE=1 for human "
+                "recovery.\n"
+            )
+            sys.exit(2)
+        _audit("project-dir-init-error-failopen", name, detail)
+        sys.stderr.write(
+            f"governance-shim: {name} could not initialize project attribution; "
+            "advisory hook fails open.\n"
+        )
         sys.exit(0)
     canonical = _canonical(name)
     if canonical is not None:
         _delegate(canonical, name)
         return
     # Hub not found.
-    if name in _FAIL_CLOSED_HOOKS:
-        recovery = _recovery_command_from_stdin()
+    payload_event = ""
+    raw_payload: str | None = None
+    if name not in _FAIL_CLOSED_HOOKS and _conditional_armed(name) and not _argv_declared_event():
+        # No delegation follows in this branch, so consuming stdin is safe: resolve the event
+        # from the payload so a payload-only SessionStart stays advisory (round-16 daemon HIGH).
+        raw_payload = _read_stdin_bounded_shim()
+        try:
+            data = json.loads(raw_payload or "")
+            if isinstance(data, dict):
+                evt = data.get("hook_event_name") or data.get("hookEventName")
+                payload_event = evt if isinstance(evt, str) else ""
+        except (ValueError, TypeError):
+            payload_event = ""
+    if _fails_closed(name, payload_event):
+        recovery = _recovery_command_from_stdin(raw_payload)
         if recovery is not None:
             # The bootloader exception: permit the small, fixed surface needed to INSTALL the hub so
             # the documented recovery is reachable on a fresh host. Audited; everything else blocks.

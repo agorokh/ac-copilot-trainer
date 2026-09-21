@@ -74,12 +74,28 @@ def _apply_field(row: dict[str, Any], text: str) -> str | None:
         "backend",
         "endpoint",
         "vault_root",
+        "audit_log",
+        "stale_after_hours",
         "match_repo_basenames",
+        "tailnet_name",
+        "tailnet_suffix",
+        "tls_server_name",
+        "bridge_scheme",
+        "is_memory_central",
     }:
         return None
     raw_value = match.group(2)
     if key == "match_repo_basenames" and not raw_value.strip():
         row[key] = []
+    elif key == "stale_after_hours":
+        val = _yaml_scalar(raw_value)
+        try:
+            row[key] = int(val)
+        except ValueError:
+            row[key] = val
+    elif key == "is_memory_central":
+        val = _yaml_scalar(raw_value).strip().lower()
+        row[key] = val in ("true", "yes", "1", "on")
     else:
         row[key] = _yaml_scalar(raw_value)
     return key
@@ -90,6 +106,11 @@ def _fallback_manifest_from_text(text: str) -> dict[str, Any]:
 
     Covers:
     * ``hosts: [- workspaces: [- name/backend/endpoint/vault_root/match_repo_basenames]]``
+    * Host-level identity used by SessionStart prefetch to derive a live
+      central candidate (``tailnet_name`` / ``tailnet_suffix`` /
+      ``tls_server_name`` / ``bridge_scheme`` / ``is_memory_central``) so a
+      PyYAML-less host python still sees the current central host
+      (governance-hub#517 / agent-factory#1888).
     * Top-level ``repo:`` block with ``code_dirs`` / ``code_top_level`` lists
       and ``tier3_workspace_id`` scalar (Qodo PR #194 HIGH: without this, the
       per-repo override silently drops in PyYAML-missing hook runtimes and the
@@ -149,7 +170,9 @@ def _fallback_manifest_from_text(text: str) -> dict[str, Any]:
         if in_repo and indent > repo_indent:
             # A scalar key or the start of a list (`code_dirs:`, `code_top_level:`,
             # `tier3_workspace_id: "..."`).
-            scalar_m = re.match(r"(code_dirs|code_top_level|tier3_workspace_id):\s*(.*)$", stripped)
+            scalar_m = re.match(
+                r"(code_dirs|code_top_level|tier3_workspace_id):\s*(.*)$", stripped
+            )
             if scalar_m:
                 key = scalar_m.group(1)
                 raw_value = scalar_m.group(2).strip()
@@ -163,9 +186,15 @@ def _fallback_manifest_from_text(text: str) -> dict[str, Any]:
                     # valid YAML but used to land here as an opaque scalar string, silently
                     # dropping the repo's code-dir allowlist so the gate reverted to defaults and
                     # stopped gating custom dirs. Parse it as a list.
-                    inner = raw_value[1 : raw_value.rfind("]")] if "]" in raw_value else raw_value[1:]
+                    inner = (
+                        raw_value[1 : raw_value.rfind("]")]
+                        if "]" in raw_value
+                        else raw_value[1:]
+                    )
                     repo_block[key] = [
-                        _yaml_scalar(item.strip()) for item in inner.split(",") if item.strip()
+                        _yaml_scalar(item.strip())
+                        for item in inner.split(",")
+                        if item.strip()
                     ]
                     repo_list_key = None
                 else:
@@ -175,8 +204,14 @@ def _fallback_manifest_from_text(text: str) -> dict[str, Any]:
             # SECURITY (#10): accept block-sequence items indented at the SAME column as the key
             # (`>=`), not only strictly deeper (`>`). Same-indent `-` items are valid YAML and
             # were previously dropped, reverting the code-dir allowlist to permissive defaults.
-            if repo_list_key and stripped.startswith("- ") and indent >= repo_list_indent:
-                repo_block.setdefault(repo_list_key, []).append(_yaml_scalar(stripped[2:].strip()))
+            if (
+                repo_list_key
+                and stripped.startswith("- ")
+                and indent >= repo_list_indent
+            ):
+                repo_block.setdefault(repo_list_key, []).append(
+                    _yaml_scalar(stripped[2:].strip())
+                )
                 continue
             # Unrecognized line inside repo: — ignore (forward-compat with new keys).
             continue
@@ -220,7 +255,11 @@ def _fallback_manifest_from_text(text: str) -> dict[str, Any]:
             continue
 
         if not in_workspaces:
-            if current_host is not None and host_indent is not None and indent > host_indent:
+            if (
+                current_host is not None
+                and host_indent is not None
+                and indent > host_indent
+            ):
                 _apply_field(current_host, stripped)
             continue
 
@@ -248,7 +287,9 @@ def _fallback_manifest_from_text(text: str) -> dict[str, Any]:
     return out
 
 
-def load_manifest(root: Path, *, warn_missing_pyyaml: bool = False) -> dict[str, Any] | None:
+def load_manifest(
+    root: Path, *, warn_missing_pyyaml: bool = False
+) -> dict[str, Any] | None:
     path = root / "ops" / "memory_manifest.yml"
     if not path.is_file():
         return None
@@ -330,6 +371,30 @@ def _gather_workspace_rows(manifest: dict[str, Any] | None) -> list[dict[str, An
     return candidates
 
 
+def find_memory_central_host(manifest: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return the host entry marked ``is_memory_central: true``, or None.
+
+    Pure dict walk (no I/O). Prefetch uses this to derive a live candidate
+    from the current central host identity instead of a stored tailnet IP
+    (governance-hub#517). A stringy ``true`` from the regex fallback parser
+    is accepted the same as a YAML bool.
+    """
+    if not isinstance(manifest, dict):
+        return None
+    hosts = manifest.get("hosts") or []
+    if not isinstance(hosts, list):
+        return None
+    for host in hosts:
+        if not isinstance(host, dict):
+            continue
+        flag = host.get("is_memory_central")
+        if flag is True:
+            return host
+        if isinstance(flag, str) and flag.strip().lower() in ("true", "yes", "1", "on"):
+            return host
+    return None
+
+
 def resolve_workspace(
     root: Path,
     manifest: dict[str, Any] | None,
@@ -347,7 +412,9 @@ def resolve_workspace(
     Rows keyed ``id:`` / ``workspace:`` instead of ``name:`` resolve too —
     matching goes through ``workspace_name()``.
     """
-    candidates = _gather_workspace_rows(manifest) + _gather_workspace_rows(local_manifest)
+    candidates = _gather_workspace_rows(manifest) + _gather_workspace_rows(
+        local_manifest
+    )
     if not candidates:
         return None
 
@@ -416,7 +483,9 @@ def active_workspace_backend(root: Path, workspace: str) -> str | None:
     if not active:
         return None
     active_name = workspace_name(active)
-    if active_name != workspace and not (name_match_keys(active_name) & name_match_keys(workspace)):
+    if active_name != workspace and not (
+        name_match_keys(active_name) & name_match_keys(workspace)
+    ):
         return None
     return workspace_backend(active)
 
@@ -659,8 +728,11 @@ class EndpointCandidate:
     scheme: str
     host: str
     port: int
-    source: str  # env_bridge|consumer_registry|legacy_registry|env_registry|manifest|loopback
+    source: str  # env_bridge|consumer_registry|legacy_registry|env_registry|manifest|manifest_central|loopback
     priority: int
+    # Present when the registry row that produced this URL named ``tls_server_name``.
+    # The prefetch uses it as the SNI host for raw-IP HTTPS (governance-hub#473).
+    tls_server_name: str | None = None
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -748,7 +820,11 @@ def _parse_registry(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     defaults: dict[str, Any] = defaults_raw if isinstance(defaults_raw, dict) else {}
     # Match the drift runtime: only the `vaults` array defines substrate rows.
     value = data.get("vaults")
-    rows = [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+    rows = (
+        [item for item in value if isinstance(item, dict)]
+        if isinstance(value, list)
+        else []
+    )
     return rows, defaults
 
 
@@ -796,6 +872,18 @@ def _row_endpoint(row: dict[str, Any], defaults: dict[str, Any]) -> str | None:
     return None
 
 
+def _row_tls_server_name(row: dict[str, Any]) -> str | None:
+    """Return the registry row's ``tls_server_name``, or None if unset.
+
+    This is the authoritative SNI host for a raw-IP HTTPS endpoint
+    (governance-hub#473). The prefetch env var is an override, not the source.
+    """
+    val = row.get("tls_server_name")
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+    return None
+
+
 def resolve_memory_endpoints(
     workspace: str,
     manifest_workspace: dict[str, Any] | None = None,
@@ -814,6 +902,8 @@ def resolve_memory_endpoints(
     # (priority, source, scheme, host, port)
     raw: list[tuple[int, str, str, str, int]] = []
     registry_hosts: set[str] = set()
+    # SNI from the first registry row that named each (scheme, host, port).
+    sni_by_key: dict[tuple[str, str, int], str] = {}
 
     sources = _registry_sources(env) if registry_sources is None else registry_sources
     for index, (path, label) in enumerate(sources):
@@ -846,6 +936,9 @@ def resolve_memory_endpoints(
                 raw.append((20 + index, label, *parsed))
                 if not _is_loopback_host(parsed[1]):
                     registry_hosts.add(parsed[1])
+                tls_sni = _row_tls_server_name(row)
+                if tls_sni:
+                    sni_by_key.setdefault(parsed, tls_sni)
 
     # SSRF guard (#7) WARN is DEFERRED (gh#111): if the manifest names a loopback
     # endpoint on an untrusted port we reject it below, but only surface that as a
@@ -858,7 +951,9 @@ def resolve_memory_endpoints(
         # snippet, an offline graphiti row, or (with an empty workspace arg) any
         # manifest row at all.
         mf_name = workspace_name(manifest_workspace)
-        mf_matches = bool(mf_name) and bool(keys) and bool(name_match_keys(mf_name) & keys)
+        mf_matches = (
+            bool(mf_name) and bool(keys) and bool(name_match_keys(mf_name) & keys)
+        )
         endpoint = manifest_workspace.get("endpoint")
         if (
             mf_matches
@@ -870,6 +965,22 @@ def resolve_memory_endpoints(
             # they are never reachable and must not seed base_port or candidates.
             if parsed and parsed[2] not in _PLACEHOLDER_PORTS:
                 mf_scheme, mf_host, mf_port = parsed
+                # SNI for a manifest-declared endpoint. Without this, the
+                # host-level ``tls_server_name`` the parser reads above is
+                # dropped on the floor: ``sni_by_key`` was filled ONLY from
+                # registry rows, so a manifest-only raw-IP HTTPS candidate got
+                # ``tls_server_name=None`` and died in the handshake — the
+                # exact case governance-hub#473 added the field for.
+                #
+                # ``setdefault`` keeps registry precedence: the trusted
+                # ~/.config registries rank above the operated repo's tree.
+                # Safety: this only ever reaches a candidate that already
+                # survived the non-loopback allowlist + HTTPS filter below, so
+                # a manifest cannot name SNI for a host it could not already
+                # name as an endpoint.
+                mf_sni = _row_tls_server_name(manifest_workspace)
+                if mf_sni:
+                    sni_by_key.setdefault(parsed, mf_sni)
                 if _is_loopback_host(mf_host):
                     # SECURITY (#7 SSRF, 2026-06-03 scan): the manifest ``endpoint`` is read
                     # from the OPERATED repo's tree (attacker-controllable). A loopback host
@@ -880,7 +991,9 @@ def resolve_memory_endpoints(
                     # (from trusted ~/.config registries, collected above) or the default
                     # substrate port — never an arbitrary port the repo names.
                     allowed_loopback_ports = {
-                        port for (_pri, _lbl, _sch, _h, port) in raw if _is_loopback_host(_h)
+                        port
+                        for (_pri, _lbl, _sch, _h, port) in raw
+                        if _is_loopback_host(_h)
                     } | {_DEFAULT_SUBSTRATE_PORT}
                     if mf_port in allowed_loopback_ports:
                         raw.append((40, "manifest", *parsed))
@@ -975,5 +1088,15 @@ def resolve_memory_endpoints(
         if url in seen:
             continue
         seen.add(url)
-        out.append(EndpointCandidate(url, scheme, host, port, source, priority))
+        out.append(
+            EndpointCandidate(
+                url,
+                scheme,
+                host,
+                port,
+                source,
+                priority,
+                tls_server_name=sni_by_key.get((scheme, host, port)),
+            )
+        )
     return out
