@@ -1,5 +1,5 @@
 # OWNER: @agorokh
-"""Shared repo-root resolution for Claude Code memory hooks.
+"""Shared repo-root resolution and host identity for Claude Code memory hooks.
 
 Git worktrees expose `.git` as a file and use a random slug as the worktree
 directory name. Hooks that stamp or read ``.scratch/.last_memory_query`` must
@@ -10,6 +10,7 @@ manifest ``match_repo_basenames`` and lockfile paths stay consistent.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -69,6 +70,7 @@ def normalize_to_main_worktree_dir(base: Path) -> Path:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             check=False,
             timeout=4,
         )
@@ -110,3 +112,86 @@ def worktree_root_for(path: Path) -> Path | None:
         if (parent / ".git").exists():
             return parent
     return None
+
+
+def boot_identity() -> str | None:
+    """This machine's EXACT boot identifier, or None when it cannot be determined.
+
+    Shared by the prefetch (which STAMPS it into the lock/marker) and the gate (which
+    COMPARES the stamps). Both sides must agree byte-for-byte or the comparison silently
+    stops matching, so the extraction is deliberate: two copies of this drifted apart the
+    moment either gained a platform (advisory MEDIUM, PR #544).
+
+    Returning None is safe -- the consumer treats an absent identity as "not comparable"
+    and falls through to wall clock, then mtime, then CLOSED.
+    """
+    try:
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(
+            encoding="utf-8"
+        ).strip()
+        if boot_id:
+            return f"linux:{boot_id}"
+    except OSError:
+        pass
+    try:
+        proc = subprocess.run(
+            ["sysctl", "-n", "kern.boottime"], capture_output=True, text=True,
+            encoding="utf-8", timeout=5, check=False,
+        )
+        out = (proc.stdout or "").strip()
+        if proc.returncode == 0 and out:
+            return _darwin_boot_identity(out)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+#: ``kern.boottime`` renders as ``{ sec = 1788715075, usec = 877413 } Sun Sep  6 10:17:55 2026``.
+#: Only the struct fields are stable; the trailing ctime is formatted in the CALLER's
+#: timezone and locale.
+_DARWIN_BOOTTIME_RE = re.compile(r"sec\s*=\s*(\d+).*?usec\s*=\s*(\d+)", re.DOTALL)
+_DARWIN_NORMALIZED_RE = re.compile(r"darwin:(\d+)\.(\d+)\Z")
+
+
+def _darwin_boot_identity(raw: str) -> str:
+    """Boot identity from ``kern.boottime`` output, keyed on the stable fields only.
+
+    The whole stdout is NOT usable as the key. ``sec``/``usec`` are invariant for a
+    given boot, but the ctime suffix is rendered in the caller's timezone, so the same
+    boot yields different strings to processes with different ``TZ``::
+
+        $ TZ=UTC        sysctl -n kern.boottime
+        { sec = 1788715075, usec = 877413 } Sun Sep  6 17:17:55 2026
+        $ TZ=Asia/Tokyo sysctl -n kern.boottime
+        { sec = 1788715075, usec = 877413 } Mon Sep  7 02:17:55 2026
+
+    A launchd-run producer and an interactive-shell consumer need not share ``TZ``, so
+    embedding the suffix made one boot compare as two -- and this function's contract is
+    that both sides "agree byte-for-byte or the comparison silently stops matching".
+    The consumer then falls off the boot-identity path to wall clock, then mtime.
+
+    Falls back to the raw string when the fields cannot be parsed: an unrecognised
+    format is better keyed imperfectly than treated as "no identity at all".
+    """
+    match = _DARWIN_BOOTTIME_RE.search(raw)
+    if match:
+        return f"darwin:{match.group(1)}.{match.group(2)}"
+    return f"darwin:{raw}"
+
+
+def normalized_boot_identity(identity: str) -> str:
+    """Canonicalize current and legacy Darwin boot ids for persisted-record reads."""
+    value = identity.strip()
+    normalized = _DARWIN_NORMALIZED_RE.fullmatch(value)
+    if normalized:
+        return f"darwin:{normalized.group(1)}.{normalized.group(2)}"
+    if value.startswith("darwin:"):
+        legacy = _DARWIN_BOOTTIME_RE.search(value.removeprefix("darwin:"))
+        if legacy:
+            return f"darwin:{legacy.group(1)}.{legacy.group(2)}"
+    return value
+
+
+def boot_identities_match(first: str, second: str) -> bool:
+    """Compare boot ids while dual-reading pre-#646 Darwin persisted records."""
+    return normalized_boot_identity(first) == normalized_boot_identity(second)
