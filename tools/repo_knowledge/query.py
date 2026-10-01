@@ -20,11 +20,24 @@ def _glob_to_like(pattern: str) -> str:
     return p.replace("**", "%").replace("*", "%")
 
 
-def connect(db_path: Path) -> sqlite3.Connection:
+def connect(db_path: Path, *, readonly: bool = False) -> sqlite3.Connection:
     """Open (or create) the DB, apply schema, and return a connection.
 
-    Caller must ``close()`` the connection (or use a context manager) when done.
+    ``readonly=True`` opens the existing file in SQLite read-only URI mode and skips
+    mkdir/schema application (#2096): the worktree MCP fallback serves the main
+    checkout's DB without mutating or lock-contending it (WAL tolerates a concurrent
+    writer). Caller must ``close()`` the connection (or use a context manager) when done.
     """
+    if readonly:
+        # as_uri() path-encodes (spaces, '?'/'#' cannot weaken mode=ro); same safe form
+        # as tools/model_training/data_pipeline.py. WAL note: ro open needs the -wal/-shm
+        # sidecars readable AND the DB directory writable (shm recovery) — fine in the
+        # fleet's same-user checkout model; it is the wrapper's stderr-noted requirement.
+        uri = db_path.expanduser().resolve().as_uri()
+        conn = sqlite3.connect(f"{uri}?mode=ro", uri=True)
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.row_factory = sqlite3.Row
+        return conn
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
