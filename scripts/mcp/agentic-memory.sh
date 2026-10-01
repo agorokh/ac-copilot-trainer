@@ -159,13 +159,61 @@ _resolve_python() {
   _resolve_command_executable python3 || _resolve_command_executable python
 }
 
-MCP_ROOT="$(_resolve_root "AGENTIC_MEMORY_MCP_SERVERS_ROOT" "${AGENTIC_MEMORY_MCP_SERVERS_ROOT:-}" "${CHILD_REPO_ROOT}/../mcp-servers")" || exit 1
+# Worktree-aware sibling defaults, ported verbatim from workstation-ops#2097
+# (fleet rollout: Atelier-AppliedAI/workstation-ops#3548). Explicit
+# AGENTIC_MEMORY_*_ROOT env vars stay strict; only the defaults fall back.
+# Primary checkout root for this repo. Inside a linked git worktree the sibling
+# clones usually live next to the MAIN checkout, not next to the worktree, so
+# sibling defaults are resolved against the main checkout as a fallback.
+_main_checkout_root() {
+  local common
+  if common="$(git -C "${CHILD_REPO_ROOT}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+    && [[ -n "${common}" ]]; then
+    if (cd -- "${common}/.." 2>/dev/null && pwd -P); then
+      return 0
+    fi
+  fi
+  printf '%s\n' "${CHILD_REPO_ROOT}"
+}
+
+# Default root for a sibling clone: prefer the worktree-local sibling ONLY when it
+# carries the FULL launch contract (every passed path exists as a file; a path tagged
+# +x/ must also be executable). A partial clone holding just one contract file must
+# not shadow the main checkout's real sibling and hard-fail at the later import or
+# launcher checks (PR #2097 cursor review). Otherwise fall back to the main
+# checkout's sibling; _resolve_root validates existence afterwards.
+_default_sibling_root() {
+  local name="${1:-}"
+  shift
+  local sentinel p
+  for sentinel in "$@"; do
+    case "${sentinel}" in
+      +x/*)
+        p="${CHILD_REPO_ROOT}/../${name}/${sentinel#+x/}"
+        if [[ ! -f "${p}" || ! -x "${p}" ]]; then
+          printf '%s' "${MAIN_CHECKOUT_ROOT}/../${name}"
+          return 0
+        fi
+        ;;
+      *)
+        if [[ ! -f "${CHILD_REPO_ROOT}/../${name}/${sentinel}" ]]; then
+          printf '%s' "${MAIN_CHECKOUT_ROOT}/../${name}"
+          return 0
+        fi
+        ;;
+    esac
+  done
+  printf '%s' "${CHILD_REPO_ROOT}/../${name}"
+}
+
+MAIN_CHECKOUT_ROOT="$(_main_checkout_root)"
+MCP_ROOT="$(_resolve_root "AGENTIC_MEMORY_MCP_SERVERS_ROOT" "${AGENTIC_MEMORY_MCP_SERVERS_ROOT:-}" "$(_default_sibling_root mcp-servers servers/agentic-memory/src/agentic_memory/server.py +x/scripts/mcp/agentic-memory.sh)")" || exit 1
 AGENTIC_PKG="${MCP_ROOT}/servers/agentic-memory/src"
 if [[ ! -d "${AGENTIC_PKG}" ]]; then
   _die "agentic-memory package not found at ${AGENTIC_PKG}; verify AGENTIC_MEMORY_MCP_SERVERS_ROOT points at a checkout of agorokh/mcp-servers."
 fi
 
-AF_ROOT="$(_resolve_root "AGENTIC_MEMORY_AGENT_FACTORY_ROOT" "${AGENTIC_MEMORY_AGENT_FACTORY_ROOT:-}" "${CHILD_REPO_ROOT}/../agent-factory")" || exit 1
+AF_ROOT="$(_resolve_root "AGENTIC_MEMORY_AGENT_FACTORY_ROOT" "${AGENTIC_MEMORY_AGENT_FACTORY_ROOT:-}" "$(_default_sibling_root agent-factory tools/hermes_adapter/agentic_memory_registry_materialize.py tools/hermes_adapter/fleet_registry.toml)")" || exit 1
 
 if [[ -n "${AGENTIC_MEMORY_SOURCE_REGISTRY:-}" ]]; then
   SRC_REGISTRY="$(_expand_home "${AGENTIC_MEMORY_SOURCE_REGISTRY}")" || exit 1
