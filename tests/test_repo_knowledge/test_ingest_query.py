@@ -6,6 +6,8 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from tools.process_miner.schemas import AnalysisResult, CommentCluster, PRData, ReviewComment
 from tools.process_miner.vault_audit import VaultAuditResult, VaultNode
 from tools.repo_knowledge.ingest import ingest_analysis
@@ -82,6 +84,42 @@ def test_connect_initializes_schema_without_ingest(tmp_path: Path) -> None:
     conn = connect(db)
     try:
         assert query_decisions(conn, "any") == []
+    finally:
+        conn.close()
+
+
+def test_connect_readonly_opens_existing_db_without_schema_writes(tmp_path: Path) -> None:
+    # #2096: the worktree MCP fallback serves the main checkout's DB read-only —
+    # no mkdir, no schema application, no write mode.
+    db = tmp_path / "ro.db"
+    ingest_analysis(_minimal_result(), "o/r", db)
+    conn = connect(db, readonly=True)
+    try:
+        rows = query_file_patterns(conn, "src/x.py")
+        assert rows
+        with pytest.raises(sqlite3.OperationalError):
+            conn.execute("CREATE TABLE write_probe (id INTEGER)")
+    finally:
+        conn.close()
+
+
+def test_connect_readonly_missing_db_fails_instead_of_creating(tmp_path: Path) -> None:
+    db = tmp_path / "nope.db"
+    with pytest.raises(sqlite3.OperationalError):
+        connect(db, readonly=True)
+    assert not db.exists()  # read-only mode never mkdir/creates
+
+
+def test_connect_readonly_handles_paths_requiring_uri_encoding(tmp_path: Path) -> None:
+    # The file: URI must be path-encoded (as_uri) — a space or '?'/'#' in the path
+    # cannot be allowed to weaken mode=ro (PR #2097 cursor review).
+    spaced = tmp_path / "dir with space"
+    spaced.mkdir()
+    db = spaced / "ro db.db"
+    ingest_analysis(_minimal_result(), "o/r", db)
+    conn = connect(db, readonly=True)
+    try:
+        assert query_file_patterns(conn, "src/x.py")
     finally:
         conn.close()
 
