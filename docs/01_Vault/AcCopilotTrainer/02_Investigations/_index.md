@@ -18,3 +18,4 @@ Deep-dive analyses that inform decisions and architecture. Each node captures fi
 | [bot-reviewer-fleet-analysis-2026-04.md](bot-reviewer-fleet-analysis-2026-04.md) | 7-bot reviewer fleet composition, Qodo SaaS cap issue, stale re-posting noise, Doppler centralization status. |
 | [post-merge-determinism-overhaul-2026-04.md](post-merge-determinism-overhaul-2026-04.md) | Two-phase post-merge steward, exit-code contract, vault SAVE via labeled PR + auto-merge workflow (no more agent push to main). |
 | [pr-pain-detection-workflow-2026-04.md](pr-pain-detection-workflow-2026-04.md) | Linear pain score over merged PRs → process-learning issue in template-repo, fingerprint-deduped across child repos, allowlist-gated. |
+| [2026-10-05-repin-vault-automerge-db8b63c6.md](2026-10-05-repin-vault-automerge-db8b63c6.md) | `vault-automerge` hub pin `78a47069` to `db8b63c6` (governance-hub#711): what changed, why this public checkout-shape repo went early, rollback. |
