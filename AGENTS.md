@@ -90,6 +90,7 @@ Skill: `~/.agents/skills/vault-memory/SKILL.md` (mirrored under `.cursor/skills/
 
 - **Install:** see `README.md` and `WARP.md`.
 - **Checks:** `make ci-fast` (format, lint, tests, policy scripts).
+- **Vault-only PRs:** CI runs `make ci-vault` instead of `make ci-fast` when every changed path is under `docs/01_Vault/` (governance-hub#701). A test that starts reading live vault notes joins `VAULT_TESTS` in the `Makefile`. The scope rule is the vendored `.fleet-governance-vendor/scripts/classify_pr_scope.py`; it is pinned in `tests/test_vendored_classifier_pin.py` and in `.github/workflows/ci.yml`, so re-vendor it and update both pins together.
 - **Pre-commit:** `make hooks-install` once per clone.
 - **Optional stacks:** DB, AWS, HF, Ollama, browser automation — [docs/00_Core/OPTIONAL_CAPABILITIES.md](docs/00_Core/OPTIONAL_CAPABILITIES.md).
 - **Sidecar reference lap (M0 voice coaching):** `AC_COPILOT_REFERENCE_ARCHIVE` — path to a faster reference lap archive JSON; used when starting the sidecar without `--reference-archive` so the live observer can emit `coaching.cue` advisories for the voice client.
