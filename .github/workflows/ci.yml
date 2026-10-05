@@ -20,6 +20,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      # The vault-only scope step reads the PR's file list (governance-hub#701).
+      pull-requests: read
     env:
       # Egress runtime is VENDORED in-repo (.fleet-governance-vendor) — no private-hub checkout, no
       # GH_PAT. The vendored client is hostname-clean and SHA-256-pinned to the hub
@@ -40,16 +44,85 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Vault-only fast path (governance-hub#701). When every changed path, rename sources
+      # included, is under docs/01_Vault/, this job runs `make ci-vault` instead of the full
+      # `make ci-fast`, so a required `build` concludes inside the vault-automerge wait.
+      #
+      # The scope rule is the fleet's, defined once in governance-hub scripts/classify_pr_scope.py.
+      # Private repos call the hub's `classify-pr-scope` action. This repo is PUBLIC: it cannot
+      # resolve a private action, and this job runs PR code, so it must not mint a token to check
+      # the hub out. So the script is VENDORED and pinned (tests/test_vendored_classifier_pin.py),
+      # and this step reproduces the hub action's fail-closed wrapper.
+      #
+      # A vendored script lives in the workspace, so unlike the hub action this step runs AFTER
+      # checkout and executes the pull request's copy of the script. Three things keep a PR from
+      # using that to skip its own full build:
+      #   1. This step runs before setup-python, the install and every `make`, so no PR code has
+      #      run yet: the interpreter is the runner image's own.
+      #   2. The file's SHA-256 must equal CLASSIFIER_SHA256 below, or the verdict is a full build.
+      #   3. Python runs isolated (-I): neither the script's directory nor the workspace is on
+      #      sys.path, and PYTHON* variables are ignored, so a file planted beside the script
+      #      cannot replace a standard-library module.
+      # It fails closed and never fails the job: no interpreter, a missing or mismatching script, a
+      # non-zero exit, any event other than a PR, an unreadable, empty or truncated file list or a
+      # head that moved during the read is `full-build=true`. The last assignment in $GITHUB_OUTPUT
+      # wins, so the fallback overrides anything a dying classifier left behind. The steps below
+      # gate on `!= 'false'` and `== 'false'` exactly, so a missing output also runs the full build.
+      - name: Classify PR scope
+        id: scope
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLASSIFIER: .fleet-governance-vendor/scripts/classify_pr_scope.py
+          CLASSIFIER_SHA256: b6e9180e87d8b8c19670abf7c0cf10b49cfd7cc7b41a2461afceffeb6134ddc8  # pragma: allowlist secret
+        run: |
+          set +e
+          set -uo pipefail
+          fail_closed() {
+            echo "reason=$1" >> "$GITHUB_OUTPUT"
+            echo "full-build=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=CI scope::full-build=true ($1)"
+          }
+          py=""
+          for candidate in python3 python; do
+            if command -v "$candidate" >/dev/null 2>&1 \
+                && "$candidate" -I -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 9) else 1)' >/dev/null 2>&1; then
+              py="$candidate"
+              break
+            fi
+          done
+          if [[ -z "$py" || ! -f "$CLASSIFIER" ]]; then
+            fail_closed "classifier could not run"
+            exit 0
+          fi
+          actual="$("$py" -I -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$CLASSIFIER" 2>/dev/null)"
+          if [[ "$actual" != "$CLASSIFIER_SHA256" ]]; then
+            fail_closed "vendored classifier does not match its pin"
+            exit 0
+          fi
+          if ! "$py" -I "$CLASSIFIER"; then
+            fail_closed "classifier could not run"
+          fi
+          exit 0
+
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: pyproject.toml
 
+      # Both paths install the same set. Measured on this job's last four PR runs the install is
+      # 18-23s and `make ci-fast` is 260-303s, so the fast path's saving is the test run. One
+      # environment also means a vault test cannot pass or skip differently on the vault path.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev,mining,knowledge,analytics]"
 
       - name: make ci-fast
+        if: steps.scope.outputs.full-build != 'false'
         run: make ci-fast
+
+      - name: make ci-vault
+        if: steps.scope.outputs.full-build == 'false'
+        run: make ci-vault

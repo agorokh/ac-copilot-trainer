@@ -158,6 +158,10 @@ extend-exclude = [
   # repo-owned and never style-gated (ruff's force-exclude otherwise descends into the dotted dir
   # when scripts/ is passed explicitly).
   "scripts/.governance-vendored-bak/",
+  # Vendored hub files, pinned byte-identical by SHA-256 (tests/test_vendored_egress_pin.py,
+  # tests/test_vendored_classifier_pin.py). The hub owns their formatting: a pre-commit
+  # `ruff --fix` / `ruff-format` rewrite of one of them would break its pin.
+  ".fleet-governance-vendor/",
 ]
 
 [tool.ruff.format]

@@ -1,4 +1,4 @@
-.PHONY: all clean ci-fast ci-conventional ci-format ci-lint ci-test ci-security ci-secrets ci-policy ci-agent-proof ci-csp-api ci-csp-ui-safety ci-drive doppler-doctor memory-contract memory-contract-check init-knowledge bootstrap-knowledge merge-settings format lint test hooks-install hooks-run
+.PHONY: all clean ci-fast ci-vault ci-conventional ci-format ci-lint ci-test ci-security ci-secrets ci-policy ci-agent-proof ci-csp-api ci-csp-ui-safety ci-drive doppler-doctor memory-contract memory-contract-check init-knowledge bootstrap-knowledge merge-settings format lint test hooks-install hooks-run
 
 PYTHON ?= python3
 
@@ -13,6 +13,25 @@ clean:
 
 ci-fast: ci-conventional ci-format ci-lint ci-test ci-security ci-secrets ci-policy ci-agent-proof ci-csp-api ci-csp-ui-safety
 	@echo "ci-fast: OK"
+
+# ci-vault — what the CI `build` job runs INSTEAD of ci-fast for a PR whose every changed path is
+# under docs/01_Vault/ (governance-hub#701), so a required `build` concludes inside the
+# vault-automerge wait. It is every ci-fast check that reads live vault content: the branch/title
+# policy (it applies to every PR), the tracked-file secret scan, the canonical-docs check (it
+# requires docs/01_Vault/00_Graph_Schema.md to exist), and the tests below.
+# Add a test here when it starts reading live vault notes; a missed one is not silent, it turns
+# the next code PR's full build red. The test list was derived by tracing the suite's file opens
+# under docs/01_Vault/ (2026-10-04), not by grepping for the path. The last entry reads no vault
+# note: it pins the vendored scope classifier that selects this path, so it runs on both paths.
+VAULT_TESTS = tests/test_no_stale_hook_refs.py tests/test_instruction_coherence.py \
+	tests/test_invariants_present.py tests/test_scripts/test_fleet_inventory_refresh.py \
+	tests/test_doppler_doctor.py tests/test_merge_memory_contract.py \
+	tests/test_memory_vault_paths.py tests/test_public_governance_conformance.py \
+	tests/test_vendored_classifier_pin.py
+
+ci-vault: ci-conventional ci-secrets ci-policy
+	$(PYTHON) -m pytest -q $(VAULT_TESTS)
+	@echo "ci-vault: OK"
 
 ci-format:
 	$(PYTHON) -m ruff format --check src tests tools scripts
