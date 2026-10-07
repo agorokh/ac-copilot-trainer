@@ -47,7 +47,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: agorokh/governance-hub
-          ref: db8b63c6eccff8e384c8c092fc08cfe9503636d3  # pragma: allowlist secret (git SHA, not a secret)
+          ref: b256859fc74cd986e2fbbb1f10623ececc52116f  # pragma: allowlist secret (git SHA, not a secret)
           token: ${{ steps.app-token.outputs.token }}
           path: .governance-hub
       - uses: ./.governance-hub/.github/actions/vault-automerge
@@ -55,3 +55,8 @@ jobs:
           github-token: ${{ github.token }}
           pr-number: ${{ github.event.pull_request.number }}
           repo: ${{ github.repository }}
+          # Do not hold a runner while required checks finish (workstation-ops#3632). The first
+          # "required checks are pending" answer ends this step green with the PR still open, and
+          # the hub vault-pr-sweep merges it once it is mergeable. A PR that then never merges is
+          # listed in the hub issue "Vault sweep: vault-only PRs open past the stall limit".
+          release-when-pending: "true"
