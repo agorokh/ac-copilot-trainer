@@ -22,7 +22,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github/workflows/vault-automerge.yml"
 PUBLIC_WORKFLOW = REPO_ROOT / ".github/workflows/vault-automerge-public.yml"
-HUB_ACTION_REF = "db8b63c6eccff8e384c8c092fc08cfe9503636d3"  # pragma: allowlist secret
+HUB_ACTION_REF = "b256859fc74cd986e2fbbb1f10623ececc52116f"  # pragma: allowlist secret
 
 # Copier renders `.copier-answers.yml` into every child (children pin the template
 # via its `_src_path`; `copier.yml` `_exclude` keeps it out of the template tree).
@@ -118,6 +118,7 @@ def test_workflow_is_thin_hub_action_caller() -> None:
         "github-token": "${{ github.token }}",
         "pr-number": "${{ github.event.pull_request.number }}",
         "repo": "${{ github.repository }}",
+        "release-when-pending": "true",
     }
 
 
@@ -156,6 +157,19 @@ def test_public_variant_pins_same_hub_action_ref() -> None:
     assert any(
         s.get("uses") == "./.governance-hub/.github/actions/vault-automerge" for s in steps
     ), "public variant must invoke the checked-out action via its local path"
+
+
+@_skip_without_public_variant
+def test_public_variant_releases_while_required_checks_are_pending() -> None:
+    """Both variants set `release-when-pending` (workstation-ops#3632), so the job ends green
+    with the PR open instead of polling while required checks finish. The thin-caller test
+    pins it for the private variant; this pins it for the checkout variant, which is the only
+    one a public child has."""
+    steps = _public_doc()["jobs"]["guard-and-automerge"]["steps"]
+    action = next(
+        s for s in steps if s.get("uses") == "./.governance-hub/.github/actions/vault-automerge"
+    )
+    assert action["with"]["release-when-pending"] == "true"
 
 
 @_skip_without_public_variant
