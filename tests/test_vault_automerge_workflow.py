@@ -160,6 +160,19 @@ def test_public_variant_pins_same_hub_action_ref() -> None:
 
 
 @_skip_without_public_variant
+def test_public_variant_releases_while_required_checks_are_pending() -> None:
+    """Both variants set `release-when-pending` (workstation-ops#3632), so the job ends green
+    with the PR open instead of polling while required checks finish. The thin-caller test
+    pins it for the private variant; this pins it for the checkout variant, which is the only
+    one a public child has."""
+    steps = _public_doc()["jobs"]["guard-and-automerge"]["steps"]
+    action = next(
+        s for s in steps if s.get("uses") == "./.governance-hub/.github/actions/vault-automerge"
+    )
+    assert action["with"]["release-when-pending"] == "true"
+
+
+@_skip_without_public_variant
 def test_public_variant_timeout_exceeds_merge_wait() -> None:
     """timeout-minutes must exceed the action's synchronous merge-timeout-seconds
     (300s default) so the graceful timeout-comment path runs instead of a hard-kill."""
