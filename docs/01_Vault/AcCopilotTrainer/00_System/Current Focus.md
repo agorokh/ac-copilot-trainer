@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-08-30T02:10:31Z
+last_updated: 2026-10-10T04:42:57Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-10-10-044257Z-c1-issue764-parked-rig-8af472.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-30-021031Z-c1-issue764-recheck-add813.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-30-014457Z-c1-issue749-rig-offline-fa5727.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-30-005829Z-post-merge-pr776-c1-cycle-278fb1.md
@@ -75,14 +76,15 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**C1 still BLOCKED (rechecked 2026-08-30T02:10Z): `/autonomous-deliver 764` reverified the
-MCP 2.1.1 consumer path on current `origin/main` `11b30c0`**: focused protocol test passed, all
-five tools enumerated, and `query_file_patterns` returned without error. A clean full local parity
-run passed with 4105 tests, 75 skips, and 87.21% coverage. Fresh Tailscale, ping, and SSH probes
-still find AG_PC offline; do not retry WoL-only. An hourly thread heartbeat waits for physical
-power-on and will resume the #749 and #750 live proofs when the host reconnects. C1 (#749, #750,
-#751, #764) stays open together. Resume from
-[[2026-08-30-021031Z-c1-issue764-recheck-add813]].
+**C1 remains BLOCKED (October 9 Pacific, rechecked 2026-10-10T04:42Z): `/autonomous-deliver
+764` reverified the current MCP consumer protocol** at `origin/main` `3cab771`: four protocol
+and startup tests pass, and exact-main hosted CI is green. AG_PC is offline and SSH times out.
+Current fleet inventory and live workstation-ops #3711/#2922 records explain the absence:
+the PC is intentionally parked with a dead graphics card. Hardware repair and the documented
+un-park sequence precede the retained #749 second-session adoption and #750 three-lap
+scientist/ledger proofs. Do not retry WoL-only or un-park remotely. C1 (#749, #750, #751, #764)
+stays open together. Resume from
+[[2026-10-10-044257Z-c1-issue764-parked-rig-8af472]].
 
 **Delivered (2026-08-10):** `/autonomous-deliver 529` — **#746 CLOSED** by PR
 [#748](https://github.com/agorokh/ac-copilot-trainer/pull/748) (MERGED `c9ec97c`): the self-play
