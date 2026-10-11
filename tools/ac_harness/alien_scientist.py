@@ -154,8 +154,9 @@ def meta_priors(
     """Falsified qualitative constraints transferable to any combo sharing ``scope``'s META key.
 
     A falsification suppresses a retry only when the durable row proves that both arms contained
-    at least two flying laps after their out-laps were removed. Under-evidenced legacy rows stay
-    immutable and retryable. Rows may omit ``scope`` / ``combo`` provenance, but never evidence.
+    at least two flying laps after their out-laps were removed, driven at the same verified safe
+    margin. Under-evidenced legacy rows stay immutable and retryable. Rows may omit
+    ``scope`` / ``combo`` provenance, but never evidence.
     """
     scoped = scope_key(scope)
     out: list[dict[str, Any]] = []
@@ -172,6 +173,14 @@ def meta_priors(
             or isinstance(candidate_flying_laps, bool)
             or baseline_flying_laps < 2
             or candidate_flying_laps < 2
+        ):
+            continue
+        baseline_scale = _finite(row.get("baseline_ggv_scale"))
+        candidate_scale = _finite(row.get("candidate_ggv_scale"))
+        if (
+            baseline_scale is None
+            or not 0 < baseline_scale <= 1
+            or candidate_scale != baseline_scale
         ):
             continue
         constraint = str(row.get("constraint_key") or "")
@@ -727,6 +736,8 @@ def persist_completed_run(
             "reason": outcome.get("reason"),
             "baseline_flying_laps": outcome.get("baseline_flying_laps"),
             "candidate_flying_laps": outcome.get("candidate_flying_laps"),
+            "baseline_ggv_scale": outcome.get("baseline_ggv_scale"),
+            "candidate_ggv_scale": outcome.get("candidate_ggv_scale"),
         }
         if scope_payload is not None:
             row["scope"] = scope_payload

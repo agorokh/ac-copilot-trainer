@@ -2605,6 +2605,7 @@ def test_scientist_requires_requested_laps_before_persisting(
             "drive": {"recoveries": 0},
         },
         "lap_archives": baseline_paths,
+        "run": {"argv": ["--ggv-scale", "0.9"]},
     }
 
     nested_calls = []
@@ -2630,6 +2631,7 @@ def test_scientist_requires_requested_laps_before_persisting(
                         "drive": {"recoveries": 0},
                     },
                     "lap_archives": paths,
+                    "run": {"argv": ["--ggv-scale", str(candidate_args.ggv_scale)]},
                 }
             ),
             encoding="utf-8",
@@ -2722,6 +2724,7 @@ def _scientist_batch_env(monkeypatch, tmp_path):
     base_outcome = {
         "report": {"lap_times_ms": [110_000, 100_000, 101_000], "drive": {"recoveries": 0}},
         "lap_archives": baseline_paths,
+        "run": {"argv": ["--ggv-scale", "0.9"]},
     }
     return user_dir, baseline_setup, base_outcome
 
@@ -2750,8 +2753,14 @@ def _race_failed_pipeline_result(candidate_args) -> tuple[int, dict]:
     }
 
 
-def _run_scientist_with_fake_pipeline(monkeypatch, tmp_path, fake_nested_pipeline):
+def _run_scientist_with_fake_pipeline(
+    monkeypatch, tmp_path, fake_nested_pipeline, *, baseline_scale="0.9"
+):
     user_dir, baseline_setup, base_outcome = _scientist_batch_env(monkeypatch, tmp_path)
+    if baseline_scale is None:
+        base_outcome.pop("run")
+    else:
+        base_outcome["run"]["argv"] = ["--ggv-scale", str(baseline_scale)]
     monkeypatch.setattr(auto_alien, "run_pipeline", fake_nested_pipeline)
     args = _args(
         user_dir, "--setup", str(baseline_setup), "--laps", "3", "--iterations", "1", "--scientist"
@@ -2766,6 +2775,55 @@ def _run_scientist_with_fake_pipeline(monkeypatch, tmp_path, fake_nested_pipelin
         base_outcome=base_outcome,
     )
     return result, user_dir
+
+
+def test_scientist_carries_validated_ladder_margin_into_candidate(monkeypatch, tmp_path):
+    # Live C1 regression: original args 0.9, measured baseline 0.95. Reusing the original
+    # margin changes the controller as well as the wing and corrupts the durable verdict.
+    def nested(candidate_args, *, run_stage):
+        assert candidate_args.ggv_scale == 0.95
+        return _successful_candidate_pipeline_result(candidate_args)
+
+    result, user_dir = _run_scientist_with_fake_pipeline(
+        monkeypatch, tmp_path, nested, baseline_scale="0.95"
+    )
+    assert result["ok"] is True
+    row = _json.loads(Path(result["ledger_path"]).read_text())
+    assert row["baseline_ggv_scale"] == row["candidate_ggv_scale"] == 0.95
+    assert row["baseline_flying_laps"] == row["candidate_flying_laps"] == 2
+
+
+@pytest.mark.parametrize("scale", [None, "nan", "inf", "0", "-0.1", "True", "1.05"])
+def test_scientist_refuses_unverifiable_or_overspeed_baseline_margin(monkeypatch, tmp_path, scale):
+    def forbidden(*args, **kwargs):
+        pytest.fail("unsafe baseline must not launch a candidate")
+
+    result, user_dir = _run_scientist_with_fake_pipeline(
+        monkeypatch, tmp_path, forbidden, baseline_scale=scale
+    )
+    assert result["ok"] is False
+    assert "scientist_baseline_ggv_scale_" in result["error"]
+    assert not (user_dir / "journal" / "alien_scientist" / "experiments.jsonl").exists()
+
+
+@pytest.mark.parametrize("candidate_argv", [None, ["--ggv-scale", "0.9"]])
+def test_scientist_checks_actual_candidate_margin_before_persisting(
+    monkeypatch, tmp_path, candidate_argv
+):
+    def nested(candidate_args, *, run_stage):
+        code, report = _successful_candidate_pipeline_result(candidate_args)
+        path = Path(candidate_args.evidence_dir) / "drive" / "report.json"
+        payload = _json.loads(path.read_text())
+        payload["run"] = {"argv": candidate_argv}
+        path.write_text(_json.dumps(payload))
+        return code, report
+
+    result, user_dir = _run_scientist_with_fake_pipeline(
+        monkeypatch, tmp_path, nested, baseline_scale="0.95"
+    )
+    assert result["ok"] is False
+    assert "scientist_candidate_ggv_scale_mismatch" in result["error"]
+    assert not (user_dir / "journal" / "alien_scientist" / "experiments.jsonl").exists()
 
 
 def _successful_candidate_pipeline_result(candidate_args) -> tuple[int, dict]:
@@ -2790,6 +2848,7 @@ def _successful_candidate_pipeline_result(candidate_args) -> tuple[int, dict]:
                     "drive": {"recoveries": 0},
                 },
                 "lap_archives": paths,
+                "run": {"argv": ["--ggv-scale", str(candidate_args.ggv_scale)]},
             }
         ),
         encoding="utf-8",

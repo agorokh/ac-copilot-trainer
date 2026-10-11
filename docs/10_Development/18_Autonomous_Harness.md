@@ -217,9 +217,15 @@ python -m tools.ac_harness.auto_alien \
   removing its out-lap, the run records an explicit `no_verdict` for audit but appends no durable
   promotion, falsification, or suppression row. Invalid, confounded, or inconclusive batches keep
   the previous setup. Only falsifications whose ledger rows prove at least two flying laps in both
-  arms can suppress a later retry; older under-evidenced rows stay untouched and are ignored. The
+  arms and the same verified safe grip margin can suppress a later retry; older under-evidenced
+  rows stay untouched and are ignored. The
   report names the rejection and only a promoted result exposes
   `recommended_setup`.
+- The candidate uses the baseline drive's recorded `ggv_scale`, including a validated ladder
+  step, and its actual drive report must confirm the same margin before a verdict is recorded.
+  Missing margin provenance refuses the experiment. A baseline above `1.0` also refuses it:
+  the candidate's own identified plant has not validated that overspeed rung. Use a ladder
+  capped at `--max-scale 1.0` for scientist experiments; the existing overspeed gate stays intact.
 - Completed plan, outcomes, and verdict persist under
   `<AC user data>/journal/alien_scientist/runs/`; the append-only
   `journal/alien_scientist/experiments.jsonl` ledger suppresses a falsified constraint for the same

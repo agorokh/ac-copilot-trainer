@@ -218,6 +218,22 @@ def stage_l3_summary(outcome: dict | None) -> dict | None:
     return summary
 
 
+def stage_ggv_scale(outcome: dict | None) -> float | None:
+    """Read the margin actually passed to a drive, never the parent ladder's initial margin."""
+    run = (outcome or {}).get("run")
+    argv = run.get("argv") if isinstance(run, dict) else None
+    if not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv):
+        return None
+    if argv.count("--ggv-scale") != 1:
+        return None
+    index = argv.index("--ggv-scale") + 1
+    try:
+        scale = float(argv[index])
+    except (IndexError, ValueError, OverflowError):
+        return None
+    return scale if math.isfinite(scale) and 0 < scale <= ALIEN_MAX_OVERSPEED_SCALE else None
+
+
 def compose_stint_layers(
     *,
     plant_artifact: dict | None,
@@ -1771,6 +1787,14 @@ def run_scientist(
                 f"load_errors={len(load_errors)}:foreign={foreign}:"
                 f"attributable={baseline_attribution.get('attributable') is not False}"
             )
+        baseline_scale = stage_ggv_scale(baseline_outcome)
+        if baseline_scale is None:
+            raise ScientistError("scientist_baseline_ggv_scale_unverifiable")
+        if baseline_scale > 1:
+            # A setup candidate starts on its own identified plant, so it cannot borrow a
+            # different setup's validated overspeed rung or bypass the normal pipeline gate.
+            raise ScientistError("scientist_baseline_ggv_scale_above_safe_limit")
+        result["baseline_ggv_scale"] = baseline_scale
         scope = {
             "mechanical_platform": args.scientist_mechanical_platform or args.car,
             "aero_platform": args.scientist_aero_platform or args.car,
@@ -1807,6 +1831,7 @@ def run_scientist(
             candidate_args.setup = str(candidate_path)
             candidate_args.force_identify = False
             candidate_args.iterations = 0
+            candidate_args.ggv_scale = baseline_scale
             candidate_args.scientist = False
             candidate_args.scientist_proposals = None
             candidate_args.evidence_dir = candidate_root
@@ -1891,6 +1916,9 @@ def run_scientist(
             candidate_valid, candidate_reason = evaluate_selfplay_iteration(
                 code, candidate_outcome, candidate_payloads
             )
+            candidate_scale = stage_ggv_scale(candidate_outcome)
+            if candidate_scale != baseline_scale:
+                raise ScientistError("scientist_candidate_ggv_scale_mismatch")
             outcome = evaluate_experiment(
                 plan=plan,
                 experiment=experiment,
@@ -1899,6 +1927,8 @@ def run_scientist(
                 candidate_valid=candidate_valid,
                 candidate_reason=candidate_reason,
             )
+            outcome["baseline_ggv_scale"] = baseline_scale
+            outcome["candidate_ggv_scale"] = candidate_scale
             outcome["candidate_setup"] = str(candidate_path)
             outcome["evidence_root"] = str(candidate_root)
             if outcome.get("promoted"):
