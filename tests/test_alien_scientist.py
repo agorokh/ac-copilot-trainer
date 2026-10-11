@@ -96,6 +96,8 @@ def test_falsified_constraint_is_suppressed_for_same_platform_scope() -> None:
                     "verdict": "falsified",
                     "baseline_flying_laps": 2,
                     "candidate_flying_laps": 2,
+                    "baseline_ggv_scale": 0.9,
+                    "candidate_ggv_scale": 0.9,
                 }
             ],
             proposed_hypotheses=[
@@ -133,6 +135,8 @@ def test_meta_prior_transfers_across_combos_sharing_scope_key() -> None:
             "reason": "candidate_not_significantly_faster",
             "baseline_flying_laps": 2,
             "candidate_flying_laps": 2,
+            "baseline_ggv_scale": 0.9,
+            "candidate_ggv_scale": 0.9,
         }
     ]
     priors = meta_priors(ledger, scope=_SCOPE)
@@ -219,6 +223,8 @@ def test_legacy_ledger_row_without_combo_still_suppresses() -> None:
                     "verdict": "falsified",
                     "baseline_flying_laps": 2,
                     "candidate_flying_laps": 2,
+                    "baseline_ggv_scale": 0.9,
+                    "candidate_ggv_scale": 0.9,
                 }
             ],
             proposed_hypotheses=[
@@ -267,9 +273,36 @@ def test_malformed_flying_lap_counts_cannot_create_suppressing_prior(bad_count) 
             "verdict": "falsified",
             "baseline_flying_laps": bad_count,
             "candidate_flying_laps": 2,
+            "baseline_ggv_scale": 0.9,
+            "candidate_ggv_scale": 0.9,
         }
     ]
     assert meta_priors(ledger, scope=_SCOPE) == []
+
+
+@pytest.mark.parametrize(
+    "margins",
+    [
+        {},
+        {"baseline_ggv_scale": 0.95, "candidate_ggv_scale": 0.9},
+        {"baseline_ggv_scale": 1.05, "candidate_ggv_scale": 1.05},
+        {"baseline_ggv_scale": float("nan"), "candidate_ggv_scale": 0.9},
+        {"baseline_ggv_scale": True, "candidate_ggv_scale": True},
+    ],
+)
+def test_unverified_margin_cannot_create_suppressing_prior(margins) -> None:
+    first = _plan()
+    row = {
+        "scope_key": first["scope_key"],
+        "constraint_key": first["experiments"][0]["constraint_key"],
+        "verdict": "falsified",
+        "baseline_flying_laps": 2,
+        "candidate_flying_laps": 2,
+        **margins,
+    }
+    ledger = [row]
+    assert meta_priors(ledger, scope=_SCOPE) == []
+    assert ledger == [row]
 
 
 def test_rejected_batch_does_not_suppress_unmeasured_constraint() -> None:
@@ -564,6 +597,8 @@ def test_completed_run_persists_plan_outcomes_and_append_only_ledger(tmp_path: P
         "reason": "candidate_not_significantly_faster",
         "baseline_flying_laps": 2,
         "candidate_flying_laps": 2,
+        "baseline_ggv_scale": 0.9,
+        "candidate_ggv_scale": 0.9,
     }
 
     run_path = persist_completed_run(
@@ -583,6 +618,8 @@ def test_completed_run_persists_plan_outcomes_and_append_only_ledger(tmp_path: P
     assert ledger[0]["scope_key"] == plan["scope_key"]
     assert ledger[0]["baseline_flying_laps"] == 2
     assert ledger[0]["candidate_flying_laps"] == 2
+    assert ledger[0]["baseline_ggv_scale"] == 0.9
+    assert ledger[0]["candidate_ggv_scale"] == 0.9
     with pytest.raises(ScientistError, match="scientist_experiment_already_recorded"):
         append_ledger(tmp_path / "journal" / "alien_scientist" / "experiments.jsonl", ledger[0])
 

@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-10-10T04:42:57Z
+last_updated: 2026-10-11T21:44:18Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-10-11-214800Z-c1-live-margin-verification-21e389.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-10-044257Z-c1-issue764-parked-rig-8af472.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-30-021031Z-c1-issue764-recheck-add813.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-30-014457Z-c1-issue749-rig-offline-fa5727.md
@@ -76,15 +77,14 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**C1 remains BLOCKED (October 9 Pacific, rechecked 2026-10-10T04:42Z): `/autonomous-deliver
-764` reverified the current MCP consumer protocol** at `origin/main` `3cab771`: four protocol
-and startup tests pass, and exact-main hosted CI is green. AG_PC is offline and SSH times out.
-Current fleet inventory and live workstation-ops #3711/#2922 records explain the absence:
-the PC is intentionally parked with a dead graphics card. Hardware repair and the documented
-un-park sequence precede the retained #749 second-session adoption and #750 three-lap
-scientist/ledger proofs. Do not retry WoL-only or un-park remotely. C1 (#749, #750, #751, #764)
-stays open together. Resume from
-[[2026-10-10-044257Z-c1-issue764-parked-rig-8af472]].
+**C1 live continuation (October 11):** AG_PC is repaired and online; the current fleet
+inventory and local RTX 3060 status supersede the parked-host SAVE. MCP v2 consumer
+verification passes. A real scientist ladder exposed a grip-margin mismatch between its
+validated baseline and setup candidate; the correction carries and verifies the measured
+margin before a durable verdict. Focused regression tests pass. Full CI, corrected scientist
+run, and retained Huracan/Spa second-session adoption proof remain in progress; all four
+C1 issues stay open together. Resume from
+[[2026-10-11-214800Z-c1-live-margin-verification-21e389]].
 
 **Delivered (2026-08-10):** `/autonomous-deliver 529` — **#746 CLOSED** by PR
 [#748](https://github.com/agorokh/ac-copilot-trainer/pull/748) (MERGED `c9ec97c`): the self-play
