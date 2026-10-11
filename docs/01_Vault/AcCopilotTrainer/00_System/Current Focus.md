@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-10-11T22:35:00Z
+last_updated: 2026-10-11T23:04:43Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-10-11-230443Z-post-merge-pr800-c1-21e389.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-11-214800Z-c1-live-margin-verification-21e389.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-10-044257Z-c1-issue764-parked-rig-8af472.md
   - AcCopilotTrainer/00_System/handoffs/2026-08-30-021031Z-c1-issue764-recheck-add813.md
@@ -77,16 +78,15 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**C1 continuation (October 11):** MCP v2 consumer verification, the corrected
-scientist comparison (two flying laps per arm, matched measured margin), and exact
-archive scoping are verified. Full local CI passes; the margin repair is PR
-[#800](https://github.com/agorokh/ac-copilot-trainer/pull/800). AG_PC is repaired and online.
-The user closed AC during the Huracan/Spa baseline and explicitly paused rig runs
-while playing Minecraft. The owned harness is stopped; further live testing requires
-their confirmation. #749 second-session adoption remains unverified. Continue review,
-merge and source distribution without launching AC. All four C1 issues stay open together.
-Resume from [[2026-10-11-214800Z-c1-live-margin-verification-21e389]]; archive evidence is
-[[2026-10-11-212100Z-c1-issue751-live-scope-9d7b82]].
+**C1 repair shipped (October 11):** the scientist margin correction is merged in
+[PR #800](https://github.com/agorokh/ac-copilot-trainer/pull/800), with source-backed review
+adjudication merged in [PR #801](https://github.com/agorokh/ac-copilot-trainer/pull/801).
+Primary main is updated; deployed source and production scientist/MCP readbacks pass.
+#750's corrected live comparison and #751's exact archive scoping are verified.
+The user manually closed AC during the Huracan/Spa baseline and paused rig runs while
+playing Minecraft. No further AC run until explicit confirmation. #749 second-session
+adoption remains unverified; all four C1 issues stay open together. Resume from
+[[2026-10-11-230443Z-post-merge-pr800-c1-21e389]].
 
 **Delivered (2026-08-10):** `/autonomous-deliver 529` — **#746 CLOSED** by PR
 [#748](https://github.com/agorokh/ac-copilot-trainer/pull/748) (MERGED `c9ec97c`): the self-play
