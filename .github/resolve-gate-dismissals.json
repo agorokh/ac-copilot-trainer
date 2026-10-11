@@ -1,0 +1,12 @@
+[
+  {
+    "path": "tests/test_alien_scientist.py",
+    "finding": "Silent test loss due to duplicate function name",
+    "reason": "Confirmed false positive at reviewed head 5d1c5320a0e8ae11cd0d344495e83e81ff26dffb: the first test is test_plan_turns_prose_into_one_schema_valid_parameter, the next is test_falsified_constraint_is_suppressed_for_same_platform_scope; AST inspection finds no duplicate top-level definitions. Exact-head source and adjudication: https://github.com/agorokh/ac-copilot-trainer/pull/800#issuecomment-6114763706"
+  },
+  {
+    "path": "tools/ac_harness/auto_alien.py",
+    "finding": "Brittle raw argv re-parsing breaks layering and attribution",
+    "reason": "Confirmed false positive at reviewed head 5d1c5320a0e8ae11cd0d344495e83e81ff26dffb: drive_argv regenerates split stage tokens from the parsed Namespace; run_pipeline passes them to auto_drive._main, whose report writes list(argv), not parent sys.argv. The completed live baseline and candidate both report actual 0.95 despite parent initial 0.9. Missing or mismatched margins fail closed. Exact-head source and adjudication: https://github.com/agorokh/ac-copilot-trainer/pull/800#issuecomment-6114763706"
+  }
+]
