@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
 
@@ -11,9 +12,10 @@ lupa = pytest.importorskip("lupa")
 MODULES = Path(__file__).resolve().parents[1] / "src/ac_copilot_trainer/modules"
 
 
-@pytest.fixture
-def runtime(tmp_path):
-    lua = lupa.LuaRuntime(unpack_returned_tuples=True)
+@pytest.fixture(params=["lua51", "luajit21"])
+def runtime(tmp_path, request):
+    target = importlib.import_module(f"lupa.{request.param}")
+    lua = target.LuaRuntime(unpack_returned_tuples=True)
     lua.execute(f"package.path = package.path .. {json.dumps(';' + MODULES.as_posix() + '/?.lua')}")
     lua.execute(
         """
@@ -45,7 +47,10 @@ def runtime(tmp_path):
     def decode(text):
         decoded_sizes.append(len(text))
         assert len(text) < 65536, "Telemetry was passed to JSON.parse"
-        parsed = json.loads(text)
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            return None
         if isinstance(parsed, (dict, list)):
             return lua.table_from(parsed, recursive=True)
         return parsed

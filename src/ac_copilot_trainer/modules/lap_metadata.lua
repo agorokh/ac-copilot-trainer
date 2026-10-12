@@ -14,12 +14,29 @@ local function stringEnd(raw, pos)
   end
 end
 
+-- Numeric telemetry arrays dominate archive size. Lua's balanced scan runs in
+-- C, avoiding a pattern-class check on every numeric character. Quotes or
+-- objects require the general scanner because brackets inside strings count.
+local function plainArrayEnd(raw, pos)
+  local start, finish = raw:find("%b[]", pos)
+  if start ~= pos then return nil end
+  local array = raw:sub(pos, finish)
+  if array:find('"', 1, true) or array:find("{", 1, true) or array:find("}", 1, true) then
+    return nil
+  end
+  return finish
+end
+
 local function valueEnd(raw, pos)
   local first = raw:sub(pos, pos)
   if first == '"' then return stringEnd(raw, pos) end
   if first ~= "{" and first ~= "[" then
     local delimiter = raw:find('[,}]', pos)
     return delimiter and delimiter - 1 or nil
+  end
+  if first == "[" then
+    local finish = plainArrayEnd(raw, pos)
+    if finish then return finish end
   end
   local stack = { first }
   while #stack > 0 do
@@ -29,7 +46,10 @@ local function valueEnd(raw, pos)
     if token == '"' then
       nextPos = stringEnd(raw, nextPos)
       if not nextPos then return nil end
-    elseif token == "{" or token == "[" then
+    elseif token == "[" then
+      local finish = plainArrayEnd(raw, nextPos)
+      if finish then nextPos = finish else stack[#stack + 1] = token end
+    elseif token == "{" then
       stack[#stack + 1] = token
     else
       local expected = token == "}" and "{" or "["
