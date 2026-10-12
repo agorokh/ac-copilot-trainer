@@ -704,17 +704,9 @@ if wsBridge.registerRequestHandler then
   wsBridge.registerRequestHandler("setup.list", "setup.list.result", function(_payload)
     local ident = setupLibrary.activeIdentity()
     local list = setupLibrary.list()
-    -- Precompute BEST once per list refresh — `bestForSetup` walks matching
-    -- lap JSONs (full journal, sorted newest-first) per row. Doing that
-    -- inside the per-row loop was O(rows×N) disk reads (CodeRabbit on PR #91).
-    local bestCache = {}
-    for j = 1, #list do
-      local e = list[j]
-      local key = (type(e.path) == "string" and e.path ~= "") and e.path or ("n:" .. tostring(e.name))
-      if bestCache[key] == nil then
-        bestCache[key] = setupLibrary.bestForSetup(e.name, e.path)
-      end
-    end
+    -- One metadata scan for the entire list; never decode telemetry on AC's
+    -- main thread just to display setup BEST times (#804).
+    local bests = setupLibrary.bestForSetups(list)
     local items = {}
     for i = 1, #list do
       local entry = list[i]
@@ -740,8 +732,6 @@ if wsBridge.registerRequestHandler then
         ac.log("[COPILOT][setup.list] summaryForSetup failed for "
           .. tostring(entry.path) .. ": " .. detail)
       end
-      local bkey = (type(entry.path) == "string" and entry.path ~= "") and entry.path
-        or ("n:" .. tostring(name))
       -- Round-trip chip fields as integers so the screen JSON parser never
       -- drops BB on float/string shapes (issue #93).
       local function chipInt(v)
@@ -753,7 +743,7 @@ if wsBridge.registerRequestHandler then
       items[i] = {
         name = name,
         mtime_iso = mtimeIso,
-        best_ms = bestCache[bkey],
+        best_ms = bests[i],
         path = entry.path,
         brake_bias = chipInt(sum.brake_bias),
         abs = chipInt(sum.abs),

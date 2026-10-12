@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-10-12T05:18:44Z
+last_updated: 2026-10-12T16:50:38Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-10-12-165038Z-setup-list-stall-repair-24cc37.md
   - AcCopilotTrainer/10_Rig/external-racing-controls.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-051844Z-game-point-deployed-ac-stalled-294d91.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-034900Z-rig-dashboard-control-d326a9.md
@@ -93,12 +94,12 @@ The offline candidate's startup-off and blue recovery-entry frames were correcte
 and tested; firmware remains marked DO-NOT-FLASH pending exact-board evidence.
 This is a separate documented rig-control plan; existing active work below remains.
 
-Game Point startup sizing and the reviewed current EXE are deployed (#805/#806).
-Two fresh launches show all controls, START works, and P7/ESP32 transports reconnect.
-Porsche/Magione launches freeze after Drive, including direct, windowed and
-standard-physics checks. Live dashboard and physical screen acceptance remain
-unverified; #804 stays open. Diagnostics were restored and no host reboot occurred.
-See [the deployment and freeze handoff](handoffs/2026-10-12-051844Z-game-point-deployed-ac-stalled-294d91.md).
+Game Point sizing and reviewed EXE are deployed (#805/#806/#807).
+Post-reboot live telemetry and actual P7 pixels passed with the lap archive
+temporarily isolated. The original 185 files are restored with matching hashes.
+PR #809 repairs setup.list full-telemetry decoding; review, final deployment,
+normal-state telemetry and physical rig-screen pixels remain pending on #804.
+See [the repair handoff](handoffs/2026-10-12-165038Z-setup-list-stall-repair-24cc37.md).
 Earlier C1 autonomous-driving pause remains in force.
 
 **Repo:** ac-copilot-trainer.

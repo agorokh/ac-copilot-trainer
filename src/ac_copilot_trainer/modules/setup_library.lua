@@ -17,6 +17,7 @@ local M = {}
 
 local ch = require("csp_helpers")
 local persistence = require("persistence")  -- shares the journal/laps dir layout
+local lapMetadata = require("lap_metadata")
 local meta = require("ac_content_meta")    -- ui_car.json / ui_track.json reader
 local setupReader = require("setup_reader") -- INI key harvest for per-row params
 
@@ -187,140 +188,84 @@ function M.list()
   return out
 end
 
---- Walk per-lap archive JSONs and find the fastest lap_ms for the given
---- setup name on the current car + track + layout combo. Returns nil if
---- no matching lap is on disk.
----
---- Per-lap files are written under `journal/laps/lap_<...>_<name>.json`
---- with body `{car:{id}, track:{id, layout?}, setup:{snapshot:{...}}, lap:{lap_ms}}`.
---- We use the SETUP NAME (not hash) for matching: the user's UI reads
---- "BEST under setup `aggressive`" rather than "BEST under hash 0xab12",
---- and naming-by-name happens to be exactly what the per-lap snapshot
---- stores in `setup.snapshot["NAME"]` if it was loaded by name. Since
---- the existing schema doesn't store the setup *name* as a top-level
---- field, we conservatively walk all files for the current car/track
---- and surface the fastest lap with a matching setup.snapshot.path.
----
---- Performance: O(N) over the journal, but typical sessions have <500
---- laps and the screen calls this per-row only when refreshing the list,
---- not per-frame. CSP exposes `io.scanDir` + `io.open`, both blocking.
----@param setupName string  basename without `.ini`
----@param setupPath string|nil  optional absolute path — when present, lap
----   records are matched on normalized full path first so two `race.ini`
----   files under different track folders cannot cross-contaminate BEST
----   (chatgpt-codex P2 on PR #91).
----@return integer|nil  fastest lap_ms, or nil
-function M.bestForSetup(setupName, setupPath)
-  if type(setupName) ~= "string" or setupName == "" then return nil end
-  if type(setupPath) ~= "string" then setupPath = nil end
-  if setupPath == "" then setupPath = nil end
-  if not (io and type(io.scanDir) == "function") then return nil end
-
+-- Read the journal once per list request. Never cache across requests: a new
+-- completed lap must appear on the next refresh without waiting for a restart.
+local function lapRecords()
+  local out = {}
+  if not (io and type(io.scanDir) == "function") then return out end
   local dir = persistence.dataDir() .. "/journal/laps"
-  local files
-  local ok = pcall(function()
-    files = io.scanDir(dir, "lap_*.json")
-  end)
-  if not ok or type(files) ~= "table" or #files == 0 then return nil end
-
-  local wantCar = activeCarId()
-  local wantTrack = activeTrackId()
-  local wantLayout = activeTrackLayoutId()
-  local wantName = setupName:lower()
-  local wantPathNorm ---@type string|nil
-  if setupPath then
-    wantPathNorm = setupPath:lower():gsub("\\", "/")
+  local ok, files = pcall(io.scanDir, dir, "lap_*.json")
+  if not ok or type(files) ~= "table" then return out end
+  for i = 1, #files do
+    if type(files[i]) == "string" then
+      local rec = lapMetadata.read(dir .. "/" .. files[i])
+      if rec then out[#out + 1] = rec end
+    end
   end
-  local best  ---@type integer|nil
+  return out
+end
 
-  -- Avoid pulling JSON globally (CSP build dependent). Rely on `JSON.parse`
-  -- the same way `lap_archive` does — falls through to nil if missing.
-  local hasJson = (JSON and type(JSON.parse) == "function")
-  if not hasJson then return nil end
-
-  -- Filenames sort chronologically (see lap_archive.write —
-  -- `lap_<UTC>_<sess>_<n>_<lap_ms>_<uuid>.json`), so alpha-descending ==
-  -- time-descending. Scan the full journal so BEST is never truncated by an
-  -- arbitrary cap (chatgpt-codex P2 on PR #91 — the prior 200-file limit
-  -- could miss a faster older lap when the journal is large).
-  table.sort(files, function(a, b) return tostring(a) > tostring(b) end)
-  local maxScan = #files
-
-  for i = 1, maxScan do
-    local name = files[i]
-    if type(name) == "string" then
-      local path = dir .. "/" .. name
-      local f = io.open(path, "r")
-      if f then
-        local raw = f:read("*a")
-        f:close()
-        if raw and #raw > 0 then
-          local okParse, rec = pcall(JSON.parse, raw)
-          if okParse and type(rec) == "table"
-              and type(rec.lap) == "table"
-              and type(rec.setup) == "table"
-              and type(rec.car) == "table"
-              and type(rec.track) == "table" then
-            local lapMs = tonumber(rec.lap.lap_ms)
-            local carOk = tostring(rec.car.id or ""):lower() == wantCar:lower()
-            local trackOk = tostring(rec.track.id or ""):lower() == wantTrack:lower()
-            -- Filter by layout when one is active (CodeRabbit on PR #91).
-            -- A faster lap on a different layout (e.g. monza_junior vs
-            -- monza) must NOT surface as BEST for the current layout. When
-            -- the session has no layout, we accept any layout-tagged record
-            -- (treat the layout filter as soft).
-            local layoutOk = true
-            if wantLayout ~= "" then
-              local recLayout = tostring(rec.track.layout or ""):lower()
-              -- Only reject when the archive *named* a different layout.
-              -- `lap_archive` historically omits `track.layout` on many records;
-              -- treating empty as non-match made BEST vanish for all layout
-              -- sessions (codex P1 on PR #91).
-              if recLayout ~= "" and recLayout ~= wantLayout:lower() then
-                layoutOk = false
-              end
-            end
-            -- The path comparison does not depend on snapshot CONTENTS, so
-            -- check it outside the snapshot-table guard (Cursor on PR #91).
-            -- Read both `setup.path` (current schema, written by lap_archive
-            -- as of PR #91 follow-up) and `setup.snapshot.path` (legacy
-            -- archives written before PR #91) so previously-saved laps still
-            -- show their BEST after the schema bump.
-            local snapPath
-            if type(rec.setup.path) == "string" and rec.setup.path ~= "" then
-              snapPath = rec.setup.path
-            elseif type(rec.setup.snapshot) == "table"
-                and type(rec.setup.snapshot.path) == "string"
-                and rec.setup.snapshot.path ~= "" then
-              snapPath = rec.setup.snapshot.path
-            end
-            local nameOk = false
-            if snapPath then
-              local lower = snapPath:lower():gsub("\\", "/")
-              if wantPathNorm then
-                -- Strict path match when the list row carried a disambiguator
-                -- so `.../monza/race.ini` and `.../spa/race.ini` never share BEST.
-                nameOk = (lower == wantPathNorm)
-              else
-                -- Basename-only when no path on the row (legacy / sparse archives).
-                local base = lower:match("([^/]+)$") or lower
-                base = base:gsub("%.ini$", "")
-                if base == wantName then nameOk = true end
-              end
-            end
-            if lapMs and lapMs > 0 and carOk and trackOk and layoutOk and nameOk
-                and rec.lap.is_valid ~= false then
-              if best == nil or lapMs < best then
-                best = lapMs
-              end
-            end
-          end
+local function bestForSetupRecords(setupName, setupPath, records)
+  if type(setupName) ~= "string" or setupName == "" then return nil end
+  if type(setupPath) ~= "string" or setupPath == "" then setupPath = nil end
+  local wantCar, wantTrack, wantLayout = activeCarId(), activeTrackId(), activeTrackLayoutId()
+  local wantName = setupName:lower()
+  local wantPath = setupPath and setupPath:lower():gsub("\\", "/") or nil
+  local best
+  for i = 1, #records do
+    local rec = records[i]
+    if type(rec.lap) == "table" and type(rec.setup) == "table"
+        and type(rec.car) == "table" and type(rec.track) == "table" then
+      local lapMs = tonumber(rec.lap.lap_ms)
+      local carOk = tostring(rec.car.id or ""):lower() == wantCar:lower()
+      local trackOk = tostring(rec.track.id or ""):lower() == wantTrack:lower()
+      -- Preserve legacy archives with an omitted layout, and no-layout sessions.
+      local layout = tostring(rec.track.layout or ""):lower()
+      local layoutOk = wantLayout == "" or layout == "" or layout == wantLayout:lower()
+      local snapPath = rec.setup.path
+      if type(snapPath) ~= "string" or snapPath == "" then
+        snapPath = type(rec.setup.snapshot) == "table" and rec.setup.snapshot.path or nil
+      end
+      local nameOk = false
+      if type(snapPath) == "string" and snapPath ~= "" then
+        local normalized = snapPath:lower():gsub("\\", "/")
+        if wantPath then
+          nameOk = normalized == wantPath
+        else
+          local basename = normalized:match("([^/]+)$") or normalized
+          nameOk = basename:gsub("%.ini$", "") == wantName
         end
+      end
+      if lapMs and lapMs == lapMs and lapMs > 0 and lapMs < math.huge
+          and carOk and trackOk and layoutOk and nameOk and rec.lap.is_valid ~= false then
+        if best == nil or lapMs < best then best = lapMs end
       end
     end
   end
-
   return best
+end
+
+--- Fastest archived lap for a setup, preserving full-path disambiguation.
+--- Only lap/setup/car/track metadata is decoded; telemetry is irrelevant to BEST.
+---@param setupName string
+---@param setupPath string|nil
+---@return integer|nil
+function M.bestForSetup(setupName, setupPath)
+  if type(setupName) ~= "string" or setupName == "" then return nil end
+  return bestForSetupRecords(setupName, setupPath, lapRecords())
+end
+
+--- Return BEST by row index, sharing a single metadata scan for all setup rows.
+---@param setups table[]
+---@return table
+function M.bestForSetups(setups)
+  local bests = {}
+  if type(setups) ~= "table" or #setups == 0 then return bests end
+  local records = lapRecords()
+  for i = 1, #setups do
+    bests[i] = bestForSetupRecords(setups[i].name, setups[i].path, records)
+  end
+  return bests
 end
 
 --- Load a setup. Returns `{ok:bool, name, message?, error?}` shaped like the
