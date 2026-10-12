@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-10-12T03:49:00Z
+last_updated: 2026-10-12T05:18:44Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-10-12-051844Z-game-point-deployed-ac-stalled-294d91.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-034900Z-rig-dashboard-control-d326a9.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-11-230443Z-post-merge-pr800-c1-21e389.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-11-214800Z-c1-live-margin-verification-21e389.md
@@ -77,12 +78,12 @@ relates_to:
 
 # Current focus
 
-2026-10-11 local rig check: Game Point live window enlarged; P7 USB debugging,
-screenshots and interactive control verified; Fully Kiosk reloaded to the working
-dashboard (DASH-CONNECTED). Screen connection verified, physical display not
-observed. AC remains closed, voice observer-only, and deployed launcher remains
-July build. Startup sizing and current EXE distribution are unperformed. See
-[the rig-control handoff](handoffs/2026-10-12-034900Z-rig-dashboard-control-d326a9.md).
+Game Point startup sizing and the reviewed current EXE are deployed (#805/#806).
+Two fresh launches show all controls, START works, and P7/ESP32 transports reconnect.
+Porsche/Magione launches freeze after Drive, including direct, windowed and
+standard-physics checks. Live dashboard and physical screen acceptance remain
+unverified; #804 stays open. Diagnostics were restored and no host reboot occurred.
+See [the deployment and freeze handoff](handoffs/2026-10-12-051844Z-game-point-deployed-ac-stalled-294d91.md).
 Earlier C1 autonomous-driving pause remains in force.
 
 **Repo:** ac-copilot-trainer.
