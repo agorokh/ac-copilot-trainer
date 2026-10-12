@@ -283,10 +283,21 @@ class LauncherView:
         if not isinstance(root, (tk.Tk, tk.Toplevel)):
             return
         root.update_idletasks()
-        width = max(620, root.winfo_reqwidth())
-        height = max(400, root.winfo_reqheight())
+        # Tk's window-manager maximum can be narrower than the virtual desktop.
+        # Wrap diagnostic paths before measuring, rather than requesting a width
+        # the current monitor cannot allocate.
+        maximum_width, _ = root.maxsize()
+        details = [widgets["detail"] for widgets in self._rows.values()]
+        for detail in [self._summary_caption, *details]:
+            assert isinstance(detail, tk.Label)
+            row = detail.master
+            other_width = row.winfo_reqwidth() - detail.winfo_reqwidth()
+            detail.configure(wraplength=max(160, maximum_width - 68 - other_width))
+        root.update_idletasks()
+        minimum_width, minimum_height = root.minsize()
+        width = max(620, minimum_width, root.winfo_reqwidth())
+        height = max(400, minimum_height, root.winfo_reqheight())
         root.minsize(width, height)
-        root.geometry(f"{width}x{height}")
 
     def mark_pending(self) -> None:
         """Show a neutral 'checking' state until the first real status lands.
@@ -329,6 +340,7 @@ class LauncherView:
             detail = widgets["detail"]
             assert isinstance(detail, tk.Label)
             detail.configure(text=probe.detail or "")
+        self.fit_window()
 
 
 def build_launcher_view(

@@ -1,5 +1,6 @@
 """Check actual Tk widget allocation at normal and enlarged font scaling."""
 
+import sys
 from dataclasses import replace
 
 import pytest
@@ -14,15 +15,12 @@ def _descendants(parent):
 
 
 @pytest.mark.parametrize("scaling", [1.0, 2.0])
-def test_fresh_launcher_and_minimum_size_show_all_controls(scaling):
+def test_fresh_launcher_and_minimum_size_show_all_controls(scaling, tk_root):
     from tools.rig_launcher.preview import _NOOP_ACTIONS, demo_status
     from tools.rig_launcher.supervisor import ProbeResult
     from tools.rig_launcher.view import build_launcher_view
 
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("Tk display unavailable")
+    root = tk.Toplevel(tk_root)
     try:
         root.withdraw()
         root.title("Game Point layout test")
@@ -40,7 +38,13 @@ def test_fresh_launcher_and_minimum_size_show_all_controls(scaling):
         status = replace(
             demo_status(),
             tablet=ProbeResult("tablet", True, "dash-connected", "browser_peers=1"),
-            resilient=ProbeResult("ac_session", False, "menu_config_required", "check CSP menu"),
+            resilient=ProbeResult(
+                "ac_session",
+                False,
+                "menu_config_required",
+                "Set [NEW_UI] REPLACE_MAIN_MENU=0 in "
+                r"C:\Users\driver\OneDrive\Documents\Assetto Corsa\cfg\extension\gui.ini",
+            ),
         )
         view.update(status)
         for geometry in [None, "1x1"]:
@@ -56,8 +60,31 @@ def test_fresh_launcher_and_minimum_size_show_all_controls(scaling):
             assert any(w.cget("text") == "MENU_CONFIG_REQUIRED" for w in labels)
             for widget in controls + labels:
                 assert widget.winfo_ismapped(), widget.cget("text")
+                assert widget.winfo_width() >= widget.winfo_reqwidth(), (
+                    f"{widget.cget('text')} min={root.minsize()} req={root.winfo_reqwidth()} "
+                    f"width={width} max={root.maxsize()} wrap={widget.cget('wraplength')}"
+                )
                 x, y = widget.winfo_rootx() - left, widget.winfo_rooty() - top
                 assert 0 <= x and x + widget.winfo_width() <= width, widget.cget("text")
                 assert 0 <= y and y + widget.winfo_height() <= height, widget.cget("text")
+        root.geometry(f"{width + 100}x{height + 100}")
+        root.update()
+        enlarged = root.winfo_width(), root.winfo_height()
+        view.update(demo_status())
+        root.update()
+        assert (root.winfo_width(), root.winfo_height()) == enlarged
     finally:
         root.destroy()
+
+
+@pytest.fixture(scope="module")
+def tk_root():
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        if sys.platform == "win32":
+            raise
+        pytest.skip("Tk display unavailable")
+    root.withdraw()
+    yield root
+    root.destroy()

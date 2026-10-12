@@ -34,7 +34,9 @@ committed.
 The launcher measures its fonts and controls on every start and uses that size
 as its initial and minimum window size. The START and other action buttons stay
 visible beneath all status rows without a manual resize. The window can still
-be enlarged; its visual preview uses the same sizing path.
+be enlarged; live status updates can raise the minimum to fit longer messages
+without shrinking a larger window chosen by the operator. Its visual preview
+uses the same sizing path.
 
 ### Audio backend (rtmixer is opt-in)
 
