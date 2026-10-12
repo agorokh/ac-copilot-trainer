@@ -103,6 +103,9 @@ class LauncherView:
         tk.Frame(panel, bg=theme.LINE, height=1).pack(fill="x")
         self._build_summary(panel)
 
+        # Reserve the actions before allocating the expandable status body.
+        self._build_buttons(panel, actions)
+
         body = tk.Frame(panel, bg=theme.GRAPHITE)
         body.pack(fill="both", expand=True, padx=16, pady=(2, 8))
         for index, (label, key) in enumerate(_ROWS):
@@ -114,7 +117,6 @@ class LauncherView:
         if on_toggle_simhub is not None:
             self._build_simhub_toggle(body, on_toggle_simhub, simhub_autostart)
 
-        self._build_buttons(panel, actions)
         self._add_corner_brackets(panel)
 
     # -- construction helpers -------------------------------------------------
@@ -197,7 +199,6 @@ class LauncherView:
             bg=theme.GRAPHITE,
             fg=theme.CHALK,
             font=(self._f_disp, 13, "bold"),
-            width=12,
             anchor="w",
         )
         state.pack(side="left")
@@ -211,7 +212,7 @@ class LauncherView:
 
     def _build_buttons(self, panel: tk.Frame, actions: Mapping[str, Callable[[], None]]) -> None:
         row = tk.Frame(panel, bg=theme.GRAPHITE)
-        row.pack(fill="x", padx=16, pady=(10, 14))
+        row.pack(side="bottom", fill="x", padx=16, pady=(10, 14))
         for column, weight in enumerate(_BUTTON_WEIGHTS):
             row.columnconfigure(column, weight=weight, uniform="actions")
         for column, (label, key, primary) in enumerate(_BUTTONS):
@@ -276,6 +277,28 @@ class LauncherView:
 
     # -- refresh --------------------------------------------------------------
 
+    def fit_window(self) -> None:
+        """Fit the initial window and its minimum size to the actual fonts and controls."""
+        root = self._root
+        if not isinstance(root, (tk.Tk, tk.Toplevel)):
+            return
+        root.update_idletasks()
+        # Tk's window-manager maximum can be narrower than the virtual desktop.
+        # Wrap diagnostic paths before measuring, rather than requesting a width
+        # the current monitor cannot allocate.
+        maximum_width, _ = root.maxsize()
+        details = [widgets["detail"] for widgets in self._rows.values()]
+        for detail in [self._summary_caption, *details]:
+            assert isinstance(detail, tk.Label)
+            row = detail.master
+            other_width = row.winfo_reqwidth() - detail.winfo_reqwidth()
+            detail.configure(wraplength=max(160, maximum_width - 68 - other_width))
+        root.update_idletasks()
+        minimum_width, minimum_height = root.minsize()
+        width = max(620, minimum_width, root.winfo_reqwidth())
+        height = max(400, minimum_height, root.winfo_reqheight())
+        root.minsize(width, height)
+
     def mark_pending(self) -> None:
         """Show a neutral 'checking' state until the first real status lands.
 
@@ -317,6 +340,7 @@ class LauncherView:
             detail = widgets["detail"]
             assert isinstance(detail, tk.Label)
             detail.configure(text=probe.detail or "")
+        self.fit_window()
 
 
 def build_launcher_view(
