@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-10-12T18:14:58Z
+last_updated: 2026-10-12T19:17:00Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-10-12-191700Z-c1-live-acceptance-87ff.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-181458Z-operator-driven-rigcheck-f3b1cc.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-174325Z-post-merge-pr809-dc1d25.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-165038Z-setup-list-stall-repair-24cc37.md
@@ -102,9 +103,11 @@ The operator then drove Porsche/Magione: USB video matches changing telemetry,
 gears 1..5, speed up to 184 km/h, throttle/braking and T4..T8 coaching.
 Photos prove physical ESP32 rendering at idle; its changing display readback is
 still pending on #804. The operator explicitly exited AC; it is now stopped.
-Stable AC auto-Drive remains unresolved. No autonomous C1 run was resumed.
+Stable AC auto-Drive remains unresolved. At that operator-driven verification,
+no autonomous C1 run had resumed; subsequent C1 evidence is recorded below.
 See [the driven verification handoff](handoffs/2026-10-12-181458Z-operator-driven-rigcheck-f3b1cc.md).
-Earlier C1 autonomous-driving pause remains in force.
+The operator subsequently released the rig for C1. Verification finished and owned AC
+closed gracefully; no further autonomous C1 run is armed.
 
 **Repo:** ac-copilot-trainer.
 
@@ -113,10 +116,15 @@ Earlier C1 autonomous-driving pause remains in force.
 adjudication merged in [PR #801](https://github.com/agorokh/ac-copilot-trainer/pull/801).
 Primary main is updated; deployed source and production scientist/MCP readbacks pass.
 #750's corrected live comparison and #751's exact archive scoping are verified.
-The user manually closed AC during the Huracan/Spa baseline and paused rig runs while
-playing Minecraft. No further AC run until explicit confirmation. #749 second-session
-adoption remains unverified; all four C1 issues stay open together. Resume from
-[[2026-10-11-230443Z-post-merge-pr800-c1-21e389]].
+**C1 live acceptance verified (October 12):** the operator explicitly released the rig.
+The original 1.15 Huracan/Spa replay was falsified by seven recoveries and retained the
+inherited plant unchanged. A separately named 1.10-step variant adopted three lateral
+bins and raised five, then drove three AC-valid laps with zero recoveries and 0.018%
+flying spread. Actual retained fit b403e5d5ac37 matches the validated drive; merges 2 -> 3.
+Current primary production MCP/scientist readbacks pass. All retained C1 clauses are
+observed; close #749/#750/#751/#764 together after this SAVE's review/distribution.
+Completion receipt belongs on #764. No further C1 physical test is needed. Details:
+[[2026-10-12-191700Z-c1-live-acceptance-87ff]].
 
 **Delivered (2026-08-10):** `/autonomous-deliver 529` — **#746 CLOSED** by PR
 [#748](https://github.com/agorokh/ac-copilot-trainer/pull/748) (MERGED `c9ec97c`): the self-play
@@ -128,15 +136,12 @@ G2 ladder**: its `80.791 / 95.122` stint now falsifies and the plant rolls back 
 2's repeatable `81.505 / 81.519`). Node:
 [[issue-746-749-repeatability-and-thermal-gate-2026-08-10]].
 
-**Active focus — EPIC #529 G1 pace is blocked on
-[#749](https://github.com/agorokh/ac-copilot-trainer/issues/749), not on rig availability.** The
-huracan@spa ladder proved inherited-plant carry is real (base 180.366 s vs 185.53 s cold = 5.2 s)
-but **every refit was refused** by the #543 thermal `stability >= 0.80` gate (measured 0.41–0.62),
-so nothing compounded. Two hypotheses are already refuted with measurements and one framing of mine
-withdrawn — read the node before re-deriving. Also open:
-[#750](https://github.com/agorokh/ac-copilot-trainer/issues/750) (scientist compares out-laps),
-[#751](https://github.com/agorokh/ac-copilot-trainer/issues/751) (`lap_archives` not scoped to its
-batch — the structural end of #746's review spiral).
+**EPIC #529 G1 pace remains a separate objective.** Its former C1 thermal-compounding,
+scientist and archive-scope obligations now have retained acceptance evidence above;
+this does not assert G1 pace passed. The August 10 refit refusals (stability 0.41–0.62)
+and withdrawn scientist framing remain historical evidence in
+[[issue-746-749-repeatability-and-thermal-gate-2026-08-10]]. Do not restore those obsolete
+blockers or revive the withdrawn suppression-clearing criterion.
 
 **Delivered (2026-08-10):** `/autonomous-deliver 738` — **#738 CLOSED** by PR
 [#743](https://github.com/agorokh/ac-copilot-trainer/pull/743) (MERGED `6173766`): CM's blocking
