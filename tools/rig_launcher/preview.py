@@ -72,11 +72,11 @@ def render(out_path: str, *, status: GamePointStatus | None = None) -> int:
     load_private_fonts()  # register design faces so the capture matches the rig
     root = tk.Tk()
     root.title("AC Copilot Game Point")
-    root.geometry("660x440+140+140")
     view = build_launcher_view(
         root, actions=_NOOP_ACTIONS, status_path=demo_status().status_path, port=8765
     )
     view.update(status or demo_status())
+    view.fit_window()
     root.update_idletasks()
     root.deiconify()
     root.lift()

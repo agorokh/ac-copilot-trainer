@@ -330,8 +330,6 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
     from tools.rig_launcher.view import build_launcher_view
 
     root.title("AC Copilot Game Point")
-    root.geometry("660x440")
-    root.minsize(620, 400)
 
     last_status: dict[str, GamePointStatus | None] = {"status": None}
     _poll_busy: dict[str, bool] = {"v": False}
@@ -478,6 +476,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
             return
 
     view.mark_pending()  # neutral state until the first async poll lands (#568 review)
+    view.fit_window()
     # Honor the configured SimHub auto-start ONCE at launch (the periodic ticks are read-only,
     # so without this the documented AC_COPILOT_START_SIMHUB / checkbox would be a no-op until
     # the operator pressed START — #568 review).

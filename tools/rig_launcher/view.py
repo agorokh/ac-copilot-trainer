@@ -103,6 +103,9 @@ class LauncherView:
         tk.Frame(panel, bg=theme.LINE, height=1).pack(fill="x")
         self._build_summary(panel)
 
+        # Reserve the actions before allocating the expandable status body.
+        self._build_buttons(panel, actions)
+
         body = tk.Frame(panel, bg=theme.GRAPHITE)
         body.pack(fill="both", expand=True, padx=16, pady=(2, 8))
         for index, (label, key) in enumerate(_ROWS):
@@ -114,7 +117,6 @@ class LauncherView:
         if on_toggle_simhub is not None:
             self._build_simhub_toggle(body, on_toggle_simhub, simhub_autostart)
 
-        self._build_buttons(panel, actions)
         self._add_corner_brackets(panel)
 
     # -- construction helpers -------------------------------------------------
@@ -197,7 +199,6 @@ class LauncherView:
             bg=theme.GRAPHITE,
             fg=theme.CHALK,
             font=(self._f_disp, 13, "bold"),
-            width=12,
             anchor="w",
         )
         state.pack(side="left")
@@ -211,7 +212,7 @@ class LauncherView:
 
     def _build_buttons(self, panel: tk.Frame, actions: Mapping[str, Callable[[], None]]) -> None:
         row = tk.Frame(panel, bg=theme.GRAPHITE)
-        row.pack(fill="x", padx=16, pady=(10, 14))
+        row.pack(side="bottom", fill="x", padx=16, pady=(10, 14))
         for column, weight in enumerate(_BUTTON_WEIGHTS):
             row.columnconfigure(column, weight=weight, uniform="actions")
         for column, (label, key, primary) in enumerate(_BUTTONS):
@@ -275,6 +276,17 @@ class LauncherView:
         ).pack(side="left")
 
     # -- refresh --------------------------------------------------------------
+
+    def fit_window(self) -> None:
+        """Fit the initial window and its minimum size to the actual fonts and controls."""
+        root = self._root
+        if not isinstance(root, (tk.Tk, tk.Toplevel)):
+            return
+        root.update_idletasks()
+        width = max(620, root.winfo_reqwidth())
+        height = max(400, root.winfo_reqheight())
+        root.minsize(width, height)
+        root.geometry(f"{width}x{height}")
 
     def mark_pending(self) -> None:
         """Show a neutral 'checking' state until the first real status lands.
