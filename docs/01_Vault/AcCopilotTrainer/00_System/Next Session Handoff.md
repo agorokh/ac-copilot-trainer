@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-08-10T13:52:00Z
 relates_to:
+  - AcCopilotTrainer/10_Rig/external-racing-controls.md
   - AcCopilotTrainer/03_Investigations/issue-746-749-repeatability-and-thermal-gate-2026-08-10.md
   - AcCopilotTrainer/03_Investigations/issue-738-cm-csp-dialog-skip-2026-08-09.md
   - AcCopilotTrainer/03_Investigations/issue-737-setup-race-retry-2026-08-09.md

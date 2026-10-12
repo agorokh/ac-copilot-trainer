@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-18
-updated: 2026-04-22
+updated: 2026-10-12
 relates_to:
   - AcCopilotTrainer/00_System/Project State.md
   - 00_Graph_Schema.md
@@ -19,6 +19,8 @@ Knowledge nodes for the physical simulator rig: seat / shakers / motors / wheelb
 - [physical-rig-integration-epic-59.md](physical-rig-integration-epic-59.md) — **OPEN.** Umbrella issue #59 for the full hardware peripheral roadmap: Arduino UNO (fan / OLED / seat vibration motors / pedal haptics) + ESP32 touch dashboard + Dayton BST-1 shaker + salvaged Xbox controller motors. Pin map + architecture diagram + BOM + thermal lessons + per-phase completion status.
 
 ### Active state
+
+- [external-racing-controls.md](external-racing-controls.md) — Operator's external button/knob plan: keypad Button 1 shaker-socket power, encoder shaker-specific level, Buttons 2/3 intentionally unassigned. Preserve current bindings while workstation-ops #3863 delivers independent constant-red lighting; racing remapping is not deployed.
 
 - [esp32-jc3248w535-screen-v1.md](esp32-jc3248w535-screen-v1.md) — **Active. PR [#83](https://github.com/agorokh/ac-copilot-trainer/pull/83) MERGED 2026-04-22.** Guition JC3248W535 ESP32-S3 3.5" touchscreen. Firmware at `firmware/screen/` (Arduino_GFX 1.4.7 + ArduinoWebsockets). End-to-end working over Windows Mobile Hotspot: device authenticates with `X-AC-Copilot-Token`, emits `{v:1,type:"action",name:"toggleFocusPractice"}` every 10 s. Phase-2 LVGL + touch reader + Figma UI is next.
 - [single-bs-1-recovery-phase1r-v1.md](single-bs-1-recovery-phase1r-v1.md) — **Active.** Single-transducer recovery profile (Phase 1R). BS-1 under seat on right channel only, mono-sum, `RPMContainer @ 25` for engine thrum. Pedal-side mount empty pending Dayton TT25 replacement.
