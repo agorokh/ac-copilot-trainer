@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-10-12T17:43:25Z
+last_updated: 2026-10-12T18:14:58Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-10-12-181458Z-operator-driven-rigcheck-f3b1cc.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-174325Z-post-merge-pr809-dc1d25.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-165038Z-setup-list-stall-repair-24cc37.md
   - AcCopilotTrainer/10_Rig/external-racing-controls.md
@@ -95,13 +96,14 @@ The offline candidate's startup-off and blue recovery-entry frames were correcte
 and tested; firmware remains marked DO-NOT-FLASH pending exact-board evidence.
 This is a separate documented rig-control plan; existing active work below remains.
 
-Game Point sizing and current EXE are deployed (#805/#806/#807/#809).
-PR #809 merged e4bb25c; installed build 6d2e1ee, reviewed bounded archive reads.
-Normal-state Porsche/Magione telemetry and actual P7 LIVE pixels pass with all
-185 archives restored. The ESP32 transport is connected; physical rendering and
-pedal response remain unverified because the operator is away. #804 stays open.
-Stable AC auto-Drive remains unacknowledged; the live session used Content Manager.
-See [the verified deployment handoff](handoffs/2026-10-12-174325Z-post-merge-pr809-dc1d25.md).
+Game Point sizing and current EXE are deployed (#805/#806/#807/#809/#810).
+Normal-state telemetry and actual P7 pixels pass with all archives restored.
+The operator then drove Porsche/Magione: USB video matches changing telemetry,
+gears 1..5, speed up to 184 km/h, throttle/braking and T4..T8 coaching.
+Photos prove physical ESP32 rendering at idle; its changing display readback is
+still pending on #804. The operator explicitly exited AC; it is now stopped.
+Stable AC auto-Drive remains unresolved. No autonomous C1 run was resumed.
+See [the driven verification handoff](handoffs/2026-10-12-181458Z-operator-driven-rigcheck-f3b1cc.md).
 Earlier C1 autonomous-driving pause remains in force.
 
 **Repo:** ac-copilot-trainer.
