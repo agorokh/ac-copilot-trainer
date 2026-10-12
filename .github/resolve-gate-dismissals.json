@@ -8,5 +8,12 @@
     "path": "tools/ac_harness/auto_alien.py",
     "finding": "Brittle raw argv re-parsing breaks layering and attribution",
     "reason": "Confirmed false positive at reviewed head 5d1c5320a0e8ae11cd0d344495e83e81ff26dffb: drive_argv regenerates split stage tokens from the parsed Namespace; run_pipeline passes them to auto_drive._main, whose report writes list(argv), not parent sys.argv. The completed live baseline and candidate both report actual 0.95 despite parent initial 0.9. Missing or mismatched margins fail closed. Exact-head source and adjudication: https://github.com/agorokh/ac-copilot-trainer/pull/800#issuecomment-6114763706"
+  },
+  {
+    "path": "tools/rig_launcher/view.py",
+    "line": 272,
+    "line_tolerance": 0,
+    "finding": "Stale geometry calculation truncates window height and locks excessive width",
+    "reason": "Confirmed false positive at reviewed head 90323fd865bfb8789f2ff761ec90e1f8bb19006d: root.update_idletasks() already follows the wrapping loop at line 296, before root.winfo_reqwidth()/winfo_reqheight() at lines 298-299. Real Tk layout tests exercise long wrapping at scaling 1.0 and 2.0 and full ci-fast passes. Exact-head source: https://github.com/agorokh/ac-copilot-trainer/blob/90323fd865bfb8789f2ff761ec90e1f8bb19006d/tools/rig_launcher/view.py#L290-L300 ; adjudication: https://github.com/agorokh/ac-copilot-trainer/pull/805#issuecomment-6117893871"
   }
 ]
