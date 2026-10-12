@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-10-12T19:17:00Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-10-12-232609Z-issue813-display-delivery-6f39a1.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-191700Z-c1-live-acceptance-87ff.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-181458Z-operator-driven-rigcheck-f3b1cc.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-174325Z-post-merge-pr809-dc1d25.md
@@ -82,6 +83,17 @@ relates_to:
 ---
 
 # Current focus
+
+## Issue 813 display correctness and MAP delivery
+
+Active branch `fix/issue-813-rig-displays-map` carries the coordinated Lua,
+sidecar, tablet and ESP32 revision. Explicit coaching action/target semantics,
+live physics electronics and persistent pits-only capability are implemented;
+focused tests and USB-serial firmware compilation pass. MAP work and native
+render verification are underway. Deployment and an operator-driven valid
+Porsche/Magione lap with both physical displays and exit transitions remain
+unverified. Retain the separate #804/#531/#86 acceptance and parked programmes.
+See the linked dated handoff for the current evidence and resume pointer.
 
 ## External racing controls — operator plan, 2026-10-11 PDT
 

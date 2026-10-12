@@ -913,7 +913,8 @@ if wsBridge.registerRequestHandler then
       resetOk = okCall and (allowed == true)
     end
     if not resetOk then
-      return { ok = false, section = section, error = "must be in pits" }
+      return { ok = false, section = section, reset_allowed = false,
+        error = "Setup changes require pits/reset permission" }
     end
     local ack = setupLibrary.setSpinner(payload)
     if type(ack) ~= "table" then
@@ -922,6 +923,9 @@ if wsBridge.registerRequestHandler then
       ack.ok = false
       if ack.error == nil then ack.error = "library returned malformed ack" end
     end
+    local capability = setupLibrary.capability()
+    ack.reset_allowed = capability.reset_allowed
+    ack.lock_reason = capability.lock_reason
     if ack.ok and wsBridge.publishTopic then
       pcall(function()
         local activeName = nil

@@ -29,6 +29,13 @@ typedef struct {
     char        primary_line[96];
     char        secondary_line[160];
     char        corner_label[32];   // e.g. "Lesmo 1" or "T3"
+    char        current_corner_label[32];
+    char        approach_corner_label[32];
+    char        action[24];
+    char        target_phase[32];
+    char        target_provenance[32];
+    bool        target_available;
+    bool        current_speed_available;
     char        kind[24];           // "brake" | "line" | "info" | "placeholder"
     char        sub_state[24];      // "approaching" | "in_corner" | ...
     int32_t     target_speed_kmh;   // -1 = unknown
@@ -52,6 +59,7 @@ lv_obj_t* screen_ac_copilot_create(void);
 // call must happen from the main loop, which is where `main.cpp`'s WS
 // dispatch already lives.
 void screen_ac_copilot_apply_snapshot(const coaching_snapshot_t* snap);
+void screen_ac_copilot_invalidate(void);
 
 // Override the secondary line with a richer LLM advice (corner_advice
 // pipeline from PR #75). Stores the override against `corner_id`; the

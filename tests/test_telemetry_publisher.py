@@ -14,6 +14,8 @@ import pathlib
 
 import pytest
 
+from tools.ai_sidecar.external_protocol import validate_inbound
+
 lupa = pytest.importorskip("lupa", reason="lupa Lua runtime not installed (pip install lupa)")
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -87,6 +89,73 @@ def _runtime():
     p = str(MODULES_DIR).replace("\\", "/")
     rt.execute(f'package.path = package.path .. ";{p}/?.lua"')
     return rt
+
+
+def test_live_electronics_follow_car_setting_not_intervention_or_setup():
+    rt = _runtime()
+    out = rt.execute("""
+      ac = {isCarResetAllowed=function() return false end}
+      local m = require("telemetry_publisher")
+      local ws = make_ws()
+      local car = {physicsAvailable=true, brakeBias=0.63, tractionControlModes=12,
+        tractionControlMode=4, absModes=12, absMode=0,
+        tractionControlInAction=true, absInAction=false}
+      m.publishTelemetryTickIfDue({dt=0.05,car=car,wsBridge=ws})
+      car.brakeBias = 0.64
+      car.tractionControlMode = 3
+      m.publishTelemetryTickIfDue({dt=0.05,car=car,wsBridge=ws})
+      return {first=ws._calls[1].send,second=ws._calls[2].send}
+    """)
+    first, second = out["first"]["payload"], out["second"]["payload"]
+    assert first["brake_bias_pct"] == pytest.approx(63)
+    assert second["brake_bias_pct"] == pytest.approx(64)
+    assert first["brake_bias_source"] == "car.brakeBias"
+    assert first["tc_level"] == 4 and second["tc_level"] == 3
+    assert first["tc_active"] is True
+    assert first["abs_level"] == 0  # Disabled is a known setting, not absence.
+    assert first["setup_reset_allowed"] is False
+    assert "pits/reset" in first["setup_lock_reason"]
+    for tick in (out["first"], out["second"]):
+        assert (
+            validate_inbound(
+                {
+                    "v": 1,
+                    "type": "telemetry_tick",
+                    "seq": tick["seq"],
+                    "payload": dict(tick["payload"].items()),
+                }
+            )
+            is None
+        )
+
+
+@pytest.mark.parametrize("physics", [False, None])
+def test_live_electronics_omit_settings_without_physics(physics):
+    rt = _runtime()
+    rt.globals()["physics"] = physics
+    out = rt.execute("""
+      local ws = make_ws()
+      require("telemetry_publisher").publishTelemetryTickIfDue({dt=0.05,
+        car={physicsAvailable=physics,brakeBias=0.63,tractionControlMode=5,
+          tractionControlModes=12,absMode=3,absModes=12},wsBridge=ws})
+      return ws._calls[1].send.payload
+    """)
+    for key in ("brake_bias_pct", "tc_level", "tc_modes", "abs_level", "abs_modes"):
+        assert out[key] is None
+
+
+def test_live_electronics_absent_system_is_not_level_zero():
+    rt = _runtime()
+    out = rt.execute("""
+      local ws = make_ws()
+      require("telemetry_publisher").publishTelemetryTickIfDue({dt=0.05,
+        car={physicsAvailable=true,tractionControlMode=0,tractionControlModes=0,
+          absMode=0,absModes=0,brakeBias=0/0},wsBridge=ws})
+      return ws._calls[1].send.payload
+    """)
+    assert out["tc_modes"] == 0 and out["abs_modes"] == 0
+    assert out["tc_level"] is None and out["abs_level"] is None
+    assert out["brake_bias_pct"] is None
 
 
 # --------------------------------------------------------------------------- delta

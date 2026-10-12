@@ -10,6 +10,7 @@
 #include "ui/nav.h"
 #include "ui/persist.h"
 #include "ui/tokens.h"
+#include "ui/coaching_semantics.h"
 
 #include <Arduino.h>
 #include <ctype.h>
@@ -75,57 +76,25 @@ void uppercase_copy(const char* src, char* dst, size_t n) {
     dst[i] = 0;
 }
 
-bool contains_ascii(const char* haystack, const char* needle) {
-    if (!haystack || !needle || !*needle) return false;
-    // Case-insensitive substring scan over the full strings — no fixed-size
-    // copy, so keywords are still found past the old 48-char buffer (e.g.
-    // "brake"/"lift" late in the 96-char primary_line).
-    for (const char* h = haystack; *h; ++h) {
-        const char* hp = h;
-        const char* np = needle;
-        while (*hp && *np &&
-               toupper((unsigned char)*hp) == toupper((unsigned char)*np)) {
-            ++hp;
-            ++np;
-        }
-        if (!*np) return true;
-    }
-    return false;
-}
-
 bool snapshot_is_stale() {
     // `!has_data` already covers "no snapshot yet"; a separate
     // `g_last_snapshot_ms == 0` guard would wedge staleness off forever if the
     // first snapshot happened to land at millis() == 0 right after boot.
     if (!g_snap.has_data) return false;
+    if (!g_snap.current_speed_available) return true;
     return (uint32_t)(millis() - g_last_snapshot_ms) > SNAPSHOT_STALE_MS;
 }
 
 const char* command_for_snapshot(bool stale) {
-    if (!g_snap.has_data) return "WAIT";
-    if (stale) return "STALE";
-    if (contains_ascii(g_snap.kind, "brake") ||
-        contains_ascii(g_snap.primary_line, "brake")) {
-        return "BRAKE";
-    }
-    if (contains_ascii(g_snap.primary_line, "lift") ||
-        contains_ascii(g_snap.kind, "line")) {
-        return "LIFT";
-    }
-    if (g_snap.target_speed_kmh > 0 && g_snap.current_speed_kmh >= 0) {
-        int32_t delta = g_snap.current_speed_kmh - g_snap.target_speed_kmh;
-        if (delta > 8) return "BRAKE";
-        if (delta <= 0) return "CLEAR";
-    }
-    if (contains_ascii(g_snap.kind, "info")) return "INFO";
-    return "HOLD";
+    return coaching_command(g_snap.action, g_snap.primary_line, g_snap.has_data, stale);
 }
 
 lv_color_t command_color(const char* command) {
     if (strcmp(command, "BRAKE") == 0 || strcmp(command, "STALE") == 0) {
         return UI_ALERT_RED;
     }
-    if (strcmp(command, "LIFT") == 0 || strcmp(command, "WAIT") == 0) {
+    if (strcmp(command, "LIFT") == 0 || strcmp(command, "WAIT") == 0 ||
+        strcmp(command, "UNAVAILABLE") == 0) {
         return UI_LINE_AMBER;
     }
     if (strcmp(command, "CLEAR") == 0) {
@@ -171,6 +140,24 @@ void corner_badge_text(const char* corner, char* out, size_t n) {
 
 void set_label(lv_obj_t* obj, const char* text) {
     if (obj) lv_label_set_text(obj, text ? text : "");
+}
+
+// Measure the actual shipped LVGL fonts. Numeric/command labels never wrap;
+// choose the largest face that fits their allotted field before painting.
+void set_fitted_label(lv_obj_t* obj, const char* text, bool command = false) {
+    if (!obj) return;
+    const lv_font_t* number_fonts[] = {UI_FONT_READ_XL, UI_FONT_READ_LG, UI_FONT_READ_MD, UI_FONT_MONO_MD};
+    const lv_font_t* command_fonts[] = {UI_FONT_COMMAND_HERO, UI_FONT_COMMAND_MD, UI_FONT_COMMAND_SM, UI_FONT_LABEL_MD};
+    const lv_font_t** fonts = command ? command_fonts : number_fonts;
+    const char* value = text ? text : "";
+    for (int i = 0; i < 4; ++i) {
+        lv_point_t size;
+        lv_txt_get_size(&size, value, fonts[i], 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        lv_obj_set_style_text_font(obj, fonts[i], LV_PART_MAIN);
+        if (size.x <= lv_obj_get_width(obj)) break;
+    }
+    lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
+    lv_label_set_text(obj, value);
 }
 
 void style_label(lv_obj_t* obj, const lv_font_t* font, lv_color_t color) {
@@ -238,11 +225,12 @@ void update_delta(ac_copilot_ctx_t* ctx, bool stale) {
     const int center_x = trough_x + trough_w / 2;
     const int max_w = trough_w / 2;
 
-    if (!g_snap.has_data || stale ||
-        g_snap.target_speed_kmh <= 0 || g_snap.current_speed_kmh < 0) {
+    if (!g_snap.has_data || stale || !g_snap.target_available ||
+        g_snap.target_speed_kmh < 0 || g_snap.current_speed_kmh < 0 ||
+        strcmp(g_snap.target_phase, "brake_onset") != 0) {
         lv_obj_add_flag(ctx->delta_fill, LV_OBJ_FLAG_HIDDEN);
         set_label(ctx->delta_value, "--");
-        set_label(ctx->delta_meta, "ENTRY D - REF --");
+        set_label(ctx->delta_meta, "NEXT BRAKE - REF --");
         return;
     }
 
@@ -260,20 +248,17 @@ void update_delta(ac_copilot_ctx_t* ctx, bool stale) {
                        : center_x - width / 2;
     lv_obj_set_pos(ctx->delta_fill, x, trough_y);
     lv_obj_set_size(ctx->delta_fill, width, DELTA_TROUGH_H);
-    lv_obj_set_style_bg_color(ctx->delta_fill,
-                              delta > 8 ? UI_ALERT_RED :
-                              delta <= 0 ? UI_OK_GREEN : UI_LINE_AMBER,
-                              LV_PART_MAIN);
+    // A difference to a future brake-onset target describes the approach, not
+    // whether the current corner is safe. Keep the row informational.
+    lv_obj_set_style_bg_color(ctx->delta_fill, UI_DATA_CYAN, LV_PART_MAIN);
     lv_obj_clear_flag(ctx->delta_fill, LV_OBJ_FLAG_HIDDEN);
 
-    char buf[32];
+    char buf[80];
     snprintf(buf, sizeof(buf), "%+ld", (long)delta);
-    set_label(ctx->delta_value, buf);
-    lv_obj_set_style_text_color(ctx->delta_value,
-                                delta > 8 ? UI_ALERT_RED :
-                                delta <= 0 ? UI_OK_GREEN : UI_LINE_AMBER,
-                                LV_PART_MAIN);
-    snprintf(buf, sizeof(buf), "ENTRY D - REF %ld", (long)g_snap.target_speed_kmh);
+    set_fitted_label(ctx->delta_value, buf);
+    lv_obj_set_style_text_color(ctx->delta_value, UI_DATA_CYAN, LV_PART_MAIN);
+    snprintf(buf, sizeof(buf), "NEXT %s BRAKE %ld", g_snap.approach_corner_label,
+             (long)g_snap.target_speed_kmh);
     set_label(ctx->delta_meta, buf);
 }
 
@@ -297,10 +282,10 @@ void apply_to_widgets(ac_copilot_ctx_t* ctx) {
     else snprintf(buf, sizeof(buf), "AC COPILOT");
     set_label(ctx->mode_label, buf);
 
-    corner_badge_text(g_snap.corner_label, buf, sizeof(buf));
+    corner_badge_text(stale ? "" : g_snap.current_corner_label, buf, sizeof(buf));
     set_label(ctx->corner_badge, buf);
 
-    if (g_snap.corner_label[0]) uppercase_copy(g_snap.corner_label, buf, sizeof(buf));
+    if (!stale && g_snap.current_corner_label[0]) uppercase_copy(g_snap.current_corner_label, buf, sizeof(buf));
     else snprintf(buf, sizeof(buf), "--");
     set_label(ctx->corner_label, buf);
 
@@ -309,18 +294,18 @@ void apply_to_widgets(ac_copilot_ctx_t* ctx) {
     } else {
         snprintf(buf, sizeof(buf), "--");
     }
-    set_label(ctx->current_speed, buf);
+    set_fitted_label(ctx->current_speed, buf);
 
-    set_label(ctx->command_label, command);
+    set_fitted_label(ctx->command_label, command, true);
     lv_obj_set_style_text_color(ctx->command_label, cmd_color, LV_PART_MAIN);
     lv_obj_set_style_text_color(ctx->command_marker, cmd_color, LV_PART_MAIN);
 
-    if (g_snap.dist_to_brake_m >= 0 && !stale) {
+    if (g_snap.target_available && g_snap.dist_to_brake_m >= 0 && !stale) {
         snprintf(buf, sizeof(buf), "%ld", (long)g_snap.dist_to_brake_m);
     } else {
         snprintf(buf, sizeof(buf), "--");
     }
-    set_label(ctx->brake_distance, buf);
+    set_fitted_label(ctx->brake_distance, buf);
     lv_obj_set_style_text_color(ctx->brake_distance,
                                 g_snap.has_data && !stale ? UI_TX_PRIMARY : UI_TX_FAINT,
                                 LV_PART_MAIN);
@@ -332,8 +317,8 @@ void apply_to_widgets(ac_copilot_ctx_t* ctx) {
     update_delta(ctx, stale);
 
     const char* advice = g_snap.secondary_line;
-    if (g_advice_text[0] && g_advice_corner[0] && g_snap.corner_label[0] &&
-        strncmp(g_advice_corner, g_snap.corner_label, sizeof(g_advice_corner)) == 0) {
+    if (g_advice_text[0] && g_advice_corner[0] && g_snap.current_corner_label[0] &&
+        strncmp(g_advice_corner, g_snap.current_corner_label, sizeof(g_advice_corner)) == 0) {
         advice = g_advice_text;
     }
     if (!g_snap.has_data) {
@@ -448,24 +433,24 @@ extern "C" lv_obj_t* screen_ac_copilot_create(void) {
     make_line(scr, 110);
 
     ctx->command_label = make_label(scr, "WAIT", UI_FONT_COMMAND_HERO,
-                                    UI_LINE_AMBER, PAD, 132, 180);
+                                    UI_LINE_AMBER, PAD, 118, SCREEN_W - 2 * PAD);
     ctx->command_marker = make_label(scr, "v", UI_FONT_COMMAND_SM,
                                      UI_LINE_AMBER, PAD + 4, 184, 24);
 
-    make_label(scr, "BRAKE PT", UI_FONT_LABEL_XS, UI_TX_QUIET,
-               SCREEN_W - 104, 142, 86);
+    make_label(scr, "NEXT BRAKE PT", UI_FONT_LABEL_XS, UI_TX_QUIET,
+               SCREEN_W - 154, 180, 140);
     ctx->brake_distance = make_label(scr, "--", UI_FONT_READ_XL,
-                                     UI_TX_FAINT, SCREEN_W - 104, 160, 80);
+                                     UI_TX_FAINT, SCREEN_W - 154, 194, 132);
     lv_obj_set_style_text_align(ctx->brake_distance, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
     ctx->brake_unit = make_label(scr, "m", UI_FONT_MONO_MD,
-                                 UI_TX_FAINT, SCREEN_W - 22, 196, 16);
+                                 UI_TX_FAINT, SCREEN_W - 22, 222, 16);
 
     build_segments(scr, ctx);
     make_label(scr, "NOW", UI_FONT_LABEL_XS, UI_TX_QUIET, PAD, 282, 80);
     make_label(scr, "BRAKE ZONE", UI_FONT_LABEL_XS, UI_ALERT_RED,
                SCREEN_W - 104, 282, 91);
 
-    ctx->delta_meta = make_label(scr, "ENTRY D - REF --", UI_FONT_LABEL_SM,
+    ctx->delta_meta = make_label(scr, "NEXT BRAKE - REF --", UI_FONT_LABEL_SM,
                                  UI_TX_MUTED, PAD, DELTA_META_Y, 190);
     lv_obj_t* trough = lv_obj_create(scr);
     lv_obj_set_size(trough, SCREEN_W - 2 * PAD - 104, DELTA_TROUGH_H);
@@ -539,6 +524,13 @@ extern "C" void screen_ac_copilot_apply_snapshot(const coaching_snapshot_t* snap
     g_snap = *snap;
     g_snap.has_data = true;
     g_last_snapshot_ms = millis();
+    if (g_active_ctx) lv_async_call(async_refresh_cb, g_active_ctx);
+}
+
+extern "C" void screen_ac_copilot_invalidate(void) {
+    g_snap = coaching_snapshot_t{};
+    g_advice_corner[0] = 0;
+    g_advice_text[0] = 0;
     if (g_active_ctx) lv_async_call(async_refresh_cb, g_active_ctx);
 }
 

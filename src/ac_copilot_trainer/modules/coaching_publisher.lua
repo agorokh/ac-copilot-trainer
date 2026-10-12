@@ -31,6 +31,44 @@ local _accumDt = 0.0
 -- from the numeric value to fix.
 local _lastSpeed = nil
 
+local ACTIONS = {
+  BRAKE = true, LIFT = true, UPSHIFT = true, CARRY_MORE_SPEED = true,
+  HOLD = true, CLEAR = true, UNAVAILABLE = true,
+}
+local LEGACY_ACTIONS = {
+  ["BRAKE NOW"] = "BRAKE", ["PREPARE TO BRAKE"] = "BRAKE",
+  ["EASE OFF"] = "LIFT", ["SHIFT UP"] = "UPSHIFT",
+  ["CARRY MORE SPEED"] = "CARRY_MORE_SPEED", ["APPROACHING"] = "HOLD",
+  ["ON PACE"] = "HOLD", ["NEXT TURN"] = "CLEAR",
+}
+
+local function label(value)
+  if type(value) == "string" and value ~= "" then return value:sub(1, 64) end
+  return nil
+end
+
+local function nonnegative(value)
+  local n = tonumber(value)
+  if n and n == n and n >= 0 and n < math.huge then return n end
+  return nil
+end
+
+local function speed(value)
+  local n = nonnegative(value)
+  if n and n <= 1000 then return n end
+  return nil
+end
+
+local function targetFields(value, phase, provenance, available)
+  local n = speed(value)
+  local valid = available == true and n ~= nil
+    and ((phase == "brake_onset" and provenance == "reference_brake")
+      or (phase == "entry" and provenance == "segment_entry")
+      or (phase == "reference_at_position" and provenance == "reference_trace"))
+  if valid then return n, phase, provenance, true end
+  return nil, "unavailable", "unavailable", false
+end
+
 --- Publish at most once every PUBLISH_INTERVAL_SEC sim seconds.
 ---
 ---@param opts table
@@ -79,16 +117,16 @@ function M.publishIfDue(opts)
   -- screen contract treats 0 as a legitimate value and only -1 / nil as
   -- "missing". When the read raised, fall back to the cached last-known
   -- value so transient CSP nil/cdata flips do not make the screen flicker.
-  local cur = 0
+  local cur = -1
   local readOk = false
   if car then
     local okSpeed, sp = pcall(function() return car.speedKmh end)
-    if okSpeed and type(sp) == "number" then
-      cur = sp
+    if okSpeed and type(sp) == "number" and speed(sp) ~= nil then
+      cur = speed(sp)
       readOk = true
     end
   end
-  if not readOk and _lastSpeed then
+  if car and not readOk and _lastSpeed then
     cur = _lastSpeed
   end
   if readOk then
@@ -103,19 +141,38 @@ function M.publishIfDue(opts)
   local target = nil
   local dist = nil
   local progress = 0.0
+  local action = "UNAVAILABLE"
+  local currentCornerLabel, approachLabel
+  local targetPhase, targetProvenance, targetAvailable = "unavailable", "unavailable", false
+  local currentTarget, currentPhase, currentProvenance, currentAvailable
+  local selectedTarget, selectedPhase, selectedProvenance, selectedAvailable, selectedCorner
 
   if type(view) == "table" then
-    primary = tostring(view.primaryLine or primary)
-    secondary = tostring(view.secondaryLine or secondary)
+    primary = tostring(view.primaryLine or primary):sub(1, 160)
+    secondary = tostring(view.secondaryLine or secondary):sub(1, 240)
     kind = tostring(view.kind or kind)
     subState = tostring(view.subState or subState)
     if type(view.cornerLabel) == "string" and view.cornerLabel ~= "" then
-      cornerLabel = view.cornerLabel
+      cornerLabel = label(view.cornerLabel)
     end
-    target = tonumber(view.targetSpeedKmh)
-    dist = tonumber(view.distToBrakeM)
+    -- Backwards compatibility is exact-command only. `kind=line` includes
+    -- upshift and carrying speed, so it cannot imply LIFT.
+    if view.action == nil then action = LEGACY_ACTIONS[primary] or "UNAVAILABLE"
+    elseif ACTIONS[view.action] then action = view.action end
+    currentCornerLabel = label(view.currentCornerLabel)
+    approachLabel = label(view.approachLabel)
+    target, targetPhase, targetProvenance, targetAvailable = targetFields(
+      view.targetSpeedKmh, view.targetPhase, view.targetProvenance, view.targetAvailable)
+    currentTarget, currentPhase, currentProvenance, currentAvailable = targetFields(
+      view.currentTargetSpeedKmh, view.currentTargetPhase,
+      view.currentTargetProvenance, view.currentTargetAvailable)
+    selectedTarget, selectedPhase, selectedProvenance, selectedAvailable = targetFields(
+      view.selectedTargetSpeedKmh, view.selectedTargetPhase,
+      view.selectedTargetProvenance, view.selectedTargetAvailable)
+    selectedCorner = label(view.selectedTargetCornerLabel)
+    dist = nonnegative(view.distToBrakeM)
     local p = tonumber(view.progressPct)
-    if p then
+    if p and p == p and p < math.huge then
       -- realtime_coaching emits 0..1; the screen contract is 0..100 for
       -- the bar fill so the screen-side LVGL bar sets value(0..100) directly.
       progress = math.max(0, math.min(100, p * 100))
@@ -131,9 +188,35 @@ function M.publishIfDue(opts)
     primary_line = primary,
     secondary_line = secondary,
     kind = kind,
+    action = action,
     sub_state = subState,
     target_speed_kmh = target,
+    -- Legacy target_speed_kmh and all target_* metadata refer to NEXT.
+    -- Current speed comparisons use current_target_* / selected_target_*.
+    current_corner_id = currentCornerLabel,
+    current_corner_label = currentCornerLabel,
+    approach_corner_id = approachLabel,
+    approach_corner_label = approachLabel,
+    target_corner_id = approachLabel,
+    target_phase = targetPhase,
+    target_provenance = targetProvenance,
+    target_available = targetAvailable,
+    approach_target_speed_kmh = target,
+    approach_target_phase = targetPhase,
+    approach_target_provenance = targetProvenance,
+    approach_target_available = targetAvailable,
+    current_target_speed_kmh = currentTarget,
+    current_target_phase = currentPhase or "unavailable",
+    current_target_provenance = currentProvenance or "unavailable",
+    current_target_available = currentAvailable == true,
+    selected_target_speed_kmh = selectedTarget,
+    selected_target_corner_id = selectedCorner,
+    selected_target_phase = selectedPhase or "unavailable",
+    selected_target_provenance = selectedProvenance or "unavailable",
+    selected_target_available = selectedAvailable == true,
     current_speed_kmh = cur,
+    current_speed_available = readOk,
+    current_speed_source = readOk and "live" or (cur >= 0 and "cached" or "unavailable"),
     dist_to_brake_m = dist,
     progress_pct = progress,
   }
