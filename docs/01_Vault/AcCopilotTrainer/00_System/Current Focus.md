@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-10-12T05:18:44Z
 relates_to:
+  - AcCopilotTrainer/10_Rig/external-racing-controls.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-051844Z-game-point-deployed-ac-stalled-294d91.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-034900Z-rig-dashboard-control-d326a9.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-11-230443Z-post-merge-pr800-c1-21e389.md
@@ -77,6 +78,20 @@ relates_to:
 ---
 
 # Current focus
+
+## External racing controls — operator plan, 2026-10-11 PDT
+
+[External devices, buttons and knobs](../10_Rig/external-racing-controls.md) records
+the future keypad mapping: Button 1 shaker-socket power; encoder shaker-specific
+level; Buttons 2/3 and future encoder press intentionally undecided. The PC and
+SimHub reference the same `Rig Shakers - Seat and Pedals` endpoint; its SimHub
+volume ownership must be respected. The operator reports a working smart socket,
+but its exact HA entity has not been identified. No racing remapping was deployed.
+Preserve current six controls while workstation-ops #3863 delivers constant red;
+physical GPIO/recovery and device red/power-cycle verification remain unproved.
+The offline candidate's startup-off and blue recovery-entry frames were corrected
+and tested; firmware remains marked DO-NOT-FLASH pending exact-board evidence.
+This is a separate documented rig-control plan; existing active work below remains.
 
 Game Point startup sizing and the reviewed current EXE are deployed (#805/#806).
 Two fresh launches show all controls, START works, and P7/ESP32 transports reconnect.
