@@ -35,10 +35,24 @@ def runtime(tmp_path, request):
           return {dataDir = function() return data_root end}
         end
         read_count = 0
+        close_count = 0
+        max_read_bytes = 0
         local original_open = io.open
         io.open = function(...)
           read_count = read_count + 1
-          return original_open(...)
+          local file = original_open(...)
+          if not file then return nil end
+          return {
+            read = function(_, size)
+              assert(type(size) == 'number' and size <= 32768, 'Unbounded archive read')
+              max_read_bytes = math.max(max_read_bytes, size)
+              return file:read(size)
+            end,
+            close = function()
+              close_count = close_count + 1
+              return file:close()
+            end,
+          }
         end
         """
     )
@@ -91,6 +105,8 @@ def test_batch_scans_each_archive_once_and_never_decodes_samples(runtime):
     bests = lua.execute("return require('setup_library').bestForSetups(setups)")
     assert [bests[1], bests[2]] == [90000, 89000]
     assert lua.globals().read_count == 2
+    assert lua.globals().close_count == 2
+    assert lua.globals().max_read_bytes == 32768
     assert max(decoded_sizes) < 1000
     # No stale cache: a newer archived lap is visible on the next request.
     (directory / "lap_2.json").write_text(json.dumps(record(paths[0], 88000)))
@@ -160,3 +176,30 @@ def test_oversized_metadata_is_not_decoded(runtime):
     lua, _, _ = runtime
     lua.globals().archive = json.dumps(record(setup={"path": "x" * 70000}))
     assert lua.execute("return require('lap_metadata').parse(archive)") is None
+
+
+@pytest.mark.parametrize("offset", range(-3, 4))
+def test_streamed_escape_and_metadata_cross_chunk_boundaries(runtime, offset):
+    lua, directory, _ = runtime
+    value = record()
+    # Put escaped quotes, backslashes, braces and brackets across chunk edges.
+    prefix = "x" * (32768 + offset) + '\\"}]'
+    value = {"telemetry": {"labels": [prefix]}, **value}
+    path = directory / "lap_boundary.json"
+    path.write_text(json.dumps(value))
+    lua.globals().archive_path = path.as_posix()
+    metadata = lua.execute("return require('lap_metadata').read(archive_path)")
+    assert metadata["lap"]["lap_ms"] == 90000
+    assert metadata["car"]["id"] == "car"
+    assert metadata["telemetry"] is None
+    assert lua.globals().close_count == 1
+
+
+@pytest.mark.parametrize("suffix", [" trailing", ',"broken":{]}'])
+def test_streamed_trailing_corruption_fails_closed_and_closes_file(runtime, suffix):
+    lua, directory, _ = runtime
+    path = directory / "lap_broken.json"
+    path.write_text(json.dumps(record()) + suffix)
+    lua.globals().archive_path = path.as_posix()
+    assert lua.execute("return require('lap_metadata').read(archive_path)") is None
+    assert lua.globals().close_count == 1
