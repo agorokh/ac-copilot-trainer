@@ -1050,13 +1050,14 @@ class GamePointSupervisor:
                 status = self._keypad_worker.status()
         except (OSError, ValueError, ImportError) as exc:
             return ProbeResult("keypad", False, "unavailable", str(exc))
-        detail = status.get("profile") or status.get("error") or "awaiting prepared keypad"
+        detail = status.get("error") or status.get("profile") or "awaiting prepared keypad"
         if status.get("reload_error"):
             detail += "; invalid config reload rejected"
         if status.get("action_error"):
             detail += "; " + status["action_error"]
         ok = (
-            status["state"] == "active"
+            status["state"] in {"active", "negotiating"}
+            and not status.get("error")
             and not status.get("reload_error")
             and not status.get("action_error")
         )
@@ -1387,8 +1388,8 @@ class GamePointSupervisor:
     def close(self) -> None:
         with self._proc_lock:
             if self._keypad_worker is not None:
-                self._keypad_worker.stop()
-                self._keypad_worker = None
+                if self._keypad_worker.stop() is not False:
+                    self._keypad_worker = None
             self.stop_sidecar()
             self._close_log_handles()
             # The resilient child owns the machine-wide rig lock and the live AC session.

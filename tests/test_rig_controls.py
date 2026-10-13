@@ -446,3 +446,85 @@ def test_deep_json_reload_is_rejected_without_losing_config(tmp_path):
     ctl, _, _, _ = ready()
     assert not ctl.reload(path)
     assert ctl.status()["profile"] == "minecraft"
+
+
+def test_negotiation_does_not_flap_health_and_missing_device_stays_visible(tmp_path):
+    from tools.rig_launcher.supervisor import GamePointConfig, GamePointSupervisor, LauncherPaths
+
+    supervisor = GamePointSupervisor(
+        GamePointConfig(paths=LauncherPaths(tmp_path), keypad_profiles="profiles.json"), environ={}
+    )
+    snapshot = {"state": "negotiating", "profile": None, "error": ""}
+
+    class ExistingWorker:
+        def status(self):
+            return snapshot
+
+    supervisor._keypad_worker = ExistingWorker()
+    assert supervisor.probe_keypad().ok
+    snapshot["state"] = "unavailable"
+    assert not supervisor.probe_keypad().ok
+    snapshot.update(state="active", reload_error="bad JSON")
+    assert not supervisor.probe_keypad().ok
+
+
+def test_timed_out_shutdown_retains_owner_until_owning_thread_exits(tmp_path):
+    import threading
+
+    from tools.rig_controls.runtime import Worker
+
+    path = tmp_path / "profiles.json"
+    path.write_text(json.dumps(config()))
+    entered, release = threading.Event(), threading.Event()
+    owner_threads = []
+
+    class Owner:
+        def close(self):
+            owner_threads.append(threading.get_ident())
+
+    def blocked_context():
+        entered.set()
+        assert release.wait(3)
+        return Context()
+
+    worker = Worker(
+        path,
+        opener=Device,
+        actions=Actions(),
+        context_provider=blocked_context,
+        owner_factory=Owner,
+    )
+    worker.start()
+    assert entered.wait(1)
+    original_join = worker._thread.join
+    worker._thread.join = lambda timeout: original_join(0.01)
+    try:
+        assert worker.stop() is False
+        assert worker.owner is not None and not owner_threads
+        assert worker.status()["state"] == "stopping"
+    finally:
+        release.set()
+        original_join(1)
+    assert worker.owner is None
+    assert owner_threads == [worker._thread.ident]
+    assert worker.stop() is True
+
+
+def test_supervisor_retains_a_worker_with_pending_shutdown(tmp_path):
+    from tools.rig_launcher.supervisor import GamePointConfig, GamePointSupervisor, LauncherPaths
+
+    supervisor = GamePointSupervisor(GamePointConfig(paths=LauncherPaths(tmp_path)), environ={})
+
+    class PendingWorker:
+        stopped = False
+
+        def stop(self):
+            return self.stopped
+
+    pending = PendingWorker()
+    supervisor._keypad_worker = pending
+    supervisor.close()
+    assert supervisor._keypad_worker is pending
+    pending.stopped = True
+    supervisor.close()
+    assert supervisor._keypad_worker is None
