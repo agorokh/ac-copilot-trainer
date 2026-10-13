@@ -100,6 +100,8 @@ class Worker:
 
     def start(self):
         if self._thread is None:
+            with self._lock:
+                self._status.update(state="negotiating")
             self._thread = threading.Thread(target=self._run, name="GamePoint-keypad", daemon=True)
             self._thread.start()
 
