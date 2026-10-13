@@ -81,7 +81,11 @@ Game Point is the usual owner. In its existing user settings set `keypad_profile
 to the absolute JSON path (or relative to the existing launcher root). Alternatively
 set `AC_COPILOT_KEYPAD_PROFILES` before starting Game Point. Empty/unset is disabled
 and never enumerates HID. The Keypad status row reports disabled, unavailable,
-negotiating or active, profile name and action/reload errors. A machine-wide Windows mutex
+negotiating, active or stopping, profile name and action/reload errors. Normal
+negotiation stays healthy while errors and configured missing hardware remain visible.
+If shutdown takes longer than two seconds, status reports pending shutdown and the
+worker retains exclusive ownership until it exits.
+A machine-wide Windows mutex
 prevents competing Game Point/diagnostic workers across sessions from opening
 competing handles.
 
