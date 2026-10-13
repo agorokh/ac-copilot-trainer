@@ -621,3 +621,37 @@ def test_running_process_sampling_keeps_foreground_fresh(monkeypatch, tmp_path):
     assert contexts[1].foreground_process == "acs.exe"
     assert all(c.running == frozenset({"javaw.exe"}) for c in contexts)
     worker.stop()
+
+
+def test_reserved_action_is_visible_without_poisoning_transport_health(tmp_path):
+    from tools.rig_controls.runtime import Worker
+    from tools.rig_controls.windows import Actions as WindowsActions
+    from tools.rig_launcher.supervisor import GamePointConfig, GamePointSupervisor, LauncherPaths
+
+    data = config()
+    data["profiles"][0]["bindings"]["button_1"] = {"action": "rig", "name": "shakers.power.toggle"}
+    path = tmp_path / "profiles.json"
+    path.write_text(json.dumps(data))
+    injected = []
+    actions = WindowsActions(sender=lambda *args: injected.append(args))
+    device = Device()
+    worker = Worker(path, opener=lambda: device, actions=actions, context_provider=Context)
+    worker.tick(0)
+    device.ack()
+    worker.tick(0.1)
+    device.event(1)
+    worker.tick(0.2)
+    snapshot = worker.status()
+    assert snapshot["action_error"] == ""
+    assert "shakers.power.toggle" in snapshot["action_unavailable"]
+    assert not injected
+    supervisor = GamePointSupervisor(
+        GamePointConfig(paths=LauncherPaths(tmp_path), keypad_profiles=str(path)), environ={}
+    )
+    supervisor._keypad_worker = worker
+    probe = supervisor.probe_keypad()
+    assert probe.ok and "not activated" in probe.detail
+    actions.last_error = "real action failure"
+    worker._publish()
+    assert not supervisor.probe_keypad().ok
+    supervisor.close()
