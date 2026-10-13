@@ -10,6 +10,8 @@
 #include "include/ch5xx_usb.h"
 #include "USBconstant.h"
 #include "USBhandler.h"
+#include "../profile_protocol.h"
+#include <Arduino.h>
 // clang-format on
 
 // clang-format off
@@ -19,6 +21,11 @@ extern __xdata __at (EP1_ADDR) uint8_t Ep1Buffer[];
 
 volatile __xdata uint8_t UpPoint1_Busy =
     0; // Flag of whether upload pointer is busy
+#if KEYPAD_MANAGED
+static volatile __xdata uint8_t ProfileOut[9];
+static volatile uint8_t ProfileOutPending;
+static volatile uint8_t ProfileResetPending;
+#endif
 
 __xdata uint8_t HIDKey[8] = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
 __xdata uint8_t HIDMouse[4] = {0x0, 0x0, 0x0, 0x0};
@@ -179,7 +186,58 @@ void USB_EP1_IN() {
 void USB_EP1_OUT() {
   if (U_TOG_OK) // Discard unsynchronized packets
   {
+#if KEYPAD_MANAGED
+    /* EP1 receives a maximum of nine bytes. Main-loop processing avoids calling
+     * the non-reentrant SDCC protocol functions from the USB interrupt. */
+    if (USB_RX_LEN == 9 && !ProfileOutPending) {
+      for (uint8_t i = 0; i < 9; i++) ProfileOut[i] = Ep1Buffer[i];
+      ProfileOutPending = 1;
+      UEP1_CTRL = (UEP1_CTRL & ~MASK_UEP_R_RES) | UEP_R_RES_NAK;
+    }
+#endif
   }
+}
+
+void USB_profile_reset(void) {
+  UpPoint1_Busy = 0;
+  UEP1_T_LEN = 0;
+#if KEYPAD_MANAGED
+  ProfileOutPending = 0;
+  ProfileResetPending = 1;
+#endif
+}
+
+void USB_profile_service(void) {
+#if KEYPAD_MANAGED
+  uint8_t packet[9];
+  uint8_t had_packet;
+  uint8_t had_reset;
+  uint8_t interrupt_enabled = IE_USB;
+  IE_USB = 0;
+  had_packet = ProfileOutPending;
+  had_reset = ProfileResetPending;
+  ProfileResetPending = 0;
+  if (had_packet) {
+    for (uint8_t i = 0; i < 9; i++) packet[i] = ProfileOut[i];
+    ProfileOutPending = 0;
+    UEP1_CTRL = (UEP1_CTRL & ~MASK_UEP_R_RES) | UEP_R_RES_ACK;
+  }
+  IE_USB = interrupt_enabled;
+  /* millis needs timer interrupts; only USB is masked while updating state. */
+  uint32_t now = millis();
+  IE_USB = 0;
+  if (had_reset) profile_disconnect();
+  profile_tick(now);
+  if (had_packet) profile_receive(packet, 9, now);
+  if (UsbConfig && !UpPoint1_Busy && profile_peek(packet)) {
+    for (uint8_t i = 0; i < 9; i++) Ep1Buffer[64 + i] = packet[i];
+    UEP1_T_LEN = 9;
+    UpPoint1_Busy = 1;
+    UEP1_CTRL = (UEP1_CTRL & ~MASK_UEP_T_RES) | UEP_T_RES_ACK;
+    profile_sent();
+  }
+  IE_USB = interrupt_enabled;
+#endif
 }
 
 static uint8_t USB_EP1_send_consumer(uint8_t wait_for_ready) {

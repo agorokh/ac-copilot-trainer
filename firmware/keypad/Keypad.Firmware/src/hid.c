@@ -4,6 +4,7 @@
 #include "led.h"
 #include "hid.h"
 #include "configuration_data.h"
+#include "profile_protocol.h"
 
 #if !CONFIGURATION_DEBUG_MODE
 
@@ -204,6 +205,13 @@ void hid_handle_button(size_t button_index, hid_trigger_mode_t mode)
     return;
   }
 
+#if KEYPAD_MANAGED
+  if (mode == HID_TRIGGER_PRESS || mode == HID_TRIGGER_RELEASE)
+    profile_event(button_index == 3 ? 6 : (uint8_t)(button_index + 1),
+                  mode == HID_TRIGGER_PRESS);
+  return;
+#else
+
   const button_binding_t *binding = &button_bindings[button_index];
 
 #if NEO_COUNT > 0
@@ -221,6 +229,7 @@ void hid_handle_button(size_t button_index, hid_trigger_mode_t mode)
 #endif
 
   hid_run_binding(&binding->function, mode);
+#endif
 }
 
 void hid_handle_encoder(size_t encoder_index, bool clockwise)
@@ -230,13 +239,19 @@ void hid_handle_encoder(size_t encoder_index, bool clockwise)
     return;
   }
 
+#if KEYPAD_MANAGED
+  profile_event(clockwise ? 4 : 5, 1);
+#else
+
   const encoder_binding_t *binding = &encoder_bindings[encoder_index];
   const hid_binding_t *fn = clockwise ? &binding->clockwise : &binding->counter_clockwise;
   hid_run_binding(fn, HID_TRIGGER_CLICK);
+#endif
 }
 
 void hid_service(void)
 {
+#if !KEYPAD_MANAGED
   if (consumer_phase_s == 1)
   {
     if (Keyboard_consumer_try_send(0))
@@ -262,6 +277,7 @@ void hid_service(void)
       consumer_phase_s = 1;
     }
   }
+#endif
 }
 
 #endif

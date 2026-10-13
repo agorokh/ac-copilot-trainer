@@ -11,6 +11,10 @@
 static bool *button_state_s = NULL;
 static size_t button_state_capacity_s = 0;
 static size_t button_state_count_s = 0;
+#if KEYPAD_MANAGED
+static bool observed_s[CONFIGURATION_BUTTON_CAPACITY];
+static uint32_t changed_ms_s[CONFIGURATION_BUTTON_CAPACITY];
+#endif
 
 void buttons_setup(void)
 {
@@ -41,6 +45,10 @@ void buttons_setup(void)
         bool active = button_bindings[i].active_low ? !digitalRead(button_bindings[i].pin)
                                                    : digitalRead(button_bindings[i].pin);
         button_state_s[i] = active;
+#if KEYPAD_MANAGED
+        observed_s[i] = active;
+        changed_ms_s[i] = millis();
+#endif
         if (active)
         {
             hid_handle_button(i, HID_TRIGGER_PRESS);
@@ -62,6 +70,18 @@ void buttons_update(void)
     {
         bool active = button_bindings[i].active_low ? !digitalRead(button_bindings[i].pin)
                                                    : digitalRead(button_bindings[i].pin);
+#if KEYPAD_MANAGED
+        const uint32_t now = millis();
+        if (active != observed_s[i])
+        {
+            observed_s[i] = active;
+            changed_ms_s[i] = now;
+        }
+        if ((uint32_t)(now - changed_ms_s[i]) < 5)
+        {
+            active = button_state_s[i];
+        }
+#endif
         if (button_bindings[i].bootloader_chord_member)
         {
             has_bootloader_chord = true;

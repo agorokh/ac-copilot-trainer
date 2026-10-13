@@ -3,6 +3,11 @@
 
 #pragma once
 
+// Build script selects 0 for the separately preserved keyboard baseline.
+#ifndef KEYPAD_MANAGED
+#define KEYPAD_MANAGED 1
+#endif
+
 #define CONFIGURATION_BUTTON_CAPACITY 4
 #define CONFIGURATION_ENCODER_CAPACITY 1
 #define CONFIGURATION_DEBUG_MODE 0

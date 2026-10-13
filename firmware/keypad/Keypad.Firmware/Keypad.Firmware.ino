@@ -18,6 +18,7 @@
 #include "src/hid.h"
 #include "src/led.h"
 #include "src/util.h"
+#include "src/profile_protocol.h"
 #endif
 
 // ===================================================================================
@@ -29,12 +30,14 @@ void setup()
 #if CONFIGURATION_DEBUG_MODE
   debug_mode_setup();
 #else
+  profile_init();
 #if NEO_COUNT > 0
   // Initialize neopixels
   NEO_init();
   delay(10);
-  NEO_clearAll();
   led_init();
+  // Styling is available before USB enumeration or a host application starts.
+  led_update();
 #endif
 
   // Go in bootloader mode if the configured boot button is held during power-on
@@ -60,6 +63,7 @@ void loop()
   debug_mode_loop();
 #else
   //task update
+  USB_profile_service();
   buttons_update();
   encoder_update();
   hid_service();

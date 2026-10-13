@@ -18,7 +18,7 @@ const button_binding_t button_bindings[] = {
                     {
                         .kind = HID_STEP_KEY,
                         .keycode = 'a',
-                        .modifiers = 0,
+                        .modifiers = 5,
                         .hold_ms = 10,
                         .gap_ms = 10,
                         .function_value = 1,
@@ -43,8 +43,8 @@ const button_binding_t button_bindings[] = {
                 .steps = {
                     {
                         .kind = HID_STEP_KEY,
-                        .keycode = 'b',
-                        .modifiers = 0,
+                        .keycode = 'm',
+                        .modifiers = 5,
                         .hold_ms = 10,
                         .gap_ms = 10,
                         .function_value = 1,
@@ -69,8 +69,8 @@ const button_binding_t button_bindings[] = {
                 .steps = {
                     {
                         .kind = HID_STEP_KEY,
-                        .keycode = 'c',
-                        .modifiers = 0,
+                        .keycode = 's',
+                        .modifiers = 5,
                         .hold_ms = 10,
                         .gap_ms = 10,
                         .function_value = 1,
@@ -94,15 +94,15 @@ const button_binding_t button_bindings[] = {
             .function.sequence = {
                 .steps = {
                     {
-                        .kind = HID_STEP_KEY,
-                        .keycode = 'd',
+                        .kind = HID_STEP_FUNCTION,
+                        .keycode = 0,
                         .modifiers = 0,
-                        .hold_ms = 10,
-                        .gap_ms = 10,
+                        .hold_ms = 0,
+                        .gap_ms = 0,
                         .function_value = 1,
                         .pointer_type = 0,
                         .pointer_value = 0,
-                        .functionPointer = 0
+                        .functionPointer = hid_consumer_mute
                     }
                 },
                 .length = 1
@@ -161,14 +161,14 @@ const encoder_binding_t encoder_bindings[] = {
 const size_t encoder_binding_count = sizeof(encoder_bindings) / sizeof(encoder_bindings[0]);
 
 static const led_passive_mode_t led_passive_modes[] = {
-    LED_PASSIVE_RAINBOW,
-    LED_PASSIVE_RAINBOW,
-    LED_PASSIVE_RAINBOW
+    LED_PASSIVE_STATIC,
+    LED_PASSIVE_STATIC,
+    LED_PASSIVE_STATIC
 };
 static const led_rgb_t led_passive_colors[] = {
     { .r = 255, .g = 0, .b = 0 },
-    { .r = 255, .g = 255, .b = 0 },
-    { .r = 0, .g = 255, .b = 0 }
+    { .r = 255, .g = 0, .b = 0 },
+    { .r = 255, .g = 0, .b = 0 }
 };
 static const led_active_mode_t led_active_modes[] = {
     LED_ACTIVE_SOLID,
@@ -179,9 +179,9 @@ static const uint8_t led_rainbow_step_ms[] = { 20, 20, 20 };
 static const uint8_t led_breathing_min_percent[] = { 20, 20, 20 };
 static const uint8_t led_breathing_step_ms[] = { 20, 20, 20 };
 static const led_rgb_t led_active_colors[] = {
-    { .r = 255, .g = 255, .b = 255 },
-    { .r = 255, .g = 255, .b = 255 },
-    { .r = 255, .g = 255, .b = 255 }
+    { .r = 255, .g = 0, .b = 0 },
+    { .r = 255, .g = 0, .b = 0 },
+    { .r = 255, .g = 0, .b = 0 }
 };
 const led_configuration_t led_configuration = {
     .passive_modes = led_passive_modes,

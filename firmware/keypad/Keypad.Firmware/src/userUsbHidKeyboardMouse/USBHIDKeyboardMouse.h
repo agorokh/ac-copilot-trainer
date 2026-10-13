@@ -8,6 +8,8 @@
 // clang-format on
 
 #define KEY_LEFT_CTRL 0x80
+void USB_profile_service(void);
+void USB_profile_reset(void);
 #define KEY_LEFT_SHIFT 0x81
 #define KEY_LEFT_ALT 0x82
 #define KEY_LEFT_GUI 0x83

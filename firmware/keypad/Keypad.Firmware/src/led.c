@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include "../configuration.h"
 #include "led.h"
+#include "profile_protocol.h"
 
 #if !CONFIGURATION_DEBUG_MODE && NEO_COUNT > 0
 #ifndef NEO_REVERSED
@@ -133,7 +134,8 @@ void led_show_bootloader_indicator(void)
   for (uint8_t i = 0; i < count; ++i)
   {
     const uint8_t physical = led_physical_index(i);
-    NEO_writeHue(physical, NEO_BLUE, NEO_BRIGHT_KEYS);
+    // Recovery entry preserves the rig's solid-red styling.
+    NEO_writeColor(physical, 255, 0, 0);
   }
   NEO_update();
 }
@@ -165,6 +167,13 @@ void led_set_key_state(int key, bool pressed)
 void led_update()
 {
   const uint8_t count = led_count();
+#if KEYPAD_MANAGED
+  uint8_t rgb[3];
+  profile_color(rgb);
+  for (uint8_t i = 0; i < count; ++i)
+    NEO_writeColor(led_physical_index(i), rgb[0], rgb[1], rgb[2]);
+  NEO_update();
+#else
   const uint32_t now = millis();
   for (uint8_t led = 0; led < count; ++led)
   {
@@ -285,5 +294,6 @@ void led_update()
   }
 
   NEO_update();
+#endif
 }
 #endif

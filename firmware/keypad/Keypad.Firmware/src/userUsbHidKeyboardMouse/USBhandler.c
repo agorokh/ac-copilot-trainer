@@ -9,6 +9,12 @@
 #include "USBhandler.h"
 
 #include "USBconstant.h"
+#include "USBHIDKeyboardMouse.h"
+#include "../profile_protocol.h"
+#if KEYPAD_MANAGED
+static __xdata uint8_t capability[9];
+static uint8_t capability_offset;
+#endif
 
 // Keyboard functions:
 
@@ -59,6 +65,22 @@ void USB_EP0_SETUP() {
       }
       case USB_REQ_TYP_CLASS: {
         switch (SetupReq) {
+#if KEYPAD_MANAGED
+        case 0x01: // HID GET_REPORT, feature ID 7, interface zero only
+          if (UsbSetupBuf->bRequestType != 0xa1 || UsbSetupBuf->wValueH != 3 ||
+              UsbSetupBuf->wValueL != 7 || UsbSetupBuf->wIndexL ||
+              UsbSetupBuf->wIndexH || !SetupLen) {
+            len = 0xff;
+            break;
+          }
+          profile_capability(capability);
+          if (SetupLen > 9) SetupLen = 9;
+          len = SetupLen > 8 ? 8 : SetupLen;
+          for (uint8_t i = 0; i < len; i++) Ep0Buffer[i] = capability[i];
+          SetupLen -= len;
+          capability_offset = len;
+          break;
+#endif
         default:
           len = 0xFF; // command not supported
           break;
@@ -305,6 +327,16 @@ void USB_EP0_SETUP() {
 
 void USB_EP0_IN() {
   switch (SetupReq) {
+#if KEYPAD_MANAGED
+  case 0x01: {
+    uint8_t len = SetupLen > 8 ? 8 : SetupLen;
+    for (uint8_t i = 0; i < len; i++) Ep0Buffer[i] = capability[capability_offset + i];
+    capability_offset += len; SetupLen -= len;
+    UEP0_T_LEN = len;
+    UEP0_CTRL ^= bUEP_T_TOG;
+    break;
+  }
+#endif
   case USB_GET_DESCRIPTOR: {
     __data uint8_t len = SetupLen >= DEFAULT_ENDP0_SIZE
                              ? DEFAULT_ENDP0_SIZE
@@ -438,6 +470,7 @@ void USBInterrupt(void) { // inline not really working in multiple files in SDCC
 
   // Device mode USB bus reset
   if (UIF_BUS_RST) {
+    USB_profile_reset();
     UEP0_CTRL = UEP_R_RES_ACK | UEP_T_RES_NAK;
     UEP1_CTRL = bUEP_AUTO_TOG | UEP_T_RES_NAK | UEP_R_RES_ACK;
 
