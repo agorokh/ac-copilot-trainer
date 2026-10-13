@@ -15,6 +15,9 @@ from typing import Any
 
 from tools.ai_sidecar.track_map import _channel_valid, _valid_trace, build_corner_comparison
 from tools.lap_qualification import (
+    _UNITS as _EXPECTED_CHANNEL_UNITS,
+)
+from tools.lap_qualification import (
     USES,
     archive_combo,
     duplicate_identity_reasons,
@@ -36,7 +39,7 @@ from tools.session_review.report import (
     _num_ms,
 )
 
-_CANONICAL = ("spline", "speed", "eMs", "throttle", "brake", "steer", "gear", "px", "py", "pz")
+_CANONICAL = tuple(_EXPECTED_CHANNEL_UNITS)
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -68,9 +71,9 @@ def _channels(record: Mapping[str, Any], *, inspection: bool) -> list[dict[str, 
             valid = False
         basis = channel.get("basis") or ("legacy_unverified" if present else "unavailable")
         semantics_known = (
-            channel.get("basis") == "measured"
-            and isinstance(channel.get("unit"), str)
-            and bool(channel["unit"].strip())
+            name in _EXPECTED_CHANNEL_UNITS
+            and channel.get("unit") == _EXPECTED_CHANNEL_UNITS[name]
+            and channel.get("basis") == "measured"
         ) or (not managed and name in _CANONICAL)
         reason = (
             "missing_channel"

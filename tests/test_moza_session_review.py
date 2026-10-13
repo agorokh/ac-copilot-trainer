@@ -104,12 +104,18 @@ def test_attributed_original_native_allows_analysis_only(tmp_path):
     assert selected.read_bytes() == before
 
 
-def test_finite_extra_native_fields_without_semantics_are_not_qualified(tmp_path):
+@pytest.mark.parametrize("claimed_unit", [None, "m", "bananas"])
+def test_finite_extra_native_fields_without_semantics_are_not_qualified(tmp_path, claimed_unit):
     record = native()
     record["trace"]["fields"].append("extra_unqualified_channel")
     for sample in record["trace"]["samples"]:
         sample.append(42)
     record["qualification"] = assessment(record)
+    if claimed_unit is not None:
+        record["qualification"]["channels"]["extra_unqualified_channel"] = {
+            "basis": "measured",
+            "unit": claimed_unit,
+        }
     report = build_moza_session_report(write(tmp_path, record))
     review = report["moza_review"]
     assert review["available"]
@@ -121,6 +127,20 @@ def test_finite_extra_native_fields_without_semantics_are_not_qualified(tmp_path
         assert rendered.index("Selected lap corner measurements") < rendered.index(
             "Channel availability"
         )
+
+
+@pytest.mark.parametrize("unit", ["mph", "bananas"])
+def test_unsupported_canonical_unit_never_appears_usable(tmp_path, unit):
+    record = native(authority="shared")
+    record["qualification"]["channels"]["speed"]["unit"] = unit
+    channel = next(
+        row for row in moza._channels(record, inspection=False) if row["name"] == "speed"
+    )
+    assert channel["present"] and not channel["available"]
+    assert channel["reason"] == "channel_semantics_unverified"
+    review = build_moza_session_report(write(tmp_path, record))["moza_review"]
+    assert review["reason"] == "unsupported_channel_unit:speed"
+    assert not any(row["available"] for row in review["channels"])
 
 
 def test_qualified_same_combo_native_comparison_uses_existing_corner_measurements(tmp_path):
