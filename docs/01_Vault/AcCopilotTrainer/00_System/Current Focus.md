@@ -112,22 +112,21 @@ startup is recorded and the real screen connects; P7 USB/wireless discovery is
 empty and no video camera is detected. Physical captures need those inputs
 reconnected; the agent owns recording. No physical acceptance is upgraded.
 
-## External racing controls — software prepared, 2026-10-12 PDT
+## External racing controls — merged and staged, 2026-10-13
 
-[Keypad preparation SAVE](handoffs/2026-10-13-065716Z-keypad-preparation-2ba352.md) records firmware and an opt-in Game
-Point profile controller in [PR #820](https://github.com/agorokh/ac-copilot-trainer/pull/820).
-Both firmware variants and the Windows EXE are built and staged; CI passes.
-Source, independent review and merge status are tracked in PR #820. Agents edit a validated
-JSON file for all six inputs, colours, conditions, priority and manual override.
-Default/racing is red; foreground Minecraft is green. Installed settings are
-unchanged and the prepared worker is inactive. Stock keypad controls remain live.
+[Keypad delivery SAVE](handoffs/2026-10-13-125748Z-post-merge-pr826-keypad-db789d.md) records merged firmware/profile
+[PR #826](https://github.com/agorokh/ac-copilot-trainer/pull/826) and controller
+[PR #825](https://github.com/agorokh/ac-copilot-trainer/pull/825), with independent
+exact-head review, passing CI, both firmware builds and the final Windows EXE.
+The PC package and validated working JSON remain inactive; installed settings
+are unchanged. Agents edit all six mappings, colours, conditions, priority and
+manual override. Default/racing is red; foreground Minecraft is green.
 [External devices, buttons and knobs](../10_Rig/external-racing-controls.md) is the
-canonical rig plan. Shaker socket/level actions remain unavailable until exact
-HA/SimHub targets are verified; Buttons 2/3 and knob click remain unassigned.
-Workstation-ops #3863 remains OPEN: hardware GPIO, ROM/recovery, all six real
-inputs and red/green power/sleep/reconnect acceptance are deferred until the
-adapter arrives. Both firmware artifacts remain DO-NOT-FLASH. Existing active
-work below and screen/AC ownership boundaries are unchanged.
+canonical rig plan. Shaker actions remain unavailable until exact targets are
+verified; Buttons 2/3 and knob click remain unassigned. Stock firmware remains live.
+Workstation-ops #3863 stays OPEN for adapter-stage ROM/GPIO/recovery qualification,
+all six physical controls and colour/power/sleep/reconnect acceptance. Both HEX
+artifacts remain DO-NOT-FLASH. Existing work and screen/AC boundaries are unchanged.
 
 Game Point sizing and current EXE are deployed (#805/#806/#807/#809/#810).
 Normal-state telemetry and actual P7 pixels pass with all archives restored.
