@@ -149,13 +149,14 @@ class Actions:
         self.sender = sender
         self.counts = {}
         self.last_error = ""
+        self.last_unavailable = ""
 
     def perform(self, binding: Binding, pressed: bool, impulse: bool = False):
         if binding.action == "noop":
             return
         if binding.action == "rig":
             if pressed:
-                self.last_error = f"{binding.name}: target integration not activated"
+                self.last_unavailable = f"{binding.name}: target integration not activated"
             return
         keys = binding.keys if pressed else tuple(reversed(binding.keys))
         for key in keys:
@@ -178,6 +179,7 @@ class Actions:
 
     def release_all(self):
         self.last_error = ""
+        self.last_unavailable = ""
         first_error = None
         for key in reversed(list(self.counts)):
             try:

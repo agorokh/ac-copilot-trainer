@@ -79,6 +79,7 @@ class Worker:
     def _publish(self):
         snapshot = self.controller.status()
         snapshot["action_error"] = getattr(self.controller.actions, "last_error", "")
+        snapshot["action_unavailable"] = getattr(self.controller.actions, "last_unavailable", "")
         with self._lock:
             self._status = snapshot
 

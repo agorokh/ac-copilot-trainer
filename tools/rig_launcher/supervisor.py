@@ -1055,6 +1055,8 @@ class GamePointSupervisor:
             detail += "; invalid config reload rejected"
         if status.get("action_error"):
             detail += "; " + status["action_error"]
+        if status.get("action_unavailable"):
+            detail += "; " + status["action_unavailable"]
         ok = (
             status["state"] in {"active", "negotiating"}
             and not status.get("error")
