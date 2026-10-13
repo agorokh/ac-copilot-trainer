@@ -491,6 +491,9 @@ def active_workspace_backend(root: Path, workspace: str) -> str | None:
 
 
 def online_workspace_name_for_failure(root: Path) -> str | None:
+    # ``graphiti`` is a removed backend (2026-06-13), never an online workspace.
+    # No caller in the hub or in any spoke copy as of gov-hub#791; kept so an
+    # out-of-tree import does not break.
     manifest = load_manifest(root)
     workspace = resolve_workspace(root, manifest)
     if not workspace or workspace_backend(workspace) == "graphiti":
@@ -857,7 +860,8 @@ def _row_backend(row: dict[str, Any], defaults: dict[str, Any]) -> str:
 
 
 def _row_is_lightrag(row: dict[str, Any], defaults: dict[str, Any]) -> bool:
-    # Offline/graphiti rows are never on the agent read path.
+    # Only lightrag rows are on the agent read path. Any other backend (a leftover
+    # graphiti row, for example; that backend was removed) is not.
     return _row_backend(row, defaults) == "lightrag"
 
 
@@ -918,7 +922,7 @@ def resolve_memory_endpoints(
             if not _row_enabled(row, defaults):
                 continue  # a disabled vault is not a reachable probe target
             if not _row_is_lightrag(row, defaults):
-                continue  # offline/graphiti rows are never on the agent read path
+                continue  # a non-lightrag row is never on the agent read path
             rid = _row_workspace_id(row)
             if not rid:
                 continue
@@ -952,7 +956,7 @@ def resolve_memory_endpoints(
     if isinstance(manifest_workspace, dict):
         # Only attach the manifest endpoint when the row is actually THIS
         # workspace and is an online (lightrag) substrate — never a mismatched
-        # snippet, an offline graphiti row, or (with an empty workspace arg) any
+        # snippet, a non-lightrag row, or (with an empty workspace arg) any
         # manifest row at all.
         mf_name = workspace_name(manifest_workspace)
         mf_matches = (
