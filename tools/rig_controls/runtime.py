@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tools.rig_controls.controller import Controller
 from tools.rig_controls.ownership import Ownership, SimulatedOwnership
-from tools.rig_controls.profiles import load_config
+from tools.rig_controls.profiles import Context, load_config
 from tools.rig_controls.protocol import open_device
 from tools.rig_controls.windows import Actions, foreground_context
 
@@ -35,6 +35,8 @@ class Worker:
             Ownership if opener is open_device else SimulatedOwnership
         )
         self.owner = None
+        self._running = frozenset()
+        self._running_at = 0.0
 
     def status(self):
         with self._lock:
@@ -57,10 +59,16 @@ class Worker:
             if self.context_provider:
                 context = self.context_provider()
             else:
-                context = foreground_context(
+                sample_running = (
                     any(p.running for p in self.controller.config.profiles)
+                    and now >= self._running_at
                 )
+                context = foreground_context(sample_running)
                 now = time.monotonic()
+                if sample_running:
+                    self._running = context.running
+                    self._running_at = now + 0.5
+                context = Context(context.foreground_process, context.title, self._running)
             self.controller.step(context, now)
         except (OSError, ValueError, RuntimeError) as exc:
             self.controller.error = str(exc)

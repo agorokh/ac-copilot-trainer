@@ -528,3 +528,96 @@ def test_supervisor_retains_a_worker_with_pending_shutdown(tmp_path):
     pending.stopped = True
     supervisor.close()
     assert supervisor._keypad_worker is None
+
+
+@pytest.mark.parametrize("open_fails", [False, True])
+def test_inspection_owns_handle_and_releases_on_failure(monkeypatch, open_fails):
+    import sys
+    from types import SimpleNamespace
+
+    from tools.rig_controls import cli
+
+    events = []
+    candidate = {"usage_page": cli.USAGE_PAGE, "usage": cli.USAGE}
+    monkeypatch.setitem(sys.modules, "hid", SimpleNamespace(enumerate=lambda *args: [candidate]))
+
+    class Owner:
+        def __init__(self):
+            events.append("own")
+
+        def close(self):
+            events.append("release")
+
+    class Probe:
+        def get_feature_report(self, *args):
+            return [7, 65, 67, 1, 0, 255, 0, 0, 0]
+
+        def close(self):
+            events.append("close")
+
+    def open_probe():
+        events.append("open")
+        if open_fails:
+            raise OSError("HID open failed")
+        return Probe()
+
+    monkeypatch.setattr(cli, "Ownership", Owner, raising=False)
+    monkeypatch.setattr(cli, "open_device", open_probe)
+    if open_fails:
+        with pytest.raises(OSError):
+            cli.inspect_devices()
+        assert events == ["own", "open", "release"]
+    else:
+        assert cli.inspect_devices()["outputs_sent"] == 0
+        assert events == ["own", "open", "close", "release"]
+
+
+def test_contended_inspection_never_opens_hid(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from tools.rig_controls import cli
+
+    candidate = {"usage_page": cli.USAGE_PAGE, "usage": cli.USAGE}
+    monkeypatch.setitem(sys.modules, "hid", SimpleNamespace(enumerate=lambda *args: [candidate]))
+    opened = []
+
+    def contested():
+        raise OSError("another controller owns keypad")
+
+    monkeypatch.setattr(cli, "Ownership", contested, raising=False)
+    monkeypatch.setattr(cli, "open_device", lambda: opened.append(1))
+    with pytest.raises(OSError):
+        cli.inspect_devices()
+    assert not opened
+
+
+def test_running_process_sampling_keeps_foreground_fresh(monkeypatch, tmp_path):
+    from tools.rig_controls import runtime
+
+    data = config()
+    data["profiles"][1]["when"] = {"running_process": ["javaw.exe"]}
+    path = tmp_path / "profiles.json"
+    path.write_text(json.dumps(data))
+    calls, contexts = [], []
+    now = [0.0]
+
+    def read_context(include_running):
+        calls.append(include_running)
+        return Context(
+            "acs.exe" if len(calls) > 1 else "javaw.exe",
+            "fresh title",
+            frozenset({"javaw.exe"}) if include_running else frozenset(),
+        )
+
+    monkeypatch.setattr(runtime, "foreground_context", read_context)
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: now[0])
+    worker = runtime.Worker(path, opener=Device, actions=Actions())
+    worker.controller.step = lambda context, timestamp: contexts.append(context)
+    for timestamp in (0.0, 0.02, 0.49, 0.5):
+        now[0] = timestamp
+        worker.tick(timestamp)
+    assert calls == [True, False, False, True]
+    assert contexts[1].foreground_process == "acs.exe"
+    assert all(c.running == frozenset({"javaw.exe"}) for c in contexts)
+    worker.stop()
