@@ -13,8 +13,9 @@ This is the live engine that ties the keystones together. It reuses the existing
 5. fires a **CONFIRM** ("Good.") once when a coached mistake is fixed, then goes silent.
 
 Deliberately a SEPARATE engine from the battle-tested :class:`RealtimeObserver` (which stays for the
-geometry); the server wires whichever producer is active. Pure stdlib + the keystone modules — no
-I/O — so it is unit-tested by feeding synthetic injected-mistake frame streams.
+geometry); the server wires whichever producer is active. Archive construction resolves provenance
+once at the boundary; telemetry ticks do no qualification I/O. Tests feed synthetic injected-mistake
+frame streams.
 """
 
 from __future__ import annotations
@@ -58,6 +59,7 @@ from tools.ai_sidecar.track_reference import (
     build_references,
     sustained_brake_onsets,
 )
+from tools.lap_qualification import qualify_archive
 
 #: Roots that demand more speed / later braking — suppressed at the grip ceiling (P3).
 #: LATE_BRAKE maps to "Brake earlier." and is NOT grip-gated (still valid at the grip ceiling).
@@ -693,14 +695,33 @@ def build_coach_runtime(
     alien_line_artifact: Mapping[str, Any] | None = None,
     alien_expected_plant_sha12: str | None = None,
     alien_expected_fast_lane_sha12: str | None = None,
+    expected_combo: tuple[str, str, str | None] | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> CoachRuntime | None:
     """Build a :class:`CoachRuntime` from a reference archive (same input as the observer)."""
+    qualification = qualify_archive(
+        reference_archive, use="live_reference", expected_combo=expected_combo
+    )
+    if diagnostics is not None:
+        diagnostics.update(allowed=qualification.allowed, reason=qualification.reason)
+    if not qualification.allowed:
+        return None
+    if diagnostics is not None:
+        diagnostics.update(allowed=False, reason="reference_trace_unavailable")
+    generator = reference_archive.get("generator") or {}
+    tt_reference = generator.get("tt_reference") if isinstance(generator, dict) else None
+    if isinstance(tt_reference, dict) and tt_reference.get("partial") is True:
+        if diagnostics is not None:
+            diagnostics.update(allowed=False, reason="partial_tt_reference")
+        return None
     try:
         ref_lap = lap_trace_from_archive(reference_archive)
     except ValueError:
         return None
     refs = build_references(ref_lap)
     if not refs:
+        if diagnostics is not None:
+            diagnostics["reason"] = "reference_corners_unavailable"
         return None
     geom = {s.index: s for s in corner_signatures(ref_lap)}  # for anchor timing only
     track_obj = reference_archive.get("track")
@@ -820,6 +841,8 @@ def build_coach_runtime(
         assess_laps=_env_int("AC_COPILOT_COACH_ASSESS_LAPS", policy.assess_laps, min_value=0),
         lap_budget=_env_int("AC_COPILOT_COACH_LAP_BUDGET", policy.lap_budget, min_value=1),
     )
+    if diagnostics is not None:
+        diagnostics.update(allowed=True, reason=qualification.reason)
     return CoachRuntime(
         refs=refs,
         ref_sigs=ref_sigs,

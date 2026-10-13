@@ -90,7 +90,7 @@ relates_to:
 
 ## Issue 815 Part B — native control provenance and MOZA import
 
-Active implementation: `codex/issue-815-moza-qualification-import`, refreshed
+Active implementation: `feat/issue-815-moza-qualification-import`, refreshed
 from current main `bb8f1db`. Part A research is complete in the separate
 [PR #818](https://github.com/agorokh/ac-copilot-trainer/pull/818) evidence record.
 Part B adds reliable control attribution for selected native laps and one shared

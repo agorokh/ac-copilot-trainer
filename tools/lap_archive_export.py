@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import sys
@@ -17,6 +18,8 @@ from collections.abc import Iterable, Iterator, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO
+
+from tools.lap_qualification import AttributionError, _stable_bytes, resolve_archive_provenance
 
 LAP_ARCHIVE_SCHEMA_VERSION = 1
 
@@ -338,11 +341,14 @@ def _format_cell(value: Any) -> str:
     return str(value)
 
 
-def load_lap_archive(path: str | Path) -> dict[str, Any]:
+def load_lap_archive(path: str | Path, *, allow_legacy_schema: bool = False) -> dict[str, Any]:
     """Load one JSON archive file and validate the minimal schema envelope."""
     archive_path = Path(path)
     try:
-        parsed = json.loads(archive_path.read_text(encoding="utf-8"))
+        raw = _stable_bytes(archive_path)
+        parsed = json.loads(raw)
+    except AttributionError as exc:
+        raise LapArchiveExportError(f"{archive_path}: {exc}") from exc
     except json.JSONDecodeError as exc:
         raise LapArchiveExportError(f"{archive_path}: invalid JSON: {exc}") from exc
     except OSError as exc:
@@ -350,7 +356,14 @@ def load_lap_archive(path: str | Path) -> dict[str, Any]:
 
     if not isinstance(parsed, dict):
         raise LapArchiveExportError(f"{archive_path}: root must be an object")
-    if parsed.get("schema_version") != LAP_ARCHIVE_SCHEMA_VERSION:
+    if allow_legacy_schema and "schema_version" not in parsed:
+        return resolve_archive_provenance(
+            parsed, source_path=archive_path, source_sha256=hashlib.sha256(raw).hexdigest()
+        )
+    if (
+        type(parsed.get("schema_version")) is not int
+        or parsed.get("schema_version") != LAP_ARCHIVE_SCHEMA_VERSION
+    ):
         raise LapArchiveExportError(
             f"{archive_path}: schema_version must be {LAP_ARCHIVE_SCHEMA_VERSION}"
         )
@@ -361,7 +374,9 @@ def load_lap_archive(path: str | Path) -> dict[str, Any]:
         raise LapArchiveExportError(f"{archive_path}: trace.fields must be an array")
     if not isinstance(trace.get("samples"), list):
         raise LapArchiveExportError(f"{archive_path}: trace.samples must be an array")
-    return parsed
+    return resolve_archive_provenance(
+        parsed, source_path=archive_path, source_sha256=hashlib.sha256(raw).hexdigest()
+    )
 
 
 def lap_is_valid(record: dict[str, Any]) -> bool:

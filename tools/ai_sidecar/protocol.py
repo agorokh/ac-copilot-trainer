@@ -6,7 +6,6 @@ All frames are JSON objects. ``protocol`` is required on new messages; missing
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -49,6 +48,7 @@ def _load_safe_archive_path(raw_path: Any) -> dict[str, Any] | None:
         return None
     # Defer the import so protocol.py stays importable without the coaching extra installed.
     from tools.ai_sidecar.setup_optimizer import is_supported_lap_archive_path
+    from tools.lap_archive_export import load_lap_archive
 
     try:
         resolved = Path(raw_path).resolve()
@@ -60,7 +60,7 @@ def _load_safe_archive_path(raw_path: Any) -> dict[str, Any] | None:
     try:
         if not resolved.is_file() or resolved.stat().st_size > _MAX_ARCHIVE_BYTES:
             return None
-        data = json.loads(resolved.read_text(encoding="utf-8"))
+        data = load_lap_archive(resolved, allow_legacy_schema=True)
     except (OSError, ValueError) as exc:
         logger.info("brain: could not load archivePath %r: %s", raw_path, exc)
         return None

@@ -32,6 +32,8 @@ from tools.ai_sidecar.lap_dynamics import (
     lap_trace_from_archive,
     segment_corners,
 )
+from tools.lap_qualification import archive_combo, qualify_archive
+from tools.lap_trace_validity import completed_trace_reason, finish_wrap_cut
 
 #: Outline resolution cap — ~2 m spacing on a 5 km lap, well under the A133's SVG budget.
 MAX_OUTLINE_POINTS = 256
@@ -52,13 +54,24 @@ def _round_gear(value: float) -> int | None:
 
 
 def build_track_map(
-    archive: dict[str, Any], corner_catalog: dict[str, Any] | None = None
+    archive: dict[str, Any],
+    corner_catalog: dict[str, Any] | None = None,
+    *,
+    expected_combo: tuple[str, str, str | None] | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """The ``track.map`` payload for ``archive``, or ``None`` when it cannot be built honestly.
 
     Never raises: a malformed archive (no trace, no position channels, too few samples)
     returns ``None`` — the caller logs and the MAP page keeps its explicit unknown.
     """
+    qualification = qualify_archive(archive, use="map", expected_combo=expected_combo)
+    if diagnostics is not None:
+        diagnostics.update(allowed=qualification.allowed, reason=qualification.reason)
+    if not qualification.allowed:
+        return None
+    if diagnostics is not None:
+        diagnostics.update(allowed=False, reason="reference_geometry_unavailable")
     try:
         lap = lap_trace_from_archive(archive)
     except (ValueError, TypeError, AttributeError, IndexError, OverflowError):
@@ -102,9 +115,9 @@ def build_track_map(
 
     corners: list[dict[str, Any]] = []
     catalogue = _canonical_catalog(archive, corner_catalog)
-    measured_reference = _reference_provenance_valid(archive) and all(
-        _channel_valid(archive, key) for key in ("speed", "px", "pz")
-    )
+    measured_reference = _reference_provenance_valid(
+        archive, expected_combo=expected_combo
+    ) and all(_channel_valid(archive, key) for key in ("speed", "px", "pz"))
     for identity, measured, window in _catalog_windows(lap, catalogue, measure=measured_reference):
         if window is None:
             corners.append(
@@ -181,6 +194,8 @@ def build_track_map(
         payload["car_id"] = lap.car_id
     if lap.lap_ms is not None and lap.lap_ms > 0:
         payload["lap_ms"] = lap.lap_ms
+    if diagnostics is not None:
+        diagnostics.update(allowed=True, reason=qualification.reason)
     return payload
 
 
@@ -315,21 +330,8 @@ def _channel_valid(archive: dict[str, Any], name: str) -> bool:
 
 
 def _combo(archive: dict[str, Any]) -> tuple[Any, Any, Any]:
-    car, track = _metadata(archive, "car"), _metadata(archive, "track")
-    if (
-        track.get("identity_source") == "csp_content_ids"
-        and track.get("layout_available") is not True
-    ):
-        return None, None, None
-    cid, tid, layout = car.get("id"), track.get("id"), track.get("layout") or ""
-    if not isinstance(cid, str) or not isinstance(tid, str) or not isinstance(layout, str):
-        return None, None, None
-    if "/" in tid:
-        tid, suffix = tid.split("/", 1)
-        if layout and layout != suffix:
-            return None, None, None
-        layout = suffix
-    return cid, tid, layout
+    combo = archive_combo(archive)
+    return (combo[0], combo[1], combo[2] or "") if combo else (None, None, None)
 
 
 def _metadata(archive: dict[str, Any], key: str) -> dict[str, Any]:
@@ -337,7 +339,13 @@ def _metadata(archive: dict[str, Any], key: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _reference_provenance_valid(archive: dict[str, Any]) -> bool:
+def _reference_provenance_valid(
+    archive: dict[str, Any], *, expected_combo: tuple[str, str, str | None] | None = None
+) -> bool:
+    if not qualify_archive(
+        archive, use="reference_comparison", expected_combo=expected_combo
+    ).allowed:
+        return False
     generator = _metadata(archive, "generator")
     name = str(generator.get("name") or "")
     if "reference_lap" in name or name.startswith("trace_replay:"):
@@ -362,18 +370,11 @@ def _normalise_finish_wrap(lap: LapTrace) -> LapTrace | None:
     to the completed lap. Sorting it into the beginning corrupts elapsed-time alignment.
     Retain the pre-finish coverage and lap duration; never invent a sample at spline zero.
     """
-    decreases = [i for i in range(1, len(lap)) if lap.spline[i] < lap.spline[i - 1]]
-    if not decreases:
+    cut = finish_wrap_cut(lap.spline, lap.t_s)
+    if cut is None:
+        return None
+    if cut == len(lap):
         return lap
-    if len(decreases) != 1:
-        return None
-    cut = decreases[0]
-    if lap.spline[0] > 0.01 or lap.spline[cut - 1] < 0.99:
-        return None
-    if any(not 0 <= s <= 0.01 for s in lap.spline[cut:]):
-        return None
-    if any(a >= b for a, b in zip(lap.t_s, lap.t_s[1:], strict=False)):
-        return None
     changes = {
         field.name: getattr(lap, field.name)[:cut]
         for field in fields(lap)
@@ -396,19 +397,7 @@ def _valid_trace(archive: dict[str, Any]) -> LapTrace | None:
         out = _normalise_finish_wrap(out)
         if out is None:
             return None
-        if not out.lap_ms or not math.isfinite(out.lap_ms) or out.lap_ms <= 0:
-            return None
-        if not all(0 <= s <= 1 for s in out.spline):
-            return None
-        if any(a >= b for a, b in zip(out.spline, out.spline[1:], strict=False)):
-            return None
-        if any(a >= b for a, b in zip(out.t_s, out.t_s[1:], strict=False)):
-            return None
-        if out.spline[0] > 0.01 or out.spline[-1] < 0.99:
-            return None
-        if abs((out.t_s[-1] - out.t_s[0]) * 1000 - out.lap_ms) > max(500, out.lap_ms * 0.01):
-            return None
-        if any(v < 0 for v in out.v_ms):
+        if completed_trace_reason(out.spline, [t * 1000 for t in out.t_s], out.v_ms, out.lap_ms):
             return None
         return out
     except (TypeError, ValueError):
@@ -448,15 +437,27 @@ def build_corner_comparison(
     }
     if reference is None:
         return result
+    subject_qualification = qualify_archive(archive, use="analysis")
+    if not subject_qualification.allowed:
+        result["reason"] = f"lap qualification: {subject_qualification.reason}"
+        return result
+    combo = _combo(archive)
+    reference_qualification = qualify_archive(
+        reference,
+        use="reference_comparison",
+        expected_combo=combo if combo[0] and combo[1] else None,
+    )
+    if not reference_qualification.allowed:
+        result["reason"] = f"reference qualification: {reference_qualification.reason}"
+        return result
     result["reference_id"] = reference_identity(reference)
     result["reference_lap_uuid"] = reference.get("lap_uuid")
     result["reference_source"] = reference.get("source") or "unknown"
     result["reference_import_format"] = reference.get("import_format")
     result["lap_source"] = archive.get("source") or "unknown"
-    if not _reference_provenance_valid(reference):
+    if not _reference_provenance_valid(reference, expected_combo=combo):
         result["reason"] = "measured reference provenance unavailable/unsupported"
         return result
-    combo = _combo(archive)
     if not combo[0] or not combo[1] or combo != _combo(reference):
         result["reason"] = "car/track/layout mismatch or unknown identity"
         return result
