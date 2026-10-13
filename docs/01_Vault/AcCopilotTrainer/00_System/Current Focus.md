@@ -112,19 +112,22 @@ startup is recorded and the real screen connects; P7 USB/wireless discovery is
 empty and no video camera is detected. Physical captures need those inputs
 reconnected; the agent owns recording. No physical acceptance is upgraded.
 
-## External racing controls — operator plan, 2026-10-11 PDT
+## External racing controls — software prepared, 2026-10-12 PDT
 
-[External devices, buttons and knobs](../10_Rig/external-racing-controls.md) records
-the future keypad mapping: Button 1 shaker-socket power; encoder shaker-specific
-level; Buttons 2/3 and future encoder press intentionally undecided. The PC and
-SimHub reference the same `Rig Shakers - Seat and Pedals` endpoint; its SimHub
-volume ownership must be respected. The operator reports a working smart socket,
-but its exact HA entity has not been identified. No racing remapping was deployed.
-Preserve current six controls while workstation-ops #3863 delivers constant red;
-physical GPIO/recovery and device red/power-cycle verification remain unproved.
-The offline candidate's startup-off and blue recovery-entry frames were corrected
-and tested; firmware remains marked DO-NOT-FLASH pending exact-board evidence.
-This is a separate documented rig-control plan; existing active work below remains.
+[Keypad preparation SAVE](handoffs/2026-10-13-065716Z-keypad-preparation-2ba352.md) records firmware and an opt-in Game
+Point profile controller in [PR #820](https://github.com/agorokh/ac-copilot-trainer/pull/820).
+Both firmware variants and the Windows EXE are built and staged; CI passes.
+Source, independent review and merge status are tracked in PR #820. Agents edit a validated
+JSON file for all six inputs, colours, conditions, priority and manual override.
+Default/racing is red; foreground Minecraft is green. Installed settings are
+unchanged and the prepared worker is inactive. Stock keypad controls remain live.
+[External devices, buttons and knobs](../10_Rig/external-racing-controls.md) is the
+canonical rig plan. Shaker socket/level actions remain unavailable until exact
+HA/SimHub targets are verified; Buttons 2/3 and knob click remain unassigned.
+Workstation-ops #3863 remains OPEN: hardware GPIO, ROM/recovery, all six real
+inputs and red/green power/sleep/reconnect acceptance are deferred until the
+adapter arrives. Both firmware artifacts remain DO-NOT-FLASH. Existing active
+work below and screen/AC ownership boundaries are unchanged.
 
 Game Point sizing and current EXE are deployed (#805/#806/#807/#809/#810).
 Normal-state telemetry and actual P7 pixels pass with all archives restored.
