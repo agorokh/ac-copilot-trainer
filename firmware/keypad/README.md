@@ -83,3 +83,11 @@ controller. Reconcile silicon and outer-key GPIO, establish compatible recovery,
 then program and test red startup, held/rotating controls, lease expiry, profile
 colors, disconnect/reconnect, power cycle, sleep/resume and repeated recovery.
 The boot adapter is removed for normal use. Unpowered LEDs cannot stay lit.
+
+## Adapter arrival checklist
+
+The [qualification guide](qualification/README.md) contains the passive USB-C wiring
+diagram, recovery-first steps, six-control checks and red/green focus tests. Its
+three temporary JSON profiles are for later managed-hardware qualification; they
+do not enable shaker actions. Controller activation and both HEX uploads remain
+deferred until ROM identity, GPIO mapping and repeatable recovery are established.

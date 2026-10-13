@@ -127,6 +127,8 @@ verified; Buttons 2/3 and knob click remain unassigned. Stock firmware remains l
 Workstation-ops #3863 stays OPEN for adapter-stage ROM/GPIO/recovery qualification,
 all six physical controls and colour/power/sleep/reconnect acceptance. Both HEX
 artifacts remain DO-NOT-FLASH. Existing work and screen/AC boundaries are unchanged.
+The [adapter arrival SAVE](handoffs/2026-10-13-154636Z-keypad-adapter-guide-codex.md) links the wiring guide and three
+temporary test profiles; agents resume recovery and mapping qualification there.
 
 Game Point sizing and current EXE are deployed (#805/#806/#807/#809/#810).
 Normal-state telemetry and actual P7 pixels pass with all archives restored.

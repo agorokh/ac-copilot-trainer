@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "default": "test-red",
+  "manual_override": null,
+  "profiles": [
+    {
+      "name": "test-red",
+      "rgb": [
+        255,
+        0,
+        0
+      ],
+      "bindings": {
+        "button_1": {
+          "action": "noop"
+        },
+        "button_2": {
+          "action": "noop"
+        },
+        "button_3": {
+          "action": "noop"
+        },
+        "knob_cw": {
+          "action": "noop"
+        },
+        "knob_ccw": {
+          "action": "noop"
+        },
+        "knob_press": {
+          "action": "noop"
+        }
+      }
+    },
+    {
+      "name": "test-green",
+      "rgb": [
+        0,
+        255,
+        0
+      ],
+      "priority": 10,
+      "when": {
+        "foreground_process": [
+          "javaw.exe",
+          "java.exe"
+        ],
+        "title_contains": "Minecraft"
+      },
+      "bindings": {
+        "button_1": {
+          "action": "noop"
+        },
+        "button_2": {
+          "action": "noop"
+        },
+        "button_3": {
+          "action": "noop"
+        },
+        "knob_cw": {
+          "action": "noop"
+        },
+        "knob_ccw": {
+          "action": "noop"
+        },
+        "knob_press": {
+          "action": "noop"
+        }
+      }
+    },
+    {
+      "name": "test-green-bedrock",
+      "rgb": [
+        0,
+        255,
+        0
+      ],
+      "priority": 20,
+      "when": {
+        "foreground_process": [
+          "Minecraft.Windows.exe"
+        ]
+      },
+      "bindings": {
+        "button_1": {
+          "action": "noop"
+        },
+        "button_2": {
+          "action": "noop"
+        },
+        "button_3": {
+          "action": "noop"
+        },
+        "knob_cw": {
+          "action": "noop"
+        },
+        "knob_ccw": {
+          "action": "noop"
+        },
+        "knob_press": {
+          "action": "noop"
+        }
+      }
+    }
+  ]
+}

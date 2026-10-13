@@ -146,3 +146,16 @@ changing speaker/headset audio before enabling those actions. Buttons 2/3 and th
 future encoder press stay unassigned until chosen. Register later external devices
 here with identity, physical labels, logical actions, target ownership and observed
 recovery evidence. AC session and screen-firmware freezes remain unchanged.
+
+## Adapter arrival resume packet
+
+The [wiring and qualification guide](../../../../firmware/keypad/qualification/README.md)
+is saved with [red](../../../../firmware/keypad/qualification/test-red.json),
+[green](../../../../firmware/keypad/qualification/test-green.json) and
+[automatic Minecraft](../../../../firmware/keypad/qualification/test-auto.json)
+temporary profiles. The Arduino kit supplies resistors, jumpers and breadboard;
+the Uno is not connected. Manual colour tests map all six inputs to A-F in Notepad;
+automatic Minecraft testing uses no-op bindings in every profile. These files do not replace
+the working racing JSON, activate Game Point or authorize an upload. First verify
+ROM identity and return to stock twice, then reconcile GPIO mapping. Controller
+activation and both staged DO-NOT-FLASH firmware variants remain deferred.
