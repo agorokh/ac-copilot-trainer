@@ -22,8 +22,9 @@ SimHub running. The physical LEDs still need observation on the actual board.
 | Counterclockwise | `knob_ccw`, one impulse | `shakers.level.decrease` | Same dependency |
 | Knob press | `knob_press`, down/up | Operator will choose | No operation |
 
-`rig` names are reserved targets with visible "not activated" errors when pressed;
-they do not toggle any socket or adjust any audio endpoint. Keyboard mappings are
+`rig` names are reserved targets with visible "not activated" messages when pressed;
+they do not toggle any socket or adjust any audio endpoint. These expected unavailable
+messages remain visible without failing transport health; real action errors still fail health. Keyboard mappings are
 implemented. All controls are retained in the managed protocol, but their functions
 require a running controller and chosen bindings. The separate red baseline retains
 Ctrl+Alt+A/M/S and computer volume up/down/mute for preservation testing.
@@ -70,7 +71,9 @@ transport/context/action doubles; it does not prove an LED colour or send key in
 custom capability if present; it sends **zero output reports**. HIDAPI is needed only
 for inspection and a real managed controller: install `.[controls]`.
 
-The worker rereads the file every 500ms. Invalid/partial edits leave the last valid
+The worker rereads the file every 500ms. Foreground state stays fresh on each tick;
+optional running-process queries are cached for 500ms. Inspection acquires the same
+ownership mutex before opening a managed device and refuses contention. Invalid/partial edits leave the last valid
 configuration active and show a reload error. Write a validated temporary JSON file,
 then atomically replace the destination. A valid selected-profile edit releases old
 keys and renegotiates before routing new inputs.
