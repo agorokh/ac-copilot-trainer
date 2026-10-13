@@ -1,0 +1,11 @@
+[
+  {"foreground_process": "acs.exe", "title": "Assetto Corsa", "events": []},
+  {"foreground_process": "javaw.exe", "title": "Minecraft", "events": [
+    {"control": "button_1", "pressed": true}, {"control": "button_1", "pressed": false},
+    {"control": "button_2", "pressed": true}, {"control": "button_2", "pressed": false},
+    {"control": "button_3", "pressed": true}, {"control": "button_3", "pressed": false},
+    {"control": "knob_cw", "pressed": true}, {"control": "knob_ccw", "pressed": true},
+    {"control": "knob_press", "pressed": true}, {"control": "knob_press", "pressed": false}
+  ]},
+  {"foreground_process": "acs.exe", "title": "Assetto Corsa", "running": ["javaw.exe"], "events": []}
+]

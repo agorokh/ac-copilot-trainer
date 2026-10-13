@@ -16,10 +16,12 @@ relates_to:
 
 The operator's 2026-10-11 PDT direction establishes external controls as part of the
 Assetto Corsa / SimHub rig: the current keypad is the first device, with further
-button boxes and knobs expected. This node records the function plan. The racing
-bindings below are **not deployed**; existing controls remain the lighting baseline.
+button boxes and knobs expected. This node records the function plan and the prepared controller. The operator
+commissioned firmware and conditional PC profiles on 2026-10-12, with physical
+verification deferred until the adapter arrives. Shaker bindings remain **inactive**;
+existing stock controls remain the physical baseline.
 The keypad lighting/recovery owner is [workstation-ops #3863](https://github.com/Atelier-AppliedAI/workstation-ops/issues/3863).
-Former AC #798 is superseded. No simulator-runtime changes are commissioned here;
+Former AC #798 is superseded. Keypad software preparation is commissioned;
 the #627 freeze and screen-firmware ownership remain unchanged.
 
 ## First device: three keys and one encoder
@@ -88,26 +90,59 @@ a blind toggle. A missing/offline/ambiguous target must report unavailable and l
 other plugs and the default audio endpoint untouched. Encoder steps require bounded
 increments and a visible actual level; reconnection must not invent a new target.
 
-## Constant red is independent of functions
+## Default red and conditional game styling
 
-All three LEDs should remain `#FF0000` during powered normal use: initialization,
-idle, held/released keys, rotation, host restart and USB reconnection. They are a
+All three LEDs should remain `#FF0000` in the baseline and default/racing profile:
+initialization, idle, held/released keys, rotation, host restart and USB reconnection.
+The operator subsequently requested explicit profile styling: Minecraft green
+(`#00FF00`) while its profile is selected, with independent action bindings. They are a
 styling element matching the fence and other lighting, not socket-status indicators.
 No rainbow, breathing, white press effect or volume/power color changes. Firmware
 must apply red before USB/host setup; no SimHub/AC session is required for the color.
 Unpowered LEDs cannot light; ROM recovery has its own behavior and needs measurement.
 
-The offline candidate now sends red before USB initialization, removes its startup
-off frame and replaces its blue recovery-entry indication with red. Tests cover
-startup ordering and 228 red renderer frames, plus the preserved six HID functions;
-the build is 12,387 bytes. **The actual keypad has not been flashed or proved red.**
-Exact-board GPIO/ROM identity and repeatable recovery remain required before flashing.
+## Prepared software and agent control
+
+Source is now owned here: [firmware/keypad](../../../../firmware/keypad/README.md)
+and [tools/rig_controls](../../../../tools/rig_controls/README.md). The PC controller
+is an opt-in Game Point worker with a Keypad status row. Agents edit a strict JSON
+file containing all six mappings, RGB colour, foreground/title/running conditions,
+priority and optional manual override. Valid edits reload automatically; invalid
+edits preserve the last valid configuration and report an error. Keyboard actions
+are implemented as held chords for buttons and impulses for the encoder. Rig names
+remain visibly unavailable until their target integration is verified.
+
+Two build variants are prepared. **Baseline** preserves Ctrl+Alt+A/M/S and consumer
+volume up/down/mute with steady red. **Managed** emits all six logical controls and
+accepts a leased colour; actions require the PC controller. Without that controller
+it remains red with inert inputs. This prevents global volume or stale application
+bindings from becoming an accidental fallback. The current physical keypad retains
+its stock firmware until hardware qualification.
+
+The custom collection is `1209:C55D`, usage `FF31:1`, with an `AC` version-1 feature
+identity. The controller excludes stock `1189:8890` and ROM `4348:55E0`, verifies a
+unique candidate and capability before writing, and requires the new colour's ACK
+before routing its inputs. Held actions are released on profile change, gaps,
+timeout or disconnect. A session ownership mutex prevents competing workers.
+The prepared local USB identifiers are not a claim of a globally allocated product.
+
+The real CH55xDuino 0.0.26/SDCC build succeeds for both variants within CH552's
+application boundary. Native tests exercise actual protocol, HID, endpoint and LED
+code under test stubs; host tests exercise selection, reload and routing without
+hardware. These are **software proofs**, not GPIO, electrical or LED observations.
+Both HEX artifacts remain **DO-NOT-FLASH** pending ROM identity, outer-key P11/P16
+ordering and repeatable recovery. Source provenance and CC-BY-SA licence remain in
+the firmware subtree. The wiring adapter is removed during normal operation.
 
 ## Staged acceptance
 
-First prove recovery, physical steady red and power-cycle persistence while all six
-baseline controls work. Then identify the shaker socket and verify shaker-only level
-control without changing speaker/headset audio. Implement the operator's chosen
-racing profile only when commissioned; Buttons 2/3 and future encoder press stay
-unassigned until chosen. Register later external devices here with their identity,
-physical labels, logical actions, target ownership and observed recovery evidence.
+Software preparation is commissioned and implemented; physical acceptance is
+explicitly deferred. First prove ROM identity and recovery returning to all six
+stock controls twice; reconcile GPIO order before programming. Then test steady red,
+all six baseline functions, managed ACK/input routing, green Minecraft and red
+return, disconnect/lease fallback, power cycles, sleep/resume and recovery.
+Identify the shaker socket and verify supported shaker-only level control without
+changing speaker/headset audio before enabling those actions. Buttons 2/3 and the
+future encoder press stay unassigned until chosen. Register later external devices
+here with identity, physical labels, logical actions, target ownership and observed
+recovery evidence. AC session and screen-firmware freezes remain unchanged.
