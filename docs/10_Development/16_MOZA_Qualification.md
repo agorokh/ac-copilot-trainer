@@ -114,3 +114,22 @@ raw PB labels or its current-session state. MOZA inspection artifacts are not
 MoTeC references, and the existing Lua importer requires `motec_csv`. Any later
 live integration must explicitly address activation and control ownership under
 Part D; installing this code alone does not retroactively change the running rig.
+
+## Part C: offline report boundary
+
+The offline integration uses the existing session-review report and Game Point
+entrypoint. Its file selection is separate from the live reference and voice
+settings. Generating or opening a report must not start AC, the sidecar, a
+controller or playback, or update the attribution ledger or driver profile.
+
+Native telemetry is analyzed only when the shared policy permits analysis.
+Matched native comparisons retain their independent combo and qualification
+checks. A cache inspection report explains available processed channels and
+rejection reasons; it cannot invent missing measured channels or corner results.
+
+Optional MOZA producer advice uses the existing `CoachingOracle` and
+`CoachingSnapshot` interface. Numeric traces, scores and event annotations are
+separate from actual supported advice. Empty or zero-eligible evaluations remain
+unavailable. Unknown producer advice schemas must remain unavailable rather than
+be interpreted as expert coaching. Track Titan and the current voice pipeline
+retain their existing behavior. Shadow replay and activation remain Part D.
