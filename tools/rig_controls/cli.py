@@ -9,6 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from tools.rig_controls.controller import Controller
+from tools.rig_controls.ownership import Ownership
 from tools.rig_controls.profiles import CONTROLS, Context, load_config
 from tools.rig_controls.protocol import PID, USAGE, USAGE_PAGE, VID, open_device
 from tools.rig_controls.runtime import Worker
@@ -109,11 +110,15 @@ def inspect_devices():
         "outputs_sent": 0,
     }
     if len(matching) == 1:
-        device = open_device()
+        owner = Ownership()
         try:
-            result["capability"] = list(device.get_feature_report(7, 9))
+            device = open_device()
+            try:
+                result["capability"] = list(device.get_feature_report(7, 9))
+            finally:
+                device.close()
         finally:
-            device.close()
+            owner.close()
     return result
 
 
