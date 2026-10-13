@@ -88,6 +88,18 @@ relates_to:
 
 # Current focus
 
+## Issue 815 Part B — native control provenance and MOZA import
+
+Active implementation: `codex/issue-815-moza-qualification-import`, refreshed
+from current main `bb8f1db`. Part A research is complete in the separate
+[PR #818](https://github.com/agorokh/ac-copilot-trainer/pull/818) evidence record.
+Part B adds reliable control attribution for selected native laps and one shared
+consumer policy before the cache importer. Preserve raw archives, uncertain
+historical attribution, Track Titan and the existing voice pipeline. Reporting
+features and live activation remain Parts C/D; no new rig operation is assigned.
+The [implementation contract](../../../10_Development/16_MOZA_Qualification.md)
+records the boundary. Existing physical, C2 and parked owners below remain intact.
+
 ## Issue 813 display correctness and MAP delivery
 
 Merged revision b513d05 carries the coordinated Lua,
