@@ -6,6 +6,47 @@ from tests.test_realtime_observer import _corner_archive as _raw_corner_archive
 from tools.ai_sidecar.track_map import MAX_OUTLINE_POINTS, build_track_map
 
 
+def test_circular_windows_preserve_measured_finish_and_start_samples() -> None:
+    from tools.ai_sidecar.lap_dynamics import LapTrace
+    from tools.ai_sidecar.track_map import _slice_circular
+
+    lap = LapTrace(
+        spline=[0, 0.01, 0.50, 0.98, 0.99, 1],
+        t_s=[0, 1, 50, 98, 99, 100],
+        brake=[0, 0, 0, 0.8, 0.8, 0.8],
+        lap_ms=100_000,
+        v_ms=[40] * 6,
+        throttle=[0.5] * 6,
+        steer=[0] * 6,
+        gear=[4] * 6,
+        x=list(range(6)),
+        z=[0] * 6,
+    )
+    finish = _slice_circular(lap, 0.98, 1)
+    assert finish.spline == [0.98, 0.99, 1]
+    assert finish.t_s == [98, 99, 100]
+    assert finish.brake == [0.8, 0.8, 0.8]
+    whole = _slice_circular(lap, 0, 1)
+    assert whole.spline == lap.spline
+    assert whole.t_s == lap.t_s
+    assert whole.brake == lap.brake
+    wrapped = _slice_circular(lap, 0.98, 0.01)
+    assert wrapped.spline == [0.98, 0.99, 1, 0.01]
+    assert wrapped.t_s == [98, 99, 100, 101]
+    assert wrapped.brake == [0.8, 0.8, 0.8, 0]
+
+
+def test_unknown_combo_retains_geometry_without_corner_catalogue() -> None:
+    archive = _corner_archive()
+    archive["car"] = {}
+    archive["track"] = {}
+    live = {"available": True, "combo": [None, None, None], "corners": archive["corners"]}
+    for catalog in (None, live):
+        payload = build_track_map(archive, catalog)
+        assert payload is not None and payload["outline"]
+        assert payload["corners"] == []
+
+
 def _corner_archive(*, degrade: float = 0.0) -> dict:
     archive = _raw_corner_archive(degrade=degrade)
     archive["source"] = "in_game"

@@ -127,6 +127,27 @@ controls. Use bounded read/sync for this carrier and preserve all peer state.
 
 ## Retained clauses and next actions
 
+### Adopted design-review correction
+
+Council initial transport/auth failures were retained, not treated as opinions.
+A smaller corrected-helper panel completed with quorum 3/3 (Mistral, ChatGPT
+Projects, Kimi). Dissent and source-backed dispositions remain local in
+`.scratch/issue813/council-dispositions.md`; no unanimous approval is claimed.
+One concrete measured-finish substitution was reproduced from a saved literal
+input: .98..1 window incorrectly ended with lap-start brake 0 instead of the
+measured finish .8. Non-wrapping windows now preserve actual endpoints, including
+both distinct observations for full 0..1; circular windows prefer measured finish
+then chronological prefix. The unchanged original case now ends with .8. Unknown
+car/track identity also cannot inherit a corner catalogue, while geometry remains.
+92 focused MAP/server/browser contract tests pass after these repairs. Full
+ci-fast passes (4246 tests passed, 89 skipped, all policy/security/CSP stages 0).
+Fresh browser render source hashes match the corrected implementation; the earlier ccda08f staged
+package is not eligible for deployment after this source correction. A coherent
+push will restart exact-head self-hosted review. Ambiguous reversals/duplicates
+remain explicit unavailable; archives are never sorted or rewritten to invent
+timing alignment. Other Council claims were adjudicated against actual SDK,
+source and detector contracts rather than expanding this assignment.
+
 | Clause | Current evidence / next action |
 |---|---|
 | A action/target semantics | Software contracts and both native/browser consumers verified; physical agreement remains in E operator acceptance. |

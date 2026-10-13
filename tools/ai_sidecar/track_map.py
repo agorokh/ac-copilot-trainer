@@ -185,8 +185,11 @@ def build_track_map(
 
 
 def _canonical_catalog(archive: dict[str, Any], live: dict[str, Any] | None) -> dict[str, Any]:
+    combo = _combo(archive)
+    if not combo[0] or not combo[1]:
+        return {}  # unknown identities can retain geometry, never a matching corner catalogue
     if live is not None:
-        if live.get("available") is not True or tuple(live.get("combo") or ()) != _combo(archive):
+        if live.get("available") is not True or tuple(live.get("combo") or ()) != combo:
             return {}
         rows = live.get("corners")
         source = "lua_active_reference"
@@ -231,14 +234,18 @@ def _canonical_catalog(archive: dict[str, Any], live: dict[str, Any] | None) -> 
 
 
 def _slice_circular(lap: LapTrace, start: float, end: float) -> LapTrace:
-    span = (end - start) % 1
-    indices = sorted(
-        (i for i, s in enumerate(lap.spline) if (s - start) % 1 <= span),
-        key=lambda i: (lap.spline[i] - start) % 1,
-    )
-    # s=1 and s=0 are the same S/F point; don't repeat the seam sample.
-    if 0 in indices and len(lap) - 1 in indices and lap.spline[-1] == 1 and lap.spline[0] == 0:
-        indices.remove(len(lap) - 1)
+    if start <= end:
+        # Equal physical S/F positions are distinct observations at t=0 and t=lap_ms.
+        # A non-wrapping window ending at 1 must retain the actual finish telemetry.
+        indices = [i for i, s in enumerate(lap.spline) if start <= s <= end]
+    else:
+        suffix = [i for i, s in enumerate(lap.spline) if s >= start]
+        prefix = [i for i, s in enumerate(lap.spline) if s <= end]
+        # At a circular seam prefer the measured finish over repeating t=0 shifted
+        # by one lap. Other prefix samples supply the circular continuation.
+        if suffix and prefix and lap.spline[suffix[-1]] == 1 and lap.spline[prefix[0]] == 0:
+            prefix = prefix[1:]
+        indices = suffix + prefix
     channels = {
         name: [getattr(lap, name)[i] for i in indices]
         for name in ("spline", "v_ms", "brake", "throttle", "steer", "gear", "x", "z")
