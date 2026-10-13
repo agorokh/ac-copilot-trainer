@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-10-13T02:13:16Z
+last_updated: 2026-10-13T02:47:44Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-10-13-024744Z-issue813-recording-attempt-27327d.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-13-021316Z-post-merge-pr814-09f346.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-13-014209Z-pr814-review-recovery-d962bc.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-13-003900Z-issue813-review-checkpoint-72ba13.md
@@ -105,6 +106,11 @@ is empty. Keep #813 OPEN for on-glass/P7 proof
 and the operator-driven valid Porsche/Magione lap, both displays and exit
 transitions. Retain separate #804/#531/#86 scopes and freezes. The new dated
 post-merge handoff records deployment identity and the explicit exception.
+
+Agent-owned physical recording was attempted on 2026-10-13. Installed launcher
+startup is recorded and the real screen connects; P7 USB/wireless discovery is
+empty and no video camera is detected. Physical captures need those inputs
+reconnected; the agent owns recording. No physical acceptance is upgraded.
 
 ## External racing controls — operator plan, 2026-10-11 PDT
 
