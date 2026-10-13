@@ -22,6 +22,12 @@ from statistics import median
 from typing import Any
 
 from tools.lap_archive_export import iter_lap_archive_paths, lap_is_valid, load_lap_archive
+from tools.lap_qualification import (
+    AttributionError,
+    duplicate_identity_reasons,
+    qualify_archive,
+    restricted_lap_identities,
+)
 
 PROFILE_SCHEMA_VERSION = 1
 DEFAULT_DRIVER_ID = "local-driver"
@@ -45,6 +51,51 @@ CORNER_SAMPLE_FIELDS = (
 
 class ProfileLoadError(ValueError):
     """Raised when an existing profile ledger cannot be trusted."""
+
+
+def _profile_restriction_reason(profile: Mapping[str, Any]) -> str | None:
+    """Do not merge or serve aggregates whose attributed inputs require rebuilding.
+
+    No aggregate is subtracted heuristically: retention may have removed the raw
+    laps needed to reconstruct it. Preserve the on-disk profile and manual fields.
+    """
+    try:
+        restricted = restricted_lap_identities(use="human_progression")
+    except AttributionError as exc:
+        return f"profile_rebuild_required:{exc}"
+    if not restricted:
+        return None
+
+    def overlaps(node: Any) -> bool:
+        if isinstance(node, Mapping):
+            for identity in restricted:
+                lap_id = identity["lap_uuid"]
+                if node.get("lap_uuid") == lap_id or node.get("best_lap_uuid") == lap_id:
+                    return True
+                if any(
+                    lap_id in node.get(key, [])
+                    for key in ("lap_uuids", "valid_lap_uuids")
+                    if isinstance(node.get(key), list)
+                ):
+                    return True
+                if lap_id in _mapping_or_empty(node.get("lap_times_by_lap_uuid")):
+                    return True
+                if node.get("session_uuid") == identity["session_uuid"]:
+                    if node.get("lap_uuid"):
+                        continue  # A different exact lap is not session contamination.
+                    known = node.get("lap_uuids")
+                    if isinstance(known, list) and len(known) == node.get("lap_count"):
+                        continue  # Complete identities demonstrate this lap was excluded.
+                    return True
+            return any(overlaps(value) for value in node.values())
+        return isinstance(node, list) and any(overlaps(value) for value in node)
+
+    if any(
+        overlaps(profile.get(key))
+        for key in ("session_rollups", "personal_bests", "consistency", "corner_history")
+    ):
+        return "profile_rebuild_required:attributed_lap_or_session_overlap"
+    return None
 
 
 @dataclass(frozen=True)
@@ -270,6 +321,29 @@ def _rollups_from_existing_bests(existing: Mapping[str, Any]) -> dict[str, dict[
     return rollups
 
 
+def sanitize_profile(
+    profile: Mapping[str, Any],
+    *,
+    driver_id: str = DEFAULT_DRIVER_ID,
+    strict: bool = False,
+) -> dict[str, Any]:
+    """Park restricted aggregates at file and direct-mapping consumption boundaries.
+
+    Keep manual preferences/focus and the reason in the returned value. Neither
+    the supplied mapping nor a persisted profile is modified by this check.
+    """
+    restriction = _profile_restriction_reason(profile)
+    if not restriction:
+        return dict(profile)
+    if strict:
+        raise ProfileLoadError(restriction)
+    parked = _default_profile(driver_id)
+    parked["preferences"] = _mapping_or_empty(profile.get("preferences"))
+    parked["focus_corners"] = _mapping_or_empty(profile.get("focus_corners"))
+    parked["source"].update(rebuild_required=True, skipped=[restriction])
+    return parked
+
+
 def load_profile(
     path: str | Path = DEFAULT_PROFILE_PATH,
     *,
@@ -296,6 +370,7 @@ def load_profile(
                 f"profile schema mismatch at {profile_path}: expected {PROFILE_SCHEMA_VERSION}"
             )
         return _default_profile(driver_id)
+    loaded = sanitize_profile(loaded, driver_id=driver_id, strict=strict)
     loaded.setdefault("driver_id", driver_id)
     loaded["preferences"] = _mapping_or_empty(loaded.get("preferences"))
     loaded["focus_corners"] = _mapping_or_empty(loaded.get("focus_corners"))
@@ -313,7 +388,10 @@ def load_profile(
 
 def _is_driver_lap(record: Mapping[str, Any]) -> bool:
     source = str(record.get("source") or "").strip().lower()
-    return source not in NON_DRIVER_LAP_SOURCES
+    return (
+        source not in NON_DRIVER_LAP_SOURCES
+        and qualify_archive(record, use="human_progression").allowed
+    )
 
 
 def _corner_rows_from_record(path: Path, record: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -709,11 +787,22 @@ def _rollups_from_archives(
     valid_laps = 0
     skipped: list[str] = []
     seen_lap_uuids: set[str] = set()
+    loaded: list[tuple[Path, dict[str, Any]]] = []
     for path in iter_lap_archive_paths(inputs):
         try:
             record = load_lap_archive(path)
         except Exception as exc:  # noqa: BLE001 - one corrupt archive must not erase a profile
             skipped.append(f"{Path(path).name}: {type(exc).__name__}")
+            continue
+        loaded.append((Path(path), record))
+    duplicates = duplicate_identity_reasons([record for _, record in loaded])
+    for index, (path, record) in enumerate(loaded):
+        if index in duplicates:
+            skipped.append(f"{path.name}: archive_qualification:{duplicates[index]}")
+            continue
+        qualification = qualify_archive(record, use="human_progression")
+        if not qualification.allowed:
+            skipped.append(f"{Path(path).name}: archive_qualification:{qualification.reason}")
             continue
         if not _is_driver_lap(record):
             skipped.append(f"{Path(path).name}: non_driver_source:{record.get('source')}")
@@ -821,6 +910,10 @@ def build_profile(
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     """Build a compacted driver profile by merging archive-derived roll-ups."""
+    if existing:
+        restriction = _profile_restriction_reason(existing)
+        if restriction:
+            raise ProfileLoadError(restriction)
     effective_driver_id = str(driver_id or DEFAULT_DRIVER_ID)
     if driver_id == DEFAULT_DRIVER_ID and isinstance(existing, Mapping):
         prior_driver_id = existing.get("driver_id")

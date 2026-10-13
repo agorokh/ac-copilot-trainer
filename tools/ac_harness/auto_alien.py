@@ -299,18 +299,42 @@ def compose_stint_layers(
 
 def load_archive_payloads(paths: list[str]) -> tuple[list[dict], list[str]]:
     """Load lap-archive JSON payloads; unreadable files are reported, never silently dropped."""
-    payloads: list[dict] = []
+    from hashlib import sha256
+
+    from tools.lap_qualification import (
+        _stable_bytes,
+        duplicate_identity_reasons,
+        qualify_archive,
+        resolve_archive_provenance,
+    )
+
+    loaded: list[tuple[str, dict]] = []
     errors: list[str] = []
     for path in paths:
         try:
-            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+            raw = _stable_bytes(Path(path))
+            payload = json.loads(raw)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             errors.append(f"{path}: {type(exc).__name__}")
             continue
         if isinstance(payload, dict):
-            payloads.append(payload)
+            payload = resolve_archive_provenance(
+                payload, source_path=path, source_sha256=sha256(raw).hexdigest()
+            )
+            loaded.append((path, payload))
         else:
             errors.append(f"{path}: archive root is not an object")
+    duplicates = duplicate_identity_reasons([payload for _, payload in loaded])
+    payloads = []
+    for index, (path, payload) in enumerate(loaded):
+        if index in duplicates:
+            errors.append(f"{path}: archive_qualification:{duplicates[index]}")
+            continue
+        decision = qualify_archive(payload, use="plant_fit")
+        if not decision.allowed:
+            errors.append(f"{path}: archive_qualification:{decision.reason}")
+            continue
+        payloads.append(payload)
     return payloads, errors
 
 

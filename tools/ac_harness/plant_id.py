@@ -1468,7 +1468,14 @@ def refine_ggv_from_lap_archives(
             loaded.append(item)
             continue
         try:
-            payload = json.loads(Path(item).read_text(encoding="utf-8"))
+            from tools.lap_qualification import _stable_bytes, resolve_archive_provenance
+
+            raw = _stable_bytes(Path(item))
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                payload = resolve_archive_provenance(
+                    payload, source_path=item, source_sha256=hashlib.sha256(raw).hexdigest()
+                )
         except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
             load_errors.append(f"{item}: {type(exc).__name__}")
             continue

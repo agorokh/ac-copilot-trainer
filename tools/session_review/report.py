@@ -26,6 +26,7 @@ from typing import Any, TextIO
 
 from tools.ai_sidecar.coach_report import build_structured_debrief
 from tools.lap_archive_export import iter_lap_archive_paths, lap_is_valid, load_lap_archive
+from tools.lap_qualification import archive_combo, duplicate_identity_reasons, qualify_archive
 
 REPORT_SCHEMA_VERSION = 2
 DEFAULT_OUTPUT_DIR = Path("journal/reports")
@@ -165,6 +166,9 @@ def _reference_kind(record: Mapping[str, Any]) -> str:
     ):
         return "generated"
     if source == "in_game":
+        qualification = qualify_archive(record, use="human_progression")
+        if qualification.managed and not qualification.allowed:
+            return f"{qualification.authority}-control"
         return "your-best"
     if source == "imported" and import_format == "motec_csv":
         return "pro"
@@ -217,11 +221,13 @@ def _load_laps(inputs: Iterable[str | Path]) -> tuple[list[LoadedLap], list[str]
             skipped.append(f"{Path(path).name}: {type(exc).__name__}")
             continue
         laps.append(_loaded_lap(Path(path), record))
-    return laps, skipped
+    duplicates = duplicate_identity_reasons([lap.record for lap in laps])
+    skipped.extend(f"{laps[index].path.name}: {reason}" for index, reason in duplicates.items())
+    return [lap for index, lap in enumerate(laps) if index not in duplicates], skipped
 
 
 def _combo_key(lap: LoadedLap) -> tuple[str, str, str | None]:
-    return lap.car_id, lap.track_id, lap.track_layout
+    return archive_combo(lap.record) or (lap.car_id, lap.track_id, lap.track_layout)
 
 
 def _session_candidates(laps: list[LoadedLap]) -> dict[str, list[LoadedLap]]:
@@ -259,11 +265,37 @@ def _lap_sort_key(lap: LoadedLap) -> tuple[int, datetime, str]:
 
 
 def _valid_laps(laps: Iterable[LoadedLap]) -> list[LoadedLap]:
-    return [lap for lap in laps if lap.is_valid and lap.lap_ms is not None]
+    candidates = list(laps)
+    duplicates = duplicate_identity_reasons([lap.record for lap in candidates])
+    return [
+        lap
+        for index, lap in enumerate(candidates)
+        if index not in duplicates
+        and lap.is_valid
+        and lap.lap_ms is not None
+        and qualify_archive(lap.record, use="analysis").allowed
+    ]
 
 
-def _reference_candidates(laps: Iterable[LoadedLap]) -> list[LoadedLap]:
-    return [lap for lap in _valid_laps(laps) if not _is_partial_tt_reference(lap.record)]
+def _progression_laps(laps: Iterable[LoadedLap]) -> list[LoadedLap]:
+    return [
+        lap
+        for lap in _valid_laps(laps)
+        if qualify_archive(lap.record, use="human_progression").allowed
+    ]
+
+
+def _reference_candidates(
+    laps: Iterable[LoadedLap], *, expected_combo: tuple[str, str, str | None] | None = None
+) -> list[LoadedLap]:
+    return [
+        lap
+        for lap in _valid_laps(laps)
+        if not _is_partial_tt_reference(lap.record)
+        and qualify_archive(
+            lap.record, use="reference_comparison", expected_combo=expected_combo
+        ).allowed
+    ]
 
 
 def _reference_sort_key(lap: LoadedLap) -> tuple[int, datetime, str]:
@@ -301,14 +333,15 @@ def _select_reference(
             reference=None,
             reason="selected session has no valid timed laps",
         )
-    combo = _combo_key(valid_selected[0])
-    candidates = [lap for lap in _reference_candidates(laps) if _combo_key(lap) == combo]
-    if not candidates:
-        return ReferenceSelection(
-            requested_source=requested_source,
-            reference=None,
-            reason="no valid same car/track reference candidates found",
-        )
+    # Legacy selection keeps its historical identity fallback. Qualification must
+    # still receive None when independent content/layout identity is unavailable.
+    matching_combo = _combo_key(valid_selected[0])
+    combo = archive_combo(valid_selected[0].record)
+    candidates = [
+        lap
+        for lap in _reference_candidates(laps, expected_combo=combo)
+        if _combo_key(lap) == matching_combo
+    ]
     if reference_path is not None:
         requested_path = Path(reference_path)
         requested_name = requested_path.name or "reference file"
@@ -318,12 +351,21 @@ def _select_reference(
             raise SessionReviewError(
                 f"{requested_name}: reference path cannot be resolved"
             ) from exc
-        for candidate in candidates:
+        for candidate in laps:
             try:
                 candidate_resolved = candidate.path.resolve()
             except (OSError, RuntimeError):
                 candidate_resolved = candidate.path.absolute()
             if candidate_resolved == resolved:
+                qualification = qualify_archive(
+                    candidate.record, use="reference_comparison", expected_combo=combo
+                )
+                if not qualification.allowed:
+                    raise SessionReviewError(
+                        f"{requested_name}: reference qualification: {qualification.reason}"
+                    )
+                if candidate not in candidates:
+                    break
                 return ReferenceSelection(
                     requested_source=requested_source,
                     reference=candidate,
@@ -332,6 +374,28 @@ def _select_reference(
                 )
         raise SessionReviewError(
             f"{requested_path.name}: reference file is not a valid same car/track lap archive"
+        )
+
+    if not candidates:
+        reasons = sorted(
+            {
+                q.reason
+                for lap in laps
+                if _combo_key(lap) == matching_combo
+                for q in [
+                    qualify_archive(lap.record, use="reference_comparison", expected_combo=combo)
+                ]
+                if not q.allowed
+            }
+        )
+        return ReferenceSelection(
+            requested_source=requested_source,
+            reference=None,
+            reason=(
+                "reference qualification: " + ", ".join(reasons)
+                if reasons
+                else "no valid same car/track reference candidates found"
+            ),
         )
 
     source_candidates = [
@@ -359,8 +423,9 @@ def _select_reference(
 
 def _session_stats(session_uuid: str, selected: list[LoadedLap]) -> dict[str, Any]:
     valid = _valid_laps(selected)
-    times = [lap.lap_ms for lap in valid if lap.lap_ms is not None]
-    best = min(valid, key=lambda lap: lap.lap_ms or 999_999_999) if valid else None
+    progression = _progression_laps(valid)
+    times = [lap.lap_ms for lap in progression if lap.lap_ms is not None]
+    best = _best_valid_lap(progression)
     timestamps = _parsed_datetimes(selected)
     first = min(timestamps) if timestamps else None
     last = max(timestamps) if timestamps else None
@@ -507,10 +572,12 @@ def _aggregate_problems(
         ref_for_lap = (
             None if reference is not None and reference.path == lap.path else reference_record
         )
+        diagnostics: dict[str, Any] = {}
         structured = build_structured_debrief(
             lap.record,
             reference_archive=ref_for_lap,
             grip_ceiling_g=grip_ceiling_g,
+            diagnostics=diagnostics,
         )
         if structured is None and ref_for_lap is not None:
             structured = build_structured_debrief(
@@ -524,7 +591,7 @@ def _aggregate_problems(
                     "used lap-only analysis"
                 )
         if not structured:
-            skipped.append(f"{lap.path.name}: no usable trace")
+            skipped.append(f"{lap.path.name}: {diagnostics.get('reason') or 'no usable trace'}")
             continue
         analyzed += 1
         reference_by_corner = {
@@ -604,10 +671,25 @@ def build_session_report(
 ) -> dict[str, Any]:
     """Build a JSON-serializable session review report."""
     laps, load_skipped = _load_laps(inputs)
-    selected_session, selected = _select_session(laps, session)
+    try:
+        selected_session, selected = _select_session(laps, session)
+    except SessionReviewError as exc:
+        if load_skipped:
+            raise SessionReviewError(f"{exc}: {'; '.join(load_skipped)}") from exc
+        raise
     stats = _session_stats(selected_session, selected)
+    qualification_skipped = [
+        f"{lap.path.name}: qualification: {q.reason}"
+        for lap in selected
+        for q in [qualify_archive(lap.record, use="analysis")]
+        if not q.allowed
+    ]
     if not stats["valid_laps"]:
-        raise SessionReviewError(f"session {selected_session!r} has no valid timed laps")
+        detail = "; ".join(qualification_skipped)
+        raise SessionReviewError(
+            f"session {selected_session!r} has no valid timed laps"
+            + (f": {detail}" if detail else "")
+        )
     reference_selection = _select_reference(
         laps,
         selected,
@@ -660,7 +742,7 @@ def build_session_report(
         "source": {
             "lap_files": len(laps),
             "selected_lap_files": [lap.path.name for lap in selected],
-            "skipped": load_skipped + analysis_skipped,
+            "skipped": load_skipped + qualification_skipped + analysis_skipped,
         },
     }
 
@@ -708,7 +790,7 @@ def _lap_uuid(lap: LoadedLap | None) -> str | None:
 
 
 def _best_valid_lap(laps: Iterable[LoadedLap]) -> LoadedLap | None:
-    valid = _valid_laps(laps)
+    valid = _progression_laps(laps)
     if not valid:
         return None
     return min(
@@ -730,6 +812,7 @@ def _same_combo_laps(laps: Iterable[LoadedLap], selected: list[LoadedLap]) -> li
 
 
 def _lap_browser_row(lap: LoadedLap, *, include_trace: bool = False) -> dict[str, Any]:
+    progression = qualify_archive(lap.record, use="human_progression")
     row: dict[str, Any] = {
         "lap_uuid": _lap_uuid(lap),
         "session_uuid": lap.session_uuid,
@@ -744,6 +827,8 @@ def _lap_browser_row(lap: LoadedLap, *, include_trace: bool = False) -> dict[str
         "source": lap.source,
         "import_format": lap.import_format,
         "reference_kind": lap.reference_kind,
+        "human_progression_allowed": progression.allowed,
+        "qualification_reason": progression.reason,
     }
     if include_trace:
         row["trace"] = _trace_payload(lap)
@@ -782,7 +867,7 @@ def _corner_trends(same_combo: list[LoadedLap]) -> list[dict[str, Any]]:
     session_dates = {
         row["session_uuid"]: row.get("last_exported_at") for row in _trend_sessions(same_combo)
     }
-    for lap in _valid_laps(same_combo):
+    for lap in _progression_laps(same_combo):
         corners = lap.record.get("corners")
         if not isinstance(corners, list):
             continue
@@ -863,6 +948,14 @@ def _sample_indices(count: int, limit: int = _MAX_TRACE_POINTS) -> list[int]:
 
 
 def _trace_payload(lap: LoadedLap) -> dict[str, Any]:
+    qualification = qualify_archive(lap.record, use="analysis")
+    if not qualification.allowed:
+        return {
+            "sample_count": 0,
+            "sampled_points": 0,
+            "points": [],
+            "reason": qualification.reason,
+        }
     trace = lap.record.get("trace")
     if not isinstance(trace, Mapping):
         return {"sample_count": 0, "sampled_points": 0, "points": []}
@@ -938,8 +1031,20 @@ def _comparison_payload(
     reference: LoadedLap | None,
     reference_comparison_enabled: bool = True,
 ) -> dict[str, Any]:
-    same_combo = sorted(_reference_candidates(_same_combo_laps(laps, selected)), key=_lap_sort_key)
     best_selected = _best_valid_lap(selected)
+    anchor = best_selected or (selected[0] if selected else None)
+    combo = archive_combo(anchor.record) if anchor else None
+    same_combo = sorted(
+        _reference_candidates(_same_combo_laps(laps, selected), expected_combo=combo),
+        key=_lap_sort_key,
+    )
+    if (
+        reference is not None
+        and not qualify_archive(
+            reference.record, use="reference_comparison", expected_combo=combo
+        ).allowed
+    ):
+        reference = None
     best_path = best_selected.path if best_selected is not None else None
     default_b = reference if reference is not None and reference.path != best_path else None
     if default_b is None and reference_comparison_enabled:

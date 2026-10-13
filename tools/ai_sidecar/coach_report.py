@@ -52,6 +52,7 @@ from tools.ai_sidecar.track_reference import (
 )
 from tools.ai_sidecar.trail_brake import TrailBrakeFinding, analyze_trail_braking
 from tools.ai_sidecar.tyre_model import TyreReport, tyres_from_lap_archive
+from tools.lap_qualification import archive_combo, duplicate_identity_reasons, qualify_archive
 
 
 def _conditions_meaningful(report: ConditionsReport | None) -> bool:
@@ -478,7 +479,17 @@ def _analyze(
     Raises ``ValueError`` (from :func:`lap_trace_from_archive`) when the archive has no usable
     trace.
     """
+    qualification = qualify_archive(lap_archive, use="analysis")
+    if not qualification.allowed:
+        raise ValueError(f"lap qualification: {qualification.reason}")
     lap = lap_trace_from_archive(lap_archive)
+    combo = archive_combo(lap_archive)
+    if reference_archive is not None:
+        reference_qualification = qualify_archive(
+            reference_archive, use="reference_comparison", expected_combo=combo
+        )
+        if not reference_qualification.allowed:
+            raise ValueError(f"reference qualification: {reference_qualification.reason}")
     setup = setup or from_lap_archive(lap_archive)
     raw_ref = lap_trace_from_archive(reference_archive) if reference_archive else None
     ref = (
@@ -498,7 +509,13 @@ def _analyze(
     current_archive_key = _archive_content_key(lap_archive)
     seen_history_keys = {current_archive_key}
     history_laps: list[LapTrace] = []
-    for history_archive in history_archives or []:
+    history_records = history_archives or []
+    duplicate_history = duplicate_identity_reasons(history_records)
+    for index, history_archive in enumerate(history_records):
+        if index in duplicate_history:
+            continue
+        if not qualify_archive(history_archive, use="human_progression").allowed:
+            continue
         if not _archive_lap_is_valid(history_archive):
             continue
         history_key = _archive_content_key(history_archive)
@@ -547,9 +564,19 @@ def _analyze(
     corpus_laps: list[LapTrace] = []
     if ref is not None:
         corpus_laps.append(ref)
-    if (ref is not None or corpus_archives) and _archive_lap_is_valid(lap_archive):
+    if (
+        (ref is not None or corpus_archives)
+        and _archive_lap_is_valid(lap_archive)
+        and qualify_archive(lap_archive, use="human_progression").allowed
+    ):
         corpus_laps.append(lap)
-    for archive in corpus_archives or []:
+    corpus_records = corpus_archives or []
+    duplicate_corpus = duplicate_identity_reasons(corpus_records)
+    for index, archive in enumerate(corpus_records):
+        if index in duplicate_corpus:
+            continue
+        if not qualify_archive(archive, use="reference_comparison", expected_combo=combo).allowed:
+            continue
         if not _archive_lap_is_valid(archive):
             continue
         try:
@@ -588,6 +615,7 @@ def build_structured_debrief(
     corpus_archives: list[dict] | None = None,
     setup: CarSetup | None = None,
     grip_ceiling_g: float | None = None,
+    diagnostics: dict | None = None,
 ) -> dict | None:
     """Run the coaching brain and return a JSON-serializable structured debrief.
 
@@ -607,7 +635,9 @@ def build_structured_debrief(
             setup=setup,
             grip_ceiling_g=grip_ceiling_g,
         )
-    except ValueError:
+    except ValueError as exc:
+        if diagnostics is not None:
+            diagnostics.update(allowed=False, reason=str(exc))
         return None
     lap = a["lap"]
     balance = a["balance"]

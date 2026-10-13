@@ -38,6 +38,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from tools.ac_harness.ai_line import StanleySteering, _horizontal
+from tools.lap_qualification import duplicate_identity_reasons, qualify_archive
 
 # fast_lane.ai binary layout (AiLine header + AiPoint blocks + AiPointExtra)
 _FAST_LANE_HEADER_BYTES = 16  # 4 * int32: version, count, lap, samp
@@ -835,6 +836,10 @@ def observe_lap_tyre_state(
         "temperature_aware_fit_eligible": False,
         "thermal_warming_step_fraction": 0.0,
     }
+    qualification = qualify_archive(archive, use="plant_fit")
+    if not qualification.allowed:
+        base["reason"] = f"archive_qualification:{qualification.reason}"
+        return base
     if not isinstance(fields, list) or not isinstance(samples, list) or not samples:
         return base
     if not isinstance(tyres, dict):
@@ -1123,6 +1128,8 @@ def ggv_from_lap_archives(
     _thermal_fit_mode: str | None = None,
 ) -> tuple[GGVModel, dict]:
     """Fit an uncertainty-aware GGV using only a thermally consistent lap cohort (#543)."""
+    if duplicate_identity_reasons(archives):
+        raise ValueError("archive_qualification:duplicate_archive_identity")
     states = [observe_lap_tyre_state(archive) for archive in archives]
     if _thermal_fit_mode not in {None, "thermally_stable", "cold_side_temperature_tagged"}:
         raise ValueError(f"unsupported thermal fit mode: {_thermal_fit_mode}")

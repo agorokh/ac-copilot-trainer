@@ -115,6 +115,7 @@ from tools.ai_sidecar.protocol import (
     PROTOCOL_VERSION,
     build_brain_followup,
     build_ollama_followup,
+    has_selected_archive_path,
     prepare_outbound_message,
     resolve_lap_archive,
 )
@@ -152,6 +153,7 @@ from tools.ai_sidecar.setup_optimizer import (
 )
 from tools.ai_sidecar.shift_observer import ShiftObserver
 from tools.ai_sidecar.voice.vocabulary import KINDS as VOICE_KINDS
+from tools.lap_archive_export import LapArchiveExportError
 
 logger = logging.getLogger(__name__)
 
@@ -867,12 +869,23 @@ async def _coach_v2_between_lap(
     # not default to valid and poison _rolling_best_lap_ms before the brainOnly re-send (#687).
     is_valid = True
     validity_known = False
-    if str(inbound.get("archivePath") or "").strip() or (
+    if has_selected_archive_path(inbound) or (
         isinstance(inbound.get("trace"), dict) and inbound.get("trace", {}).get("samples")
     ):
         try:
             loaded = await asyncio.to_thread(resolve_lap_archive, inbound)
+            if not isinstance(loaded, dict):
+                logger.info("coach v2 between-lap skipped: selected archive unavailable")
+                return
             if isinstance(loaded, dict):
+                from tools.lap_qualification import qualify_archive
+
+                qualification = await asyncio.to_thread(
+                    qualify_archive, loaded, use="human_progression"
+                )
+                if not qualification.allowed:
+                    logger.info("coach v2 between-lap skipped: %s", qualification.reason)
+                    return
                 validity_known = True
                 lap_meta = loaded.get("lap")
                 if isinstance(lap_meta, dict):
@@ -882,6 +895,7 @@ async def _coach_v2_between_lap(
                         lap_ms = lap_meta.get("lap_ms") or lap_meta.get("lapTimeMs")
         except Exception as e:
             logger.info("coach v2 between-lap archive load skipped: %s", e)
+            return
     else:
         for flag_key in ("isValid", "is_valid", "valid"):
             raw = inbound.get(flag_key)
@@ -984,7 +998,7 @@ async def _calibrate_brake_marks_from_lap(inbound: dict[str, Any]) -> None:
     has_inline_trace = (
         isinstance(trace, dict) and isinstance(trace.get("samples"), list) and trace["samples"]
     )
-    if not has_inline_trace and not str(inbound.get("archivePath") or "").strip():
+    if not has_inline_trace and not has_selected_archive_path(inbound):
         return
     # One key per PHYSICAL lap across its resend forms: the plain lap_complete (which may carry
     # an inline trace) and the archive-backed brainOnly re-send both carry the same
@@ -1014,6 +1028,12 @@ async def _calibrate_brake_marks_from_lap(inbound: dict[str, Any]) -> None:
         if isinstance(lap_meta, dict) and lap_meta.get("is_valid") is False:
             return
         from tools.ai_sidecar.lap_dynamics import lap_trace_from_archive
+        from tools.lap_qualification import qualify_archive
+
+        qualification = await asyncio.to_thread(qualify_archive, archive, use="human_progression")
+        if not qualification.allowed:
+            logger.info("brake calibration skipped: %s", qualification.reason)
+            return
 
         trace = await asyncio.to_thread(lap_trace_from_archive, archive)
     except asyncio.CancelledError:
@@ -3235,9 +3255,26 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
     if reference_path:
         try:
             from tools.ai_sidecar.realtime_observer import build_observer_from_reference
+            from tools.lap_archive_export import load_lap_archive
+            from tools.lap_qualification import qualify_archive
 
-            with open(reference_path, encoding="utf-8") as fh:
-                archive = json.load(fh)
+            archive = load_lap_archive(reference_path, allow_legacy_schema=True)
+            # Startup has no independent live combo yet. Managed references remain parked
+            # until a caller can supply that context; do not certify the file against itself.
+            qualification = qualify_archive(archive, use="live_reference")
+            if not qualification.allowed:
+                set_realtime_observer(None)
+                set_voice_runtime_status(
+                    configured=True,
+                    enabled=False,
+                    state="disabled",
+                    disabled_reason=f"reference qualification: {qualification.reason}",
+                    backend=bank_backend or "",
+                    bank_configured=bool(bank_dir),
+                    reference_configured=True,
+                    tts_enabled=bool(voice_settings.tts_enabled),
+                )
+                return
             _map_reference_archive = archive
             # #531 Part F: the same archive carries real px/pz — build the MAP page's
             # geometry once, best-effort (a map failure must never disable the observer).
@@ -3326,7 +3363,14 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                         reference_path,
                     )
         except Exception as exc:  # noqa: BLE001 - malformed archive must not abort the sidecar
-            reason = f"failed to load reference: {_exception_detail(exc)}"
+            # The shared loader wraps file errors with a path for local diagnostics.
+            # Keep that context out of the public status, as with the previous raw reader.
+            detail = (
+                (_exception_detail(exc.__cause__) if exc.__cause__ else "invalid archive envelope")
+                if isinstance(exc, LapArchiveExportError)
+                else _exception_detail(exc)
+            )
+            reason = f"failed to load reference: {detail}"
             logger.exception("voice: failed to load reference %s", reference_path)
             set_voice_runtime_status(
                 configured=True,

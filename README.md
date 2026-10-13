@@ -94,6 +94,15 @@ Use `--output-dir` to target a specific `journal/laps` directory, or set
 Settings to use a faster imported lap as the active coaching reference. Imported laps never count
 as the user's local PB.
 
+### MOZA data qualification
+
+Native AI-assisted laps can be attributed without rewriting their archives. Shared
+checks isolate those laps from human progression and reference/plant consumers.
+The explicit-path MOZA cache importer produces inspection artifacts with unknown
+channels and control evidence preserved. See
+[MOZA qualification and import](docs/10_Development/16_MOZA_Qualification.md).
+Track Titan and the existing voice pipeline remain available.
+
 ### Autonomous harness
 
 The in-sim harness tools live under `tools/ac_harness/`:

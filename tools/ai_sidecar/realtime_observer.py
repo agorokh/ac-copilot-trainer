@@ -33,6 +33,7 @@ from tools.ai_sidecar.track_reference import (
     build_references,
     sustained_brake_onsets,
 )
+from tools.lap_qualification import qualify_archive
 
 #: Spline drop between consecutive frames that signals a backward jump (wrap OR same-lap rewind).
 _LAP_WRAP_DROP = 0.5
@@ -899,7 +900,11 @@ def _frames_from_lap_trace(lap: LapTrace) -> list[dict[str, Any]]:
 
 
 def build_observer_from_reference(
-    reference_archive: dict, *, brake_prepare_lead_s: float | None = None
+    reference_archive: dict,
+    *,
+    brake_prepare_lead_s: float | None = None,
+    expected_combo: tuple[str, str, str | None] | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> RealtimeObserver | None:
     """Build an observer whose target envelope is the corpus best of a (faster) reference lap.
 
@@ -907,11 +912,20 @@ def build_observer_from_reference(
     GGV theoretical ceiling (we never fabricate one from a driven lap). Returns None when the
     archive has no usable trace or no segmentable corners.
     """
-    if not isinstance(reference_archive, dict):
+    qualification = qualify_archive(
+        reference_archive, use="live_reference", expected_combo=expected_combo
+    )
+    if diagnostics is not None:
+        diagnostics.update(allowed=qualification.allowed, reason=qualification.reason)
+    if not qualification.allowed:
         return None
+    if diagnostics is not None:
+        diagnostics.update(allowed=False, reason="reference_trace_unavailable")
     generator = reference_archive.get("generator")
     tt_reference = generator.get("tt_reference") if isinstance(generator, dict) else None
     if isinstance(tt_reference, dict) and tt_reference.get("partial") is True:
+        if diagnostics is not None:
+            diagnostics.update(allowed=False, reason="partial_tt_reference")
         return None
     try:
         ref_lap = lap_trace_from_archive(reference_archive)
@@ -919,12 +933,16 @@ def build_observer_from_reference(
         return None
     refs = build_references(ref_lap)
     if not refs:
+        if diagnostics is not None:
+            diagnostics["reason"] = "reference_corners_unavailable"
         return None
     add_corpus_lap(refs, ref_lap)  # the reference lap IS the corpus best
     track_obj = reference_archive.get("track")
     track = track_obj if isinstance(track_obj, dict) else {}
     track_id = track.get("id")
     track_layout = track.get("layout")
+    if diagnostics is not None:
+        diagnostics.update(allowed=True, reason=qualification.reason)
     return RealtimeObserver(
         refs,
         track_length_m=_positive_track_length_m(track.get("lengthM")),
