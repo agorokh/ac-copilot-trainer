@@ -133,3 +133,25 @@ separate from actual supported advice. Empty or zero-eligible evaluations remain
 unavailable. Unknown producer advice schemas must remain unavailable rather than
 be interpreted as expert coaching. Track Titan and the current voice pipeline
 retain their existing behavior. Shadow replay and activation remain Part D.
+
+Game Point's **OFFLINE REPORT** action selects a native archive or MOZA view,
+with optional matched native and evaluation files. Its remembered selections
+use `moza_offline_file`, `moza_offline_native_file`,
+`moza_offline_evaluation_file` and `moza_offline_oracle` in the existing Game Point
+settings file. Oracle inspection defaults off. These settings do not select a
+live reference. Derived HTML, Markdown and JSON use the existing report writer
+under Game Point's `journal/reports`; source files remain read-only.
+
+Selecting the MOZA workflow does not itself attribute a native lap to MOZA or
+certify human control. The report shows the archive's source and resolved
+authority. It reports an observed lap time separately from human achievements,
+and gives explicit reasons when numeric analysis or a native comparison cannot
+be produced. Selecting a matched file is not proof of shared recording identity.
+
+The currently observed producer schema has no validated expert-advice contract.
+`MozaOfflineOracle` implements the existing interface but returns no
+`CoachingSnapshot` for these inputs. Its inspection result preserves source
+hashes, exact producer linkage where available, evaluation eligibility and
+unqualified event metadata. A score, event label or unknown eligibility string
+cannot create a coaching message or confidence value. Supporting a future
+producer advice schema requires separate evidence and tests.

@@ -17,11 +17,18 @@ from __future__ import annotations
 
 import tkinter as tk
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from tkinter import font as tkfont
+from typing import Any
 
 from tools.rig_launcher import theme
 from tools.rig_launcher.fonts import load_private_fonts
-from tools.rig_launcher.supervisor import GamePointStatus, ProbeResult
+from tools.rig_launcher.supervisor import (
+    GamePointConfig,
+    GamePointStatus,
+    OfflineReportResult,
+    ProbeResult,
+)
 
 #: (display label, GamePointStatus attribute) for each status row, top to bottom.
 _ROWS: tuple[tuple[str, str], ...] = (
@@ -32,6 +39,7 @@ _ROWS: tuple[tuple[str, str], ...] = (
     ("Tablet", "tablet"),
     ("Keypad", "keypad"),
     ("AC Session", "resilient"),
+    ("Offline report", "moza_review"),
 )
 
 #: (label, action key, is-primary) for each footer button. Labels are uppercase
@@ -237,6 +245,24 @@ class LauncherView:
                 highlightbackground=theme.GRAPHITE if primary else theme.LINE_2,
             )
             button.grid(row=0, column=column, sticky="nsew", padx=(0 if column == 0 else 9, 0))
+        if "moza_offline_report" in actions:
+            tk.Button(
+                row,
+                text="OFFLINE REPORT",
+                command=actions["moza_offline_report"],
+                cursor="hand2",
+                relief="flat",
+                bd=0,
+                padx=10,
+                pady=11,
+                font=(self._f_disp, 10, "bold"),
+                bg=theme.RAISE,
+                fg=theme.CHALK,
+                activebackground=theme.SLAB,
+                activeforeground=theme.CHALK,
+                highlightthickness=1,
+                highlightbackground=theme.LINE_2,
+            ).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(9, 0))
 
     def _build_simhub_toggle(
         self,
@@ -335,6 +361,12 @@ class LauncherView:
             if not isinstance(probe, ProbeResult):
                 continue
             color = theme.color_for_tone(theme.tone_for(probe.ok, probe.state))
+            if key == "moza_review":
+                # Offline availability is advisory and must never look like a live arm state.
+                tone = "clear" if probe.state == "analysis_available" else "lift"
+                if probe.state == "not_run":
+                    tone = "idle"
+                color = theme.color_for_tone(tone)
             state = widgets["state"]
             assert isinstance(state, tk.Label)
             state.configure(text=probe.state.upper(), fg=color)
@@ -342,6 +374,173 @@ class LauncherView:
             assert isinstance(detail, tk.Label)
             detail.configure(text=probe.detail or "")
         self.fit_window()
+
+
+class MozaReviewView:
+    """File choices and last offline outcome, with no process or report logic in the view."""
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        *,
+        config: GamePointConfig,
+        on_generate: Callable[[dict[str, Any]], None],
+        on_open: Callable[[Path], None],
+    ) -> None:
+        self.window = tk.Toplevel(parent)
+        self.window.title("Game Point · Offline report")
+        self.window.configure(bg=theme.GRAPHITE)
+        self.window.minsize(660, 420)
+        frame = tk.Frame(self.window, bg=theme.GRAPHITE, padx=18, pady=18)
+        frame.pack(fill="both", expand=True)
+        frame.columnconfigure(1, weight=1)
+        tk.Label(
+            frame,
+            text="OFFLINE LAP REVIEW",
+            bg=theme.GRAPHITE,
+            fg=theme.BRASS,
+            font=("Segoe UI", 14, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+        tk.Label(
+            frame,
+            text="Choose a native archive or readable MOZA cache JSON.\n"
+            "Cache charts may support inspection only. This action does not enable live coaching.",
+            bg=theme.GRAPHITE,
+            fg=theme.MUTE,
+            justify="left",
+            anchor="w",
+            wraplength=650,
+        ).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 14))
+        self._vars: dict[str, tk.StringVar] = {}
+        self._controls: list[Any] = []
+        selections = (
+            ("selected_file", "Native lap / MOZA cache", config.moza_offline_file),
+            ("matched_native_file", "Matched native (optional)", config.moza_offline_native_file),
+            ("evaluation_file", "Evaluation (optional)", config.moza_offline_evaluation_file),
+        )
+        for row, (key, label, initial) in enumerate(selections, start=2):
+            var = tk.StringVar(master=self.window, value=initial or "")
+            self._vars[key] = var
+            tk.Label(frame, text=label, bg=theme.GRAPHITE, fg=theme.CHALK, anchor="w").grid(
+                row=row,
+                column=0,
+                sticky="w",
+                padx=(0, 10),
+                pady=5,
+            )
+            entry = tk.Entry(
+                frame,
+                textvariable=var,
+                bg=theme.SLAB,
+                fg=theme.CHALK,
+                insertbackground=theme.CHALK,
+                width=48,
+            )
+            entry.grid(row=row, column=1, sticky="ew", pady=5)
+            button = tk.Button(
+                frame,
+                text="Browse…",
+                command=lambda v=var, title=label: self._browse(v, title),
+                bg=theme.RAISE,
+                fg=theme.CHALK,
+                relief="flat",
+                padx=10,
+                pady=6,
+            )
+            button.grid(row=row, column=2, padx=(8, 0), pady=5)
+            self._controls.extend((entry, button))
+        self._oracle = tk.BooleanVar(master=self.window, value=config.moza_offline_oracle)
+        oracle = tk.Checkbutton(
+            frame,
+            text="Inspect MOZA advice availability (offline)",
+            variable=self._oracle,
+            bg=theme.GRAPHITE,
+            fg=theme.CHALK,
+            selectcolor=theme.SLAB,
+            activebackground=theme.GRAPHITE,
+            activeforeground=theme.CHALK,
+            anchor="w",
+        )
+        oracle.grid(row=5, column=0, columnspan=3, sticky="w", pady=(8, 12))
+        self._controls.append(oracle)
+        self._status = tk.Label(
+            frame,
+            text="",
+            bg=theme.GRAPHITE,
+            fg=theme.MUTE,
+            anchor="nw",
+            justify="left",
+            wraplength=650,
+        )
+        self._status.grid(row=6, column=0, columnspan=3, sticky="nsew", pady=(0, 14))
+        frame.rowconfigure(6, weight=1)
+        self._generate = tk.Button(
+            frame,
+            text="SAVE SELECTIONS & GENERATE",
+            command=lambda: on_generate(self.selection()),
+            bg=theme.BRASS,
+            fg=theme.BRASS_INK,
+            relief="flat",
+            padx=12,
+            pady=10,
+        )
+        self._generate.grid(row=7, column=0, columnspan=2, sticky="w")
+        self._controls.append(self._generate)
+        self._report_path: Path | None = None
+        self._open = tk.Button(
+            frame,
+            text="OPEN REPORT",
+            state="disabled",
+            command=lambda: on_open(self._report_path) if self._report_path else None,
+            bg=theme.RAISE,
+            fg=theme.CHALK,
+            relief="flat",
+            padx=12,
+            pady=10,
+        )
+        self._open.grid(row=7, column=2, sticky="e")
+        for var in (*self._vars.values(), self._oracle):
+            var.trace_add("write", self._selection_changed)
+
+    def selection(self) -> dict[str, Any]:
+        return {
+            **{key: var.get() for key, var in self._vars.items()},
+            "oracle_enabled": bool(self._oracle.get()),
+        }
+
+    def _selection_changed(self, *_args: Any) -> None:
+        self._report_path = None
+        self._open.configure(state="disabled")
+        self._status.configure(text="Selection changed. Generate a report to check these files.")
+
+    def _browse(self, var: tk.StringVar, title: str) -> None:
+        from tkinter import filedialog
+
+        path = filedialog.askopenfilename(
+            parent=self.window,
+            title=title,
+            filetypes=[("JSON files", "*.json")],
+        )
+        if path:
+            var.set(path)
+
+    def set_running(self) -> None:
+        self._report_path = None
+        self._open.configure(state="disabled")
+        for control in self._controls:
+            control.configure(state="disabled")
+        self._status.configure(text="Generating offline report…")
+
+    def show_result(self, result: OfflineReportResult) -> None:
+        for control in self._controls:
+            control.configure(state="normal")
+        self._report_path = result.report_path
+        self._open.configure(state="normal" if result.report_path else "disabled")
+        text = result.status.state.replace("_", " ").upper() + "\n" + result.status.detail
+        if result.report_path:
+            text += "\nSaved report: " + str(result.report_path)
+        self._status.configure(text=text)
 
 
 def build_launcher_view(

@@ -96,7 +96,7 @@ def _num_ms(value: Any) -> int | None:
         return None
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if not math.isfinite(parsed) or parsed <= 0:
         return None
@@ -563,6 +563,7 @@ def _aggregate_problems(
     *,
     reference: LoadedLap | None,
     grip_ceiling_g: float | None,
+    corner_observations: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], int]:
     problems: dict[int, dict[str, Any]] = {}
     skipped: list[str] = []
@@ -594,6 +595,14 @@ def _aggregate_problems(
             skipped.append(f"{lap.path.name}: {diagnostics.get('reason') or 'no usable trace'}")
             continue
         analyzed += 1
+        if corner_observations is not None:
+            # Offline source review reports measurements without converting
+            # an assisted/unknown controller's technique into human advice.
+            corner_observations.extend(
+                {key: corner.get(key) for key in ("index", "apex_spline", "min_speed_kmh")}
+                for corner in structured.get("corners") or []
+                if isinstance(corner, Mapping)
+            )
         reference_by_corner = {
             int(row.get("index") or 0): row
             for row in structured.get("corner_reference") or []
@@ -671,6 +680,31 @@ def build_session_report(
 ) -> dict[str, Any]:
     """Build a JSON-serializable session review report."""
     laps, load_skipped = _load_laps(inputs)
+    return _build_report_from_laps(
+        laps,
+        load_skipped,
+        session=session,
+        driver_id=driver_id,
+        grip_ceiling_g=grip_ceiling_g,
+        generated_at=generated_at,
+        reference_source=reference_source,
+        reference_path=reference_path,
+    )
+
+
+def _build_report_from_laps(
+    laps: list[LoadedLap],
+    load_skipped: list[str],
+    *,
+    session: str = DEFAULT_SESSION,
+    driver_id: str = "local-driver",
+    grip_ceiling_g: float | None = None,
+    generated_at: str | None = None,
+    reference_source: str = "auto",
+    reference_path: str | Path | None = None,
+    include_corner_observations: bool = False,
+) -> dict[str, Any]:
+    """Analyze already captured records without a second mutable-file read."""
     try:
         selected_session, selected = _select_session(laps, session)
     except SessionReviewError as exc:
@@ -697,10 +731,12 @@ def build_session_report(
         reference_path=reference_path,
     )
     reference = reference_selection.reference
+    observations: list[dict[str, Any]] | None = [] if include_corner_observations else None
     problems, analysis_skipped, analyzed = _aggregate_problems(
         selected,
         reference=reference,
         grip_ceiling_g=grip_ceiling_g,
+        corner_observations=observations,
     )
     if analyzed == 0:
         raise SessionReviewError(
@@ -721,6 +757,7 @@ def build_session_report(
         latest_valid.record, reference.record if reference else None
     )
     return {
+        **({"corner_observations": observations} if observations is not None else {}),
         "schema_version": REPORT_SCHEMA_VERSION,
         "generated_at": generated_at or _iso_now(),
         "driver_id": driver_id,
@@ -1125,11 +1162,148 @@ def _atomic_write(path: Path, text: str) -> None:
         raise
 
 
+def _offline_review_tables(
+    review: Mapping[str, Any],
+) -> list[tuple[str, list[str], list[list[Any]]]]:
+    """One set of offline availability rows for the existing HTML/Markdown renderers."""
+    selected = review.get("selected") or {}
+    observed = review.get("observed_lap") or {}
+    oracle = review.get("oracle") or {}
+    evaluation = review.get("evaluation") or {}
+    comparison = review.get("native_comparison") or {}
+    matched = review.get("matched_native") or {}
+    metadata = oracle.get("metadata") or {}
+    rows = [
+        ["Status", review.get("status")],
+        ["Reason", review.get("reason")],
+        ["Selected file", selected.get("file")],
+        ["Input kind", selected.get("kind")],
+        ["Recorded source", selected.get("source") or "unknown"],
+        ["Control authority", review.get("authority")],
+        ["Input SHA256", selected.get("sha256")],
+        ["Observed lap time", _format_ms(observed.get("lap_ms"))],
+        ["Reported valid flag", observed.get("is_valid")],
+        ["Reported complete flag", observed.get("complete")],
+        ["Numeric analysis", (review.get("numeric_analysis") or {}).get("reason")],
+        ["Native comparison", comparison.get("reason")],
+        ["Matched file", matched.get("file")],
+        ["Matched authority", matched.get("authority")],
+        ["Pair identity", matched.get("association")],
+        ["Evaluation", evaluation.get("reason") or evaluation.get("status")],
+        ["Producer counts", evaluation.get("counts")],
+        ["Offline oracle", oracle.get("reason")],
+        ["Coaching confidence", metadata.get("coaching_confidence") or "unknown"],
+        ["Producer events", metadata.get("event_annotations")],
+    ]
+    inspection = review.get("inspection") or {}
+    rows += [[key.replace("_", " ").capitalize(), value] for key, value in inspection.items()]
+    tables = [("MOZA offline source review", ["Field", "Observation"], rows)]
+    tables.append(
+        (
+            "Use qualification",
+            ["Use", "Allowed", "Reason"],
+            [
+                [
+                    use,
+                    decision.get("allowed"),
+                    "; ".join(decision.get("reasons") or [decision.get("reason", "unknown")]),
+                ]
+                for use, decision in (review.get("qualification") or {}).items()
+            ],
+        )
+    )
+    observations = review.get("corner_observations") or []
+    if observations:
+        tables.append(
+            (
+                "Selected lap corner measurements",
+                ["Corner index", "Apex spline", "Minimum km/h"],
+                [
+                    [row.get(key) for key in ("index", "apex_spline", "min_speed_kmh")]
+                    for row in observations
+                ],
+            )
+        )
+    if comparison.get("available"):
+        tables.append(
+            (
+                "Qualified native corner comparison",
+                [
+                    "Corner",
+                    "Selected min km/h",
+                    "Reference min km/h",
+                    "Time delta s",
+                    "Brake onset delta m",
+                ],
+                [
+                    [
+                        row.get(key)
+                        for key in (
+                            "label",
+                            "min_speed_kmh",
+                            "reference_min_speed_kmh",
+                            "time_loss_s",
+                            "brake_onset_delta_m",
+                        )
+                    ]
+                    for row in comparison.get("corners") or []
+                ],
+            )
+        )
+    tables.append(
+        (
+            "Channel availability",
+            ["Channel", "Present", "Usable here", "Unit", "Basis", "Reason"],
+            [
+                [
+                    row.get(key)
+                    for key in ("name", "present", "available", "unit", "basis", "reason")
+                ]
+                for row in review.get("channels") or []
+            ],
+        )
+    )
+    return tables
+
+
+_OFFLINE_REVIEW_NOTE = (
+    "Workflow selection does not prove MOZA or human control. Measurements describe the selected "
+    "record; they are not human achievements or learned human technique. Missing comparison is "
+    "unavailable, not zero loss. Producer events are annotations, not causal coaching. "
+    "This offline report does not generate speech or update progression."
+)
+
+
+def _offline_value(value: Any) -> str:
+    if value is None:
+        return "unavailable"
+    return json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)
+
+
 def render_markdown(report: Mapping[str, Any]) -> str:
     """Render the session report as driver-readable Markdown."""
     session = report.get("session") if isinstance(report.get("session"), Mapping) else {}
     reference = report.get("reference") if isinstance(report.get("reference"), Mapping) else None
     title = f"{session.get('car_id') or 'car'} @ {session.get('track_id') or 'track'}"
+    review = report.get("moza_review")
+    if isinstance(review, Mapping):
+        lines = [f"# Session Review - {title}", "", _OFFLINE_REVIEW_NOTE]
+        for heading, headers, rows in _offline_review_tables(review):
+
+            def cell(value: Any) -> str:
+                return html_escape(_offline_value(value)).replace("|", "&#124;").replace("\n", " ")
+
+            lines.extend(
+                [
+                    "",
+                    "## " + heading,
+                    "",
+                    "| " + " | ".join(headers) + " |",
+                    "| " + " | ".join("---" for _ in headers) + " |",
+                ]
+            )
+            lines.extend("| " + " | ".join(cell(value) for value in row) + " |" for row in rows)
+        return "\n".join(lines).rstrip() + "\n"
     lines = [
         f"# Session Review - {title}",
         "",
@@ -1314,6 +1488,23 @@ def _json_for_script(report: Mapping[str, Any]) -> str:
 def render_html(report: Mapping[str, Any]) -> str:
     """Render a self-contained session review HTML report."""
     session = report.get("session") if isinstance(report.get("session"), Mapping) else {}
+    review = report.get("moza_review")
+    offline = isinstance(review, Mapping)
+    offline_html = ""
+    if offline:
+        offline_html = f"<section><p>{_html(_OFFLINE_REVIEW_NOTE)}</p></section>"
+        for heading, headers, rows in _offline_review_tables(review):
+            head = "".join(f"<th>{_html(value)}</th>" for value in headers)
+            body = "".join(
+                "<tr>"
+                + "".join(f"<td>{_html(_offline_value(value))}</td>" for value in row)
+                + "</tr>"
+                for row in rows
+            )
+            offline_html += (
+                f"<section><h2>{_html(heading)}</h2><table><thead><tr>{head}</tr></thead>"
+                f"<tbody>{body}</tbody></table></section>"
+            )
     history = report.get("history") if isinstance(report.get("history"), Mapping) else {}
     trend = history.get("trend") if isinstance(history.get("trend"), Mapping) else {}
     trend_sessions = trend.get("sessions") if isinstance(trend.get("sessions"), list) else []
@@ -1498,6 +1689,8 @@ def render_html(report: Mapping[str, Any]) -> str:
     <div class="meta">{reference_meta}</div>
   </header>
   <main>
+    {offline_html}
+    <div{" hidden" if offline else ""}>
     <section class="kpis" aria-label="Session summary">
       <div class="kpi">
         <h3>Best Lap</h3><strong>{_html_ms(session.get("best_lap_ms"))}</strong>
@@ -1563,6 +1756,7 @@ def render_html(report: Mapping[str, Any]) -> str:
         <span><span class="swatch" style="background:var(--green)"></span>Steer</span>
       </div>
     </section>
+    </div>
   </main>
   <script id="review-data" type="application/json">{data_json}</script>
   <script>
@@ -1694,13 +1888,30 @@ def write_session_report(
     report: Mapping[str, Any],
     *,
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
+    protected_inputs: Iterable[str | Path] = (),
 ) -> WrittenSessionReport:
-    """Write Markdown, JSON, and HTML report files under ``journal/reports``."""
+    """Write under ``journal/reports`` after checking all outputs for input aliases.
+
+    Explicit MOZA review callers must pass every selected/cache/native/evaluation
+    path. These host paths stay out of the saved report and broadcasts.
+    """
     resolved_dir = _resolve_output_dir(output_dir)
     basename = _report_basename(report)
     markdown_path = resolved_dir / f"{basename}.md"
     json_path = resolved_dir / f"{basename}.json"
     html_path = resolved_dir / f"{basename}.html"
+    inputs = [Path(path).expanduser() for path in protected_inputs]
+    if "moza_review" in report and not inputs:
+        raise SessionReviewError("protected_inputs_required_for_moza_review")
+    try:
+        for output in (markdown_path, json_path, html_path):
+            for source in inputs:
+                if output.resolve() == source.resolve() or (
+                    output.exists() and source.exists() and output.samefile(source)
+                ):
+                    raise SessionReviewError("report_output_aliases_input")
+    except (OSError, RuntimeError) as exc:
+        raise SessionReviewError("report_input_alias_check_unavailable") from exc
     _atomic_write(markdown_path, render_markdown(report))
     _atomic_write(json_path, json.dumps(report, indent=2, sort_keys=True) + "\n")
     _atomic_write(html_path, render_html(report))

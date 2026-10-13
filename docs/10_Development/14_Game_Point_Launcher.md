@@ -94,6 +94,35 @@ Settings precedence is:
 created ahead of time by calling `ensure_settings_file()` from
 `tools.rig_launcher.settings`.
 
+### Offline native / MOZA reports (#815 Part C)
+
+Choose **OFFLINE REPORT** in Game Point, then select one native lap archive or
+readable MOZA cache JSON. A matched native archive and an evaluation JSON are
+optional separate selections. **Inspect MOZA advice availability** is off by
+default. **SAVE SELECTIONS & GENERATE** runs the offline review on a worker;
+**OPEN REPORT** opens the resulting HTML when available. Normal status polling
+does not reread the selected files.
+
+Selections use the existing per-user settings file: `moza_offline_file`,
+`moza_offline_native_file`, `moza_offline_evaluation_file`, and
+`moza_offline_oracle`. Relative selections resolve under the Game Point data
+directory. Reports use the existing writer under that directory's
+`journal/reports`; source files remain untouched. Reopening Game Point restores
+the selections but does not generate a report automatically.
+
+The Offline report row shows the last explicit result: analysis available,
+inspection only, input unavailable, or error, with the qualification reason and
+control authority. A native file without attribution remains `legacy_unknown`;
+selecting it here does not establish MOZA or human control. Processed caches may
+produce an inspection report while native channels, corner comparison, and
+producer advice remain unavailable. Zero eligible evaluated laps do not become
+coaching advice. Offline status is advisory and never blocks START.
+
+These selections do not change `reference_archive`, Track Titan, alien-line or
+voice settings, and never enter the live sidecar command or environment. This
+action starts no AC session, sidecar, or speech playback. Part D owns any later
+shadow voice evidence and activation decision.
+
 Coach v2 can consume an issue #529 alien-line artifact through
 `AC_COPILOT_ALIEN_LINE` or the non-secret `alien_line` settings key. The launcher
 resolves relative paths against the Game Point data directory and passes the
