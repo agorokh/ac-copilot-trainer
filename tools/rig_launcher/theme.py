@@ -211,7 +211,14 @@ def summary_for(status: GamePointStatus, port: int = 8765) -> tuple[str, str, st
         )
     if (status.sidecar.state or "").strip().lower() in _SIDECAR_DOWN_STATES:
         return ("PRESS START", "brake", f"nothing on port {port} yet")
-    rows = (status.sidecar, status.screen, status.voice, status.simhub, status.tablet)
+    rows = (
+        status.sidecar,
+        status.screen,
+        status.voice,
+        status.simhub,
+        status.tablet,
+        status.keypad,
+    )
     caption = next(
         (row.detail or row.state for row in rows if not row.ok and (row.detail or row.state)),
         "needs attention",

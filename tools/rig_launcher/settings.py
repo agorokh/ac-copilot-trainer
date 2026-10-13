@@ -37,6 +37,7 @@ class LauncherSettings:
     resilient_layout: str | None = None
     resilient_cm_exe: str | None = None
     ac_user_dir: str | None = None
+    keypad_profiles: str | None = None
 
     @classmethod
     def load(cls, path: Path) -> LauncherSettings:
@@ -64,6 +65,7 @@ class LauncherSettings:
             resilient_layout=_optional_text(payload.get("resilient_layout")),
             resilient_cm_exe=_optional_text(payload.get("resilient_cm_exe")),
             ac_user_dir=_optional_text(payload.get("ac_user_dir")),
+            keypad_profiles=_optional_text(payload.get("keypad_profiles")),
         )
 
 
@@ -150,6 +152,7 @@ def default_settings_payload() -> dict[str, object]:
         "ac_audio_device": "",
         "ac_user_dir": "",
         "external_bind": "",
+        "keypad_profiles": "",
         "alien_line": "",
         "reference_archive": "",
         "resilient_car": "",

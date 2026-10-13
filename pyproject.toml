@@ -12,6 +12,7 @@ license = { text = "MIT" }
 dependencies = []
 
 [project.optional-dependencies]
+controls = ["hidapi>=0.14.0,<1"]
 dev = [
   "pytest>=9.0.3",
   "pytest-cov>=7.1.0",
@@ -136,6 +137,7 @@ include = ["ac_copilot_trainer*", "tools*"]
 "tools.ai_sidecar.voice" = ["web/*.html"]
 # Ship the tablet GT dashboard page + vendored fonts so /tablet/dash works in wheel installs (#531).
 "tools.ai_sidecar.dash" = ["web/*.html", "web/fonts/*.ttf"]
+"tools.rig_controls" = ["*.json", "README.md"]
 
 [tool.ruff]
 line-length = 100
