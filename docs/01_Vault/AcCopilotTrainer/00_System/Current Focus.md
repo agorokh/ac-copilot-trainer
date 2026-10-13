@@ -129,6 +129,9 @@ all six physical controls and colour/power/sleep/reconnect acceptance. Both HEX
 artifacts remain DO-NOT-FLASH. Existing work and screen/AC boundaries are unchanged.
 The [adapter arrival SAVE](handoffs/2026-10-13-154636Z-keypad-adapter-guide-codex.md) links the wiring guide and three
 temporary test profiles; agents resume recovery and mapping qualification there.
+The [post-merge packet receipt](handoffs/2026-10-13-161111Z-post-merge-pr829-keypad-guide-c53b18.md) records merged
+[PR #829](https://github.com/agorokh/ac-copilot-trainer/pull/829), clean independent
+review and verified inactive PC staging. Hardware acceptance remains on #3863.
 
 Game Point sizing and current EXE are deployed (#805/#806/#807/#809/#810).
 Normal-state telemetry and actual P7 pixels pass with all archives restored.
