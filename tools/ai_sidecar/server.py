@@ -115,6 +115,7 @@ from tools.ai_sidecar.protocol import (
     PROTOCOL_VERSION,
     build_brain_followup,
     build_ollama_followup,
+    has_selected_archive_path,
     prepare_outbound_message,
     resolve_lap_archive,
 )
@@ -868,11 +869,14 @@ async def _coach_v2_between_lap(
     # not default to valid and poison _rolling_best_lap_ms before the brainOnly re-send (#687).
     is_valid = True
     validity_known = False
-    if str(inbound.get("archivePath") or "").strip() or (
+    if has_selected_archive_path(inbound) or (
         isinstance(inbound.get("trace"), dict) and inbound.get("trace", {}).get("samples")
     ):
         try:
             loaded = await asyncio.to_thread(resolve_lap_archive, inbound)
+            if not isinstance(loaded, dict):
+                logger.info("coach v2 between-lap skipped: selected archive unavailable")
+                return
             if isinstance(loaded, dict):
                 from tools.lap_qualification import qualify_archive
 
@@ -891,6 +895,7 @@ async def _coach_v2_between_lap(
                         lap_ms = lap_meta.get("lap_ms") or lap_meta.get("lapTimeMs")
         except Exception as e:
             logger.info("coach v2 between-lap archive load skipped: %s", e)
+            return
     else:
         for flag_key in ("isValid", "is_valid", "valid"):
             raw = inbound.get(flag_key)
@@ -993,7 +998,7 @@ async def _calibrate_brake_marks_from_lap(inbound: dict[str, Any]) -> None:
     has_inline_trace = (
         isinstance(trace, dict) and isinstance(trace.get("samples"), list) and trace["samples"]
     )
-    if not has_inline_trace and not str(inbound.get("archivePath") or "").strip():
+    if not has_inline_trace and not has_selected_archive_path(inbound):
         return
     # One key per PHYSICAL lap across its resend forms: the plain lap_complete (which may carry
     # an inline trace) and the archive-backed brainOnly re-send both carry the same

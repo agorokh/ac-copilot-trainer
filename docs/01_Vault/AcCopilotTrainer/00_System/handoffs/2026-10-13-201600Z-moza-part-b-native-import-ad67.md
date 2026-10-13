@@ -58,6 +58,15 @@ run initially exposed incompatible global MCP and a missing C compiler; validati
 uses the existing MCP-v2 project venv plus an isolated Zig/Clang compiler bridge.
 All ten firmware harness tests then passed without source changes. External
 exact-head review and the final Windows result remain recorded on the PR.
+
+Subsequent integration review found and corrected direct-profile and
+inline-trace/selected-path routes that could bypass attribution. Selected-file
+failure now parks live advice/rolling-best, and managed AI subjects remain
+available for qualified offline analysis without supplying live socket advice.
+Antigravity also identified a legacy reference-selection regression: matching now
+uses its historical fallback separately from independent qualification context.
+Regression tests cover these triggers; final review/CI evidence belongs to the
+corrected head on the PR, not the earlier implementation-head receipts.
 See [qualification/import contract](../../../../10_Development/16_MOZA_Qualification.md)
 for entrypoints and limitations.
 

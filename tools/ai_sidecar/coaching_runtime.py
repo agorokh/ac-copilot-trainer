@@ -36,7 +36,7 @@ from tools.ai_sidecar.coaching_diagnosis import (
     classify_root_error,
 )
 from tools.ai_sidecar.coaching_ledger import CoachingLedger
-from tools.ai_sidecar.driver_profile import DEFAULT_PROFILE_PATH, load_profile
+from tools.ai_sidecar.driver_profile import DEFAULT_PROFILE_PATH, load_profile, sanitize_profile
 from tools.ai_sidecar.driver_progression import (
     DriverCuePolicy,
     cue_policy_from_profile,
@@ -628,7 +628,7 @@ def _profile_for_runtime(
     driver_profile_path: str | Path | None,
 ) -> Mapping[str, Any] | None:
     if driver_profile is not None:
-        return driver_profile
+        return sanitize_profile(driver_profile)
     configured = driver_profile_path or os.environ.get("AC_COPILOT_DRIVER_PROFILE")
     path = Path(configured) if configured else DEFAULT_PROFILE_PATH
     if not path.exists() and configured is None:
@@ -763,6 +763,16 @@ def build_coach_runtime(
     profile = _profile_for_reference_combo(
         _profile_for_runtime(driver_profile, driver_profile_path), reference_archive
     )
+    profile_source = profile.get("source") if isinstance(profile, Mapping) else None
+    if (
+        diagnostics is not None
+        and isinstance(profile_source, Mapping)
+        and profile_source.get("rebuild_required") is True
+    ):
+        diagnostics["driver_profile"] = {
+            "rebuild_required": True,
+            "reasons": profile_source.get("skipped", []),
+        }
     policy = cue_policy_from_profile(profile)
     frontier: dict[str, Any] = {
         "configured": False,

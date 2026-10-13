@@ -333,9 +333,14 @@ def _select_reference(
             reference=None,
             reason="selected session has no valid timed laps",
         )
+    # Legacy selection keeps its historical identity fallback. Qualification must
+    # still receive None when independent content/layout identity is unavailable.
+    matching_combo = _combo_key(valid_selected[0])
     combo = archive_combo(valid_selected[0].record)
     candidates = [
-        lap for lap in _reference_candidates(laps, expected_combo=combo) if _combo_key(lap) == combo
+        lap
+        for lap in _reference_candidates(laps, expected_combo=combo)
+        if _combo_key(lap) == matching_combo
     ]
     if reference_path is not None:
         requested_path = Path(reference_path)
@@ -376,7 +381,7 @@ def _select_reference(
             {
                 q.reason
                 for lap in laps
-                if _combo_key(lap) == combo
+                if _combo_key(lap) == matching_combo
                 for q in [
                     qualify_archive(lap.record, use="reference_comparison", expected_combo=combo)
                 ]

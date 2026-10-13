@@ -10,10 +10,11 @@ from copy import deepcopy
 import pytest
 
 from tests.test_session_review import _corner_archive
-from tools.ai_sidecar import server
+from tools.ai_sidecar import protocol, server
 from tools.ai_sidecar.coach_report import build_debrief, build_structured_debrief
 from tools.ai_sidecar.coaching_runtime import build_coach_runtime
-from tools.ai_sidecar.protocol import _load_safe_archive_path
+from tools.ai_sidecar.driver_profile import load_profile, sanitize_profile
+from tools.ai_sidecar.protocol import _load_safe_archive_path, resolve_lap_archive
 from tools.ai_sidecar.realtime_observer import build_observer_from_reference
 from tools.ai_sidecar.track_map import (
     _reference_provenance_valid,
@@ -324,3 +325,176 @@ def test_ai_lap_never_folds_rolling_best_or_emits_between_lap_advice(monkeypatch
     assert coach.calls == 0
     assert not server._recent_between_lap_fold_keys
     assert not server._recent_between_lap_advice_keys
+
+
+def _advanced_profile(lap_uuid):
+    combo = {"car_id": COMBO[0], "track_id": COMBO[1], "track_layout": ""}
+    return {
+        "schema_version": 1,
+        "preferences": {"verbosity": "low"},
+        "focus_corners": {"T1": "manual focus"},
+        "corner_history": {
+            "corner": {
+                **combo,
+                "lap_uuids": [lap_uuid],
+                "valid_laps": 8,
+                "delta_min_speed_kmh": 3.0,
+                "avg_trail_brake_ratio": 0.4,
+                "avg_throttle": 0.7,
+                "avg_steer_reversals": 1.0,
+            }
+        },
+        "consistency": {
+            "combo": {
+                **combo,
+                "session_count": 3,
+                "valid_laps": 12,
+                "median_session_best_ms": 100000,
+                "consistency_ms": 1000.0,
+            }
+        },
+    }
+
+
+def test_direct_profile_uses_same_contamination_gate_as_file_load(tmp_path):
+    ai = _archive("known-ai", session="assisted", lap_n=2)
+    archive_path = tmp_path / "lap_ai.json"
+    archive_path.write_text(json.dumps(ai), encoding="utf-8")
+    register_attribution(archive_path, _managed(deepcopy(ai), authority="ai")["qualification"])
+    profile = _advanced_profile("known-ai")
+    before = deepcopy(profile)
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps(profile), encoding="utf-8")
+    profile_bytes = path.read_bytes()
+    reference = _archive("reference", session="clean")
+    diagnostics = {}
+    runtime = build_coach_runtime(reference, driver_profile=profile, diagnostics=diagnostics)
+    assert runtime.cue_policy.level == "unknown"
+    assert runtime.ledger.lap_budget == 4
+    assert diagnostics["driver_profile"]["rebuild_required"] is True
+    assert "attributed_lap_or_session_overlap" in diagnostics["driver_profile"]["reasons"][0]
+    direct, loaded = sanitize_profile(profile), load_profile(path)
+    for parked in (direct, loaded):
+        assert parked["source"]["rebuild_required"] is True
+        assert parked["corner_history"] == {}
+        assert parked["consistency"] == {}
+        assert parked["preferences"] == profile["preferences"]
+        assert parked["focus_corners"] == profile["focus_corners"]
+    assert profile == before
+    assert path.read_bytes() == profile_bytes
+
+
+def test_clean_direct_profile_retains_policy_and_manual_fields():
+    profile = _advanced_profile("clean-lap")
+    before = deepcopy(profile)
+    clean = sanitize_profile(profile)
+    runtime = build_coach_runtime(_archive("reference"), driver_profile=profile)
+    assert clean == before
+    assert profile == before
+    assert runtime.cue_policy.level == "advanced"
+    assert runtime.ledger.lap_budget == 5
+
+
+@pytest.mark.parametrize("selected", ["ai", "missing", "invalid", "unsafe", 0, False])
+def test_selected_archive_path_cannot_fall_back_to_inline_trace(tmp_path, monkeypatch, selected):
+    from tools.ai_sidecar.coaching import between_lap
+
+    root = tmp_path / "journal" / "laps"
+    root.mkdir(parents=True)
+    path = root / "lap_selected.json"
+    ai = _archive("selected-ai")
+    if selected == "ai":
+        path.write_text(json.dumps(ai), encoding="utf-8")
+        register_attribution(path, _managed(deepcopy(ai), authority="ai")["qualification"])
+    elif selected == "invalid":
+        path.write_text("invalid JSON", encoding="utf-8")
+    elif selected == "unsafe":
+        path = tmp_path / "outside.json"
+        path.write_text(json.dumps(_archive()), encoding="utf-8")
+    frame = {
+        "lap": 1,
+        "lapTimeMs": ai["lap"]["lap_ms"],
+        "archivePath": str(path),
+        "trace": ai["trace"],
+        "isValid": True,
+    }
+    if not isinstance(selected, str):
+        frame["archivePath"] = selected
+        # Even without inline data a typed-invalid selected path is not a bare live frame.
+        frame.pop("trace")
+    resolved = resolve_lap_archive(frame)
+    if selected == "ai":
+        assert resolved["qualification"]["authority"] == "ai"
+        assert not qualify_archive(resolved, use="live_reference", expected_combo=COMBO).allowed
+        assert build_coach_runtime(resolved, expected_combo=COMBO) is None
+    else:
+        assert resolved is None
+    monkeypatch.setattr(protocol, "debrief_feature_enabled", lambda: True)
+    assert protocol.build_brain_followup(frame) is None
+
+    class Coach:
+        folds = 0
+        calibrations = 0
+
+        def note_completed_lap(self, *args, **kwargs):
+            self.folds += 1
+
+        def calibrate_from_driver_lap(self, *args, **kwargs):
+            self.calibrations += 1
+            return 1
+
+    coach = Coach()
+    monkeypatch.setattr(server, "_coach_runtime", coach)
+    monkeypatch.setattr(server, "_recent_between_lap_fold_keys", [])
+    monkeypatch.setattr(server, "_recent_between_lap_advice_keys", [])
+    monkeypatch.setattr(server, "_recent_brake_cal_keys", [])
+
+    def unexpected_advice(**kwargs):
+        pytest.fail("selected restricted/unavailable archive reached human advice")
+
+    monkeypatch.setattr(between_lap, "select_between_lap_advice", unexpected_advice)
+    asyncio.run(server._coach_v2_between_lap(None, frame, reply_coaching=True))
+    asyncio.run(server._calibrate_brake_marks_from_lap(frame))
+    assert coach.folds == 0
+    assert coach.calibrations == 0
+    assert not server._recent_between_lap_fold_keys
+    assert not server._recent_between_lap_advice_keys
+
+
+@pytest.mark.parametrize("path", [None, "", "  "])
+def test_bare_inline_trace_retains_legacy_resolution_and_fold(monkeypatch, path):
+    frame = {"lap": 1, "lapTimeMs": 100000, "trace": _archive()["trace"]}
+    frame["archivePath"] = path
+    assert resolve_lap_archive(frame) is frame
+    assert qualify_archive(frame, use="human_progression").reason == "legacy_unknown"
+    monkeypatch.setattr(protocol, "debrief_feature_enabled", lambda: True)
+    assert protocol.build_brain_followup(frame) is not None
+
+    class Coach:
+        folds = []
+
+        def note_completed_lap(self, lap_ms, *, is_valid):
+            self.folds.append((lap_ms, is_valid))
+
+    coach = Coach()
+    monkeypatch.setattr(server, "_coach_runtime", coach)
+    monkeypatch.setattr(server, "_recent_between_lap_fold_keys", [])
+    asyncio.run(server._coach_v2_between_lap(None, frame, reply_coaching=False))
+    assert coach.folds == [(100000, True)]
+
+
+def test_legacy_reference_matching_keeps_fallback_without_certifying_managed_context(tmp_path):
+    driver = _archive("driver", session="selected", degrade=5)
+    driver["track"].update(identity_source="csp_content_ids", layout_available=False)
+    reference = _archive("legacy-ref", session="prior")
+    driver_path, reference_path = tmp_path / "lap_driver.json", tmp_path / "lap_reference.json"
+    driver_path.write_text(json.dumps(driver), encoding="utf-8")
+    reference_path.write_text(json.dumps(reference), encoding="utf-8")
+    report = build_session_report([driver_path, reference_path], session="selected")
+    assert report["reference"]["lap_uuid"] == "legacy-ref"
+    _managed(reference)
+    reference_path.write_text(json.dumps(reference), encoding="utf-8")
+    with pytest.raises(SessionReviewError, match="expected_combo_unavailable"):
+        build_session_report(
+            [driver_path, reference_path], session="selected", reference_path=reference_path
+        )

@@ -79,13 +79,22 @@ def _load_safe_archive_paths(raw_paths: Any) -> list[dict[str, Any]]:
     return out
 
 
+def has_selected_archive_path(inbound: dict[str, Any]) -> bool:
+    """Whether the frame selects a path, including an invalid non-string selection."""
+    value = inbound.get("archivePath")
+    return value is not None and (not isinstance(value, str) or bool(value.strip()))
+
+
 def resolve_lap_archive(inbound: dict[str, Any]) -> dict[str, Any] | None:
     """Resolve a full lap-archive dict (with a trace) from a lap_complete-style message, or None.
 
-    Prefers an inline ``trace`` on the message; else loads a safe ``archivePath`` (traversal- and
-    size-guarded). Never raises. Shared by the attribution brain and the #522 per-driver
-    brake-mark calibration.
+    An explicitly selected ``archivePath`` is authoritative, including load failure: an inline
+    trace must not lose the selected archive's attribution. Bare inline traces keep legacy
+    behavior. Paths remain traversal- and size-guarded. Shared by the attribution brain and
+    the #522 per-driver brake-mark calibration.
     """
+    if has_selected_archive_path(inbound):
+        return _load_safe_archive_path(inbound.get("archivePath"))
     trace = inbound.get("trace")
     if isinstance(trace, dict) and isinstance(trace.get("samples"), list) and trace["samples"]:
         return inbound
@@ -105,6 +114,12 @@ def build_brain_followup(inbound: dict[str, Any]) -> dict[str, Any] | None:
         return None
     archive = resolve_lap_archive(inbound)
     if archive is None:
+        return None
+    from tools.lap_qualification import qualify_archive
+
+    qualification = qualify_archive(archive, use="human_progression")
+    if qualification.managed and not qualification.allowed:
+        logger.info("brain followup skipped: %s", qualification.reason)
         return None
     # Normalize the lap counter: a lap_complete frame carries it as a top-level int (`lap: 9`), but
     # the archive/tyre model expects `lap.lap_n`. Without this, tyres_from_lap_archive sees no lap

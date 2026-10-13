@@ -321,6 +321,29 @@ def _rollups_from_existing_bests(existing: Mapping[str, Any]) -> dict[str, dict[
     return rollups
 
 
+def sanitize_profile(
+    profile: Mapping[str, Any],
+    *,
+    driver_id: str = DEFAULT_DRIVER_ID,
+    strict: bool = False,
+) -> dict[str, Any]:
+    """Park restricted aggregates at file and direct-mapping consumption boundaries.
+
+    Keep manual preferences/focus and the reason in the returned value. Neither
+    the supplied mapping nor a persisted profile is modified by this check.
+    """
+    restriction = _profile_restriction_reason(profile)
+    if not restriction:
+        return dict(profile)
+    if strict:
+        raise ProfileLoadError(restriction)
+    parked = _default_profile(driver_id)
+    parked["preferences"] = _mapping_or_empty(profile.get("preferences"))
+    parked["focus_corners"] = _mapping_or_empty(profile.get("focus_corners"))
+    parked["source"].update(rebuild_required=True, skipped=[restriction])
+    return parked
+
+
 def load_profile(
     path: str | Path = DEFAULT_PROFILE_PATH,
     *,
@@ -347,15 +370,7 @@ def load_profile(
                 f"profile schema mismatch at {profile_path}: expected {PROFILE_SCHEMA_VERSION}"
             )
         return _default_profile(driver_id)
-    restriction = _profile_restriction_reason(loaded)
-    if restriction:
-        if strict:
-            raise ProfileLoadError(restriction)
-        parked = _default_profile(driver_id)
-        parked["preferences"] = _mapping_or_empty(loaded.get("preferences"))
-        parked["focus_corners"] = _mapping_or_empty(loaded.get("focus_corners"))
-        parked["source"].update(rebuild_required=True, skipped=[restriction])
-        return parked
+    loaded = sanitize_profile(loaded, driver_id=driver_id, strict=strict)
     loaded.setdefault("driver_id", driver_id)
     loaded["preferences"] = _mapping_or_empty(loaded.get("preferences"))
     loaded["focus_corners"] = _mapping_or_empty(loaded.get("focus_corners"))

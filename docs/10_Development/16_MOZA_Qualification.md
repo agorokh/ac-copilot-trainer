@@ -70,6 +70,13 @@ for direct parsed inputs; a loader-only guard is insufficient. The expected
 combo, where required, comes from the consuming session or comparison subject,
 not from the proposed reference certifying itself.
 
+An explicitly selected `archivePath` is authoritative over an inline trace. A
+missing or invalid selected file does not fall back to unattributed telemetry for
+advice or rolling-best updates. Directly supplied profile mappings receive the
+same contamination check as profile files. Legacy reference matching retains its
+historical combo fallback, while managed qualification still requires independent
+car/track/layout evidence.
+
 ## MOZA caches
 
 Only explicitly selected local files are read. The reader checks stable bytes
