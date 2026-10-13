@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "default": "test-red",
+  "manual_override": "test-red",
+  "profiles": [
+    {
+      "name": "test-red",
+      "rgb": [
+        255,
+        0,
+        0
+      ],
+      "bindings": {
+        "button_1": {
+          "action": "key",
+          "keys": [
+            "A"
+          ]
+        },
+        "button_2": {
+          "action": "key",
+          "keys": [
+            "B"
+          ]
+        },
+        "button_3": {
+          "action": "key",
+          "keys": [
+            "C"
+          ]
+        },
+        "knob_cw": {
+          "action": "key",
+          "keys": [
+            "D"
+          ]
+        },
+        "knob_ccw": {
+          "action": "key",
+          "keys": [
+            "E"
+          ]
+        },
+        "knob_press": {
+          "action": "key",
+          "keys": [
+            "F"
+          ]
+        }
+      }
+    },
+    {
+      "name": "test-green",
+      "rgb": [
+        0,
+        255,
+        0
+      ],
+      "priority": 10,
+      "when": {
+        "foreground_process": [
+          "javaw.exe",
+          "java.exe"
+        ],
+        "title_contains": "Minecraft"
+      },
+      "bindings": {
+        "button_1": {
+          "action": "key",
+          "keys": [
+            "A"
+          ]
+        },
+        "button_2": {
+          "action": "key",
+          "keys": [
+            "B"
+          ]
+        },
+        "button_3": {
+          "action": "key",
+          "keys": [
+            "C"
+          ]
+        },
+        "knob_cw": {
+          "action": "key",
+          "keys": [
+            "D"
+          ]
+        },
+        "knob_ccw": {
+          "action": "key",
+          "keys": [
+            "E"
+          ]
+        },
+        "knob_press": {
+          "action": "key",
+          "keys": [
+            "F"
+          ]
+        }
+      }
+    }
+  ]
+}

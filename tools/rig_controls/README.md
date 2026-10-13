@@ -119,3 +119,8 @@ control, red startup/idle/held keys, Minecraft green and return to red, lease ex
 power cycles, sleep/resume, reconnect and recovery. Smart-socket and shaker gain
 activation additionally need exact target identification and observed target-only
 results. See the canonical [external racing controls](../../docs/01_Vault/AcCopilotTrainer/10_Rig/external-racing-controls.md).
+
+The [adapter qualification guide](../../firmware/keypad/qualification/README.md)
+includes safe temporary red, green and automatic Minecraft test profiles. They are
+separate from `profiles.example.json` and the inactive working racing configuration;
+saving or validating them never starts a controller.
