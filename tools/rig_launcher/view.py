@@ -30,6 +30,7 @@ _ROWS: tuple[tuple[str, str], ...] = (
     ("Voice", "voice"),
     ("SimHub", "simhub"),
     ("Tablet", "tablet"),
+    ("Keypad", "keypad"),
     ("AC Session", "resilient"),
 )
 

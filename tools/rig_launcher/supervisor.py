@@ -232,6 +232,7 @@ class GamePointConfig:
     #: Assetto Corsa user-data root containing cfg/extension/gui.ini. Used to verify the
     #: CSP 0.2.11 legacy-menu prerequisite before Stable AC starts.
     ac_user_dir: str | None = None
+    keypad_profiles: str | None = None
     #: Manage the tablet dashboard's ``adb reverse`` USB tunnel (issue #567). Opt-in
     #: (house pattern, cf. ``start_simhub``): off by default so CI / non-rig hosts never
     #: shell out to adb; the rig sets ``AC_COPILOT_MANAGE_TABLET_TUNNEL=1``.
@@ -308,6 +309,9 @@ class GamePointConfig:
             ),
             simhub_exe=_configured_text(env_map.get("AC_COPILOT_SIMHUB_EXE"), settings.simhub_exe),
             start_simhub=start_simhub,
+            keypad_profiles=_configured_text(
+                env_map.get("AC_COPILOT_KEYPAD_PROFILES"), settings.keypad_profiles
+            ),
             resilient_car=_configured_text(
                 env_map.get("AC_COPILOT_RESILIENT_CAR"),
                 settings.resilient_car,
@@ -351,6 +355,7 @@ class GamePointStatus:
         default_factory=lambda: ProbeResult("ac_session", True, "unconfigured")
     )
     checks: tuple[ProbeResult, ...] = field(default_factory=tuple)
+    keypad: ProbeResult = field(default_factory=lambda: ProbeResult("keypad", True, "disabled"))
 
     @property
     def ok(self) -> bool:
@@ -361,6 +366,7 @@ class GamePointStatus:
             self.simhub,
             self.tablet,
             self.resilient,
+            self.keypad,
             *self.checks,
         )
         return all(row.ok for row in rows if row.state not in {"skipped", "absent"})
@@ -375,6 +381,7 @@ class GamePointStatus:
             "simhub": self.simhub.to_dict(),
             "tablet": self.tablet.to_dict(),
             "resilient": self.resilient.to_dict(),
+            "keypad": self.keypad.to_dict(),
             "log_path": self.log_path,
             "status_path": self.status_path,
             "checks": [check.to_dict() for check in self.checks],
@@ -413,6 +420,7 @@ class GamePointSupervisor:
         # held only around the quick handle bookkeeping — never around the slow adb/HTTP probes —
         # so it cannot re-introduce the UI freeze the worker thread was added to avoid (#568).
         self._proc_lock = threading.RLock()
+        self._keypad_worker = None
 
     def sidecar_command(self) -> list[str]:
         if self._frozen:
@@ -1017,12 +1025,45 @@ class GamePointSupervisor:
             simhub=self.probe_simhub(start=start_sim),
             tablet=self.probe_tablet(health_payload),
             resilient=self._resilient_process_status(),
+            keypad=self.probe_keypad(),
             log_path=str(self.paths.sidecar_log_path),
             status_path=str(self.paths.status_path),
             checks=checks,
         )
         self.write_status(status)
         return status
+
+    def probe_keypad(self) -> ProbeResult:
+        """Own one optional input worker; disabled configurations never enumerate HID."""
+        if not self.config.keypad_profiles:
+            return ProbeResult("keypad", True, "disabled")
+        path = _resolve_launcher_path(self.config.keypad_profiles, base=self._launcher_path_base())
+        if path is None:
+            return ProbeResult("keypad", False, "unavailable", "invalid profile path")
+        try:
+            with self._proc_lock:
+                if self._keypad_worker is None:
+                    from tools.rig_controls.runtime import Worker
+
+                    self._keypad_worker = Worker(Path(path))
+                    self._keypad_worker.start()
+                status = self._keypad_worker.status()
+        except (OSError, ValueError, ImportError) as exc:
+            return ProbeResult("keypad", False, "unavailable", str(exc))
+        detail = status.get("error") or status.get("profile") or "awaiting prepared keypad"
+        if status.get("reload_error"):
+            detail += "; invalid config reload rejected"
+        if status.get("action_error"):
+            detail += "; " + status["action_error"]
+        if status.get("action_unavailable"):
+            detail += "; " + status["action_unavailable"]
+        ok = (
+            status["state"] in {"active", "negotiating"}
+            and not status.get("error")
+            and not status.get("reload_error")
+            and not status.get("action_error")
+        )
+        return ProbeResult("keypad", ok, status["state"], detail)
 
     def probe_tablet(self, health_payload: Mapping[str, object] | None = None) -> ProbeResult:
         """Keep the tablet dashboard's ``adb reverse`` USB tunnel alive (issue #567).
@@ -1348,6 +1389,9 @@ class GamePointSupervisor:
 
     def close(self) -> None:
         with self._proc_lock:
+            if self._keypad_worker is not None:
+                if self._keypad_worker.stop() is not False:
+                    self._keypad_worker = None
             self.stop_sidecar()
             self._close_log_handles()
             # The resilient child owns the machine-wide rig lock and the live AC session.
@@ -1473,6 +1517,10 @@ def build_pyinstaller_args(
         "tools.ai_sidecar",
         "--collect-submodules",
         "tools.rig_launcher",
+        "--collect-submodules",
+        "tools.rig_controls",
+        "--collect-data",
+        "tools.rig_controls",
         "--collect-data",
         "tools.ai_sidecar",
         "--collect-data",
@@ -1531,6 +1579,7 @@ def build_pyinstaller_args(
         args.extend(["--add-data", f"{fonts_dir}{os.pathsep}fonts"])
     _append_optional_pyinstaller_module(args, "rtmixer")
     _append_optional_pyinstaller_module(args, "pa_ringbuffer")
+    _append_optional_pyinstaller_module(args, "hid")
     if onefile:
         args.append("--onefile")
     if windowed:
@@ -1895,6 +1944,7 @@ def render_status_lines(status: GamePointStatus) -> list[str]:
         status.simhub,
         status.tablet,
         status.resilient,
+        status.keypad,
         *status.checks,
     ]
     return [f"{row.name}: {row.state}{(' - ' + row.detail) if row.detail else ''}" for row in rows]
