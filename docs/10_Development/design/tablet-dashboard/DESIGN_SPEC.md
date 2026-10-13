@@ -1,6 +1,6 @@
 # Tablet GT dashboard — design spec (v3 "glance spine + stable boards")
 
-**Status:** design-frozen, implementation-pending (rig PC). **Issue:** [#531](https://github.com/agorokh/ac-copilot-trainer/issues/531).
+**Status:** implemented baseline; bounded MAP and live-display revision in [#813](https://github.com/agorokh/ac-copilot-trainer/issues/813), physical acceptance pending. **Issue:** [#531](https://github.com/agorokh/ac-copilot-trainer/issues/531).
 **Reference mock:** [`reference_mock.html`](reference_mock.html) — pixel-faithful, interactive (Car / Coach-lane / Page toggles). Open it; it *is* the spec made concrete.
 **Provenance:** 11-agent design council (research + 3 competing designs + judge synthesis) + gemini/mistral. Research files: `.scratch/design2/*.md`. This doc is the durable distillation.
 
@@ -212,3 +212,46 @@ The mock hardcodes illustrative telemetry; production binds the same DOM to the 
 - Research: `.scratch/design2/{gt3-real-dashboards,sim-dashboard-bestpractice,car-adaptive-electronics,codebase-setup-electronics,codebase-telemetry-vitals,coaching-in-dash-ux,realestate-layout-critique}.md`.
 - Racing Atelier package: `docs/10_Development/design/racing-atelier/project/`.
 - Tablet transport + audio: `docs/01_Vault/AcCopilotTrainer/03_Investigations/issue-511-partd-tablet-voice-endpoint-2026-07-11.md`, `.../01_Decisions/usb-serial-screen-transport-2026-07-02.md`.
+
+## 13. Approved bounded display revision (#813)
+
+This section supersedes the earlier target and electronics wording where they conflict. Navigation,
+offline USB operation, fonts and the Racing Atelier palette remain the baseline.
+
+- MAP has a 212 px default details panel and 14 px gutter. At 1024×600 the canvas uses over 70%
+  of usable width; Details collapses to 42 px. Geometry fits the actual visible canvas width and
+  height with space for labels, S/F and a compact phase legend. Selecting MAP rebuilds bounds.
+- On-track T labels use the canonical active Lua `trackSegments` catalogue, or its persisted
+  archive corner bounds, matching coaching and the queue. `segment_corners` measures windows
+  within that catalogue and never independently numbers turns. Leader lines
+  and collision-aware placement keep labels readable. Green outline denotes current, cyan next;
+  these live outlines and the red car dot expire with telemetry. S/F and the white direction arrow
+  describe the reference's increasing spline direction. Where measured boundaries are unresolved,
+  the label remains at the canonical brake anchor with explicit unavailable phases/metrics.
+  The illustrative mock is not Magione mapping evidence; actual archived catalogue replay proves
+  canonical alignment separately, and the fresh operator capture remains an acceptance gate.
+- The coloured phase overlay is **reference execution**, not live driving: red braking,
+  amber entry, brass measured apex point, green exit. Brake onset and sustained steering turn-in
+  come from measured channels within the canonical corner window. Unavailable boundaries stay
+  absent; phases are never fabricated by dividing a corner into equal intervals. Circular intervals
+  are drawn through S/F in spline order. Red live position remains distinct from the overlay.
+- Selecting T shows latest valid completed lap vs explicitly valid same-car/track/layout reference:
+  minimum within the canonical window, speed at the reference apex, brake-onset difference in
+  metres (positive = later), and time in seconds over the same measured deceleration→recovery
+  window (positive = lost). The time window is not described as measured steering turn-in.
+  Declared measured native/supported-import provenance is required; unknown/generated references
+  retain geometry without a measured verdict. Reference content hash and lap ids identify provenance.
+  The active Lua catalogue and configured reference expose their separate source/lap identities.
+  Magenta dashed track highlight marks
+  the largest measured positive loss. Zero is a valid value; unknown metrics show unavailable.
+- `session.review.map_comparison` adds only bounded corner fields, reusing archive dynamics.
+  Geometry can remain visible without comparison. No reference, incompatible reference identity,
+  session changes, reconnect or stale telemetry clear the corresponding analytics/live state;
+  car/layout changes and rejected map replay clear incompatible geometry. Archives are preserved.
+- The command comes from explicit `action`. NEXT target always names its upcoming corner and
+  brake-onset/entry phase; it never reads "minimum" and never determines current safety.
+  Current-position reference speed is a separate field, and it is not a corner apex/minimum.
+- Physics-backed brake bias/TC/ABS readouts show `LIVE CAR` and expire with fresh ticks. Saved
+  setup rows show `SAVED`, CSP setup rows `SETUP`; intervention flags only flash the actual level.
+  Runtime mode counts establish presence, not an assumed legal range. Setup adjustment capability
+  is visible before interaction; pits/reset permission remains required.

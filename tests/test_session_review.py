@@ -107,6 +107,30 @@ def _write_lap(root: Path, name: str, payload: dict) -> Path:
     return path
 
 
+def test_report_map_comparison_uses_latest_valid_completed_lap(tmp_path: Path) -> None:
+    reference = _corner_archive(
+        lap_uuid="reference", session_uuid="prior", lap_n=1, exported_at="2026-10-10T00:00:00Z"
+    )
+    reference["corners"][0].update(s0=0.25, s1=0.8, brakePointSpline=0.22)
+    _write_lap(tmp_path, "ref", reference)
+    for number, valid, degrade in ((1, True, 2), (2, True, 8), (3, False, 12)):
+        lap = _corner_archive(
+            lap_uuid=f"lap-{number}",
+            session_uuid="current",
+            lap_n=number,
+            exported_at=f"2026-10-12T00:00:0{number}Z",
+            degrade=degrade,
+        )
+        lap["lap"]["is_valid"] = valid
+        _write_lap(tmp_path, str(number), lap)
+    report = build_session_report([tmp_path], session="current")
+    comparison = report["map_comparison"]
+    assert comparison["available"] is True
+    assert comparison["lap_uuid"] == "lap-2"
+    assert comparison["reference_lap_uuid"] == "reference"
+    assert comparison["corners"][0]["time_loss_s"] > 0
+
+
 @pytest.fixture
 def session_corpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.chdir(tmp_path)

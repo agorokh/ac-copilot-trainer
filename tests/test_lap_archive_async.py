@@ -81,6 +81,34 @@ def test_archive_car_identity_prefers_stable_global_over_callable_state_field(
     assert resolved == "ks_porsche_911_gt3_r_2016"
 
 
+@pytest.mark.parametrize("layout", ["", "gp-2024", None])
+def test_new_archive_retains_raw_content_track_and_readable_layout(tmp_path, layout):
+    rt = _runtime(tmp_path)
+    rt.globals()._layout = layout
+    archive_path = rt.execute("""
+      ac.getCarID=function()return 'mod-car-v2'end
+      ac.getTrackID=function()return 'mod-track-v1'end
+      ac.getTrackFullID=function()return 'mod-track-v1/gp-2024'end
+      ac.getTrackLayout=function()return _layout end
+      local archive=require('lap_archive')
+      local job,err=archive.createWriteJob({session_uuid='test',lap_n=1,lap_ms=80000,
+        car={id='wrong display'},sim={trackName='wrong display'},
+        trace={{spline=0,speed=100},{spline=1,speed=100}}},50)
+      assert(job,err)
+      for i=1,10 do
+        local done,ok,path=job:step(2)
+        if done then assert(ok,path); return path end
+      end
+      error('archive did not finish')
+    """)
+    output = json.loads(pathlib.Path(archive_path).read_text(encoding="utf-8"))
+    assert output["car"]["id"] == "mod-car-v2"
+    assert output["track"]["id"] == "mod-track-v1"
+    assert output["track"].get("layout") == layout
+    assert output["track"]["layout_available"] is (layout is not None)
+    assert output["track"]["identity_source"] == "csp_content_ids"
+
+
 def test_archive_car_identity_accepts_safe_direct_scalars_but_callable_strings_only(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -142,7 +170,8 @@ def test_archive_write_job_streams_trace_over_multiple_steps(tmp_path: pathlib.P
           is_valid = true,
           trace = trace,
           corners = {
-            { label = "T1", entrySpeed = 112, minSpeed = 71, exitSpeed = 96 },
+            { label = "T1", s0=0.9, s1=0.1, brakePointSpline=0.89,
+              entrySpeed = 112, minSpeed = 71, exitSpeed = 96 },
           },
           setup_snap = {
             path = "C:/Assetto Corsa/setups/magione.ini",
@@ -181,6 +210,9 @@ def test_archive_write_job_streams_trace_over_multiple_steps(tmp_path: pathlib.P
 
     record = json.loads(archive_path.read_text(encoding="utf-8"))
     assert record["schema_version"] == 1
+    assert record["corners"][0]["s0"] == 0.9
+    assert record["corners"][0]["s1"] == 0.1
+    assert record["corners"][0]["brakePointSpline"] == 0.89
     assert record["lap"]["lap_n"] == 3
     assert record["lap"]["lap_ms"] == 81234
     assert record["trace"]["samples_count"] == 6

@@ -618,20 +618,34 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
         "track_grip_level": (0, None),
         "track_temp_c": (None, None),
         "ambient_temp_c": (None, None),
+        "brake_bias_pct": (0, 100),
     }
     for key, (min_value, max_value) in optional_ranges.items():
         err = _validate_optional_number(payload, key, min_value=min_value, max_value=max_value)
         if err is not None:
             return err
-    for key in ("weather_type", "tyre_compound", "shift_rpm_source"):
+    for key in (
+        "weather_type",
+        "tyre_compound",
+        "shift_rpm_source",
+        "brake_bias_source",
+        "tc_level_source",
+        "abs_level_source",
+        "setup_lock_reason",
+    ):
         if key in payload and not isinstance(payload[key], str):
             return f"{key} must be a string"
     # #531 Part D: `tc_active` joins the `abs_active` slot so the dashboard can flash BOTH
     # electronics tiles on intervention. Absent = the car does not expose the system (or physics
     # is unavailable); `false` = present and idle — so these stay optional, never defaulted.
-    for key in ("tc_active", "abs_active", "brake_lock", "wheel_lock"):
+    for key in ("tc_active", "abs_active", "brake_lock", "wheel_lock", "setup_reset_allowed"):
         if key in payload and not isinstance(payload[key], bool):
             return f"{key} must be a boolean"
+    for key in ("tc_level", "tc_modes", "abs_level", "abs_modes"):
+        if key in payload and (
+            isinstance(payload[key], bool) or not isinstance(payload[key], int) or payload[key] < 0
+        ):
+            return f"{key} must be a nonnegative integer"
     return None
 
 

@@ -76,6 +76,49 @@ local function wrap01(x)
   return s
 end
 
+local function finiteSpeed(value)
+  local n = tonumber(value)
+  if n and n == n and n >= 0 and n <= 1000 then return n end
+  return nil
+end
+
+--- Canonical labels/bounds come directly from the active Lua segment graph.
+--- Reject the whole catalog on ambiguity: partial catalogs renumber a track.
+function M.buildCornerCatalog(segments)
+  if type(segments) ~= "table" then return nil, false, "segments unavailable" end
+  local rows, seen = {}, {}
+  local count = 0
+  for key in pairs(segments) do
+    if type(key) ~= "number" or key < 1 or key ~= math.floor(key) or key > #segments then
+      return nil, false, "malformed canonical segment array"
+    end
+    count = count + 1
+  end
+  if count ~= #segments then return nil, false, "malformed canonical segment array" end
+  local function spline(n)
+    return type(n) == "number" and n == n and n >= 0 and n <= 1
+  end
+  for _, seg in ipairs(segments) do
+    if type(seg) == "table" and seg.kind == "corner" then
+      local id = seg.label
+      if type(id) ~= "string" or #id == 0 or #id > 32
+          or not id:match("^[%w _%-]+$") or seen[id]
+          or not spline(seg.s0) or not spline(seg.s1) or seg.s0 == seg.s1
+          or not spline(seg.brakeSpline) then
+        return nil, false, "malformed canonical corner"
+      end
+      if #rows >= 32 then return nil, false, "canonical corner limit exceeded" end
+      seen[id] = true
+      rows[#rows + 1] = { corner_id = id, s0 = seg.s0, s1 = seg.s1,
+        brake_spline = seg.brakeSpline }
+    elseif type(seg) ~= "table" then
+      return nil, false, "malformed canonical segment"
+    end
+  end
+  if #rows == 0 then return nil, false, "canonical corners unavailable" end
+  return rows, true, "active Lua reference segments"
+end
+
 --- Forward spline distance (always positive, in [0, 1)).
 local function forwardSplineDelta(carSp, targetSp)
   local d = (targetSp - carSp) % 1
@@ -101,7 +144,7 @@ local function findNextBrake(carSp, brakes, segments)
     end
   end
   if bestEntry then
-    return bestEntry, bestDelta
+    return bestEntry, bestDelta, "reference_brake"
   end
   -- Fallback: scan segments for the next brake-or-corner kind.
   if type(segments) == "table" and #segments > 0 then
@@ -121,7 +164,7 @@ local function findNextBrake(carSp, brakes, segments)
       end
     end
   end
-  return bestEntry, bestDelta
+  return bestEntry, bestDelta, bestEntry and "segment_entry" or "unavailable"
 end
 
 --- Resolve a corner label for a brake-point spline by walking the segment
@@ -229,6 +272,7 @@ local function placeholderView(curSpeed)
     primaryLine = "DRIVE A LAP",
     secondaryLine = "REFERENCE WILL APPEAR",
     kind = "placeholder",
+    action = "UNAVAILABLE",
     subState = "no_reference",
     cornerLabel = nil,
     targetSpeedKmh = nil,
@@ -236,6 +280,15 @@ local function placeholderView(curSpeed)
     distToBrakeM = nil,
     progressPct = 0,
     brakeIndex = nil,
+    targetPhase = "unavailable",
+    targetProvenance = "unavailable",
+    targetAvailable = false,
+    currentTargetPhase = "unavailable",
+    currentTargetProvenance = "unavailable",
+    currentTargetAvailable = false,
+    selectedTargetPhase = "unavailable",
+    selectedTargetProvenance = "unavailable",
+    selectedTargetAvailable = false,
   }
 end
 
@@ -265,6 +318,7 @@ local function applyShiftCue(view, o)
   view.secondaryLine = string.format(
     "RPM %d · SHIFT AT %d", o.rpm, math.floor((targetRpm or 0) + 0.5))
   view.kind = "line"
+  view.action = "UPSHIFT"
   return view
 end
 
@@ -312,13 +366,16 @@ function M.tick(opts)
   end
 
   -- Find the next braking opportunity ahead of the car
-  local nextBrake, nextDelta = findNextBrake(sp, brakes, segments)
+  local nextBrake, nextDelta, targetProvenance = findNextBrake(sp, brakes, segments)
   local distToBrakeM
   if nextBrake and nextDelta and trackLen > 0 then
     distToBrakeM = nextDelta * trackLen
   end
   local cornerLabel = resolveCornerLabel(nextBrake, segments)
-  local targetSpeed = nextBrake and tonumber(nextBrake.entrySpeed) or nil
+  local targetSpeed = nextBrake and finiteSpeed(nextBrake.entrySpeed) or nil
+  local targetPhase = targetSpeed and (targetProvenance == "reference_brake"
+    and "brake_onset" or "entry") or "unavailable"
+  if not targetSpeed then targetProvenance = "unavailable" end
 
   -- Are we currently in the APEX REGION of a known corner segment?
   -- When in corner: use the in-corner label for the TOP TILE primary line,
@@ -340,7 +397,7 @@ function M.tick(opts)
   local topCornerLabel = inCornerLabel or cornerLabel
 
   -- Reference speed at this exact spline position
-  local refSpeed = hasTrace and refSpeedAtSpline(trace, sp) or nil
+  local refSpeed = hasTrace and finiteSpeed(refSpeedAtSpline(trace, sp)) or nil
 
   -- Build the structured viewmodel that BOTH tiles consume.
   -- topCornerLabel = current corner if inCorner else next corner ahead.
@@ -349,11 +406,23 @@ function M.tick(opts)
     primaryLine     = nil,
     secondaryLine   = nil,
     kind            = "info",
+    action          = "CLEAR",
     subState        = "cruising",
     cornerLabel     = topCornerLabel,
     -- Bottom tile reads these (always the upcoming brake target):
     approachLabel   = cornerLabel,
+    currentCornerLabel = inCornerLabel,
     targetSpeedKmh  = targetSpeed,
+    targetPhase = targetPhase,
+    targetProvenance = targetProvenance,
+    targetAvailable = targetSpeed ~= nil,
+    currentTargetSpeedKmh = inCorner and refSpeed or nil,
+    currentTargetPhase = inCorner and refSpeed and "reference_at_position" or "unavailable",
+    currentTargetProvenance = inCorner and refSpeed and "reference_trace" or "unavailable",
+    currentTargetAvailable = inCorner and refSpeed ~= nil or false,
+    selectedTargetAvailable = false,
+    selectedTargetPhase = "unavailable",
+    selectedTargetProvenance = "unavailable",
     currentSpeedKmh = cur,
     distToBrakeM    = distToBrakeM,
     progressPct     = 0,
@@ -362,7 +431,11 @@ function M.tick(opts)
     shiftZonePct    = opts.shiftZonePct,
     redZonePct      = opts.redZonePct,
     shiftProvenance = opts.shiftProvenance,
+    referenceSource = opts.referenceSource,
+    referenceLapMs = opts.referenceLapMs,
   }
+  view.cornerCatalog, view.cornerCatalogAvailable, view.cornerCatalogReason =
+    M.buildCornerCatalog(segments)
 
   if distToBrakeM and distToBrakeM <= approachM then
     view.progressPct = clamp(1 - (distToBrakeM / approachM), 0, 1)
@@ -375,6 +448,7 @@ function M.tick(opts)
     view.primaryLine = "BRAKE NOW"
     view.secondaryLine = string.format("TARGET %.0f KM/H", targetSpeed)
     view.kind = "brake"
+    view.action = "BRAKE"
     view.subState = "braking"
 
   elseif distToBrakeM and targetSpeed and distToBrakeM <= PREPARE_DIST_M
@@ -382,18 +456,21 @@ function M.tick(opts)
     view.primaryLine = "PREPARE TO BRAKE"
     view.secondaryLine = cornerLabel and ("NEXT: " .. cornerLabel) or "NEXT TURN"
     view.kind = "brake"
+    view.action = "BRAKE"
     view.subState = "approaching"
 
   elseif inCorner and refSpeed and cur < refSpeed - CORNER_DELTA_KMH then
     view.primaryLine = "CARRY MORE SPEED"
     view.secondaryLine = string.format("%+.0f KM/H VS REFERENCE", cur - refSpeed)
     view.kind = "line"
+    view.action = "CARRY_MORE_SPEED"
     view.subState = "in_corner"
 
   elseif inCorner and refSpeed and cur > refSpeed + CORNER_DELTA_KMH then
     view.primaryLine = "EASE OFF"
     view.secondaryLine = string.format("%+.0f KM/H VS REFERENCE", cur - refSpeed)
     view.kind = "line"
+    view.action = "LIFT"
     view.subState = "in_corner"
 
   elseif distToBrakeM and distToBrakeM <= approachM and cornerLabel then
@@ -402,6 +479,7 @@ function M.tick(opts)
     view.primaryLine = "APPROACHING"
     view.secondaryLine = "NEXT: " .. cornerLabel
     view.kind = "info"
+    view.action = targetSpeed and "HOLD" or "UNAVAILABLE"
     view.subState = "approaching"
 
   elseif shiftCueActive(opts) then
@@ -414,10 +492,27 @@ function M.tick(opts)
 
   else
     -- Free flowing
-    view.primaryLine = "ON PACE"
+    view.primaryLine = inCorner and refSpeed and "ON PACE" or "NEXT TURN"
     view.secondaryLine = cornerLabel and ("NEXT: " .. cornerLabel) or "FREE LAP"
     view.kind = "info"
     view.subState = "cruising"
+    view.action = inCorner and (refSpeed and "HOLD" or "UNAVAILABLE") or "CLEAR"
+  end
+
+  -- The action's target and the NEXT target have distinct identities. A
+  -- future brake-onset speed is never a verdict on the current corner.
+  if view.action == "BRAKE" or (view.action == "HOLD" and not inCorner) then
+    view.selectedTargetSpeedKmh = targetSpeed
+    view.selectedTargetCornerLabel = cornerLabel
+    view.selectedTargetPhase = targetPhase
+    view.selectedTargetProvenance = targetProvenance
+    view.selectedTargetAvailable = targetSpeed ~= nil
+  elseif inCorner and refSpeed and view.action ~= "UPSHIFT" then
+    view.selectedTargetSpeedKmh = refSpeed
+    view.selectedTargetCornerLabel = inCornerLabel
+    view.selectedTargetPhase = "reference_at_position"
+    view.selectedTargetProvenance = "reference_trace"
+    view.selectedTargetAvailable = true
   end
 
   -- Round 10: in-race per-corner LLM override.
@@ -430,11 +525,13 @@ function M.tick(opts)
   if type(topLabel) == "string" and topLabel ~= "" then
     -- Only query within the configured approach window so Ollama is not spammed
     -- for far-away brake points (Codex).
-    if opts.wsBridge and type(opts.wsBridge.sendCornerQuery) == "function"
+    local queryLabel = view.approachLabel
+    if type(queryLabel) == "string" and queryLabel ~= ""
+        and opts.wsBridge and type(opts.wsBridge.sendCornerQuery) == "function"
         and distToBrakeM and distToBrakeM <= approachM and targetSpeed then
       local refAtBrake = targetSpeed
       local now = opts.simT or monoClock
-      local prev = lastQueryState[topLabel]
+      local prev = lastQueryState[queryLabel]
       local lapNow = tonumber(opts.lap) or 0
       local shouldQuery = false
       if prev == nil then
@@ -454,9 +551,9 @@ function M.tick(opts)
       end
       if shouldQuery then
         local sent = opts.wsBridge.sendCornerQuery(
-          topLabel, cur, refAtBrake, distToBrakeM, opts.lap)
+          queryLabel, cur, refAtBrake, distToBrakeM, opts.lap)
         if sent then
-          lastQueryState[topLabel] = {
+          lastQueryState[queryLabel] = {
             cur = cur,
             dist = distToBrakeM,
             t = now,

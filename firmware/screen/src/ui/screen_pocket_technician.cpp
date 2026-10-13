@@ -42,6 +42,17 @@ namespace {
 
 constexpr int  PT_MAX_SETUPS    = 64;     // bounded list cache
 constexpr int  PT_MAX_SPINNERS  = 12;     // bounded active-setup controls
+bool g_setup_allowed = false;
+char g_lock_reason[80] = "Awaiting setup capability";
+char g_spinner_source[24] = "unknown";
+char g_pending_spinner[32] = {};
+uint32_t g_live_at = 0;
+uint32_t g_capability_at = 0;
+bool g_live_known = false;
+float g_live_bias = NAN;
+int g_live_tc = -1, g_live_tc_modes = -1, g_live_abs = -1, g_live_abs_modes = -1;
+lv_obj_t* g_minus_buttons[PT_MAX_SPINNERS] = {};
+lv_obj_t* g_plus_buttons[PT_MAX_SPINNERS] = {};
 // Effective capacity of a one-slot-wasted ring is N-1, so we size the array
 // at 5 to honor the documented depth of 4 in-flight requests (CodeRabbit on
 // PR #91). On creation we already enqueue PT_REQ_LIST once, so a user who
@@ -69,6 +80,8 @@ struct spinner_row_t {
     float   min_value;
     float   max_value;
     float   step;
+    bool    adjustable;
+    float   display_multiplier;
 };
 
 setup_row_t g_setups[PT_MAX_SETUPS];
@@ -106,6 +119,33 @@ static int            g_pending_load_n = 0;
 
 static void pending_load_clear() {
     g_pending_load_n = 0;
+}
+
+// Requests may wait until after an incoming session or link-state change.
+// Discard every mutation authorized by the previous state before main drains
+// the queue; the Lua reset gate alone cannot identify the previous car.
+static void discard_queued_mutations() {
+    pt_request_t kept[PT_MAX_REQUESTS];
+    int kept_n = 0;
+    bool kept_list = false, kept_spinners = false;
+    while (g_req_head != g_req_tail) {
+        const pt_request_t& request = g_req_q[g_req_head];
+        bool keep = false;
+        if (request.kind == PT_REQ_LIST && !kept_list) {
+            kept_list = true;
+            keep = true;
+        } else if (request.kind == PT_REQ_SPINNER_LIST && !kept_spinners) {
+            kept_spinners = true;
+            keep = true;
+        }
+        if (keep) kept[kept_n++] = request;
+        g_req_head = (g_req_head + 1) % PT_MAX_REQUESTS;
+    }
+    g_req_head = 0;
+    g_req_tail = kept_n;
+    for (int i = 0; i < kept_n; ++i) g_req_q[i] = kept[i];
+    g_pending_spinner[0] = 0;
+    pending_load_clear();
 }
 
 static bool pending_load_push(const char* name, const char* path, lv_obj_t* row) {
@@ -152,6 +192,15 @@ static lv_obj_t* pending_load_take_row(const char* name, const char* ack_path) {
 }
 
 bool req_q_push(pt_request_kind_t kind, const char* name, const char* path) {
+    // Capability/session transitions can coincide with a list response. Keep
+    // at most one safe refresh of each kind, with its latest active path.
+    if (kind == PT_REQ_LIST || kind == PT_REQ_SPINNER_LIST) {
+        for (int i = g_req_head; i != g_req_tail; i = (i + 1) % PT_MAX_REQUESTS) {
+            if (g_req_q[i].kind != kind) continue;
+            snprintf(g_req_q[i].path, sizeof(g_req_q[i].path), "%s", path ? path : "");
+            return true;
+        }
+    }
     int next = (g_req_tail + 1) % PT_MAX_REQUESTS;
     if (next == g_req_head) return false;  // full
     pt_request_t* r = &g_req_q[g_req_tail];
@@ -223,6 +272,8 @@ struct pt_ctx_t {
     lv_obj_t* meta_brand;
     lv_obj_t* meta_car;
     lv_obj_t* meta_active;
+    lv_obj_t* meta_live;
+    lv_obj_t* meta_lock;
     lv_obj_t* list_col;        // scrollable column
     lv_obj_t* placeholder_lbl; // "Loading…" / "No setups found"
     lv_obj_t* active_row_obj;  // row being loaded (for gold pulse)
@@ -240,7 +291,7 @@ pt_ctx_t* g_active_ctx = nullptr;
 constexpr int SCREEN_W   = 320;
 constexpr int SCREEN_H   = 480;
 constexpr int HEADER_H   = 40;
-constexpr int META_H     = 84;  // TRACK / BRAND / MODEL / ACTIVE
+constexpr int META_H     = 138;  // identity + persistent live source and lock reason
 constexpr int OUTER_PAD  = 12;
 constexpr int SPINNER_ROW_H = 44;
 constexpr int ROW_H      = 68;  // name+best on row 1, params+date on row 2
@@ -264,11 +315,12 @@ void format_lap_ms(int32_t ms, char* out, size_t n) {
 void format_spinner_value(const spinner_row_t& s, char* out, size_t n) {
     if (!out || n == 0) return;
     char numeric[20];
-    float rounded = roundf(s.value);
-    if (fabsf(s.value - rounded) < 0.0001f) {
+    float value = s.value * s.display_multiplier;
+    float rounded = roundf(value);
+    if (fabsf(value - rounded) < 0.0001f) {
         snprintf(numeric, sizeof(numeric), "%d", (int)rounded);
     } else {
-        snprintf(numeric, sizeof(numeric), "%.2f", (double)s.value);
+        snprintf(numeric, sizeof(numeric), "%.2f", (double)value);
         char* end = numeric + strlen(numeric) - 1;
         while (end > numeric && *end == '0') {
             *end = 0;
@@ -347,6 +399,7 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s);
 void on_row_clicked(lv_event_t* e) {
     auto* ctx = g_active_ctx;
     if (!ctx) return;
+    if (!g_setup_allowed) return;
     auto* row = lv_event_get_current_target(e);
     auto idx = (intptr_t)lv_event_get_user_data(e);
     if (idx < 0 || idx >= g_setup_count) return;
@@ -382,6 +435,7 @@ void queue_spinner_delta(int idx, int dir) {
         return;
     }
     const spinner_row_t& s = g_spinners[idx];
+    if (!g_setup_allowed || !s.adjustable || g_pending_spinner[0]) return;
     float step = s.step > 0.0f ? s.step : 1.0f;
     float next = s.value + (dir < 0 ? -step : step);
     if (next < s.min_value) next = s.min_value;
@@ -389,6 +443,8 @@ void queue_spinner_delta(int idx, int dir) {
     if (fabsf(next - s.value) < 0.0001f) return;
     if (!req_q_push_spinner_set(s.section, next, active_path_or_null())) {
         ui_toast_error("Setup control busy");
+    } else {
+        strncpy(g_pending_spinner, s.section, sizeof(g_pending_spinner) - 1);
     }
 }
 
@@ -400,6 +456,39 @@ void on_spinner_minus_clicked(lv_event_t* e) {
 void on_spinner_plus_clicked(lv_event_t* e) {
     auto idx = (intptr_t)lv_event_get_user_data(e);
     queue_spinner_delta((int)idx, 1);
+}
+
+void refresh_controls() {
+    if (g_active_ctx && g_active_ctx->meta_lock) {
+        const char* reason = g_pending_spinner[0] ? "Awaiting confirmed setup state"
+            : (g_setup_allowed ? "Setup controls: pits/reset allowed" : g_lock_reason);
+        lv_label_set_text(g_active_ctx->meta_lock, reason);
+    }
+    for (int i = 0; i < g_spinner_count; ++i) {
+        bool enabled = g_setup_allowed && g_pt_sidecar_link_up && g_spinners[i].adjustable
+            && !g_pending_spinner[0];
+        for (int b = 0; b < 2; ++b) {
+            lv_obj_t* button = b == 0 ? g_minus_buttons[i] : g_plus_buttons[i];
+            if (!button || !lv_obj_is_valid(button)) continue;
+            if (enabled) lv_obj_clear_state(button, LV_STATE_DISABLED);
+            else lv_obj_add_state(button, LV_STATE_DISABLED);
+        }
+    }
+}
+
+void refresh_live_label() {
+    if (!g_active_ctx || !g_active_ctx->meta_live) return;
+    char bias[16], tc[16], abs[16], text[96];
+    if (isfinite(g_live_bias)) snprintf(bias, sizeof(bias), "%.1f%%", (double)g_live_bias);
+    else snprintf(bias, sizeof(bias), "?");
+    if (g_live_tc_modes == 0) snprintf(tc, sizeof(tc), "absent");
+    else if (g_live_tc >= 0) snprintf(tc, sizeof(tc), "%d", g_live_tc);
+    else snprintf(tc, sizeof(tc), "?");
+    if (g_live_abs_modes == 0) snprintf(abs, sizeof(abs), "absent");
+    else if (g_live_abs >= 0) snprintf(abs, sizeof(abs), "%d", g_live_abs);
+    else snprintf(abs, sizeof(abs), "?");
+    snprintf(text, sizeof(text), "LIVE CAR: BB %s  TC %s  ABS %s", bias, tc, abs);
+    lv_label_set_text(g_active_ctx->meta_live, g_live_known ? text : "LIVE CAR: unavailable/stale");
 }
 
 void pulse_step_cb(lv_timer_t* t) {
@@ -459,6 +548,8 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
     lv_obj_align(name_lbl, LV_ALIGN_LEFT_MID, 0, 0);
 
     lv_obj_t* minus = lv_btn_create(row);
+    g_minus_buttons[idx] = minus;
+    if (!g_setup_allowed || !s.adjustable || g_pending_spinner[0]) lv_obj_add_state(minus, LV_STATE_DISABLED);
     lv_obj_set_size(minus, 34, 32);
     lv_obj_align(minus, LV_ALIGN_RIGHT_MID, -112, 0);
     lv_obj_set_style_radius(minus, UI_RADIUS_TILE, LV_PART_MAIN);
@@ -485,6 +576,8 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
     lv_obj_align(value_lbl, LV_ALIGN_RIGHT_MID, -50, 0);
 
     lv_obj_t* plus = lv_btn_create(row);
+    g_plus_buttons[idx] = plus;
+    if (!g_setup_allowed || !s.adjustable || g_pending_spinner[0]) lv_obj_add_state(plus, LV_STATE_DISABLED);
     lv_obj_set_size(plus, 34, 32);
     lv_obj_align(plus, LV_ALIGN_RIGHT_MID, -4, 0);
     lv_obj_set_style_radius(plus, UI_RADIUS_TILE, LV_PART_MAIN);
@@ -560,6 +653,10 @@ void rebuild_list_widgets(pt_ctx_t* ctx) {
     // Row widgets are about to be destroyed — drop any pending `setup.load`
     // correlation that still points at them (PR #91 review threads).
     pending_load_clear();
+    for (int i = 0; i < PT_MAX_SPINNERS; ++i) {
+        g_minus_buttons[i] = nullptr;
+        g_plus_buttons[i] = nullptr;
+    }
     for (int i = 0; i < PT_MAX_SETUPS; ++i) {
         g_row_chip_labels[i] = nullptr;
     }
@@ -569,7 +666,7 @@ void rebuild_list_widgets(pt_ctx_t* ctx) {
 
     if (g_spinner_count > 0) {
         lv_obj_t* heading = lv_label_create(ctx->list_col);
-        lv_label_set_text(heading, "ADJUST");
+        lv_label_set_text(heading, strcmp(g_spinner_source, "saved_setup") == 0 ? "SAVED VALUES" : "SETUP VALUES");
         lv_obj_set_style_text_font(heading, UI_FONT_LABEL_XS, LV_PART_MAIN);
         lv_obj_set_style_text_color(heading, UI_TX_MUTED, LV_PART_MAIN);
         lv_obj_set_style_text_letter_space(heading, 2, LV_PART_MAIN);
@@ -667,6 +764,7 @@ void on_screen_delete(lv_event_t* e) {
     pending_load_clear();
     g_req_head = 0;
     g_req_tail = 0;
+    g_pending_spinner[0] = 0;
     for (int i = 0; i < PT_MAX_SETUPS; ++i) {
         g_row_chip_labels[i] = nullptr;
     }
@@ -676,6 +774,61 @@ void on_screen_delete(lv_event_t* e) {
 
 extern "C" void screen_pocket_technician_set_sidecar_link_up(int link_up) {
     g_pt_sidecar_link_up = link_up != 0;
+    if (!g_pt_sidecar_link_up || (g_live_known && (uint32_t)(millis() - g_live_at) > 1500)
+        || (g_setup_allowed && (uint32_t)(millis() - g_capability_at) > 1500)) {
+        g_live_known = false;
+        g_setup_allowed = false;
+        strncpy(g_lock_reason, "Setup controls locked: telemetry stale/offline", sizeof(g_lock_reason) - 1);
+        discard_queued_mutations();
+        refresh_live_label();
+    }
+    refresh_controls();
+}
+
+extern "C" void screen_pocket_technician_set_setup_capability(bool allowed, const char* reason,
+                                                               const char* source) {
+    g_setup_allowed = allowed;
+    if (!allowed) discard_queued_mutations();
+    g_capability_at = millis();
+    snprintf(g_lock_reason, sizeof(g_lock_reason), "%s", reason && reason[0] ? reason : "Setup controls unavailable");
+    snprintf(g_spinner_source, sizeof(g_spinner_source), "%s", source ? source : "unknown");
+    refresh_controls();
+}
+
+extern "C" void screen_pocket_technician_apply_live_electronics(float bias, int tc, int tc_modes,
+                                                                int abs, int abs_modes,
+                                                                bool allowed, const char* reason) {
+    bool changed = g_setup_allowed != allowed;
+    g_live_bias = bias;
+    g_live_tc = tc;
+    g_live_tc_modes = tc_modes;
+    g_live_abs = abs;
+    g_live_abs_modes = abs_modes;
+    g_live_known = true;
+    g_live_at = millis();
+    g_capability_at = g_live_at;
+    g_setup_allowed = allowed;
+    if (!allowed) discard_queued_mutations();
+    snprintf(g_lock_reason, sizeof(g_lock_reason), "%s", reason && reason[0] ? reason : "Setup controls unavailable");
+    refresh_live_label();
+    refresh_controls();
+    // Refresh per-car ranges/values on pit/reset transitions, including a car
+    // stopped on track. Never infer reset permission from speed.
+    if (changed && g_active_ctx) req_q_push_refresh_or_toast(false);
+}
+
+extern "C" void screen_pocket_technician_invalidate_live_state(void) {
+    g_live_known = false;
+    g_setup_allowed = false;
+    discard_queued_mutations();
+    g_spinner_count = 0;
+    snprintf(g_lock_reason, sizeof(g_lock_reason), "Awaiting session setup capability");
+    refresh_live_label();
+    refresh_controls();
+    if (g_active_ctx) {
+        rebuild_list_widgets(g_active_ctx);
+        req_q_push_refresh_or_toast(true);
+    }
 }
 
 extern "C" lv_obj_t* screen_pocket_technician_create(void) {
@@ -688,6 +841,8 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     ctx->meta_brand       = nullptr;
     ctx->meta_car         = nullptr;
     ctx->meta_active      = nullptr;
+    ctx->meta_live        = nullptr;
+    ctx->meta_lock        = nullptr;
     ctx->list_col         = nullptr;
     ctx->placeholder_lbl  = nullptr;
     ctx->active_row_obj   = nullptr;
@@ -781,6 +936,18 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     lv_label_set_text(ctx->meta_active, "");
     lv_obj_add_flag(ctx->meta_active, LV_OBJ_FLAG_HIDDEN);
 
+    ctx->meta_live = lv_label_create(meta);
+    lv_obj_set_style_text_font(ctx->meta_live, UI_FONT_MONO_XS, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ctx->meta_live, UI_ACCENT_GOLD, LV_PART_MAIN);
+    lv_obj_set_width(ctx->meta_live, SCREEN_W - 2 * OUTER_PAD);
+    lv_label_set_long_mode(ctx->meta_live, LV_LABEL_LONG_DOT);
+    lv_obj_align(ctx->meta_live, LV_ALIGN_TOP_LEFT, 0, 82);
+    ctx->meta_lock = lv_label_create(meta);
+    lv_obj_set_style_text_font(ctx->meta_lock, UI_FONT_LABEL_XS, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ctx->meta_lock, UI_TX_MUTED, LV_PART_MAIN);
+    lv_obj_set_width(ctx->meta_lock, SCREEN_W - 2 * OUTER_PAD);
+    lv_obj_align(ctx->meta_lock, LV_ALIGN_TOP_LEFT, 0, 102);
+
     // ---- Setup list (scrollable) -------------------------------------------
     const int list_y = HEADER_H + 6 + META_H + 6;
     ctx->list_col = lv_obj_create(scr);
@@ -804,6 +971,8 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     // Initial paint from cached state.
     update_meta(ctx);
     rebuild_list_widgets(ctx);
+    refresh_live_label();
+    refresh_controls();
 
     // Stage the `setup.list` request — main.cpp will forward it on the next
     // loop tick. The trainer's response (setup.list.result) reaches us via
@@ -894,7 +1063,9 @@ extern "C" void screen_pocket_technician_add_spinner(const char* section,
                                                        float min_value,
                                                        float max_value,
                                                        float step,
-                                                       const char* unit) {
+                                                       const char* unit,
+                                                       bool adjustable,
+                                                       float display_multiplier) {
     if (!section || !*section) return;
     if (g_spinner_count >= PT_MAX_SPINNERS) return;
     spinner_row_t* row = &g_spinners[g_spinner_count];
@@ -912,6 +1083,8 @@ extern "C" void screen_pocket_technician_add_spinner(const char* section,
     row->min_value = min_value;
     row->max_value = max_value;
     row->step = step > 0.0f ? step : 1.0f;
+    row->adjustable = adjustable;
+    row->display_multiplier = isfinite(display_multiplier) ? display_multiplier : 1.0f;
     ++g_spinner_count;
 }
 
@@ -922,10 +1095,13 @@ extern "C" void screen_pocket_technician_finish_spinner_list(void) {
 }
 
 extern "C" void screen_pocket_technician_apply_spinner_ack(bool ok,
+                                                            bool confirmed,
                                                             const char* section,
                                                             float value,
                                                             const char* error) {
-    if (ok && section && *section) {
+    if (!section || strcmp(g_pending_spinner, section) != 0) return;
+    g_pending_spinner[0] = 0;
+    if (ok && confirmed && section && *section && isfinite(value)) {
         for (int i = 0; i < g_spinner_count; ++i) {
             if (strcmp(g_spinners[i].section, section) == 0) {
                 g_spinners[i].value = value;
@@ -939,6 +1115,7 @@ extern "C" void screen_pocket_technician_apply_spinner_ack(bool ok,
         ui_toast_error(msg);
         req_q_push_refresh_or_toast(false);
     }
+    refresh_controls();
 }
 
 extern "C" void screen_pocket_technician_apply_spinner_list_error(const char* error) {
@@ -994,6 +1171,15 @@ extern "C" void screen_pocket_technician_set_identity(const char* car_id, const 
         g_active_name[0] = 0;
         set_active_path(nullptr);
         pending_load_clear();
+        discard_queued_mutations();
+        g_spinner_count = 0;
+        g_pending_spinner[0] = 0;
+        g_setup_allowed = false;
+        g_live_known = false;
+        snprintf(g_lock_reason, sizeof(g_lock_reason), "Awaiting setup capability");
+        if (g_active_ctx) req_q_push_refresh_or_toast(true);
+        refresh_live_label();
+        refresh_controls();
     }
     if (g_active_ctx) update_meta(g_active_ctx);
 }
@@ -1025,9 +1211,10 @@ extern "C" void screen_pocket_technician_apply_load_ack(bool ok,
     if (name && name[0]) {
         row = pending_load_take_row(name, path);
     }
-    if (!row) {
-        row = g_active_ctx->active_row_obj;
-    }
+    // A session/link transition invalidates pending correlation. An old
+    // in-flight ack must not restore the previous car's name/path afterwards;
+    // externally initiated actual loads are delivered via setup.active.
+    if (!row) return;
     g_active_ctx->active_row_obj = row;
 
     if (ok) {

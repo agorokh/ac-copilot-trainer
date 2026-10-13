@@ -123,10 +123,10 @@ def test_session_review_replay_is_scoped_by_shared_session_uuid() -> None:
     """#622: the actual shipped page must compare a replayed review's UUID with the live
     lifecycle UUID, while retaining the additive "both known" compatibility rule."""
     body = _TABLET_DASH_PAGE_PATH.read_text(encoding="utf-8")
-    assert "function identCompatible(carId, trackId, sessionUuid)" in body
+    assert "function identCompatible(carId, trackId, sessionUuid, trackLayout)" in body
     assert "sessionUuid && S.sessionUuid" in body
     assert "String(sessionUuid) !== String(S.sessionUuid)" in body
-    assert "identCompatible(p.car_id, p.track_id, p.session_uuid)" in body
+    assert "identCompatible(p.car_id, p.track_id, p.session_uuid,p.track_layout)" in body
     assert "S.sessionUuid = p.session_uuid || null" in body
     assert '+ "|" + String(p.session_uuid || "")' in body
 
@@ -510,3 +510,142 @@ def test_make_track_map_shape() -> None:
     assert frame["type"] == ep.TYPE_STATE_SNAPSHOT
     assert frame["topic"] == ep.TOPIC_TRACK_MAP
     assert frame["source"] == "sidecar.track_map"
+
+
+def test_map_latest_valid_completion_rejects_invalid_replay_and_layout(monkeypatch) -> None:
+    import copy
+
+    from tests.test_track_map import _corner_archive
+
+    reference = _corner_archive()
+    monkeypatch.setattr(server, "_map_reference_archive", reference)
+    server._sidecar_state_cache["session"] = {
+        "payload": {
+            "car_id": reference["car"]["id"],
+            "track_id": "magione",
+            "session_uuid": "s",
+        }
+    }
+    records = {}
+    for number in (1, 2, 3):
+        record = copy.deepcopy(reference)
+        record.update(lap_uuid=f"lap-{number}", session_uuid="s")
+        record["lap"]["lap_n"] = number
+        records[str(number)] = record
+    records["3"]["lap"]["is_valid"] = False
+    records["wrong_layout"] = copy.deepcopy(records["2"])
+    records["wrong_layout"]["track"]["layout"] = "national"
+    monkeypatch.setattr(
+        server, "resolve_lap_archive", lambda inbound: records[inbound["archivePath"]]
+    )
+    broadcasts = []
+
+    async def broadcast(frame, *, exclude):
+        broadcasts.append(frame)
+
+    monkeypatch.setattr(server, "_broadcast_external", broadcast)
+
+    async def run():
+        async def complete(path, lap_n):
+            await server._publish_completed_lap_map(
+                {
+                    "archivePath": path,
+                    "lap": lap_n,
+                    "lapTimeMs": reference["lap"]["lap_ms"],
+                },
+                "producer",
+            )
+
+        await complete("2", 2)
+        await complete("3", 3)
+        await complete("1", 1)
+        await complete("wrong_layout", 2)
+        await complete("2", 7)  # completion/archive identity mismatch
+
+    asyncio.run(run())
+    assert len(broadcasts) == 1
+    comparison = broadcasts[0]["payload"]["map_comparison"]
+    assert comparison["lap_uuid"] == "lap-2"
+    assert comparison["available"] is True
+    assert comparison["corners"][0]["time_loss_s"] == 0
+
+
+def test_map_delayed_previous_session_completion_cannot_restore_cache(monkeypatch) -> None:
+    import threading
+
+    from tests.test_track_map import _corner_archive
+
+    reference = _corner_archive()
+    record = {
+        **reference,
+        "lap_uuid": "old",
+        "session_uuid": "old-session",
+        "lap": {**reference["lap"], "lap_n": 1},
+    }
+    monkeypatch.setattr(server, "_map_reference_archive", reference)
+    server._sidecar_state_cache["session"] = {
+        "payload": {
+            "car_id": reference["car"]["id"],
+            "track_id": "magione",
+            "session_uuid": "old-session",
+        }
+    }
+    entered, release = threading.Event(), threading.Event()
+
+    def resolve(_inbound):
+        entered.set()
+        assert release.wait(2)
+        return record
+
+    monkeypatch.setattr(server, "resolve_lap_archive", resolve)
+
+    async def run():
+        task = asyncio.create_task(
+            server._publish_completed_lap_map(
+                {
+                    "archivePath": "old",
+                    "lap": 1,
+                    "lapTimeMs": reference["lap"]["lap_ms"],
+                },
+                "old-producer",
+            )
+        )
+        assert await asyncio.to_thread(entered.wait, 1)
+        server._clear_completed_map_state()
+        server._sidecar_state_cache["session"]["payload"]["session_uuid"] = "new-session"
+        release.set()
+        await asyncio.wait_for(task, 2)
+
+    asyncio.run(run())
+    assert ep.TOPIC_SESSION_REVIEW not in server._sidecar_state_cache
+    assert server._map_latest_archive is None
+    assert server._track_map_frame["payload"]["corners"] == []
+
+
+def test_map_live_canonical_catalogue_replay_is_not_independently_numbered(monkeypatch) -> None:
+    from tests.test_track_map import _corner_archive
+
+    reference = _corner_archive()
+    monkeypatch.setattr(server, "_map_reference_archive", reference)
+    broadcasts = []
+
+    async def broadcast(frame, *, exclude):
+        broadcasts.append(frame)
+
+    monkeypatch.setattr(server, "_broadcast_external", broadcast)
+
+    async def run():
+        payload = {
+            "corner_catalog_available": True,
+            "corner_catalog_car_id": reference["car"]["id"],
+            "corner_catalog_track_id": "magione",
+            "corner_catalog_layout": "",
+            "corner_catalog": [{"corner_id": "T7", "s0": 0.25, "s1": 0.8, "brake_spline": 0.22}],
+        }
+        await server._refresh_map_corner_catalog(payload, "producer")
+        assert broadcasts[-1]["payload"]["corners"][0]["label"] == "T7"
+        payload = {**payload, "corner_catalog_layout": "other-layout"}
+        await server._refresh_map_corner_catalog(payload, "producer")
+        assert broadcasts[-1]["payload"]["corners"] == []
+
+    asyncio.run(run())

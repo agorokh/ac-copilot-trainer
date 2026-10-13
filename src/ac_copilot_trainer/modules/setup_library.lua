@@ -445,6 +445,29 @@ local function safeField(tbl, key)
   return nil
 end
 
+--- The setup/reset gate is independent of speed: stationary on track stays
+--- locked. Query every sample/request, not once when a display opens.
+function M.capability()
+  if not (ac and type(ac.isCarResetAllowed) == "function") then
+    return { reset_allowed = false, lock_reason = "Reset capability unavailable" }
+  end
+  local ok, allowed = pcall(ac.isCarResetAllowed)
+  if not ok or type(allowed) ~= "boolean" then
+    return { reset_allowed = false, lock_reason = "Reset capability unavailable" }
+  end
+  return {
+    reset_allowed = allowed,
+    lock_reason = allowed and "" or "Setup changes require pits/reset permission",
+  }
+end
+
+local function withCapability(result)
+  local capability = M.capability()
+  result.reset_allowed = capability.reset_allowed
+  result.lock_reason = capability.lock_reason
+  return result
+end
+
 local function normalizeSetupPath(p)
   if type(p) ~= "string" or p == "" or p:find("%z") then
     return nil
@@ -656,16 +679,20 @@ local function spinnerFromSection(section, data)
     minV = maxV
     maxV = tmp
   end
+  local rawMin, rawMax = numberOrNil(data.fields.MIN), numberOrNil(data.fields.MAX)
+  local rangeKnown = rawMin ~= nil and rawMax ~= nil and rawMin <= rawMax
   return {
     name = section,
     section = section,
     label = labelForSection(section),
     value = value,
-    min = minV,
-    max = maxV,
+    min = rangeKnown and minV or nil,
+    max = rangeKnown and maxV or nil,
     step = step,
     unit = def.unit or "",
     order = def.order or (1000 + #section),
+    source = "saved_setup",
+    range_known = rangeKnown,
   }
 end
 
@@ -697,30 +724,30 @@ local function normalizeCspSpinner(raw)
     return nil
   end
   local def = SPINNER_DEFS[name] or SPINNER_DEFS[name:upper()] or {}
-  local minV = numberOrNil(safeField(raw, "min")) or def.min or value
-  local maxV = numberOrNil(safeField(raw, "max")) or def.max or value
+  local minV = numberOrNil(safeField(raw, "min"))
+  local maxV = numberOrNil(safeField(raw, "max"))
+  local rangeKnown = minV ~= nil and maxV ~= nil and minV <= maxV
   local step = numberOrNil(safeField(raw, "step")) or def.step or 1
   if step <= 0 then step = 1 end
-  if maxV < minV then
-    local tmp = minV
-    minV = maxV
-    maxV = tmp
-  end
   local label = safeField(raw, "label") or safeField(raw, "displayName") or safeField(raw, "uiName")
   if type(label) ~= "string" or label == "" then
     label = labelForSection(name)
   end
-  local unit = safeField(raw, "unit")
+  local unit = safeField(raw, "units") or safeField(raw, "unit")
   if type(unit) ~= "string" then unit = def.unit or "" end
   local row = {
     name = name,
     section = name,
     label = label,
     value = value,
-    min = minV,
-    max = maxV,
+    min = rangeKnown and minV or nil,
+    max = rangeKnown and maxV or nil,
     step = step,
     unit = unit,
+    source = "csp_setup",
+    read_only = safeField(raw, "readOnly") == true,
+    range_known = rangeKnown,
+    display_multiplier = numberOrNil(safeField(raw, "displayMultiplier")) or 1,
   }
   -- #531 Part B: forward item NAMES when CSP exposes them (engine-map spinners name their
   -- positions, e.g. "QUALI") so a consumer can render `MAP 3/8 · QUALI` instead of the
@@ -789,8 +816,14 @@ local function setCspSpinner(section, value)
   if hadList and not spinner then
     return { ok = false, section = section, value = value, error = "spinner not found" }, true
   end
+  if not spinner then
+    return { ok = false, section = section, error = "spinner capability unavailable" }, true
+  end
   local appliedValue = value
   if spinner then
+    if spinner.read_only or not spinner.range_known then
+      return { ok = false, section = section, error = "spinner read-only or range unavailable" }, true
+    end
     if value < spinner.min or value > spinner.max then
       return {
         ok = false,
@@ -813,12 +846,20 @@ local function setCspSpinner(section, value)
       error = okSet and "setSetupSpinnerValue refused" or ("setSetupSpinnerValue raised: " .. tostring(ret)),
     }, true
   end
+  -- A setter accepting the request is not proof it applied. Read back actual
+  -- state before returning a value that consumers may repaint.
+  local actual = cspSpinnerByName(setName)
+  if not actual or math.abs(actual.value - appliedValue) > 0.000001 then
+    return { ok = false, pending = true, section = section,
+      error = "Awaiting confirmed setup state", source = "csp" }, true
+  end
   return {
     ok = true,
     section = spinner and spinner.section or section,
     name = spinner and spinner.name or section,
     label = spinner and spinner.label or labelForSection(section),
-    value = appliedValue,
+    value = actual.value,
+    confirmed = true,
     min = spinner and spinner.min or appliedValue,
     max = spinner and spinner.max or appliedValue,
     step = spinner and spinner.step or 1,
@@ -835,15 +876,15 @@ end
 function M.listSpinners(payload)
   local cspRows = cspSpinnerList()
   if cspRows then
-    return { ok = true, source = "csp", spinners = cspRows }
+    return withCapability({ ok = true, source = "csp", spinners = cspRows })
   end
   local path, pathErr = setupPathFromPayload(payload)
   if not path then
-    return { ok = false, error = pathErr or "setup path unavailable" }
+    return withCapability({ ok = false, error = pathErr or "setup path unavailable" })
   end
   local text, readErr = readTextFile(path)
   if not text then
-    return { ok = false, path = path, error = readErr }
+    return withCapability({ ok = false, path = path, error = readErr })
   end
   local parsed = parseSetupIni(text)
   local spinners = {}
@@ -860,7 +901,7 @@ function M.listSpinners(payload)
     if ao ~= bo then return ao < bo end
     return tostring(a.label) < tostring(b.label)
   end)
-  return { ok = true, path = path, spinners = spinners }
+  return withCapability({ ok = true, path = path, source = "saved_setup", spinners = spinners })
 end
 
 --- Set one active setup spinner value. Uses CSP's live setup-spinner API when
@@ -903,6 +944,9 @@ function M.setSpinner(payload)
   local spinner = spinnerFromSection(section, data)
   if not spinner then
     return { ok = false, path = path, section = section, value = value, error = "spinner value is not numeric" }
+  end
+  if not spinner.range_known then
+    return { ok = false, section = section, error = "Saved setup range unavailable" }
   end
   if value < spinner.min or value > spinner.max then
     return {
@@ -952,6 +996,9 @@ function M.setSpinner(payload)
     max = spinner.max,
     step = spinner.step,
     unit = spinner.unit,
+    source = "saved_setup",
+    confirmed = false,
+    pending = true,
   }
 end
 

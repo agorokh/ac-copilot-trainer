@@ -76,13 +76,26 @@ void screen_pocket_technician_add_spinner(const char* section,
                                           float min_value,
                                           float max_value,
                                           float step,
-                                          const char* unit);
+                                          const char* unit,
+                                          bool adjustable,
+                                          float display_multiplier);
 void screen_pocket_technician_finish_spinner_list(void);
 void screen_pocket_technician_apply_spinner_ack(bool ok,
+                                                 bool confirmed,
                                                  const char* section,
                                                  float value,
                                                  const char* error);
 void screen_pocket_technician_apply_spinner_list_error(const char* error);
+void screen_pocket_technician_set_setup_capability(bool allowed, const char* reason,
+                                                    const char* source);
+// Each telemetry tick replaces the entire live readout. NAN/-1 = unknown;
+// modes=0 means the system is absent, never an intervention setting.
+void screen_pocket_technician_apply_live_electronics(float brake_bias_pct,
+                                                     int tc_level, int tc_modes,
+                                                     int abs_level, int abs_modes,
+                                                     bool reset_allowed,
+                                                     const char* lock_reason);
+void screen_pocket_technician_invalidate_live_state(void);
 
 // ---- Out-queue (screen → trainer) ----------------------------------------
 // The screen module never writes to the WS directly; it stages a request

@@ -11,6 +11,9 @@ lupa = pytest.importorskip("lupa", reason="lupa Lua runtime not installed (pip i
 REPO = pathlib.Path(__file__).resolve().parent.parent
 MODULES_DIR = REPO / "src" / "ac_copilot_trainer" / "modules"
 FIXTURE_INI = REPO / "tests" / "fixtures" / "setups" / "pt_chip_summary.ini"
+BOUNDED_FIXTURE = FIXTURE_INI.read_text(encoding="utf-8").replace(
+    "[FRONT_BIAS]", "[FRONT_BIAS]\nMIN=40\nMAX=80\nSTEP=1"
+)
 
 
 @pytest.fixture
@@ -124,7 +127,7 @@ def test_spinner_list_reads_active_setup_controls(lua, tmp_path: pathlib.Path) -
     root = tmp_path / "setups"
     setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
     setup_path.parent.mkdir(parents=True)
-    setup_path.write_text(FIXTURE_INI.read_text(encoding="utf-8"), encoding="utf-8")
+    setup_path.write_text(BOUNDED_FIXTURE, encoding="utf-8")
     _install_spinner_stubs(lua, setup_path, root)
 
     result = lua.execute(
@@ -147,7 +150,7 @@ def test_spinner_list_rejects_traversal_payload_path(lua, tmp_path: pathlib.Path
     root = tmp_path / "setups"
     setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
     setup_path.parent.mkdir(parents=True)
-    setup_path.write_text(FIXTURE_INI.read_text(encoding="utf-8"), encoding="utf-8")
+    setup_path.write_text(BOUNDED_FIXTURE, encoding="utf-8")
     _install_spinner_stubs(lua, setup_path, root)
     attack = str(root / "ks_porsche_911_gt3_r_2016" / ".." / ".." / "outside.ini").replace(
         "\\",
@@ -237,7 +240,7 @@ def test_spinner_set_rewrites_active_setup_and_applies(lua, tmp_path: pathlib.Pa
     root = tmp_path / "setups"
     setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
     setup_path.parent.mkdir(parents=True)
-    setup_path.write_text(FIXTURE_INI.read_text(encoding="utf-8"), encoding="utf-8")
+    setup_path.write_text(BOUNDED_FIXTURE, encoding="utf-8")
     _install_spinner_stubs(lua, setup_path, root)
 
     ack = lua.execute(
@@ -321,7 +324,8 @@ def test_spinner_set_prefers_csp_api_and_snaps_to_step(lua) -> None:
         ac = {
           getSetupSpinners = function()
             return {
-              { name = "ABS", label = "ABS", value = 7, min = 0, max = 12, step = 2 },
+              { name = "ABS", label = "ABS", value = _G.__set_spinner_value or 7,
+                min = 0, max = 12, step = 2 },
             }
           end,
           setSetupSpinnerValue = function(name, value)
@@ -351,7 +355,7 @@ def test_spinner_set_rejects_out_of_range_without_writing(lua, tmp_path: pathlib
     root = tmp_path / "setups"
     setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
     setup_path.parent.mkdir(parents=True)
-    original = FIXTURE_INI.read_text(encoding="utf-8")
+    original = BOUNDED_FIXTURE
     setup_path.write_text(original, encoding="utf-8")
     _install_spinner_stubs(lua, setup_path, root)
 
@@ -371,7 +375,7 @@ def test_spinner_set_temp_file_collision_keeps_original(lua, tmp_path: pathlib.P
     root = tmp_path / "setups"
     setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
     setup_path.parent.mkdir(parents=True)
-    original = FIXTURE_INI.read_text(encoding="utf-8")
+    original = BOUNDED_FIXTURE
     setup_path.write_text(original, encoding="utf-8")
     for i in range(1, 17):
         setup_path.with_name(f"{setup_path.name}.ac-copilot-tmp-{i}").write_text(
@@ -396,7 +400,7 @@ def test_spinner_set_write_nil_keeps_original(lua, tmp_path: pathlib.Path) -> No
     root = tmp_path / "setups"
     setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
     setup_path.parent.mkdir(parents=True)
-    original = FIXTURE_INI.read_text(encoding="utf-8")
+    original = BOUNDED_FIXTURE
     setup_path.write_text(original, encoding="utf-8")
     _install_spinner_stubs(lua, setup_path, root)
 
@@ -428,7 +432,7 @@ def test_spinner_set_write_exception_reports_pcall_error(lua, tmp_path: pathlib.
     root = tmp_path / "setups"
     setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
     setup_path.parent.mkdir(parents=True)
-    original = FIXTURE_INI.read_text(encoding="utf-8")
+    original = BOUNDED_FIXTURE
     setup_path.write_text(original, encoding="utf-8")
     _install_spinner_stubs(lua, setup_path, root)
 
@@ -505,3 +509,48 @@ def test_spinner_clear_waits_for_finish_rebuild() -> None:
     assert "rebuild_list_widgets" not in clear_block
     assert "rebuild_list_widgets(g_active_ctx)" in finish_block
     assert "rebuild_list_widgets(g_active_ctx)" in error_block
+
+
+def test_spinner_set_requires_actual_readback(lua) -> None:
+    ack = lua.execute("""
+      ac = {
+        getSetupSpinners = function() return {{name="ABS",value=7,min=0,max=12,step=1}} end,
+        setSetupSpinnerValue = function() return true end,
+      }
+      return require("setup_library").setSpinner({section="ABS",value=8})
+    """)
+    assert ack["ok"] is False
+    assert ack["pending"] is True
+    assert ack["value"] is None
+
+
+def test_setup_capability_refreshes_without_speed_inference(lua) -> None:
+    result = lua.execute("""
+      local allowed = false
+      ac = {isCarResetAllowed=function() return allowed end,
+        getSetupSpinners=function() return {} end}
+      local m = require("setup_library")
+      local onTrack = m.listSpinners({})
+      allowed = true
+      local inPits = m.listSpinners({})
+      return {onTrack=onTrack,inPits=inPits}
+    """)
+    assert result["onTrack"]["reset_allowed"] is False
+    assert "pits/reset" in result["onTrack"]["lock_reason"]
+    assert result["inPits"]["reset_allowed"] is True
+    assert result["inPits"]["lock_reason"] == ""
+
+
+def test_saved_setup_unknown_ranges_are_not_adjustable(lua, tmp_path) -> None:
+    root = tmp_path / "setups"
+    root.mkdir()
+    setup_path = root / "race.ini"
+    setup_path.write_text("[FRONT_BIAS]\nVALUE=68\n", encoding="utf-8")
+    _install_spinner_stubs(lua, setup_path, root)
+    rows = lua.execute('return require("setup_library").listSpinners({})')
+    assert rows["source"] == "saved_setup"
+    assert rows["spinners"][1]["range_known"] is False
+    ack = lua.execute('return require("setup_library").setSpinner({section="FRONT_BIAS",value=69})')
+    assert ack["ok"] is False
+    assert "range unavailable" in ack["error"]
+    assert setup_path.read_text(encoding="utf-8") == "[FRONT_BIAS]\nVALUE=68\n"

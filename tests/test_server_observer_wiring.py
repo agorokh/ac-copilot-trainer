@@ -844,7 +844,8 @@ def test_wire_voice_builds_track_map_frame(tmp_path, monkeypatch):
     assert frame is not None
     assert frame["topic"] == "track.map"
     assert len(frame["payload"]["outline"]) >= 8
-    assert frame["payload"]["corners"][0]["label"] == "T1"
+    # Geometry alone cannot invent the Lua producer's canonical turn numbering.
+    assert frame["payload"]["corners"] == []
 
 
 def test_runtime_rewire_broadcasts_fresh_track_map(tmp_path, monkeypatch):
@@ -866,8 +867,11 @@ def test_runtime_rewire_broadcasts_fresh_track_map(tmp_path, monkeypatch):
             await asyncio.gather(*pending)
 
     asyncio.run(_rewire())
-    assert len(sent) == 1
-    frame, exclude = sent[0]
+    assert len(sent) == 2
+    invalidated, _ = sent[0]
+    assert invalidated["topic"] == "track.map"
+    assert invalidated["payload"]["outline"] == []
+    frame, exclude = sent[-1]
     assert exclude is None
     assert frame["topic"] == "track.map"
     assert frame == server._track_map_frame

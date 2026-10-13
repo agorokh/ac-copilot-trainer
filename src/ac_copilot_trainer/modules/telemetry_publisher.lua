@@ -22,6 +22,7 @@
 
 local wheelRead = require("wheel_read")
 local shiftProfileModel = require("shift_profile")
+local setupLibrary = require("setup_library")
 
 local M = {}
 
@@ -361,6 +362,32 @@ function M.publishTelemetryTickIfDue(opts)
     spline = _clamp(_field(car, "splinePosition") or 0, 0, 1),
     lap = math.max(0, math.floor(tonumber(_field(car, "lapCount")) or 0)),
   }
+  -- Installed CSP ac_apps/lib.lua: these are physics-only settings, distinct
+  -- from the intervention booleans below. Never substitute a saved setup value.
+  if _field(car, "physicsAvailable") == true then
+    local bias = _finite(_field(car, "brakeBias"))
+    if bias ~= nil and bias >= 0 and bias <= 1 then
+      payload.brake_bias_pct = bias * 100
+      payload.brake_bias_source = "car.brakeBias"
+    end
+    for _, spec in ipairs({
+      { "tc", "tractionControlMode", "tractionControlModes" },
+      { "abs", "absMode", "absModes" },
+    }) do
+      local count = _finite(_field(car, spec[3]))
+      local level = _finite(_field(car, spec[2]))
+      if count ~= nil and count >= 0 and count == math.floor(count) then
+        payload[spec[1] .. "_modes"] = count
+        if count > 0 and level ~= nil and level >= 0 and level == math.floor(level) then
+          payload[spec[1] .. "_level"] = level
+          payload[spec[1] .. "_level_source"] = "car." .. spec[2]
+        end
+      end
+    end
+  end
+  local capability = setupLibrary.capability()
+  payload.setup_reset_allowed = capability.reset_allowed
+  payload.setup_lock_reason = capability.lock_reason
   -- #531 Part C-min: the tablet dashboard's shift ribbon is rpm-banded from the car's real
   -- redline (never hardcoded), and its lap clock needs the running lap time. Both are optional
   -- in the validator contract; a CSP build that lacks the field (pcall in `_field`) omits it.

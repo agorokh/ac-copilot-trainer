@@ -677,6 +677,16 @@ static void dispatch_phase2_message(const String& body) {
       const char* secondary    = payload["secondary_line"] | "";
       const char* kind         = payload["kind"]         | "info";
       const char* sub_state    = payload["sub_state"]    | "cruising";
+      strncpy(snap.action, payload["action"] | "", sizeof(snap.action) - 1);
+      strncpy(snap.current_corner_label, payload["current_corner_label"] | "",
+              sizeof(snap.current_corner_label) - 1);
+      strncpy(snap.approach_corner_label, payload["approach_corner_label"] | "",
+              sizeof(snap.approach_corner_label) - 1);
+      strncpy(snap.target_phase, payload["target_phase"] | "unavailable",
+              sizeof(snap.target_phase) - 1);
+      strncpy(snap.target_provenance, payload["target_provenance"] | "unavailable",
+              sizeof(snap.target_provenance) - 1);
+      snap.target_available = payload["target_available"] | false;
       strncpy(snap.corner_label, corner_label, sizeof(snap.corner_label) - 1);
       strncpy(snap.primary_line, primary,      sizeof(snap.primary_line) - 1);
       strncpy(snap.secondary_line, secondary,  sizeof(snap.secondary_line) - 1);
@@ -690,6 +700,7 @@ static void dispatch_phase2_message(const String& body) {
       // half-up to int32. Nil/missing fields keep the -1/0 sentinels.
       snap.target_speed_kmh  = phase2_json_num_or(payload["target_speed_kmh"],  -1);
       snap.current_speed_kmh = phase2_json_num_or(payload["current_speed_kmh"], -1);
+      snap.current_speed_available = payload["current_speed_available"] | (snap.current_speed_kmh >= 0);
       snap.dist_to_brake_m   = phase2_json_num_or(payload["dist_to_brake_m"],   -1);
       int32_t pp = phase2_json_num_or(payload["progress_pct"], 0);
       if (pp < 0) pp = 0;
@@ -697,6 +708,9 @@ static void dispatch_phase2_message(const String& body) {
       snap.progress_pct      = pp;
       snap.has_data          = true;
       screen_ac_copilot_apply_snapshot(&snap);
+    } else if (strcmp(topic, "session") == 0) {
+      screen_ac_copilot_invalidate();
+      screen_pocket_technician_invalidate_live_state();
     } else if (strcmp(topic, "setup.active") == 0) {
       const char* name = payload["name"] | "";
       const char* path = payload["path"] | "";
@@ -705,6 +719,16 @@ static void dispatch_phase2_message(const String& body) {
                                                   *path ? path : nullptr);
       }
     }
+  } else if (strcmp(type, "telemetry_tick") == 0) {
+    JsonVariantConst payload = doc["payload"];
+    screen_pocket_technician_apply_live_electronics(
+        phase2_json_float_or(payload["brake_bias_pct"], NAN),
+        phase2_json_num_or(payload["tc_level"], -1),
+        phase2_json_num_or(payload["tc_modes"], -1),
+        phase2_json_num_or(payload["abs_level"], -1),
+        phase2_json_num_or(payload["abs_modes"], -1),
+        payload["setup_reset_allowed"] | false,
+        payload["setup_lock_reason"] | "capability unavailable");
   } else if (strcmp(type, "setup.list.result") == 0) {
     const char* car_id     = doc["car_id"]     | "";
     const char* car_name   = doc["car_name"]   | "";
@@ -760,6 +784,10 @@ static void dispatch_phase2_message(const String& body) {
         ok, name, (*lpath) ? lpath : nullptr, err_arg);
   } else if (strcmp(type, "setup.spinner.list.result") == 0) {
     bool ok = doc["ok"] | true;
+    screen_pocket_technician_set_setup_capability(
+        doc["reset_allowed"] | false,
+        doc["lock_reason"] | "capability unavailable",
+        doc["source"] | "unknown");
     screen_pocket_technician_clear_spinners();
     if (!ok) {
       const char* error = doc["error"] | "spinner list failed";
@@ -779,7 +807,9 @@ static void dispatch_phase2_message(const String& body) {
           float max_v = phase2_json_float_or(entry["max"], value);
           float step  = phase2_json_float_or(entry["step"], 1.0f);
           screen_pocket_technician_add_spinner(
-              section, label, value, min_v, max_v, step, unit);
+              section, label, value, min_v, max_v, step, unit,
+              (entry["range_known"] | false) && !(entry["read_only"] | true),
+              phase2_json_float_or(entry["display_multiplier"], 1.0f));
         }
       }
     }
@@ -789,9 +819,10 @@ static void dispatch_phase2_message(const String& body) {
     const char* section = doc["section"] | "";
     if (!*section) section = doc["name"] | "";
     const char* error = doc["error"] | "";
-    float value = phase2_json_float_or(doc["value"], 0.0f);
+    float value = phase2_json_float_or(doc["value"], NAN);
     const char* err_arg = (ok || !error || *error == 0) ? nullptr : error;
-    screen_pocket_technician_apply_spinner_ack(ok, section, value, err_arg);
+    screen_pocket_technician_apply_spinner_ack(
+        ok, doc["confirmed"] | false, section, value, err_arg);
   } else if (strcmp(type, "se.search.result") == 0) {
     bool ok = doc["ok"] | false;
     screen_setup_exchange_clear_results();

@@ -2,8 +2,11 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-10-12T19:17:00Z
+last_updated: 2026-10-13T01:42:09Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-10-13-014209Z-pr814-review-recovery-d962bc.md
+  - AcCopilotTrainer/00_System/handoffs/2026-10-13-003900Z-issue813-review-checkpoint-72ba13.md
+  - AcCopilotTrainer/00_System/handoffs/2026-10-12-232609Z-issue813-display-delivery-6f39a1.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-191700Z-c1-live-acceptance-87ff.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-181458Z-operator-driven-rigcheck-f3b1cc.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-174325Z-post-merge-pr809-dc1d25.md
@@ -82,6 +85,26 @@ relates_to:
 ---
 
 # Current focus
+
+## Issue 813 display correctness and MAP delivery
+
+Active branch `fix/issue-813-rig-displays-map` carries the coordinated Lua,
+sidecar, tablet and ESP32 revision. Explicit coaching action/target semantics,
+live physics electronics and persistent pits-only capability are implemented;
+full ci-fast (4246 passed, 89 skipped), both firmware builds, native actual-font
+renders and 1024x600 MAP verification pass. PR #814 at 0a2559f is BLOCKED:
+self-hosted Cursor review failed; the canonical bounded waiter expired with
+exit 124 and the final exact-head evaluator remains 4 (no eligible review).
+The staged EXE passes its normal self-test; installed EXE and screen firmware
+are not promoted. The AC Lua junction exposes candidate source, without live
+runtime proof. Tablet is absent from adb; authenticated health reads timed out.
+Distribution and the operator-driven valid Porsche/Magione lap with both
+physical displays and exit transitions remain unverified. Keep #813 OPEN,
+retain the separate #804/#531/#86 scopes and freezes. Resolve-pr 814 refreshed
+the ledger and found live Kimi/Grok fallback reviews elsewhere while Cursor
+is quota-held and Antigravity has a tracked model-selection failure. Publish
+the substantive local SAVE on this carrier and give the new exact head one
+normal bounded review round; the linked recovery node records the boundary.
 
 ## External racing controls — operator plan, 2026-10-11 PDT
 

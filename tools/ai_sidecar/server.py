@@ -205,6 +205,11 @@ RACE_STATUS_MAX_HZ = 1.0
 # `_reset_external_state()` at serve start (after wiring); the subscribe replay path
 # consults this global as the fallback.
 _track_map_frame: dict[str, Any] | None = None
+_map_reference_archive: dict[str, Any] | None = None
+_map_comparison_generation = 0
+_map_corner_catalog: dict[str, Any] | None = None
+_map_latest_archive: dict[str, Any] | None = None
+_map_latest_lap_n: int | None = None
 # The observer holds single-monotonic-stream state (last spline/lap, per-corner passes), so only ONE
 # producer may feed it. The first telemetry producer claims the feed; a second concurrent loopback
 # producer is still routed to peripherals but NOT into the observer (interleaving would corrupt wrap
@@ -523,7 +528,13 @@ def _with_snapshot_age(
 
 
 def _reset_external_state() -> None:
-    global _observer_feed_peer, _observer_feed_warned
+    global _observer_feed_peer, _observer_feed_warned, _map_comparison_generation
+    global _map_corner_catalog, _map_latest_archive, _map_latest_lap_n
+    _map_comparison_generation += 1
+    _map_corner_catalog = None
+    _map_latest_archive = None
+    _map_latest_lap_n = None
+    _clear_completed_map_state()
     _external_peers.clear()
     _session_start_authorized_peers.clear()
     _lua_authorized_peers.clear()
@@ -717,6 +728,8 @@ def _generate_session_review_safe(
         "next_session_prep": report.get("next_session_prep"),
         "reference": report.get("reference"),
         "reference_selection": report.get("reference_selection"),
+        "map_comparison": report.get("map_comparison"),
+        "track_layout": session_meta.get("track_layout"),
         "source": report.get("source"),
     }
 
@@ -2141,6 +2154,122 @@ def _session_review_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _publish_completed_lap_map(inbound: dict[str, Any], producer: Any) -> None:
+    """Use the immutable configured reference and existing archive resolver, off the ack path."""
+    global _map_comparison_generation, _map_latest_archive, _map_latest_lap_n
+    from tools.ai_sidecar.track_map import build_corner_comparison
+
+    reference = _map_reference_archive
+    generation = _map_comparison_generation
+    try:
+        archive = await asyncio.to_thread(resolve_lap_archive, inbound)
+        if not isinstance(archive, dict) or (archive.get("lap") or {}).get("is_valid") is not True:
+            return  # invalid laps never replace the latest valid completed lap
+        lap_meta = archive.get("lap") or {}
+        if isinstance(inbound.get("lap"), int) and (
+            inbound["lap"] != lap_meta.get("lap_n")
+            or inbound.get("lapTimeMs") != lap_meta.get("lap_ms")
+        ):
+            return  # an archive path must describe the physical completion that named it
+        comparison = await asyncio.to_thread(
+            build_corner_comparison, archive, reference, _map_corner_catalog
+        )
+    except Exception:
+        logger.exception("completed-lap MAP comparison unavailable")
+        return
+    if generation != _map_comparison_generation or reference is not _map_reference_archive:
+        return
+    session = (_sidecar_state_cache.get("session") or {}).get("payload") or {}
+    if not session.get("session_uuid") or not session.get("car_id") or not session.get("track_id"):
+        return  # a completed archive cannot establish a live session by itself
+    for key in ("car_id", "session_uuid"):
+        if session.get(key) and comparison.get(key) != session[key]:
+            return  # a slow previous-session archive read must not repopulate the new session
+    session_track, _, session_layout = str(session["track_id"]).partition("/")
+    session_layout = session.get("track_layout", session.get("layout", session_layout)) or ""
+    if (
+        comparison.get("track_id") != session_track
+        or comparison.get("track_layout") != session_layout
+    ):
+        return
+    lap_n = lap_meta.get("lap_n")
+    if not isinstance(lap_n, int) or isinstance(lap_n, bool):
+        return
+    if _map_latest_lap_n is not None and lap_n < _map_latest_lap_n:
+        return  # a slower older job cannot overwrite the latest valid completed lap
+    if (
+        _map_latest_lap_n == lap_n
+        and _map_latest_archive is not None
+        and archive.get("lap_uuid") != _map_latest_archive.get("lap_uuid")
+    ):
+        return  # conflicting archives for one physical completion are not interchangeable
+    _map_latest_lap_n = lap_n
+    _map_latest_archive = archive
+    payload = {
+        "ok": True,
+        "map_only": True,
+        "map_comparison": comparison,
+        "car_id": comparison.get("car_id"),
+        "track_id": comparison.get("track_id"),
+        "track_layout": comparison.get("track_layout"),
+        "session_uuid": comparison.get("session_uuid"),
+    }
+    previous = (_sidecar_state_cache.get(TOPIC_SESSION_REVIEW) or {}).get("payload") or {}
+    if previous.get("session_uuid") == payload["session_uuid"] and not previous.get("map_only"):
+        payload = {**previous, **payload, "map_only": False}
+    snapshot = _session_review_snapshot(payload)
+    _cache_sidecar_snapshot(snapshot)
+    _identity_cache_producers[TOPIC_SESSION_REVIEW] = producer
+    await _broadcast_external(snapshot, exclude=None)
+
+
+async def _refresh_map_corner_catalog(payload: dict[str, Any], producer: Any) -> None:
+    global _map_corner_catalog, _map_comparison_generation, _track_map_frame
+    from tools.ai_sidecar.track_map import build_track_map
+
+    catalog = {
+        "available": payload.get("corner_catalog_available") is True,
+        "corners": payload.get("corner_catalog"),
+        "combo": (
+            payload.get("corner_catalog_car_id"),
+            payload.get("corner_catalog_track_id"),
+            payload.get("corner_catalog_layout") or "",
+        ),
+        "reference_source": payload.get("corner_catalog_reference_source"),
+        "reference_lap_ms": payload.get("corner_catalog_reference_lap_ms"),
+    }
+    if catalog == _map_corner_catalog:
+        return
+    _map_corner_catalog = catalog
+    _map_comparison_generation += 1
+    if _map_reference_archive is not None:
+        map_payload = build_track_map(_map_reference_archive, catalog)
+        if map_payload is not None:
+            _track_map_frame = make_track_map(map_payload)
+            _cache_sidecar_snapshot(_track_map_frame)
+            await _broadcast_external(_track_map_frame, exclude=None)
+    if _map_latest_archive is not None:
+        await _publish_completed_lap_map(_map_latest_archive, producer)
+
+
+def _clear_completed_map_state() -> None:
+    global _map_comparison_generation, _map_corner_catalog, _map_latest_archive, _map_latest_lap_n
+    global _track_map_frame
+    _map_comparison_generation += 1
+    _map_corner_catalog = None
+    _map_latest_archive = None
+    _map_latest_lap_n = None
+    _sidecar_state_cache.pop(TOPIC_SESSION_REVIEW, None)
+    _sidecar_state_cache.pop("track.map", None)
+    if _map_reference_archive is not None:
+        from tools.ai_sidecar.track_map import build_track_map
+
+        payload = build_track_map(_map_reference_archive, {"available": False})
+        _track_map_frame = make_track_map(payload) if payload else None
+    else:
+        _track_map_frame = None
+
+
 def _session_review_error_snapshot(*, session: str, error: str) -> dict[str, Any]:
     return _session_review_snapshot(
         {
@@ -2626,6 +2755,29 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
         # downstream consumer (race status, replay cache, and live fan-out) so a
         # late subscriber sees the byte-equivalent resolved class.
         data = _enrich_session_snapshot(data)
+        previous_session = (_sidecar_state_cache.get("session") or {}).get("payload") or {}
+        next_session = data.get("payload") or {}
+        if previous_session and any(
+            previous_session.get(key) != next_session.get(key)
+            for key in ("car_id", "track_id", "session_index", "session_uuid")
+        ):
+            global \
+                _map_comparison_generation, \
+                _map_corner_catalog, \
+                _map_latest_archive, \
+                _map_latest_lap_n
+            _map_comparison_generation += 1
+            _map_corner_catalog = None
+            _map_latest_archive = None
+            _map_latest_lap_n = None
+            _sidecar_state_cache.pop(TOPIC_SESSION_REVIEW, None)
+            _clear_completed_map_state()
+            if _track_map_frame is not None:
+                await _broadcast_external(_track_map_frame, exclude=None)
+    if t == TYPE_STATE_SNAPSHOT and topic == "coaching.snapshot":
+        payload = data.get("payload")
+        if isinstance(payload, dict) and "corner_catalog_available" in payload:
+            await _refresh_map_corner_catalog(payload, websocket)
     # #531 Part D remainder: the Lua `delta` / `lap` topics feed the fused race-status state
     # (predicted lap = stint best + live gap) on their way through the relay. Read-only tap;
     # the frames still broadcast unchanged below.
@@ -2771,6 +2923,11 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     data.get("lapTimeMs"),
                     hints,
                 )
+                if data.get("archivePath") or isinstance(data.get("trace"), dict):
+                    map_task = asyncio.create_task(_publish_completed_lap_map(data, websocket))
+                    _background_tasks.add(map_task)
+                    pending_followups.add(map_task)
+                    map_task.add_done_callback(_followup_done)
                 # Issue #522 part 2: each completed lap of the driver's own folds into the
                 # observer's per-zone brake-mark EMA so the cue marks anchor on where THIS
                 # driver demonstrably brakes, not the synthetic reference's points. Background
@@ -2884,6 +3041,12 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
         # a dead session as current (Codex on PR #547).
         for cached_topic, producer in list(_identity_cache_producers.items()):
             if producer is websocket:
+                if cached_topic in ("session", TOPIC_SESSION_REVIEW):
+                    _clear_completed_map_state()
+                    if _track_map_frame is not None:
+                        _schedule_external_broadcast(
+                            _track_map_frame, label="track.map producer invalidated"
+                        )
                 _identity_cache_producers.pop(cached_topic, None)
                 _identity_cache_observed_monotonic.pop(cached_topic, None)
                 _sidecar_state_cache.pop(cached_topic, None)
@@ -3016,8 +3179,20 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
     # Same authority for the reference-derived track map (#531 Part F): a re-wire whose
     # reference cannot supply geometry — or that has no reference at all — must not leave
     # the previous track's map for late subscribers (Codex on PR #618).
-    global _track_map_frame
+    global _track_map_frame, _map_reference_archive, _map_comparison_generation
+    global _map_corner_catalog, _map_latest_archive, _map_latest_lap_n
     _track_map_frame = None
+    _map_reference_archive = None
+    _map_comparison_generation += 1
+    _map_corner_catalog = None
+    _map_latest_archive = None
+    _map_latest_lap_n = None
+    _sidecar_state_cache.pop(TOPIC_SESSION_REVIEW, None)
+    _sidecar_state_cache.pop("track.map", None)
+    _schedule_external_broadcast(
+        make_track_map({"source": "reference_unavailable", "outline": [], "corners": []}),
+        label="track.map reference invalidated",
+    )
     reference_path = voice_settings.reference_path
     bank_dir = voice_settings.bank_dir
     alien_line_path = voice_settings.alien_line_path or os.environ.get("AC_COPILOT_ALIEN_LINE")
@@ -3063,6 +3238,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
 
             with open(reference_path, encoding="utf-8") as fh:
                 archive = json.load(fh)
+            _map_reference_archive = archive
             # #531 Part F: the same archive carries real px/pz — build the MAP page's
             # geometry once, best-effort (a map failure must never disable the observer).
             # The stale frame was already cleared at the top of _wire_voice.
