@@ -12,7 +12,8 @@ relates_to:
 
 # Part B: native control provenance before MOZA cache import
 
-Implementation branch: `feat/issue-815-moza-qualification-import`. Part A research
+Implementation: [PR #834](https://github.com/agorokh/ac-copilot-trainer/pull/834),
+branch `feat/issue-815-moza-qualification-import`. Part A research
 remains in separate PR #818. Three implementation agents used GPT-6 Astra with
 Extra High effort as requested. Initial draft #833 used a branch prefix rejected
 by repository CI; the replacement carrier uses the existing accepted prefix.
@@ -51,8 +52,12 @@ The original post-lap evaluation JSON was not retained in the selected evidence;
 its exact optional join is tested synthetically, not claimed as real-file proof.
 Raw/personal traces and proof outputs remain gitignored under `.scratch/`.
 
-Focused tests pass; full repository CI and external exact-head review are pending
-at this implementation checkpoint. The PR records their final disposition.
+The 183 new synthetic cases pass. GitHub full `make ci-fast` on implementation
+commit `7ab8e4c` passed 4,513 tests with 15 skips and 87.07% coverage. The Windows
+run initially exposed incompatible global MCP and a missing C compiler; validation
+uses the existing MCP-v2 project venv plus an isolated Zig/Clang compiler bridge.
+All ten firmware harness tests then passed without source changes. External
+exact-head review and the final Windows result remain recorded on the PR.
 See [qualification/import contract](../../../../10_Development/16_MOZA_Qualification.md)
 for entrypoints and limitations.
 
