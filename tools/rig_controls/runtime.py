@@ -38,7 +38,12 @@ class Worker:
 
     def status(self):
         with self._lock:
-            return dict(self._status)
+            snapshot = dict(self._status)
+        if self._stop.is_set() and self._thread and self._thread.is_alive():
+            snapshot.update(
+                state="stopping", profile=None, error="shutdown pending; ownership retained"
+            )
+        return snapshot
 
     def tick(self, now: float):
         if now >= self.reload_at:
@@ -89,9 +94,13 @@ class Worker:
             self._thread = threading.Thread(target=self._run, name="GamePoint-keypad", daemon=True)
             self._thread.start()
 
-    def stop(self):
+    def stop(self) -> bool:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=2)
+            # The mutex belongs to the worker thread. Only its finally block may
+            # release it; another controller must not race a still-running worker.
+            return not self._thread.is_alive()
         else:
             self._close()
+            return True
