@@ -156,7 +156,24 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
 /* other pages */
 .sketch{flex:1;display:flex;gap:14px;min-height:0}
 .mapmain{flex:1;position:relative;padding:8px;display:flex;align-items:center;justify-content:center}
-.mside{width:300px;display:flex;flex-direction:column;padding:14px 16px}
+.mside{width:212px;flex:0 0 212px;display:flex;flex-direction:column;padding:8px 10px;overflow:auto}
+.mapmain{min-width:0}
+.maplegend{position:absolute;bottom:7px;left:9px;font:10px var(--fm);color:var(--mute);background:var(--graphite);padding:3px 5px}
+.maplegend span{margin-right:8px;white-space:nowrap}
+.maplabel{cursor:pointer;font:700 13px var(--fd)}
+.maplabel text{fill:var(--chalk);text-anchor:middle;dominant-baseline:central}
+.maplabel rect{fill:var(--carbon);stroke:var(--brass);stroke-width:1}
+.maplabel.current rect{stroke:var(--clear);stroke-width:3}
+.maplabel.next rect{stroke:var(--data);stroke-width:3}
+.maplabel.selected rect{fill:var(--edge)}
+.mapdetails{font:11px var(--fm);line-height:1.65;color:var(--mute);margin-top:5px}
+#p-map .mside{overflow:hidden}
+#p-map .crow{padding:4px 0}
+#mapSource{white-space:pre-line;font-size:10px;line-height:1.45;overflow-wrap:anywhere}
+#mapCompare{overflow-wrap:anywhere}
+.mapbutton{background:var(--raise);color:var(--chalk);border:1px solid var(--edge);font:11px var(--fd);padding:4px 7px;cursor:pointer}
+#p-map.collapsed .mside{width:42px;flex-basis:42px;padding:6px}
+#p-map.collapsed .mapinfo{display:none}
 .crow{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line)}
 .cnm{font-family:var(--fd);font-weight:600;font-size:14px;letter-spacing:.04em;text-transform:uppercase;color:var(--mute)}
 .cg{font-family:var(--fm);font-size:11px;color:var(--dim)}
@@ -229,7 +246,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
 
     <div class="board">
       <div class="elec panel pad"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
-        <div class="mh" style="margin-bottom:6px">Setup &middot; Electronics</div>
+        <div class="mh" style="margin-bottom:6px">Electronics <span id="electronicsState" style="font-size:9px;color:var(--dim)">capability waiting</span></div>
         <div class="etiles" id="etiles"><span class="ewait" id="ewait">SETUP DATA &mdash; WAITING</span></div>
       </div>
       <div class="tyres panel pad"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
@@ -271,18 +288,26 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
         <svg id="mapSvg" viewBox="0 0 620 380" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="display:none">
           <path id="mapTrough" d="" fill="none" stroke="#20242A" stroke-width="15" stroke-linejoin="round"></path>
           <path id="mapLine" d="" fill="none" stroke="#49B6C9" stroke-width="3" stroke-linejoin="round"></path>
+          <g id="mapPhases"></g><g id="mapOpportunity"></g>
           <rect id="mapStart" x="0" y="0" width="9" height="26" fill="#EEF1F3" style="display:none"></rect>
+          <path id="mapDirection" fill="none" stroke="#EEF1F3" stroke-width="2"></path>
+          <g id="mapLabels"></g>
           <circle id="mapDot" cx="0" cy="0" r="10" fill="#F23B2C" style="display:none"></circle>
           <circle id="mapDotRing" cx="0" cy="0" r="10" fill="none" stroke="#0B0C0D" stroke-width="2" style="display:none"></circle>
         </svg>
         <div class="nodata" id="mapEmpty">TRACK MAP &mdash; NO REFERENCE LOADED<br><span class="mono" style="font-size:12px;color:var(--faint);text-transform:none">spline position <span id="mapSpline">&mdash;</span></span></div>
+        <div class="maplegend"><span style="color:#F23B2C">REF brake</span><span style="color:#F4A52C">entry</span><span style="color:#C8983E">apex ●</span><span style="color:#2FBE6E">exit</span><span>car ● red · loss ◌ magenta</span></div>
       </div>
       <div class="panel mside"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <button class="mapbutton" id="mapToggle" aria-expanded="true">Details ◂</button><div class="mapinfo">
         <div style="display:flex;justify-content:space-between;align-items:baseline"><span class="lbl" style="font-size:11px" id="mapLap">lap &mdash;</span><span style="font-family:var(--fr);font-weight:700;font-size:24px;color:var(--chalk)" id="mapCur">&mdash;</span></div>
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:6px;border-bottom:1px solid var(--line);padding-bottom:12px"><span class="lbl" style="font-size:11px">delta</span><span style="font-family:var(--fr);font-weight:700;font-size:24px;color:var(--dim)" id="mapDelta">&mdash;</span></div>
-        <div class="mh" style="margin-top:12px">Ahead</div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:4px;border-bottom:1px solid var(--line);padding-bottom:4px"><span class="lbl" style="font-size:11px">delta</span><span style="font-family:var(--fr);font-weight:700;font-size:24px;color:var(--dim)" id="mapDelta">&mdash;</span></div>
+        <div class="mh" style="margin-top:6px">Ahead · reference</div>
         <div class="crow" style="border-bottom:0"><span class="cnm" id="mapNext">&mdash;</span><span class="cg" id="mapNextSub"></span></div>
         <div id="mapQueue"></div>
+        <div class="mapdetails" id="mapSource">Reference geometry unavailable</div>
+        <div class="mapdetails" id="mapCompare">Select a numbered corner</div>
+        </div>
       </div>
     </div>
   </div>
@@ -333,7 +358,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     carName: null, trackName: null, // setup.list.result identity
     carClass: "unknown",            // sidecar-enriched session identity (#534)
     sessionIdent: null,             // "car|track|session|uuid" key (re-request setup data on change)
-    sessionCarId: null, sessionTrackId: null, sessionUuid: null,
+    sessionCarId: null, sessionTrackId: null, sessionUuid: null, sessionTrackLayout: null,
                                       // identity parts for replay-frame gating (#618 R3, #622)
     spinners: null,                 // setup.spinner.list.result .spinners
     fuelAtLap: null, burns: [],     // client-side fuel-per-lap (median of last 3 lap diffs)
@@ -341,6 +366,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     race: null, raceAt: 0,          // race.status payload (sidecar fuel/predicted, #531 Part D)
     review: null,                   // session.review payload (COACH debrief, #531 Part F)
     map: null,                      // track.map payload (MAP geometry, #531 Part F)
+    mapComparison: null,
+    selectedCornerId: null,
   };
 
   // ---- helpers ---------------------------------------------------------------------------
@@ -409,6 +436,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     return null;
   }
   function stepsOf(sp) {
+    if (sp.range_known === false) return null;
     var mn = fin(sp.min), mx = fin(sp.max), st = fin(sp.step);
     if (mn === null || mx === null || st === null || st <= 0 || mx <= mn) return null;
     return Math.round((mx - mn) / st) + 1; // denominator: ((max-min)/step)+1
@@ -494,25 +522,38 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     // null = never answered (WAITING). An EMPTY list is real setup data — a car/setup with
     // no exposed spinner controls — and renders the greyed NOT FITTED core tiles instead
     // (Codex P2 on PR #547).
-    if (S.spinners === null) {
+    var live = S.wsOpen && S.tick && Date.now()-S.tickAt < STALE_MS;
+    setText("electronicsState", live ? (S.tick.setup_reset_allowed === true ? "setup permitted in pits" : String(S.tick.setup_lock_reason || "setup capability unavailable")) : "setup capability stale/unavailable");
+    if (S.spinners === null && !live) {
       var w = document.createElement("span");
       w.className = "ewait";
       w.textContent = "SETUP DATA — WAITING";
       host.appendChild(w);
       return;
     }
-    var sp = S.spinners;
+    var sp = S.spinners || [];
     var bias = findSpinner(sp, ["FRONT_BIAS", "BRAKE_BIAS"]);
     var tc = findSpinner(sp, ["TRACTION_CONTROL", "TC"]);
     var tcCut = findSpinner(sp, ["TRACTION_CONTROL_2", "TC2", "TRACTION_CONTROL_CUT"]);
     var abs = findSpinner(sp, ["ABS"]);
     var map = findSpinner(sp, ["ENGINE_MAP", "ECU_MAP", "ENGINE_MODE", "MAP"]);
     var boost = findSpinner(sp, ["TURBO", "BOOST", "TURBO_ADJUSTMENT"]);
-    host.appendChild(biasTile(bias));               // greyed when absent (core electronics)
-    tcTileRef = discreteTile("TC", tc, {});         // greyed when absent
+    // Setup rows are saved/setup metadata. Physics levels are their own source and expire
+    // with telemetry; intervention booleans only flash these actual levels, never fill them.
+    var source = live ? "LIVE CAR" : sp.some(function(r){return r.source === "saved_setup";}) ? "SAVED" : "SETUP";
+    if (live) {
+      bias = {value:fin(S.tick.brake_bias_pct),unit:"%"};
+      tc = S.tick.tc_modes === 0 ? null : {value:fin(S.tick.tc_level)};
+      abs = S.tick.abs_modes === 0 ? null : {value:fin(S.tick.abs_level)};
+    }
+    var biasView=biasTile(bias);
+    biasView.children[0].textContent="BRAKE BIAS · "+source;
+    if (live && fin(S.tick.brake_bias_pct) === null) biasView.querySelector(".bar").textContent="unavailable";
+    host.appendChild(biasView);
+    tcTileRef = discreteTile("TC · "+source, tc, {});
     host.appendChild(tcTileRef);
     if (tcCut) host.appendChild(discreteTile("TC CUT", tcCut, {})); // omitted when absent
-    absTileRef = discreteTile("ABS", abs, {});      // greyed when absent (GT2/GTE case)
+    absTileRef = discreteTile("ABS · "+source, abs, {});
     host.appendChild(absTileRef);
     if (map) {                                       // omitted when the car has no map spinner
       var t = discreteTile("MAP", map, {});
@@ -529,6 +570,14 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       host.appendChild(t);
     }
     if (boost) host.appendChild(discreteTile("BOOST", boost, {})); // no turbo -> no tile
+    host.setAttribute("data-adjustment-state", live && S.tick.setup_reset_allowed === true ? "permitted" : "locked");
+    host.setAttribute("title", live ? String(S.tick.setup_lock_reason || "Setup adjustments permitted in pits") : "Setup capability unavailable/stale");
+  }
+  var electronicsKey=null;
+  function renderLiveElectronics(live) {
+    var t=live ? S.tick : null;
+    var key=JSON.stringify(t ? [t.brake_bias_pct,t.tc_level,t.tc_modes,t.abs_level,t.abs_modes,t.setup_reset_allowed,t.setup_lock_reason] : ["stale"]);
+    if (key !== electronicsKey) {electronicsKey=key;renderElectronics();}
   }
   function carHasAbs() {
     return !!(S.spinners && findSpinner(S.spinners, ["ABS"]));
@@ -619,9 +668,9 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
   function renderCoach() {
     // Expire stale snapshots: a BRAKE takeover must never outlive its producer (Codex P2 on
     // PR #547) — beyond the freshness window, fall back to the quiet waiting lane.
-    var fresh = S.coach !== null && (Date.now() - S.coachAt) < STALE_MS;
-    var snap = fresh ? S.coach : null;
-    var braking = !!(snap && snap.kind === "brake");
+    var fresh = S.wsOpen && Date.now()-S.tickAt < STALE_MS && S.coach !== null && (Date.now() - S.coachAt) < STALE_MS;
+    var snap = fresh && S.coach.current_speed_available !== false ? S.coach : null;
+    var braking = !!(snap && snap.action === "BRAKE");
     $("lane-cruise").className = "lane" + (braking ? "" : " on");
     $("lane-brake").className = "lane" + (braking ? " on" : "");
     if (!snap) {
@@ -640,7 +689,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       }
       var dist = fin(snap.dist_to_brake_m);
       setText("bDist", dist !== null ? Math.round(dist) + " m" : "");
-      setText("bPrev", snap.corner_label ? String(snap.corner_label) : "");
+      setText("bPrev", snap.approach_corner_label ? "NEXT " + String(snap.approach_corner_label) : "");
       // TC/ABS pips: the ABS pip is suppressed on cars without the system.
       $("bPips").innerHTML = carHasAbs()
         ? 'ABS <span class="pip"></span>'
@@ -653,16 +702,20 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
         head = String(snap.primary_line || "DRIVE A LAP");
         sub = String(snap.secondary_line || "");
       } else {
-        head = snap.corner_label ? "NEXT ▸ " + String(snap.corner_label) : String(snap.primary_line || "");
-        var tgt = fin(snap.target_speed_kmh);
-        sub = tgt !== null ? "min " + Math.round(tgt) + " km/h" : String(snap.secondary_line || "");
-        micro = snap.corner_label && snap.primary_line ? String(snap.primary_line) : "";
+        var action = String(snap.action || "UNAVAILABLE").replace(/_/g, " ");
+        head = action + (snap.current_corner_label ? " · " + snap.current_corner_label : "");
+        var tgt = snap.target_available === true ? fin(snap.target_speed_kmh) : null;
+        var phase = snap.target_phase === "brake_onset" ? "BRAKE ONSET" : snap.target_phase === "entry" ? "ENTRY" : "UNAVAILABLE";
+        sub = snap.approach_corner_label ? "NEXT " + snap.approach_corner_label + " · " + phase
+          + (tgt !== null ? " " + Math.round(tgt) + " km/h" : " —") : "NEXT TARGET UNAVAILABLE";
+        micro = snap.current_target_available === true && fin(snap.current_target_speed_kmh) !== null
+          ? "CURRENT REF " + Math.round(snap.current_target_speed_kmh) + " km/h · " + String(snap.current_target_phase || "") : "";
       }
       // #531 Part E tier-2: a fresh actionable cue takes the single micro-cue slot (§8: at
       // most ONE CommandVerb-lite), then blanks after its dwell. Corner cues stay with the
       // snapshot line above; this slot carries the stint/shift verbs the snapshot never says.
       var cueMicro = microCueLabel();
-      if (cueMicro) micro = cueMicro;
+      if (cueMicro && (!snap.action || snap.action === "HOLD" || snap.action === "CLEAR")) micro = cueMicro;
       setText("cNext", head);
       setText("cSub", sub);
       setText("cMicro", micro);
@@ -744,10 +797,11 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
   // ---- MAP page (#531 Part F): real geometry from the sidecar track.map topic -------------
   var mapDirty = false;
   var mapGeom = null; // {pts:[[svgx,svgy]...], spline:[...], corners:[...]} in viewBox space
+  var mapComparisonKey = null;
   // Identity gate for replayed sidecar frames (#618 R3): reject only a KNOWN mismatch —
   // when either side lacks an id, accept (a fresh tablet with no session yet must still
   // render the replayed map/review, and single-identity rigs are the common case).
-  function identCompatible(carId, trackId, sessionUuid) {
+  function identCompatible(carId, trackId, sessionUuid, trackLayout) {
     if (carId && S.sessionCarId && String(carId) !== String(S.sessionCarId)) return false;
     // Track gate (#618 R4+R6): when BOTH ids are layout-qualified, compare in full — two
     // layouts of one venue have different geometry. Base-segment comparison applies only
@@ -761,6 +815,11 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     // This closes a reconnect replay from the prior same-car/track/session-index stint (#622).
     if (sessionUuid && S.sessionUuid
         && String(sessionUuid) !== String(S.sessionUuid)) return false;
+    // An explicit empty layout is the base circuit, not "unknown". New producers use bare
+    // venue ids plus this field, so the historical bare/full-id fallback must not hide a
+    // known named-layout mismatch. Omitted/null legacy layout preserves the older gate.
+    if (typeof trackLayout === "string" && S.sessionTrackLayout !== null
+        && trackLayout !== S.sessionTrackLayout) return false;
     return true;
   }
   function resetMapDom() {
@@ -773,6 +832,11 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     var q = $("mapQueue");
     q.innerHTML = "";
     q._key = null;
+    S.mapComparison = null; S.selectedCornerId = null;
+    mapComparisonKey = null;
+    $("mapLabels").innerHTML = ""; $("mapPhases").innerHTML = ""; $("mapOpportunity").innerHTML = "";
+    setText("mapSource", "Reference geometry unavailable");
+    setText("mapCompare", "Comparison unavailable");
   }
   function buildMapGeometry() {
     var m = S.map;
@@ -791,7 +855,9 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];
       if (p[1] < minZ) minZ = p[1]; if (p[1] > maxZ) maxZ = p[1];
     });
-    var pad = 30, W = 620, H = 380;
+    var pad = 38, W = Math.max(100, $("mapSvg").parentNode.clientWidth - 16);
+    var H = Math.max(100, $("mapSvg").parentNode.clientHeight - 16);
+    $("mapSvg").setAttribute("viewBox", "0 0 " + W + " " + H);
     var sx = (W - 2 * pad) / Math.max(1, maxX - minX);
     var sy = (H - 2 * pad) / Math.max(1, maxZ - minZ);
     var sc = Math.min(sx, sy);
@@ -799,7 +865,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     var pts = outline.map(function (p) {
       return [ox + (p[0] - minX) * sc, oy + (p[1] - minZ) * sc];
     });
-    mapGeom = { pts: pts, spline: m.spline || [], corners: Array.isArray(m.corners) ? m.corners : [] };
+    mapGeom = { pts: pts, spline: m.spline || [], corners: Array.isArray(m.corners) ? m.corners : [], width:W, height:H };
     var d = "M" + pts.map(function (p) { return p[0].toFixed(1) + "," + p[1].toFixed(1); }).join(" L") + " Z";
     $("mapTrough").setAttribute("d", d);
     $("mapLine").setAttribute("d", d);
@@ -808,9 +874,124 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     st.setAttribute("x", (s0[0] - 4.5).toFixed(1));
     st.setAttribute("y", (s0[1] - 13).toFixed(1));
     st.style.display = "";
+    drawMapInstruments();
     $("mapSvg").style.display = "";
     $("mapEmpty").style.display = "none";
   }
+  function svgElement(tag, attrs, parent) {
+    var el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    Object.keys(attrs).forEach(function (key) { el.setAttribute(key, attrs[key]); });
+    if (parent) parent.appendChild(el);
+    return el;
+  }
+  function mapPhasePath(span) {
+    if (!Array.isArray(span) || span.length !== 2 || fin(span[0]) === null || fin(span[1]) === null) return "";
+    var a = span[0], b = span[1];
+    if (a < 0 || a > 1 || b < 0 || b > 1) return "";
+    var g = mapGeom, points = [mapPointAt(a)];
+    // A real interval crossing S/F is split in spline order. Never connect a fabricated chord
+    // through the circuit interior or treat wrap as an empty segment.
+    var collect = function (lo, hi) {
+      g.spline.forEach(function (s, i) { if (s > lo && s < hi) points.push(g.pts[i]); });
+    };
+    if (b < a) { collect(a, 1); points.push(g.pts[g.pts.length-1], g.pts[0]); collect(0, b); }
+    else collect(a, b);
+    points.push(mapPointAt(b));
+    return "M" + points.filter(Boolean).map(function (p) { return p[0].toFixed(1) + "," + p[1].toFixed(1); }).join(" L");
+  }
+  function drawMapInstruments() {
+    var g = mapGeom, labels = $("mapLabels"), phases = $("mapPhases");
+    labels.innerHTML = ""; phases.innerHTML = "";
+    mapComparisonKey=null;
+    var occupied = [], colours = {braking:"#F23B2C",entry:"#F4A52C",apex:"#C8983E",exit:"#2FBE6E"};
+    g.corners.forEach(function (c) {
+      Object.keys(colours).forEach(function (phase) {
+        var span = c.phases && c.phases[phase];
+        if (!span) return;
+        if (phase === "apex") {
+          var ap = mapPointAt(span[0]);
+          if (ap) svgElement("circle", {cx:ap[0],cy:ap[1],r:5,fill:colours[phase]}, phases);
+        } else {
+          var d = mapPhasePath(span);
+          if (d) svgElement("path", {d:d,fill:"none",stroke:colours[phase],"stroke-width":6}, phases);
+        }
+      });
+      var p = mapPointAt(c.spline);
+      if (!p || c.id === undefined || !c.label) return;
+      var chosen = null, best = null, bestScore = Infinity;
+      for (var radius = 24; radius <= 120 && !chosen; radius += 20) {
+        for (var j = 0; j < 16; j++) {
+          var angle = j * Math.PI / 8;
+          var x = Math.max(21, Math.min(g.width-21, p[0]+Math.cos(angle)*radius));
+          var y = Math.max(15, Math.min(g.height-29, p[1]+Math.sin(angle)*radius));
+          var score = occupied.reduce(function (n, q) {return n + (Math.abs(q[0]-x)<44 && Math.abs(q[1]-y)<28 ? 1:0);}, 0);
+          if (score < bestScore) { bestScore=score; best=[x,y]; }
+          if (!score) {chosen=[x,y]; break;}
+        }
+      }
+      var lp = chosen || best; occupied.push(lp);
+      svgElement("line", {x1:p[0],y1:p[1],x2:lp[0],y2:lp[1],stroke:"#79808A","stroke-width":1}, labels);
+      var group = svgElement("g", {class:"maplabel","data-corner-id":c.id}, labels);
+      svgElement("rect", {x:lp[0]-18,y:lp[1]-11,width:36,height:22,rx:2}, group);
+      var text = svgElement("text", {x:lp[0],y:lp[1]}, group); text.textContent=String(c.label);
+      group.addEventListener("click", function () {S.selectedCornerId=c.id; renderMapComparison(S.wsOpen && Date.now()-S.tickAt < STALE_MS);});
+    });
+    var start = mapPointAt(0), direction = mapPointAt(0.025), before = mapPointAt(0.01);
+    if (direction && before) {
+      var angle = Math.atan2(direction[1]-before[1], direction[0]-before[0]);
+      var h1=[direction[0]-12*Math.cos(angle-.5),direction[1]-12*Math.sin(angle-.5)];
+      var h2=[direction[0]-12*Math.cos(angle+.5),direction[1]-12*Math.sin(angle+.5)];
+      $("mapDirection").setAttribute("d", "M"+h1.join(",")+" L"+direction.join(",")+" L"+h2.join(","));
+    }
+    if (start) {var sf=svgElement("text", {x:start[0]+10,y:start[1]-15,fill:"#EEF1F3","font-size":11}, labels);sf.textContent="S/F →";}
+    setText("mapSource", "REF " + String(S.map.reference_source || "unknown") + " · " + fmtLap(fin(S.map.lap_ms))
+      + "\nCorners " + (S.map.corner_catalog_source === "lua_active_reference" ? "Lua active" : S.map.corner_catalog_source === "archive_lua_corners" ? "archive Lua" : "unavailable")
+      + " · " + fmtLap(fin(S.map.corner_catalog_reference_lap_ms))
+      + "\nRef id " + String(S.map.lap_uuid || S.map.reference_id || "unknown").slice(0,8));
+  }
+  function renderMapComparison(live) {
+    var comparison = S.mapComparison, map = S.map;
+    var compatible = live && comparison && comparison.available === true && map
+      && comparison.reference_id === map.reference_id && S.sessionUuid
+      && comparison.corner_catalog_id === map.corner_catalog_id
+      && comparison.session_uuid === S.sessionUuid
+      && comparison.car_id === S.sessionCarId && comparison.track_id === String(S.sessionTrackId || "").split("/")[0]
+      && String(comparison.track_layout || "") === String(S.sessionTrackLayout || "");
+    var key=String(compatible)+"|"+String(S.selectedCornerId);
+    if (key === mapComparisonKey) return;
+    mapComparisonKey=key;
+    var opportunity = $("mapOpportunity"); opportunity.innerHTML="";
+    if (!compatible) {
+      setText("mapCompare", "Comparison unavailable · " + (comparison && comparison.reason || "complete a valid lap with compatible reference"));
+      return;
+    }
+    var rows = Array.isArray(comparison.corners) ? comparison.corners : [];
+    var id = S.selectedCornerId;
+    if (id === null) id=comparison.largest_opportunity_id;
+    var row = rows.filter(function (r) {return r.id === id;})[0];
+    var largest = rows.filter(function (r) {return r.id === comparison.largest_opportunity_id;})[0];
+    if (largest && fin(largest.time_loss_s) !== null && largest.time_loss_s > 0) {
+      var path=mapPhasePath([largest.entry_spline,largest.exit_spline]);
+      if (path) svgElement("path", {d:path,fill:"none",stroke:"#D979CB","stroke-width":11,"stroke-dasharray":"4 5",opacity:.85}, opportunity);
+    }
+    if (!row) {setText("mapCompare", "Select T label · lap " + String(comparison.lap_n === null ? "—" : comparison.lap_n)); return;}
+    var speed=function(v){return fin(v) === null ? "—" : v.toFixed(1);};
+    var signed=function(v, unit, decimals){return fin(v) === null ? "unavailable" : (v>0?"+":"")+v.toFixed(decimals)+unit;};
+    $("mapCompare").innerHTML = '<span style="color:var(--chalk)">'+esc(row.label)+" · LAP "+esc(String(comparison.lap_n === null ? "—" : comparison.lap_n))+'</span><br>'
+      +"Min "+speed(row.min_speed_kmh)+" / ref "+speed(row.reference_min_speed_kmh)+" km/h<br>"
+      +"Apex "+speed(row.apex_speed_kmh)+" / ref "+speed(row.reference_apex_speed_kmh)+" km/h<br>"
+      +"Brake "+signed(row.brake_onset_delta_m," m",1)+" (+later)<br>"
+      +"Time "+signed(row.time_loss_s," s",3)+" (+lost)<br>"
+      +'<span style="color:var(--dim)">'+(row.phase === "unavailable" ? "Phase boundaries unavailable" : "Measured corner window")
+      +"<br>ref "+esc(String(comparison.reference_lap_uuid || comparison.reference_id).slice(0,8))
+      +" · lap "+esc(String(comparison.lap_uuid || "unknown").slice(0,8))+"</span>";
+  }
+  $("mapToggle").addEventListener("click", function () {
+    var closed=$("p-map").classList.toggle("collapsed");
+    $("mapToggle").setAttribute("aria-expanded", !closed);
+    $("mapToggle").textContent=closed?"▸":"Details ◂"; mapDirty=true;
+  });
+  window.addEventListener("resize", function () {mapDirty=true;});
   function mapPointAt(spline) {
     // Look up by the STORED per-point spline (binary search): real traces sample by update
     // index, so points are denser in slow corners — uniform indexing would drift the dot on
@@ -831,6 +1012,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     return g.pts[lo];
   }
   function renderMapPage(liveTick, spline) {
+    if (!$("mapSvg").parentNode.clientWidth) return; // build against the visible canvas bounds
     if (mapDirty) { mapDirty = false; buildMapGeometry(); }
     var g = mapGeom;
     if (!g) return; // honest empty state stays
@@ -845,6 +1027,15 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     } else {
       dot.style.display = "none"; ring.style.display = "none";
     }
+    var snap = liveTick && S.coach && S.coach.current_speed_available !== false && Date.now()-S.coachAt < STALE_MS ? S.coach : null;
+    var labels=$("mapLabels").querySelectorAll(".maplabel");
+    for (var j=0;j<labels.length;j++) {
+      var id=labels[j].getAttribute("data-corner-id");
+      var cls="maplabel"+(snap && snap.current_corner_id === id ? " current":"")
+        +(snap && snap.approach_corner_id === id ? " next":"")+(S.selectedCornerId === id ? " selected":"");
+      if (labels[j].getAttribute("class") !== cls) labels[j].setAttribute("class",cls);
+    }
+    renderMapComparison(liveTick);
     // Pace-note queue: the next up-to-3 coach-aligned corners ahead of the LIVE spline.
     // Without a live position the "ahead" ordering would be fabricated from spline 0 —
     // blank the queue instead, matching the hidden dot (#618 R11).
@@ -865,7 +1056,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     var html = "";
     ahead.forEach(function (c, i) {
       var note = (fin(c.gear) !== null ? ordinalGear(c.gear) : "")
-        + (fin(c.min_speed_kmh) !== null ? (fin(c.gear) !== null ? " · " : "") + Math.round(c.min_speed_kmh) : "");
+        + (fin(c.min_speed_kmh) !== null ? (fin(c.gear) !== null ? " · " : "") + "min " + Math.round(c.min_speed_kmh) + " km/h" : "");
       html += '<div class="crow"' + (i === 2 ? ' style="border-bottom:0"' : "")
         + '><span style="display:flex;gap:9px;align-items:center"><span class="cbadge">' + esc(String(c.label || "")) + "</span></span>"
         + '<span class="cg">' + esc(note || "—") + "</span></div>";
@@ -936,6 +1127,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     if (lt.textContent !== linkTxt) { lt.textContent = linkTxt; lt.className = "linkw" + linkCls; }
 
     renderRibbon(live ? t : null);
+    if (!live && S.tickAt) {S.mapComparison=null;mapComparisonKey=null;}
 
     // centre spine
     setText("spd", live && fin(t.speed_kmh) !== null ? String(Math.round(t.speed_kmh)) : "—");
@@ -1045,6 +1237,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
 
     renderTyres();
     renderCoach();
+    renderLiveElectronics(live);
     // A stale tick must not leave a system latched "intervening" (same freshness contract as the
     // delta/coach lanes) — a dead producer reverts both boards to steady brass.
     flashTile(tcTileRef, live ? t.tc_active === true : false);
@@ -1061,9 +1254,10 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     renderCoachPage();
     // Same freshness gate as the RACE lane: MAP must not keep advertising a corner whose
     // producer stopped (Codex on PR #547).
-    var snap = S.coach !== null && (Date.now() - S.coachAt) < STALE_MS ? S.coach : null;
-    setText("mapNext", snap && snap.corner_label ? String(snap.corner_label) : "—");
-    setText("mapNextSub", snap && fin(snap.target_speed_kmh) !== null ? "min " + Math.round(snap.target_speed_kmh) : "");
+    var snap = live && S.coach !== null && S.coach.current_speed_available !== false && (Date.now() - S.coachAt) < STALE_MS ? S.coach : null;
+    setText("mapNext", snap && snap.approach_corner_label ? String(snap.approach_corner_label) : "—");
+    setText("mapNextSub", snap && snap.target_available === true && fin(snap.target_speed_kmh) !== null
+      ? (snap.target_phase === "brake_onset" ? "brake " : "entry ") + Math.round(snap.target_speed_kmh) + " km/h" : "");
     setText("dbLast", S.lap ? fmtLap(fin(S.lap.last_lap_ms)) : "—");
     setText("dbBest", S.lap ? fmtLap(fin(S.lap.best_lap_ms)) : "—");
     setText("dbLaps", S.lap && fin(S.lap.laps_completed) !== null ? String(S.lap.laps_completed) : "—");
@@ -1093,6 +1287,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     for (var i = 0; i < pages.length; i++) pages[i].className = "page" + (pages[i].id === "p-" + p ? " on" : "");
     var dots = document.querySelectorAll(".pd");
     for (var j = 0; j < dots.length; j++) dots[j].className = "pd" + (dots[j].getAttribute("data-p") === p ? " on" : "");
+    if (p === "map") {mapDirty=true;mapComparisonKey=null;}
   }
   (function wirePages() {
     var dots = document.querySelectorAll(".pd");
@@ -1187,11 +1382,14 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
           case "session.review":
             // Late-subscriber replay can deliver a PREVIOUS identity's cached review after
             // the session snapshot (#618 R3) — accept only when identity-compatible.
-            S.review = identCompatible(p.car_id, p.track_id, p.session_uuid) ? p : null;
-            reviewDirty = true;
+            var reviewCompatible=identCompatible(p.car_id, p.track_id, p.session_uuid,p.track_layout);
+            S.mapComparison=reviewCompatible ? p.map_comparison || null : null;
+            mapComparisonKey=null;
+            if (!p.map_only) {S.review=reviewCompatible ? p : null; reviewDirty=true;}
             break;
           case "track.map":
-            if (identCompatible(p.car_id, p.track_id, p.session_uuid)) {
+            if (S.map && (S.map.reference_id !== p.reference_id || S.map.corner_catalog_id !== p.corner_catalog_id)) {S.mapComparison=null;mapComparisonKey=null;}
+            if (identCompatible(p.car_id, p.track_id, p.session_uuid,p.track_layout)) {
               S.map = p; mapDirty = true;
             } else {
               // Full DOM reset on rejection (#618 R5): a dirty-flag alone leaves the
@@ -1209,7 +1407,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
             // re-request setup data (Codex P2 on PR #547), not just a car swap.
             var ident = String(p.car_id || "") + "|" + String(p.track_id || "")
               + "|" + String(p.session_index === undefined ? "" : p.session_index)
-              + "|" + String(p.session_uuid || "");
+              + "|" + String(p.session_uuid || "") + "|" + String(p.track_layout || p.layout || "");
             // Car/track delta computed BEFORE the identity parts update: a session_index-only
             // transition (practice→quali) must not drop the map (#618 R5 — track.map is only
             // replayed on subscribe and would stay blank for the rest of the connection).
@@ -1218,20 +1416,23 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
             // session_index-only transition (same full track id) still keeps it.
             var carTrackChanged = S.sessionIdent !== null && (
               String(S.sessionCarId || "") !== String(p.car_id || "")
-              || String(S.sessionTrackId || "") !== String(p.track_id || ""));
+              || String(S.sessionTrackId || "") !== String(p.track_id || "")
+              || String(S.sessionTrackLayout || "") !== String(p.track_layout || p.layout || String(p.track_id || "").split("/").slice(1).join("/") || ""));
             S.sessionCarId = p.car_id || null;
             S.sessionTrackId = p.track_id || null;
             S.sessionUuid = p.session_uuid || null;
+            S.sessionTrackLayout = typeof p.track_layout === "string" ? p.track_layout : typeof p.layout === "string" ? p.layout
+              : S.sessionTrackId ? String(S.sessionTrackId).split("/").slice(1).join("/") : null;
             S.carClass = p.car_class || "road";
             document.body.setAttribute("data-car-class", S.carClass);
             renderHeader();
             // Replayed cached frames may have arrived BEFORE this session snapshot — drop
             // any that a known identity now contradicts (#618 R3).
             if (S.review && !identCompatible(
-                S.review.car_id, S.review.track_id, S.review.session_uuid)) {
+                S.review.car_id, S.review.track_id, S.review.session_uuid,S.review.track_layout)) {
               S.review = null; reviewDirty = true;
             }
-            if (S.map && !identCompatible(S.map.car_id, S.map.track_id, S.map.session_uuid)) {
+            if (S.map && !identCompatible(S.map.car_id, S.map.track_id, S.map.session_uuid,S.map.track_layout)) {
               S.map = null; resetMapDom();
             }
             if (ident !== S.sessionIdent) {
@@ -1242,6 +1443,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               S.burns = []; // burn is per car AND per track length (Codex on PR #547)
               S.race = null; S.raceAt = 0; // sidecar race.status is per identity too (#531)
               if (hadIdentity) {
+                S.coach=null; S.coachAt=0; S.tick=null; S.tickAt=0;
+                S.mapComparison=null; mapComparisonKey=null;
                 // A REAL identity switch drops the debrief — the new session must not
                 // render the previous one's report (Codex #618 R2). The FIRST session
                 // frame must NOT (#618 R4): the subscribe replay delivers
@@ -1284,6 +1487,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               // live cues, not stay pinned to the previous stint's review (#618 R4). The
               // MAP geometry survives: it is reference-tied, not stint-tied.
               S.review = null; reviewDirty = true;
+              S.mapComparison=null;mapComparisonKey=null;S.coach=null;S.coachAt=0;
               S.lastCue = null; S.cueAt = 0; // and the stale cue must not refill it (R6)
               requestSetupData(ws); // pit work may have changed the setup during the reset
             }
@@ -1324,6 +1528,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     };
     ws.onclose = function () {
       S.wsOpen = false;
+      S.tick=null;S.tickAt=0;S.coach=null;S.coachAt=0;
+      S.mapComparison=null;mapComparisonKey=null;S.lastCue=null;S.cueAt=0;
       if (setupPollTimer) { clearInterval(setupPollTimer); setupPollTimer = null; }
       setTimeout(connect, reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 2, 10000);

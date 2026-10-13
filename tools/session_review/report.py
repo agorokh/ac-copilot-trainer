@@ -632,6 +632,12 @@ def build_session_report(
         reference=reference,
         reference_comparison_enabled=reference_selection.requested_source != "none",
     )
+    from tools.ai_sidecar.track_map import build_corner_comparison
+
+    latest_valid = max(_valid_laps(selected), key=_lap_sort_key)
+    map_comparison = build_corner_comparison(
+        latest_valid.record, reference.record if reference else None
+    )
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "generated_at": generated_at or _iso_now(),
@@ -643,6 +649,7 @@ def build_session_report(
         "next_session_prep": prep,
         "history": history,
         "comparison": comparison,
+        "map_comparison": map_comparison,
         "share": {
             "formats": ["html", "markdown", "json"],
             "self_contained_html": True,

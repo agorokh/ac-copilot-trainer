@@ -82,6 +82,43 @@ local function finiteSpeed(value)
   return nil
 end
 
+--- Canonical labels/bounds come directly from the active Lua segment graph.
+--- Reject the whole catalog on ambiguity: partial catalogs renumber a track.
+function M.buildCornerCatalog(segments)
+  if type(segments) ~= "table" then return nil, false, "segments unavailable" end
+  local rows, seen = {}, {}
+  local count = 0
+  for key in pairs(segments) do
+    if type(key) ~= "number" or key < 1 or key ~= math.floor(key) or key > #segments then
+      return nil, false, "malformed canonical segment array"
+    end
+    count = count + 1
+  end
+  if count ~= #segments then return nil, false, "malformed canonical segment array" end
+  local function spline(n)
+    return type(n) == "number" and n == n and n >= 0 and n <= 1
+  end
+  for _, seg in ipairs(segments) do
+    if type(seg) == "table" and seg.kind == "corner" then
+      local id = seg.label
+      if type(id) ~= "string" or #id == 0 or #id > 32
+          or not id:match("^[%w _%-]+$") or seen[id]
+          or not spline(seg.s0) or not spline(seg.s1) or seg.s0 == seg.s1
+          or not spline(seg.brakeSpline) then
+        return nil, false, "malformed canonical corner"
+      end
+      if #rows >= 32 then return nil, false, "canonical corner limit exceeded" end
+      seen[id] = true
+      rows[#rows + 1] = { corner_id = id, s0 = seg.s0, s1 = seg.s1,
+        brake_spline = seg.brakeSpline }
+    elseif type(seg) ~= "table" then
+      return nil, false, "malformed canonical segment"
+    end
+  end
+  if #rows == 0 then return nil, false, "canonical corners unavailable" end
+  return rows, true, "active Lua reference segments"
+end
+
 --- Forward spline distance (always positive, in [0, 1)).
 local function forwardSplineDelta(carSp, targetSp)
   local d = (targetSp - carSp) % 1
@@ -394,7 +431,11 @@ function M.tick(opts)
     shiftZonePct    = opts.shiftZonePct,
     redZonePct      = opts.redZonePct,
     shiftProvenance = opts.shiftProvenance,
+    referenceSource = opts.referenceSource,
+    referenceLapMs = opts.referenceLapMs,
   }
+  view.cornerCatalog, view.cornerCatalogAvailable, view.cornerCatalogReason =
+    M.buildCornerCatalog(segments)
 
   if distToBrakeM and distToBrakeM <= approachM then
     view.progressPct = clamp(1 - (distToBrakeM / approachM), 0, 1)

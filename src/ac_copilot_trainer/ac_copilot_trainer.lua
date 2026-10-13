@@ -2332,6 +2332,8 @@ function script.update(dt)
       bestSortedTrace = state.bestSortedTrace,
       brakingPoints = state.brakingPoints and state.brakingPoints.best or nil,
       segments = state.trackSegments,
+      referenceSource = state.activeReferenceSource,
+      referenceLapMs = state.activeReferenceLapMs,
       trackLengthM = tlM,
       approachMeters = approachM,
       dt = dt,

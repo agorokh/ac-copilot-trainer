@@ -4,9 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AC Copilot — GT dashboard v3 (car-adaptive, setup-aware)</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@500;600;700;800&family=Saira:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+@font-face{font-family:"Saira Semi Condensed";src:url("../../../../tools/ai_sidecar/dash/web/fonts/SairaSemiCondensed-Bold.ttf");font-weight:600 900}
+@font-face{font-family:"Saira";src:url("../../../../tools/ai_sidecar/dash/web/fonts/Saira-Bold.ttf");font-weight:400 700}
+@font-face{font-family:"Spline Sans Mono";src:url("../../../../tools/ai_sidecar/dash/web/fonts/SplineSansMono-Medium.ttf");font-weight:400 500}
 :root{--carbon:#0B0C0D;--graphite:#141618;--slab:#191C1F;--raise:#20242A;--edge:#2A2F35;--line:rgba(255,255,255,.07);--line2:rgba(255,255,255,.16);--chalk:#EEF1F3;--mute:#9BA1A8;--dim:#79808A;--faint:#4A4E55;--brass:#C8983E;--brake:#F23B2C;--lift:#F4A52C;--clear:#2FBE6E;--data:#49B6C9;--fd:"Saira Semi Condensed","Arial Narrow",system-ui,sans-serif;--fr:"Saira",system-ui,sans-serif;--fm:"Spline Sans Mono",ui-monospace,Menlo,monospace}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#000;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;font-family:var(--fr)}
@@ -107,7 +108,10 @@ body{background:#000;min-height:100vh;display:flex;flex-direction:column;align-i
 /* other pages */
 .sketch{flex:1;display:flex;gap:14px}
 .mapmain{flex:1;position:relative;padding:8px}
-.mside{width:300px;display:flex;flex-direction:column;padding:14px 16px}
+.mside{width:212px;flex:0 0 212px;display:flex;flex-direction:column;padding:8px 10px;overflow:auto}
+#p-map.collapsed .mside{width:42px;flex-basis:42px;padding:6px}
+#p-map.collapsed .mapinfo{display:none}
+.mapbutton{background:var(--raise);color:var(--chalk);border:1px solid var(--edge);font:11px var(--fd);padding:4px 7px;cursor:pointer}
 .crow{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line)}
 .cbadge{font-family:var(--fd);font-weight:700;font-size:12px;color:var(--brass);border:1px solid var(--edge);padding:1px 6px}
 .cnm{font-family:var(--fd);font-weight:600;font-size:14px;letter-spacing:.04em;text-transform:uppercase;color:var(--mute)}
@@ -212,22 +216,38 @@ body{background:#000;min-height:100vh;display:flex;flex-direction:column;align-i
   <div class="page" id="p-map">
     <div class="sketch">
       <div class="panel mapmain"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
-        <svg viewBox="0 0 620 380" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
+        <svg viewBox="0 0 620 440" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
           <path d="M80,300 C60,190 150,110 260,112 C340,113 360,158 430,158 C520,158 545,215 500,275 C470,315 520,338 495,372" fill="none" stroke="#20242A" stroke-width="15" stroke-linejoin="round"/>
           <path d="M80,300 C60,190 150,110 260,112 C340,113 360,158 430,158 C520,158 545,215 500,275 C470,315 520,338 495,372 C470,405 300,398 235,384 C150,366 92,372 80,300 Z" fill="none" stroke="#20242A" stroke-width="15" stroke-linejoin="round"/>
           <path d="M80,300 C60,190 150,110 260,112 C340,113 360,158 430,158 C520,158 545,215 500,275 C470,315 520,338 495,372 C470,405 300,398 235,384 C150,366 92,372 80,300 Z" fill="none" stroke="#49B6C9" stroke-width="3" stroke-linejoin="round"/>
-          <path d="M260,112 C340,113 360,158 430,158" fill="none" stroke="#C8983E" stroke-width="5"/>
+          <path d="M150,130 L260,112" fill="none" stroke="#F23B2C" stroke-width="6"/>
+          <path d="M260,112 C340,113 360,158 430,158" fill="none" stroke="#F4A52C" stroke-width="6"/>
+          <circle cx="430" cy="158" r="5" fill="#C8983E"/>
+          <path d="M430,158 C520,158 545,215 500,275" fill="none" stroke="#2FBE6E" stroke-width="6"/>
+          <path d="M260,112 C340,113 360,158 430,158 C520,158 545,215 500,275" fill="none" stroke="#D979CB" stroke-width="11" stroke-dasharray="4 5"/>
+          <g font-family="Saira Semi Condensed" font-size="14" fill="#EEF1F3" text-anchor="middle">
+            <path d="M260,112 L260,86 M430,158 L438,134 M500,275 L530,287 M235,384 L235,413" stroke="#79808A"/>
+            <rect x="242" y="65" width="36" height="22" fill="#0B0C0D" stroke="#C8983E"/><text x="260" y="81">T4</text>
+            <rect x="420" y="111" width="36" height="22" fill="#0B0C0D" stroke="#2FBE6E" stroke-width="3"/><text x="438" y="127">T5</text>
+            <rect x="513" y="276" width="36" height="22" fill="#0B0C0D" stroke="#49B6C9" stroke-width="3"/><text x="531" y="292">T6</text>
+            <rect x="217" y="402" width="36" height="22" fill="#0B0C0D" stroke="#C8983E"/><text x="235" y="418">T7</text>
+            <text x="105" y="284">S/F →</text>
+          </g>
           <circle cx="430" cy="158" r="10" fill="#F23B2C"/><circle cx="430" cy="158" r="10" fill="none" stroke="#0B0C0D" stroke-width="2"/>
           <rect x="76" y="286" width="9" height="26" fill="#EEF1F3"/>
         </svg>
+        <div style="position:absolute;bottom:7px;left:9px;font:10px var(--fm);color:var(--mute)">REF brake · entry · apex ● · exit | car ● red · loss ◌ magenta</div>
       </div>
       <div class="panel mside"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <button class="mapbutton" onclick="document.getElementById('p-map').classList.toggle('collapsed')">Details ◂</button><div class="mapinfo">
         <div style="display:flex;justify-content:space-between;align-items:baseline"><span class="lbl" style="font-size:11px">lap 6 · S2</span><span style="font-family:var(--fr);font-weight:700;font-size:24px;color:var(--chalk)">1:02.41</span></div>
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:6px;border-bottom:1px solid var(--line);padding-bottom:12px"><span class="lbl" style="font-size:11px">delta</span><span style="font-family:var(--fr);font-weight:700;font-size:24px;color:var(--clear)">−0.125</span></div>
         <div class="mh" style="margin-top:12px">Ahead</div>
         <div class="crow"><span style="display:flex;gap:9px;align-items:center"><span class="cbadge">T5</span><span class="cnm">LESMO 2</span></span><span class="cg">3rd · 118</span></div>
         <div class="crow"><span style="display:flex;gap:9px;align-items:center"><span class="cbadge">T6</span><span class="cnm">CURVONE</span></span><span class="cg">6th · flat</span></div>
         <div class="crow" style="border-bottom:0"><span style="display:flex;gap:9px;align-items:center"><span class="cbadge">T7</span><span class="cnm">CHICANE</span></span><span class="cg">2nd · 96</span></div>
+        <div class="mono" style="font-size:11px;line-height:1.65;color:var(--mute);margin-top:8px">Illustrative reference geometry<br>T5 · latest valid LAP 5<br>Min 112 / ref 118 km/h<br>Apex 113 / ref 118 km/h<br>Brake +3.2 m (+later)<br>Time +0.240 s (+lost)<br>Measured corner window<br>ref demo-ref · lap demo-lap<br>Unavailable = —</div>
+        </div>
       </div>
     </div>
   </div>
@@ -294,7 +314,7 @@ body{background:#000;min-height:100vh;display:flex;flex-direction:column;align-i
     document.querySelectorAll('[data-car]').forEach(function(b){b.classList.toggle('on',b.dataset.car===id)});}
   function hasABS(){return CARS[curCarId].elec.some(function(e){return e.k==='ABS'&&!e.absent;});}
   function coachHTML(m){
-    if(m==='cruise')return '<span class="next">NEXT ▸ LESMO 2 · T5</span><span class="nsub">3rd · min 118 km/h</span><span class="micro" style="color:var(--lift);margin-left:auto">BRAKE 5 M LATER · T4</span><span class="queue" style="margin-left:16px">T6 CURVONE · T7 CHICANE</span>';
+    if(m==='cruise')return '<span class="next">HOLD · T4</span><span class="nsub">NEXT T5 · BRAKE ONSET 118 km/h</span><span class="queue" style="margin-left:auto">T6 · T7</span>';
     var absPip=hasABS()?'ABS <span class="pip" style="background:var(--raise)"></span>':'<span class="fr" style="font-size:11px;color:var(--faint)">no ABS</span>';
     return '<span class="cv">BRAKE ▸</span><div class="bseg" id="bseg"></div><span class="nsub" style="color:var(--chalk);font-size:15px">42 m</span><span class="queue" style="margin-left:auto">prev T3 · <span style="color:var(--brake)">LATE</span></span><span class="nsub" style="margin-left:6px">TC <span class="pip" style="background:var(--brake)"></span> '+absPip+'</span>';
   }

@@ -18,6 +18,7 @@
 -- needs to track that.
 
 local M = {}
+local cspHelpers = require("csp_helpers")
 
 local PUBLISH_INTERVAL_SEC = 0.1
 local TOPIC = "coaching.snapshot"
@@ -179,6 +180,23 @@ function M.publishIfDue(opts)
     end
   end
 
+  -- A fresh envelope cannot make an old viewmodel actionable. The speed
+  -- read is part of the live predicate, so a cached/failed read parks the
+  -- command and every position-dependent corner/target field together.
+  if not readOk then
+    action = "UNAVAILABLE"
+    primary = "COACHING UNAVAILABLE"
+    secondary = "LIVE SPEED UNAVAILABLE"
+    kind = "placeholder"
+    subState = "telemetry_unavailable"
+    cornerLabel, currentCornerLabel, approachLabel, selectedCorner = nil, nil, nil, nil
+    target, currentTarget, selectedTarget, dist = nil, nil, nil, nil
+    targetPhase, currentPhase, selectedPhase = "unavailable", "unavailable", "unavailable"
+    targetProvenance, currentProvenance, selectedProvenance = "unavailable", "unavailable", "unavailable"
+    targetAvailable, currentAvailable, selectedAvailable = false, false, false
+    progress = 0
+  end
+
   local payload = {
     -- Issue #86 Part C3 contract: stable string keys, all numeric fields
     -- explicit. `corner_id` is the short label (e.g. "T3") and matches the
@@ -219,7 +237,45 @@ function M.publishIfDue(opts)
     current_speed_source = readOk and "live" or (cur >= 0 and "cached" or "unavailable"),
     dist_to_brake_m = dist,
     progress_pct = progress,
+    corner_catalog_available = false,
+    corner_catalog_source = "lua_active_reference",
+    corner_catalog_reason = "canonical corners unavailable",
   }
+
+  if readOk and type(view) == "table" then
+    payload.corner_catalog_reason = label(view.cornerCatalogReason) or payload.corner_catalog_reason
+    local carId = cspHelpers.safeCarIdRaw()
+    local trackId = cspHelpers.safeTrackIdRaw()
+    local layout = cspHelpers.safeTrackLayoutRaw()
+    local identityOk = type(carId) == "string" and #carId > 0 and #carId <= 128
+      and type(trackId) == "string" and #trackId > 0 and #trackId <= 128
+      and type(layout) == "string" and #layout <= 128
+    if view.cornerCatalogAvailable == true and identityOk then
+      payload.corner_catalog = view.cornerCatalog
+      payload.corner_catalog_available = true
+      payload.corner_catalog_car_id = carId
+      payload.corner_catalog_track_id = trackId
+      payload.corner_catalog_layout = layout
+      payload.corner_catalog_reference_source = label(view.referenceSource) or "active_lua_reference"
+      payload.corner_catalog_reference_lap_ms = nonnegative(view.referenceLapMs)
+      -- The rig's normal USB parser accepts at most 8192 bytes per frame.
+      -- Count the full envelope, including any advisory/string escaping.
+      local ok, serialized = false, nil
+      if JSON and type(JSON.stringify) == "function" then
+        ok, serialized = pcall(JSON.stringify,
+          { v = 1, type = "state.snapshot", topic = TOPIC, payload = payload }, false)
+      end
+      if not ok or type(serialized) ~= "string" or #serialized > 8192 then
+        payload.corner_catalog = nil
+        payload.corner_catalog_available = false
+        payload.corner_catalog_reason = "canonical catalog frame budget unavailable"
+      end
+    elseif view.cornerCatalogAvailable == true then
+      payload.corner_catalog_reason = "canonical combo identity unavailable"
+    end
+  elseif not readOk then
+    payload.corner_catalog_reason = "live speed unavailable"
+  end
 
   return wsBridge.publishTopic(TOPIC, payload) == true
 end

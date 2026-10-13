@@ -121,6 +121,33 @@ static void pending_load_clear() {
     g_pending_load_n = 0;
 }
 
+// Requests may wait until after an incoming session or link-state change.
+// Discard every mutation authorized by the previous state before main drains
+// the queue; the Lua reset gate alone cannot identify the previous car.
+static void discard_queued_mutations() {
+    pt_request_t kept[PT_MAX_REQUESTS];
+    int kept_n = 0;
+    bool kept_list = false, kept_spinners = false;
+    while (g_req_head != g_req_tail) {
+        const pt_request_t& request = g_req_q[g_req_head];
+        bool keep = false;
+        if (request.kind == PT_REQ_LIST && !kept_list) {
+            kept_list = true;
+            keep = true;
+        } else if (request.kind == PT_REQ_SPINNER_LIST && !kept_spinners) {
+            kept_spinners = true;
+            keep = true;
+        }
+        if (keep) kept[kept_n++] = request;
+        g_req_head = (g_req_head + 1) % PT_MAX_REQUESTS;
+    }
+    g_req_head = 0;
+    g_req_tail = kept_n;
+    for (int i = 0; i < kept_n; ++i) g_req_q[i] = kept[i];
+    g_pending_spinner[0] = 0;
+    pending_load_clear();
+}
+
 static bool pending_load_push(const char* name, const char* path, lv_obj_t* row) {
     if (g_pending_load_n >= PT_MAX_PENDING_LOADS) return false;
     pending_load_t* p = &g_pending_loads[g_pending_load_n++];
@@ -165,6 +192,15 @@ static lv_obj_t* pending_load_take_row(const char* name, const char* ack_path) {
 }
 
 bool req_q_push(pt_request_kind_t kind, const char* name, const char* path) {
+    // Capability/session transitions can coincide with a list response. Keep
+    // at most one safe refresh of each kind, with its latest active path.
+    if (kind == PT_REQ_LIST || kind == PT_REQ_SPINNER_LIST) {
+        for (int i = g_req_head; i != g_req_tail; i = (i + 1) % PT_MAX_REQUESTS) {
+            if (g_req_q[i].kind != kind) continue;
+            snprintf(g_req_q[i].path, sizeof(g_req_q[i].path), "%s", path ? path : "");
+            return true;
+        }
+    }
     int next = (g_req_tail + 1) % PT_MAX_REQUESTS;
     if (next == g_req_head) return false;  // full
     pt_request_t* r = &g_req_q[g_req_tail];
@@ -728,6 +764,7 @@ void on_screen_delete(lv_event_t* e) {
     pending_load_clear();
     g_req_head = 0;
     g_req_tail = 0;
+    g_pending_spinner[0] = 0;
     for (int i = 0; i < PT_MAX_SETUPS; ++i) {
         g_row_chip_labels[i] = nullptr;
     }
@@ -742,7 +779,7 @@ extern "C" void screen_pocket_technician_set_sidecar_link_up(int link_up) {
         g_live_known = false;
         g_setup_allowed = false;
         strncpy(g_lock_reason, "Setup controls locked: telemetry stale/offline", sizeof(g_lock_reason) - 1);
-        g_pending_spinner[0] = 0;
+        discard_queued_mutations();
         refresh_live_label();
     }
     refresh_controls();
@@ -751,6 +788,7 @@ extern "C" void screen_pocket_technician_set_sidecar_link_up(int link_up) {
 extern "C" void screen_pocket_technician_set_setup_capability(bool allowed, const char* reason,
                                                                const char* source) {
     g_setup_allowed = allowed;
+    if (!allowed) discard_queued_mutations();
     g_capability_at = millis();
     snprintf(g_lock_reason, sizeof(g_lock_reason), "%s", reason && reason[0] ? reason : "Setup controls unavailable");
     snprintf(g_spinner_source, sizeof(g_spinner_source), "%s", source ? source : "unknown");
@@ -770,6 +808,7 @@ extern "C" void screen_pocket_technician_apply_live_electronics(float bias, int 
     g_live_at = millis();
     g_capability_at = g_live_at;
     g_setup_allowed = allowed;
+    if (!allowed) discard_queued_mutations();
     snprintf(g_lock_reason, sizeof(g_lock_reason), "%s", reason && reason[0] ? reason : "Setup controls unavailable");
     refresh_live_label();
     refresh_controls();
@@ -781,7 +820,7 @@ extern "C" void screen_pocket_technician_apply_live_electronics(float bias, int 
 extern "C" void screen_pocket_technician_invalidate_live_state(void) {
     g_live_known = false;
     g_setup_allowed = false;
-    g_pending_spinner[0] = 0;
+    discard_queued_mutations();
     g_spinner_count = 0;
     snprintf(g_lock_reason, sizeof(g_lock_reason), "Awaiting session setup capability");
     refresh_live_label();
@@ -1132,6 +1171,7 @@ extern "C" void screen_pocket_technician_set_identity(const char* car_id, const 
         g_active_name[0] = 0;
         set_active_path(nullptr);
         pending_load_clear();
+        discard_queued_mutations();
         g_spinner_count = 0;
         g_pending_spinner[0] = 0;
         g_setup_allowed = false;
@@ -1171,9 +1211,10 @@ extern "C" void screen_pocket_technician_apply_load_ack(bool ok,
     if (name && name[0]) {
         row = pending_load_take_row(name, path);
     }
-    if (!row) {
-        row = g_active_ctx->active_row_obj;
-    }
+    // A session/link transition invalidates pending correlation. An old
+    // in-flight ack must not restore the previous car's name/path afterwards;
+    // externally initiated actual loads are delivered via setup.active.
+    if (!row) return;
     g_active_ctx->active_row_obj = row;
 
     if (ok) {

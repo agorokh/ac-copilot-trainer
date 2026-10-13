@@ -134,6 +134,12 @@ local function countTraceRows(trace)
   return n
 end
 
+local function cornerSpline(value)
+  local n = tonumber(value)
+  if n and n == n and n >= 0 and n <= 1 then return n end
+  return nil
+end
+
 --- Settings UI calls `stats()` every frame; cache full-directory scan for a short TTL (Gemini #78).
 --- Uses `os.time` (wall-ish seconds), not `os.clock` (CPU time can stall the TTL — Cursor #78).
 local _statsCacheT = -1e9
@@ -237,8 +243,16 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
   end
 
   local sim = opts.sim
-  local carId = persistence.archiveCarIdFromCar(opts.car) or ch.sanitizeId(ch.safeCarIdRaw(), "unknown")
-  local trackId = persistence.archiveTrackIdFromSim(sim) or ch.sanitizeId(ch.safeTrackIdRaw(), "unknown")
+  local rawCarId = ch.safeCarIdRaw()
+  local carId = (type(rawCarId) == "string" and rawCarId ~= "") and rawCarId
+    or persistence.archiveCarIdFromCar(opts.car)
+  -- Keep raw content identity separate from display names and filename keys.
+  -- A sanitized full ID loses layout delimiters and cannot prove a combo.
+  local rawTrackId = ch.safeTrackIdRaw()
+  local trackId = (type(rawTrackId) == "string" and rawTrackId ~= "") and rawTrackId or nil
+  local trackLayout = ch.safeTrackLayoutRaw()
+  local layoutAvailable = type(trackLayout) == "string"
+  if not layoutAvailable then trackLayout = nil end
 
   local trackLengthM = nil
   -- `ac.StateSim` is userdata in CSP — same pattern as grip/temps (Cursor Bugbot #78).
@@ -333,6 +347,8 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
       if type(c) == "table" then
         cornersOut[#cornersOut + 1] = {
           label = tostring(c.label or ""),
+          s0 = cornerSpline(c.s0),
+          s1 = cornerSpline(c.s1),
           entrySpeed = tonumber(c.entrySpeed),
           minSpeed = tonumber(c.minSpeed),
           exitSpeed = tonumber(c.exitSpeed),
@@ -377,7 +393,9 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
     },
     track = {
       id = trackId,
-      layout = nil,
+      layout = trackLayout,
+      identity_source = "csp_content_ids",
+      layout_available = layoutAvailable,
       lengthM = trackLengthM,
     },
     conditions = {

@@ -457,6 +457,44 @@ def corner_signatures(
     return sigs
 
 
+def corner_phase_boundaries(
+    lap: LapTrace, corner: tuple[int, int, int], *, brake_available: bool, steer_available: bool
+) -> dict[str, Any]:
+    """Measured boundaries on the coach's canonical window, never equal-sized phase slices.
+
+    Entry is first sustained steering in the segmented deceleration window; the apex is a
+    measured point, not an invented interval. Missing turn-in or brake channels remain unknown.
+    """
+    entry, apex, exit_i = corner
+    brake_i = _first_before(lap.brake, apex, entry, 0.05) if brake_available else None
+    turn_i = (
+        next(
+            (
+                i
+                for i in range(entry, apex)
+                if abs(lap.steer[i]) > 0.05 and abs(lap.steer[i + 1]) > 0.05
+            ),
+            None,
+        )
+        if steer_available
+        else None
+    )
+
+    def span(start: int | None, end: int | None) -> list[float] | None:
+        if start is None or end is None or start > end:
+            return None
+        values = [lap.spline[start], lap.spline[end]]
+        return [round(v, 6) for v in values] if all(math.isfinite(v) for v in values) else None
+
+    return {
+        "braking": span(brake_i, turn_i),
+        "entry": span(turn_i, apex),
+        "apex": span(apex, apex),
+        "exit": span(apex, exit_i),
+        "source": "reference_trace/canonical_corner_window",
+    }
+
+
 def _signature(
     lap: LapTrace,
     idx: int,

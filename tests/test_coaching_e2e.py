@@ -27,6 +27,14 @@ def display_lua():
     lua = lupa.LuaRuntime(unpack_returned_tuples=True)
     modules = Path(__file__).resolve().parents[1] / "src/ac_copilot_trainer/modules"
     lua.execute(f'package.path = package.path .. ";{modules.as_posix()}/?.lua"')
+    lua.execute("""
+      ac={getCarID=function()return 'ks_porsche_911_gt3_r_2016'end,
+        getTrackID=function()return 'magione'end,getTrackLayout=function()return ''end}
+    """)
+    lua.globals()._display_json = lambda value: json.dumps(
+        _display_py(value), separators=(",", ":")
+    )
+    lua.execute("JSON={stringify=function(value,pretty)return _display_json(value)end}")
     lua.execute("rtc = require('realtime_coaching'); publisher = require('coaching_publisher')")
     return lua
 
@@ -38,13 +46,22 @@ def _display_view(lua, *, spline=0.11, speed=130, rpm=3000, reference=True):
       bestSortedTrace={{spline=0,speed=100},{spline=1,speed=100}},
       brakingPoints={{spline=0.1,entrySpeed=180,label='T1'},
         {spline=0.5,entrySpeed=230,label='T2'}},
-      segments={{kind='corner',s0=0.105,s1=0.49,label='T1'},
-        {kind='corner',s0=0.505,s1=0.9,label='T2'}}
+      segments={{kind='corner',s0=0.105,s1=0.49,brakeSpline=0.1,label='T1'},
+        {kind='corner',s0=0.505,s1=0.9,brakeSpline=0.5,label='T2'}}
     }""")
     opts["splinePos"], opts["currentSpeedKmh"], opts["rpm"] = spline, speed, rpm
     if not reference:
         opts["bestSortedTrace"], opts["brakingPoints"], opts["segments"] = None, None, None
     return lua.globals().rtc.tick(opts)
+
+
+def _display_py(value):
+    if hasattr(value, "items"):
+        entries = dict(value.items())
+        if entries and set(entries) == set(range(1, len(entries) + 1)):
+            return [_display_py(entries[i]) for i in range(1, len(entries) + 1)]
+        return {str(k): _display_py(v) for k, v in entries.items()}
+    return value
 
 
 def _publish_display(lua, view):
@@ -57,7 +74,7 @@ def _publish_display(lua, view):
           assert(topic=='coaching.snapshot'); frame=payload; return true end}}))
       return frame
     """)
-    return dict(payload.items())
+    return _display_py(payload)
 
 
 @pytest.mark.parametrize(
@@ -240,6 +257,93 @@ def test_display_speed_distinguishes_stopped_cached_and_missing(display_lua):
       assert(payload.current_speed_kmh==-1 and not payload.current_speed_available)
       assert(payload.current_speed_source=='unavailable')
     """)
+
+
+def test_display_failed_live_speed_parks_explicit_brake_and_targets(display_lua):
+    display_lua.globals().view = _display_view(display_lua, spline=0.485, speed=250, rpm=7800)
+    display_lua.execute("""
+      publisher.reset()
+      local payload
+      local bridge={publishTopic=function(topic,p) payload=p; return true end}
+      publisher.publishIfDue({dt=0.1,view=view,car={speedKmh=250},wsBridge=bridge})
+      assert(payload.action=='BRAKE' and payload.target_available)
+      publisher.publishIfDue({dt=0.1,view=view,car={speedKmh=0/0},wsBridge=bridge})
+      assert(payload.action=='UNAVAILABLE' and not payload.current_speed_available)
+      assert(payload.current_speed_kmh==250 and payload.current_speed_source=='cached')
+      assert(payload.target_speed_kmh==nil and not payload.target_available)
+      assert(payload.current_target_speed_kmh==nil and not payload.current_target_available)
+      assert(payload.selected_target_speed_kmh==nil and not payload.selected_target_available)
+      assert(payload.corner_label==nil and payload.approach_corner_label==nil)
+      assert(payload.dist_to_brake_m==nil and payload.progress_pct==0)
+      assert(not payload.corner_catalog_available and payload.corner_catalog==nil)
+    """)
+
+
+def test_display_catalog_preserves_exact_authority_and_combo(display_lua):
+    frame = _publish_display(display_lua, _display_view(display_lua))
+    assert frame["corner_catalog_available"] is True
+    assert frame["corner_catalog_car_id"] == "ks_porsche_911_gt3_r_2016"
+    assert frame["corner_catalog_track_id"] == "magione"
+    assert frame["corner_catalog_layout"] == ""
+    assert frame["corner_catalog_source"] == "lua_active_reference"
+    assert frame["corner_catalog"] == [
+        {"corner_id": "T1", "s0": 0.105, "s1": 0.49, "brake_spline": 0.1},
+        {"corner_id": "T2", "s0": 0.505, "s1": 0.9, "brake_spline": 0.5},
+    ]
+
+
+@pytest.mark.parametrize("invalid", ["duplicate", "missing", "nonfinite", "too_many", "hole"])
+def test_display_catalog_rejects_ambiguous_graph_as_whole(display_lua, invalid):
+    display_lua.globals().invalid = invalid
+    view = display_lua.execute("""
+      local segments={{kind='corner',label='T1',s0=0.9,s1=0.1,brakeSpline=0.89}}
+      if invalid=='duplicate' then segments[2]=segments[1]
+      elseif invalid=='missing' then segments[1].s0=nil
+      elseif invalid=='nonfinite' then segments[1].s1=0/0
+      elseif invalid=='hole' then
+        segments[3]={kind='corner',label='T3',s0=0.2,s1=0.3,brakeSpline=0.19}
+      else for i=2,33 do
+        segments[i]={kind='corner',label='T'..i,s0=0.2,s1=0.3,brakeSpline=0.19}
+      end end
+      return rtc.tick({splinePos=0.8,currentSpeedKmh=100,segments=segments})
+    """)
+    frame = _publish_display(display_lua, view)
+    assert frame["corner_catalog_available"] is False
+    assert frame.get("corner_catalog") is None
+
+
+def test_display_maximum_catalog_fits_normal_firmware_frame(display_lua):
+    view = display_lua.execute("""
+      local segments={}
+      for i=1,32 do segments[i]={kind='corner',label=string.rep('T',29)..i,
+        s0=0.123456789123456,s1=0.987654321987654,brakeSpline=0.112233445566778} end
+      return rtc.tick({splinePos=0.01,currentSpeedKmh=100,segments=segments})
+    """)
+    frame = _publish_display(display_lua, view)
+    assert frame["corner_catalog_available"] is True
+    envelope = {"v": 1, "type": "state.snapshot", "topic": "coaching.snapshot", "payload": frame}
+    assert len(json.dumps(envelope, separators=(",", ":")).encode("utf-8")) <= 8192
+
+
+def test_display_catalog_drops_for_unavailable_identity_or_full_frame_budget(display_lua):
+    view = display_lua.execute("""
+      local segments={}
+      for i=1,32 do segments[i]={kind='corner',label=string.rep('T',29)..i,
+        s0=0.123456789123456,s1=0.987654321987654,brakeSpline=0.112233445566778} end
+      return rtc.tick({splinePos=0.01,currentSpeedKmh=100,segments=segments})
+    """)
+    display_lua.execute("ac.getTrackLayout=function()return nil end")
+    unknown = _publish_display(display_lua, view)
+    assert unknown["corner_catalog_available"] is False
+    assert unknown.get("corner_catalog") is None
+    assert "identity unavailable" in unknown["corner_catalog_reason"]
+    display_lua.execute("ac.getTrackLayout=function()return '' end")
+    view["primaryLine"], view["secondaryLine"] = "\0" * 160, "\0" * 240
+    view["cornerLabel"] = view["approachLabel"] = "\0" * 64
+    oversized = _publish_display(display_lua, view)
+    assert oversized["corner_catalog_available"] is False
+    assert oversized.get("corner_catalog") is None
+    assert "frame budget" in oversized["corner_catalog_reason"]
 
 
 def test_display_corner_query_pairs_future_speed_with_future_identity(display_lua):

@@ -119,6 +119,81 @@ def test_best_imported_reference_scans_fastest_matching_car_track(tmp_path: Path
     assert ref["source"] == "imported"
 
 
+@pytest.mark.parametrize(
+    ("record_layout", "current_layout", "layout_available", "current_track", "matches"),
+    [
+        ("gp-2024", "gp-2024", True, "mod-track-v1", True),
+        ("", "", True, "mod-track-v1", True),
+        ("gp-2024", "gp_2024", True, "mod-track-v1", False),
+        ("gp-2024", "national", True, "mod-track-v1", False),
+        ("gp-2024", None, True, "mod-track-v1", False),
+        (None, "", False, "mod-track-v1", False),
+        ("gp-2024", "gp-2024", True, "mod_track_v1", False),
+        ("gp-2024", "gp-2024", True, "", False),
+    ],
+)
+def test_new_reference_content_identity_matches_exact_layout_only(
+    tmp_path, record_layout, current_layout, layout_available, current_track, matches
+):
+    laps = tmp_path / "ac_copilot_trainer/journal/laps"
+    laps.mkdir(parents=True)
+    record = _record(90_000, car="mod-car-v2", track="mod-track-v1")
+    record["track"].update(
+        identity_source="csp_content_ids", layout=record_layout, layout_available=layout_available
+    )
+    path = laps / "lap_named_layout.json"
+    original = json.dumps(record)
+    path.write_text(original, encoding="utf-8")
+    rt = _runtime(tmp_path, [path.name])
+    rt.globals()._current_layout = current_layout
+    rt.globals()._current_track = current_track
+    rt.execute("""
+      ac.getCarID=function()return 'mod-car-v2'end
+      ac.getTrackID=function()return _current_track end
+      ac.getTrackLayout=function()return _current_layout end
+    """)
+    ref = rt.execute("""
+      return require('persistence').bestImportedReference(
+        {id='wrong display name'},{trackName='wrong display name'})
+    """)
+    assert (ref is not None) is matches
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_legacy_layoutless_reference_keeps_base_compatibility_only(tmp_path):
+    laps = tmp_path / "ac_copilot_trainer/journal/laps"
+    laps.mkdir(parents=True)
+    path = laps / "lap_legacy_base.json"
+    original = json.dumps(_record(90_000))
+    path.write_text(original, encoding="utf-8")
+    rt = _runtime(tmp_path, [path.name])
+    for current_layout, matches in [("", True), ("national", False), (None, False)]:
+        rt.globals()._current_layout = current_layout
+        rt.execute("ac.getTrackLayout=function()return _current_layout end")
+        ref = rt.execute("""
+          return require('persistence').bestImportedReference({id='car_a'},{trackName='track_a'})
+        """)
+        assert (ref is not None) is matches
+
+
+def test_legacy_named_reference_cannot_match_base_layout(tmp_path):
+    laps = tmp_path / "ac_copilot_trainer/journal/laps"
+    laps.mkdir(parents=True)
+    record = _record(90_000)
+    record["track"]["layout"] = "national"
+    path = laps / "lap_legacy_named.json"
+    original = json.dumps(record)
+    path.write_text(original, encoding="utf-8")
+    rt = _runtime(tmp_path, [path.name])
+    rt.execute("ac.getTrackLayout=function()return '' end")
+    ref = rt.execute("""
+      return require('persistence').bestImportedReference({id='car_a'},{trackName='track_a'})
+    """)
+    assert ref is None
+    assert path.read_text(encoding="utf-8") == original
+    assert path.read_text(encoding="utf-8") == original
+
+
 def test_choose_imported_reference_requires_flag_and_faster_lap(tmp_path: Path) -> None:
     rt = _runtime(tmp_path, [])
     result = rt.execute(

@@ -785,8 +785,8 @@ static void dispatch_phase2_message(const String& body) {
   } else if (strcmp(type, "setup.spinner.list.result") == 0) {
     bool ok = doc["ok"] | true;
     screen_pocket_technician_set_setup_capability(
-        doc["setup_reset_allowed"] | false,
-        doc["setup_lock_reason"] | "capability unavailable",
+        doc["reset_allowed"] | false,
+        doc["lock_reason"] | "capability unavailable",
         doc["source"] | "unknown");
     screen_pocket_technician_clear_spinners();
     if (!ok) {

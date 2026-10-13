@@ -146,6 +146,7 @@ void set_label(lv_obj_t* obj, const char* text) {
 // choose the largest face that fits their allotted field before painting.
 void set_fitted_label(lv_obj_t* obj, const char* text, bool command = false) {
     if (!obj) return;
+    lv_obj_update_layout(obj);
     const lv_font_t* number_fonts[] = {UI_FONT_READ_XL, UI_FONT_READ_LG, UI_FONT_READ_MD, UI_FONT_MONO_MD};
     const lv_font_t* command_fonts[] = {UI_FONT_COMMAND_HERO, UI_FONT_COMMAND_MD, UI_FONT_COMMAND_SM, UI_FONT_LABEL_MD};
     const lv_font_t** fonts = command ? command_fonts : number_fonts;
@@ -328,7 +329,8 @@ void apply_to_widgets(ac_copilot_ctx_t* ctx) {
         set_label(ctx->advice_delta, "stale");
         set_label(ctx->advice_text, "no fresh sidecar data");
     } else {
-        set_label(ctx->advice_delta, g_snap.primary_line[0] ? g_snap.primary_line : "live");
+        set_label(ctx->advice_delta, "COACH");
+        lv_obj_set_style_text_color(ctx->advice_delta, cmd_color, LV_PART_MAIN);
         set_label(ctx->advice_text, advice && advice[0] ? advice : "hold the line");
     }
 }
@@ -478,7 +480,7 @@ extern "C" lv_obj_t* screen_ac_copilot_create(void) {
     lv_obj_set_style_text_align(ctx->delta_value, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
 
     ctx->advice_delta = make_label(scr, "--", UI_FONT_LABEL_SM,
-                                   UI_ALERT_RED, PAD, 404, 84);
+                                   UI_DATA_CYAN, PAD, 404, 60);
     ctx->advice_text = make_label(scr, "waiting for coaching snapshot",
                                   UI_FONT_MONO_XS, UI_TX_MUTED, PAD + 66, 405, 220);
 

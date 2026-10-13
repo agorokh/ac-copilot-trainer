@@ -336,15 +336,30 @@ local function archiveRecordCarTrackMatches(rec, car, sim)
   if type(recCar) ~= "string" or recCar == "" or type(recTrack) ~= "string" or recTrack == "" then
     return false
   end
+  if rec.track.identity_source == "csp_content_ids" then
+    local rawCar = ch.safeCarIdRaw()
+    local rawTrack = ch.safeTrackIdRaw()
+    local rawLayout = ch.safeTrackLayoutRaw()
+    return type(rawCar) == "string" and rawCar ~= "" and recCar == rawCar
+      and type(rawTrack) == "string" and rawTrack ~= "" and recTrack == rawTrack
+      and rec.track.layout_available == true and type(rec.track.layout) == "string"
+      and type(rawLayout) == "string" and rec.track.layout == rawLayout
+  end
   local carId = M.archiveCarIdFromCar(car) or ch.sanitizeId(ch.safeCarIdRaw(), "unknown")
   local trackId = M.archiveTrackIdFromSim(sim) or ch.sanitizeId(ch.safeTrackIdRaw(), "unknown")
   if recCar ~= carId or recTrack ~= trackId then
     return false
   end
   local recLayout = rec.track and rec.track.layout
+  -- Layout-less legacy records retain base-layout compatibility only. A
+  -- display name/sanitized key cannot prove they came from a named layout.
+  local currentLayout = ch.safeTrackLayoutRaw()
+  if type(currentLayout) ~= "string" then return false end
+  if (recLayout == nil or recLayout == "") and currentLayout ~= "" then
+    return false
+  end
   if type(recLayout) == "string" and recLayout ~= "" then
-    local curLayout = ch.safeTrackLayoutRaw()
-    if type(curLayout) == "string" and curLayout ~= "" and recLayout ~= ch.sanitizeId(curLayout, "") then
+    if recLayout ~= ch.sanitizeId(currentLayout, "") then
       return false
     end
   end
