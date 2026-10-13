@@ -81,8 +81,9 @@ Game Point is the usual owner. In its existing user settings set `keypad_profile
 to the absolute JSON path (or relative to the existing launcher root). Alternatively
 set `AC_COPILOT_KEYPAD_PROFILES` before starting Game Point. Empty/unset is disabled
 and never enumerates HID. The Keypad status row reports disabled, unavailable,
-negotiating or active, profile name and action/reload errors. A Windows session mutex
-prevents two Game Point/diagnostic workers from opening competing handles.
+negotiating or active, profile name and action/reload errors. A machine-wide Windows mutex
+prevents competing Game Point/diagnostic workers across sessions from opening
+competing handles.
 
 Source launchers need `.[controls]`; Windows EXE builders should install
 `.[launcher,controls]`. The PyInstaller build includes controller modules/data and
@@ -99,8 +100,10 @@ nine-byte USB contract. A matching colour ACK is required before the new profile
 inputs execute. A 3-second firmware lease is renewed every second, with a 500ms ACK
 deadline. After a missed renewal the host discards queued inputs and reconnects
 before routing anything. An orderly shutdown releases injected keys; force-killing
-the process or an OS crash cannot guarantee Windows key-up delivery. Input sequences start at zero, wrap at 255 and expose queue loss; a gap
-releases held actions and negotiates a fresh epoch. Lease expiry is steady red with
+the process or an OS crash cannot guarantee Windows key-up delivery. Input sequences start at zero, wrap at 255 and expose queue loss; a
+transport gap
+releases held actions and negotiates a fresh epoch. Firmware queue overflow ends
+the lease immediately, avoiding modulo-256 loss hiding a missing key-up. Lease expiry is steady red with
 inert inputs. No master-volume fallback is introduced in the managed build.
 
 Both HEX files are **DO-NOT-FLASH**. When the boot adapter arrives, first confirm ROM

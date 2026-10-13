@@ -123,7 +123,7 @@ The custom collection is `1209:C55D`, usage `FF31:1`, with an `AC` version-1 fea
 identity. The controller excludes stock `1189:8890` and ROM `4348:55E0`, verifies a
 unique candidate and capability before writing, and requires the new colour's ACK
 before routing its inputs. Held actions are released on profile change, gaps,
-timeout or disconnect. A session ownership mutex prevents competing workers.
+timeout or disconnect. A machine-wide ownership mutex prevents competing workers.
 The prepared local USB identifiers are not a claim of a globally allocated product.
 
 The real CH55xDuino 0.0.26/SDCC build succeeds for both variants within CH552's

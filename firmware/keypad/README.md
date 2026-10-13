@@ -58,8 +58,12 @@ and runtime guide for the complete host contract. USB class requests other than
 the supported capability query stall. No HID report invokes bootloader commands.
 
 Each new epoch clears queued input and resets the sequence to zero. ACK precedes
-that epoch's events. Busy USB preserves pending events. Queue overflow evicts the
-oldest event so the host sees a sequence gap, clears held actions and renegotiates.
+that epoch's events. Busy USB preserves pending events. Queue overflow immediately
+ends the lease, clears queued input and returns to red. Same-epoch renewal is
+rejected; the host's renewal ACK timeout releases held actions and renegotiates.
+No events are evicted silently: otherwise exactly 256 lost reports could wrap an
+8-bit sequence and hide a lost key-up. Ordinary transport gaps likewise require
+the host to clear held actions and obtain a new epoch.
 Renewing the same active epoch acknowledges the color without clearing input.
 Unsigned elapsed time handles the 32-bit `millis()` wrap.
 Managed button transitions must remain stable for 5ms before being emitted. A USB

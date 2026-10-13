@@ -47,9 +47,10 @@ void profile_event(uint8_t control, uint8_t pressed) {
   uint8_t slot;
   if (!managed || control < 1 || control > 6 || pressed > 1 ||
       ((control == 4 || control == 5) && !pressed)) return;
-  /* Evict oldest on pressure. The next transmitted sequence exposes the gap;
-   * host releases held actions and obtains a new epoch before routing again. */
-  if (count == QUEUE_SIZE) { head = (head + 1) % QUEUE_SIZE; count--; }
+  /* Dropping a key-up is unsafe, and 8-bit sequence gaps can alias after 256
+   * losses. End the lease on any overflow; old-epoch renewals are rejected and
+   * the host's ACK timeout releases held actions before claiming a new epoch. */
+  if (count == QUEUE_SIZE) { profile_disconnect(); return; }
   slot = (head + count) % QUEUE_SIZE;
   events[slot].sequence = sequence++;
   events[slot].control = control; events[slot].pressed = pressed;

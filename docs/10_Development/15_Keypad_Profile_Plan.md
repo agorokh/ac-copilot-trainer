@@ -29,7 +29,8 @@ usage `1`, VID/PID `1209:C55D`; verify capability before any output. Stock
 Controls: 1 button_1, 2 button_2, 3 button_3, 4 knob_cw, 5 knob_ccw, 6 knob_press.
 Buttons/press emit down/up; rotary detents emit pressed=1 impulses. Epoch changes
 flush queued events. Sequence increments modulo256; host duplicate reports do not
-repeat actions. Sequence gaps invalidate held keys and require a new epoch.
+repeat actions. Transport sequence gaps invalidate held keys and require a new epoch. Firmware
+queue overflow ends the lease immediately so 256 lost events cannot hide a key-up.
 ACK precedes new-epoch events. MCU lease expiry sets red and ends managed input;
 host must renegotiate, and no Windows master-volume action is invented.
 

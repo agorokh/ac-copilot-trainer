@@ -198,4 +198,7 @@ def load_config(path: Path) -> Config:
         raw = stream.read(65537)
     if len(raw) > 65536:
         raise ValueError("profile file exceeds 64 KiB")
-    return parse_config(json.loads(raw.decode("utf-8-sig")))
+    try:
+        return parse_config(json.loads(raw.decode("utf-8-sig")))
+    except RecursionError as exc:
+        raise ValueError("profile JSON nesting is too deep") from exc

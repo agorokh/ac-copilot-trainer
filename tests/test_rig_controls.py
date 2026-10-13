@@ -434,3 +434,15 @@ def test_invalid_typed_reload_keeps_last_good_config(tmp_path):
     path.write_text(json.dumps(data))
     assert not ctl.reload(path)
     assert ctl.status()["profile"] == "minecraft"
+
+
+def test_deep_json_reload_is_rejected_without_losing_config(tmp_path):
+    from tools.rig_controls.profiles import load_config
+
+    path = tmp_path / "deep.json"
+    path.write_text("[" * 3000 + "0" + "]" * 3000)
+    with pytest.raises(ValueError):
+        load_config(path)
+    ctl, _, _, _ = ready()
+    assert not ctl.reload(path)
+    assert ctl.status()["profile"] == "minecraft"

@@ -50,9 +50,9 @@ int main(void) {
   profile_event(2,1); p[2]=10; assert(profile_receive(p,9,300));
   profile_event(6,0); assert(profile_peek(r) && r[0]==6); profile_sent();
   assert(profile_peek(r) && r[0]==4 && r[2]==10 && r[3]==0 && r[4]==6); profile_sent();
-  /* More than queue capacity must expose a sequence gap, never hide lost ups. */
+  /* Queue pressure invalidates the lease; it must never silently lose an up. */
   for(control=0;control<10;control++) profile_event(1,control%2);
-  assert(profile_peek(r) && r[3]>1);
+  assert(!profile_peek(r)); assert(!profile_receive(p,9,400));
   profile_tick(1300); profile_capability(r);
   assert(r[8]==0 && r[5]==255 && r[6]==0);
   assert(!profile_peek(r)); profile_event(1,1); assert(!profile_peek(r));
@@ -299,6 +299,46 @@ int main(void){
         check=True,
     )
     subprocess.run([str(tmp_path / "buttons")], check=True)
+
+
+def test_queue_overflow_cannot_alias_sequence_and_hide_lost_keyup(tmp_path):
+    harness = tmp_path / "overflow.c"
+    harness.write_text(r"""
+#include <assert.h>
+#include <stdint.h>
+#include "profile_protocol.h"
+int main(void){
+ unsigned i; uint8_t p[9]={5,1,9,0,255,0,30,0,0}, r[9];
+ profile_init();assert(profile_receive(p,9,0));profile_peek(r);profile_sent();
+ profile_event(1,1);profile_peek(r);assert(r[3]==0&&r[5]==1);profile_sent();
+ profile_event(1,0); /* seq1 is the key-up that must never silently disappear. */
+ for(i=0;i<259;i++) profile_event(4,1);
+ /* Eviction would lose exactly256 and alias the next sequence to expected1. */
+ profile_capability(r);assert(r[8]==0&&r[5]==255&&r[6]==0);
+ assert(!profile_peek(r));assert(!profile_receive(p,9,100));
+ p[2]=10;assert(profile_receive(p,9,100));
+ assert(profile_peek(r)&&r[0]==6&&r[2]==10);profile_sent();
+ profile_event(1,1);assert(profile_peek(r)&&r[0]==4&&r[3]==0);
+ return 0;
+}
+""")
+    subprocess.run(
+        [
+            "cc",
+            "-std=c99",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-I",
+            str(FIRMWARE / "src"),
+            str(harness),
+            str(FIRMWARE / "src/profile_protocol.c"),
+            "-o",
+            str(tmp_path / "overflow"),
+        ],
+        check=True,
+    )
+    subprocess.run([str(tmp_path / "overflow")], check=True)
 
 
 def test_actual_usb_endpoint_functions_under_native_register_harness(tmp_path):
