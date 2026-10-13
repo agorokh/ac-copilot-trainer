@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-10-13T01:42:09Z
+last_updated: 2026-10-13T02:13:16Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-10-13-021316Z-post-merge-pr814-09f346.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-13-014209Z-pr814-review-recovery-d962bc.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-13-003900Z-issue813-review-checkpoint-72ba13.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-12-232609Z-issue813-display-delivery-6f39a1.md
@@ -88,23 +89,22 @@ relates_to:
 
 ## Issue 813 display correctness and MAP delivery
 
-Active branch `fix/issue-813-rig-displays-map` carries the coordinated Lua,
+Merged revision b513d05 carries the coordinated Lua,
 sidecar, tablet and ESP32 revision. Explicit coaching action/target semantics,
 live physics electronics and persistent pits-only capability are implemented;
 full ci-fast (4246 passed, 89 skipped), both firmware builds, native actual-font
-renders and 1024x600 MAP verification pass. PR #814 at 0a2559f is BLOCKED:
-self-hosted Cursor review failed; the canonical bounded waiter expired with
-exit 124 and the final exact-head evaluator remains 4 (no eligible review).
-The staged EXE passes its normal self-test; installed EXE and screen firmware
-are not promoted. The AC Lua junction exposes candidate source, without live
-runtime proof. Tablet is absent from adb; authenticated health reads timed out.
-Distribution and the operator-driven valid Porsche/Magione lap with both
-physical displays and exit transitions remain unverified. Keep #813 OPEN,
-retain the separate #804/#531/#86 scopes and freezes. Resolve-pr 814 refreshed
-the ledger and found live Kimi/Grok fallback reviews elsewhere while Cursor
-is quota-held and Antigravity has a tracked model-selection failure. Publish
-the substantive local SAVE on this carrier and give the new exact head one
-normal bounded review round; the linked recovery node records the boundary.
+renders and 1024x600 MAP verification pass. PR #814 merged as b513d05 with
+the operator's explicit one-time waiver of independent review and the daemon
+review-wait lease. No eligible review is credited; published findings are
+clear, hosted CI and close-intent pass, and merge was bound to c2c7a12.
+Installed EXE is promoted and its normal self-test verifies build 0a2559f
+and source-matching dashboard bytes. The Lua junction exposes merged source.
+Screen image 303c44a is flashed with hardware hash verification and five valid
+post-boot hello frames; full prior flash is preserved. Tablet adb inventory
+is empty. Keep #813 OPEN for on-glass/P7 proof
+and the operator-driven valid Porsche/Magione lap, both displays and exit
+transitions. Retain separate #804/#531/#86 scopes and freezes. The new dated
+post-merge handoff records deployment identity and the explicit exception.
 
 ## External racing controls — operator plan, 2026-10-11 PDT
 
