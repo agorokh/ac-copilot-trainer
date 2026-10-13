@@ -655,3 +655,36 @@ def test_reserved_action_is_visible_without_poisoning_transport_health(tmp_path)
     worker._publish()
     assert not supervisor.probe_keypad().ok
     supervisor.close()
+
+
+def test_start_publishes_negotiating_before_first_device_attempt(monkeypatch, tmp_path):
+    from tools.rig_controls import runtime
+
+    class DelayedThread:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return False
+
+        def join(self, timeout):
+            pass
+
+    monkeypatch.setattr(runtime.threading, "Thread", DelayedThread)
+    path = tmp_path / "profiles.json"
+    path.write_text(json.dumps(config()))
+
+    def missing_device():
+        raise OSError("keypad missing")
+
+    worker = runtime.Worker(path, opener=missing_device, context_provider=Context)
+    worker.start()
+    assert worker.status()["state"] == "negotiating"
+    worker.tick(0)
+    assert worker.status()["state"] == "unavailable"
+    assert "keypad missing" in worker.status()["error"]
+    worker._close()
+    worker.stop()
