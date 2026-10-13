@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-10-13T02:47:44Z
+last_updated: 2026-10-13T21:04:12Z
 relates_to:
   - AcCopilotTrainer/00_System/handoffs/2026-10-13-024744Z-issue813-recording-attempt-27327d.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-13-021316Z-post-merge-pr814-09f346.md
@@ -90,15 +90,15 @@ relates_to:
 
 ## Issue 815 Part B — native control provenance and MOZA import
 
-Active implementation: [PR #834](https://github.com/agorokh/ac-copilot-trainer/pull/834), refreshed
-from current main `bb8f1db`. Part A research is complete in the separate
-[PR #818](https://github.com/agorokh/ac-copilot-trainer/pull/818) evidence record.
-Part B adds reliable control attribution for selected native laps and one shared
-consumer policy before the cache importer. Preserve raw archives, uncertain
-historical attribution, Track Titan and the existing voice pipeline. Reporting
-features and live activation remain Parts C/D; no new rig operation is assigned.
-The [implementation contract](../../../10_Development/16_MOZA_Qualification.md)
-records the boundary. Existing physical, C2 and parked owners below remain intact.
+Delivered in [PR #834](https://github.com/agorokh/ac-copilot-trainer/pull/834)
+as `b9dda48`, after exact-head independent review and full Windows/GitHub CI.
+Part B binds native AI/shared/unknown attribution without changing raw archives,
+applies shared consumer checks, and adds the explicit-path cache importer.
+Track Titan and the existing voice pipeline remain in place. Cache parsing grants
+inspection only; Part C reporting and Part D shadow voice/activation remain open
+and unassigned. Existing physical, C2 and parked owners below remain intact.
+See the [post-merge handoff](handoffs/2026-10-13-210412Z-post-merge-pr834-ad67.md) and
+[implementation contract](../../../10_Development/16_MOZA_Qualification.md).
 
 ## Issue 813 display correctness and MAP delivery
 
