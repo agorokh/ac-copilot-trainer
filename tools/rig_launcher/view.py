@@ -390,7 +390,7 @@ class MozaReviewView:
         self.window = tk.Toplevel(parent)
         self.window.title("Game Point · Offline report")
         self.window.configure(bg=theme.GRAPHITE)
-        self.window.minsize(660, 420)
+        self.window.minsize(660, 520)
         frame = tk.Frame(self.window, bg=theme.GRAPHITE, padx=18, pady=18)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(1, weight=1)
@@ -418,6 +418,11 @@ class MozaReviewView:
             ("selected_file", "Native lap / MOZA cache", config.moza_offline_file),
             ("matched_native_file", "Matched native (optional)", config.moza_offline_native_file),
             ("evaluation_file", "Evaluation (optional)", config.moza_offline_evaluation_file),
+            (
+                "reference_file",
+                "Technique reference (optional)",
+                config.moza_offline_reference_file,
+            ),
         )
         for row, (key, label, initial) in enumerate(selections, start=2):
             var = tk.StringVar(master=self.window, value=initial or "")
@@ -462,8 +467,32 @@ class MozaReviewView:
             activeforeground=theme.CHALK,
             anchor="w",
         )
-        oracle.grid(row=5, column=0, columnspan=3, sticky="w", pady=(8, 12))
+        oracle.grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 4))
         self._controls.append(oracle)
+        self._shadow = tk.BooleanVar(master=self.window, value=config.moza_offline_shadow)
+        shadow = tk.Checkbutton(
+            frame,
+            text="Silent voice validation",
+            variable=self._shadow,
+            bg=theme.GRAPHITE,
+            fg=theme.CHALK,
+            selectcolor=theme.SLAB,
+            activebackground=theme.GRAPHITE,
+            activeforeground=theme.CHALK,
+            anchor="w",
+        )
+        shadow.grid(row=7, column=0, columnspan=3, sticky="w", pady=(0, 4))
+        self._controls.append(shadow)
+        tk.Label(
+            frame,
+            text="Checks cue timing without playing audio. Select a separate, qualified technique "
+            "reference above; the selected lap supplies replay data only.",
+            bg=theme.GRAPHITE,
+            fg=theme.MUTE,
+            justify="left",
+            anchor="w",
+            wraplength=650,
+        ).grid(row=8, column=0, columnspan=3, sticky="ew", pady=(0, 12))
         self._status = tk.Label(
             frame,
             text="",
@@ -473,8 +502,8 @@ class MozaReviewView:
             justify="left",
             wraplength=650,
         )
-        self._status.grid(row=6, column=0, columnspan=3, sticky="nsew", pady=(0, 14))
-        frame.rowconfigure(6, weight=1)
+        self._status.grid(row=9, column=0, columnspan=3, sticky="nsew", pady=(0, 14))
+        frame.rowconfigure(9, weight=1)
         self._generate = tk.Button(
             frame,
             text="SAVE SELECTIONS & GENERATE",
@@ -485,7 +514,7 @@ class MozaReviewView:
             padx=12,
             pady=10,
         )
-        self._generate.grid(row=7, column=0, columnspan=2, sticky="w")
+        self._generate.grid(row=10, column=0, columnspan=2, sticky="w")
         self._controls.append(self._generate)
         self._report_path: Path | None = None
         self._open = tk.Button(
@@ -499,14 +528,15 @@ class MozaReviewView:
             padx=12,
             pady=10,
         )
-        self._open.grid(row=7, column=2, sticky="e")
-        for var in (*self._vars.values(), self._oracle):
+        self._open.grid(row=10, column=2, sticky="e")
+        for var in (*self._vars.values(), self._oracle, self._shadow):
             var.trace_add("write", self._selection_changed)
 
     def selection(self) -> dict[str, Any]:
         return {
             **{key: var.get() for key, var in self._vars.items()},
             "oracle_enabled": bool(self._oracle.get()),
+            "shadow_enabled": bool(self._shadow.get()),
         }
 
     def _selection_changed(self, *_args: Any) -> None:

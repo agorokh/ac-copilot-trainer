@@ -697,8 +697,13 @@ def build_coach_runtime(
     alien_expected_fast_lane_sha12: str | None = None,
     expected_combo: tuple[str, str, str | None] | None = None,
     diagnostics: dict[str, Any] | None = None,
+    use_environment: bool = True,
 ) -> CoachRuntime | None:
-    """Build a :class:`CoachRuntime` from a reference archive (same input as the observer)."""
+    """Build a :class:`CoachRuntime` from a reference archive (same input as the observer).
+
+    ``use_environment=False`` is the offline seam: no ambient profile, alien source
+    or pacing overrides. Explicit arguments and canonical attribution still apply.
+    """
     qualification = qualify_archive(
         reference_archive, use="live_reference", expected_combo=expected_combo
     )
@@ -761,7 +766,13 @@ def build_coach_runtime(
     # Pacing thresholds are env-tunable so the autonomous harness can verify PRIMEs in a few laps
     # (lower assess/hysteresis); production defaults stay conservative.
     profile = _profile_for_reference_combo(
-        _profile_for_runtime(driver_profile, driver_profile_path), reference_archive
+        _profile_for_runtime(
+            {}
+            if not use_environment and driver_profile is None and driver_profile_path is None
+            else driver_profile,
+            driver_profile_path,
+        ),
+        reference_archive,
     )
     profile_source = profile.get("source") if isinstance(profile, Mapping) else None
     if (
@@ -781,7 +792,9 @@ def build_coach_runtime(
         "reason": "not_configured",
         "corners": [],
     }
-    configured_alien = alien_line_path or os.environ.get("AC_COPILOT_ALIEN_LINE")
+    configured_alien = alien_line_path or (
+        os.environ.get("AC_COPILOT_ALIEN_LINE") if use_environment else None
+    )
     combo = _archive_combo(reference_archive)
     artifact = alien_line_artifact
     if artifact is None and configured_alien:
@@ -799,9 +812,15 @@ def build_coach_runtime(
                     load_verified_alien_evidence(
                         configured_alien,
                         combo=combo,
-                        plant_path=os.environ.get("AC_COPILOT_ALIEN_PLANT"),
-                        fast_lane_path=os.environ.get("AC_COPILOT_ALIEN_FAST_LANE"),
-                        ac_root=os.environ.get("AC_COPILOT_AC_ROOT"),
+                        plant_path=(
+                            os.environ.get("AC_COPILOT_ALIEN_PLANT") if use_environment else None
+                        ),
+                        fast_lane_path=(
+                            os.environ.get("AC_COPILOT_ALIEN_FAST_LANE")
+                            if use_environment
+                            else None
+                        ),
+                        ac_root=(os.environ.get("AC_COPILOT_AC_ROOT") if use_environment else None),
                     )
                 )
             except FrontierError as exc:
@@ -847,9 +866,21 @@ def build_coach_runtime(
         if ref.coachable_apex_kmh is not None and ref.index in ref_sigs:
             ref_sigs[ref.index] = replace(ref_sigs[ref.index], min_speed_kmh=ref.coachable_apex_kmh)
     ledger = CoachingLedger(
-        hysteresis=_env_int("AC_COPILOT_COACH_HYSTERESIS", policy.hysteresis, min_value=1),
-        assess_laps=_env_int("AC_COPILOT_COACH_ASSESS_LAPS", policy.assess_laps, min_value=0),
-        lap_budget=_env_int("AC_COPILOT_COACH_LAP_BUDGET", policy.lap_budget, min_value=1),
+        hysteresis=(
+            _env_int("AC_COPILOT_COACH_HYSTERESIS", policy.hysteresis, min_value=1)
+            if use_environment
+            else policy.hysteresis
+        ),
+        assess_laps=(
+            _env_int("AC_COPILOT_COACH_ASSESS_LAPS", policy.assess_laps, min_value=0)
+            if use_environment
+            else policy.assess_laps
+        ),
+        lap_budget=(
+            _env_int("AC_COPILOT_COACH_LAP_BUDGET", policy.lap_budget, min_value=1)
+            if use_environment
+            else policy.lap_budget
+        ),
     )
     if diagnostics is not None:
         diagnostics.update(allowed=True, reason=qualification.reason)

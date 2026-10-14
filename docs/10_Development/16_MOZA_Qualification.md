@@ -185,3 +185,20 @@ authority; replay does not certify them human. Unknown control, unmatched condit
 or unvalidated technique keep human evaluation unavailable even when the software
 replay succeeds. Known AI/shared references retain their existing rejection. The
 live-activation decision remains explicit and does not execute an activation.
+
+In **OFFLINE REPORT**, select the native driving recording, check **Silent voice
+validation**, and select the separate technique reference. **SAVE SELECTIONS &
+GENERATE** writes the usual HTML, Markdown and JSON reports. The optional settings
+are `moza_offline_shadow` (default false) and `moza_offline_reference_file`;
+neither changes the live `reference_archive` or voice settings. Missing or rejected
+references leave numeric inspection available and give a specific replay reason.
+MOZA processed caches remain inspection-only.
+
+The `moza_shadow` result retains input hashes, attribution, condition comparisons,
+measured brake events and a cue-by-cue scheduler decision log for each producer.
+Lead to recorded brake onset, the producer's requested lead budget and modeled
+clip finish are separate checks. Missing dispatch or an unmatched event stays
+unavailable, never zero. Corner indices identify the reference's segmented windows;
+they are not certified track corner names. Both producers start with fresh memory
+and replay one recording once. Coach v2's assessment phase may therefore produce
+no cues; that does not prove timing coverage. No driver history is read or invented.

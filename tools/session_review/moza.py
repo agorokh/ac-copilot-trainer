@@ -220,12 +220,49 @@ def _comparison(
     return comparison, info
 
 
+def _shadow_unavailable(reason: str) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "enabled": True,
+        "available": False,
+        "status": "unavailable",
+        "reason": reason,
+        "decision": {
+            "human_evaluation": "no_go",
+            "live_activation": "no_go",
+            "reasons": [reason],
+        },
+        "measured_brake_events": [],
+        "lanes": {},
+    }
+
+
+def _shadow_replay(record: dict[str, Any], reference_file: str | Path | None) -> dict[str, Any]:
+    from tools.ai_sidecar.voice.shadow_replay import build_shadow_replay
+
+    reference = None
+    receipt = None
+    if reference_file is not None:
+        try:
+            reference, receipt = _capture_archive(Path(reference_file))
+        except MozaImportError as exc:
+            result = _shadow_unavailable("reference_input:" + str(exc))
+            result["reference_input"] = {"file": Path(reference_file).name}
+            return result
+    result = build_shadow_replay(record, reference)
+    result["enabled"] = True
+    result["reference_input"] = receipt
+    return result
+
+
 def build_moza_session_report(
     selected_file: str | Path,
     *,
     matched_native_file: str | Path | None = None,
     evaluation_file: str | Path | None = None,
     oracle_enabled: bool = False,
+    shadow_enabled: bool = False,
+    reference_file: str | Path | None = None,
     driver_id: str = "local-driver",
     generated_at: str | None = None,
 ) -> dict[str, Any]:
@@ -236,6 +273,8 @@ def build_moza_session_report(
     """
     path = Path(selected_file)
     report = _base_report(path, generated_at=generated_at, driver_id=driver_id)
+    if shadow_enabled:
+        report["moza_shadow"] = _shadow_unavailable("selected_input_unavailable")
     review: dict[str, Any] = {
         "schema_version": 1,
         "workflow": "moza_offline_review",
@@ -262,6 +301,8 @@ def build_moza_session_report(
     except MozaImportError as exc:
         review["reason"] = str(exc)
         review["numeric_analysis"] = _unavailable(str(exc))
+        if shadow_enabled:
+            report["moza_shadow"] = _shadow_unavailable("selected_input:" + str(exc))
         report["screen_summary"] = ["Offline review unavailable: " + str(exc)]
         return report
     source = captured.receipt
@@ -310,6 +351,8 @@ def build_moza_session_report(
     except MozaImportError as exc:
         review.update(reason=str(exc))
         review["numeric_analysis"] = _unavailable(str(exc))
+        if shadow_enabled:
+            report["moza_shadow"] = _shadow_unavailable("selected_input:" + str(exc))
         report["screen_summary"] = ["Offline review unavailable: " + str(exc)]
         return report
     inspection = record.get("import_format") == MOZA_IMPORT_FORMAT
@@ -414,4 +457,9 @@ def build_moza_session_report(
         f"Numeric analysis: {review['reason']}",
         f"Native comparison: {comparison['reason']}",
     ]
+    if shadow_enabled:
+        shadow = _shadow_replay(record, reference_file)
+        shadow["selected_input"] = dict(review["selected"])
+        report["moza_shadow"] = shadow
+        report["screen_summary"].append(f"Silent voice validation: {shadow['reason']}")
     return report

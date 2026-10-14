@@ -1162,8 +1162,185 @@ def _atomic_write(path: Path, text: str) -> None:
         raise
 
 
+def _shadow_replay_tables(
+    shadow: Mapping[str, Any],
+) -> list[tuple[str, list[str], list[list[Any]]]]:
+    """Render the replay evidence without implying that simulated dispatch was audible."""
+    decision = shadow.get("decision") or {}
+    reference = shadow.get("reference") or {}
+    selected_reference = shadow.get("reference_input") or {}
+    tables = [
+        (
+            "Silent voice validation",
+            ["Field", "Observation"],
+            [
+                ["Result", shadow.get("status")],
+                ["Reason", shadow.get("reason")],
+                ["Engineering replay", shadow.get("engineering_validation")],
+                ["Evidence kind", shadow.get("evidence_kind")],
+                ["Reference file", selected_reference.get("file")],
+                ["Reference SHA256", selected_reference.get("sha256")],
+                ["Reference control", reference.get("authority") or "unknown"],
+                ["Human evaluation", decision.get("human_evaluation")],
+                ["Live activation", decision.get("live_activation")],
+                ["Decision reasons", decision.get("reasons")],
+                ["Audio", "No speech or audio device; clip timing is modeled"],
+                [
+                    "Optional lateral grip",
+                    (shadow.get("optional_channels") or {}).get("lateral_grip"),
+                ],
+            ],
+        ),
+        (
+            "Reference conditions",
+            ["Condition", "Driving recording", "Reference", "Comparison"],
+            [
+                [row.get(key) for key in ("field", "stimulus", "reference", "status")]
+                for row in shadow.get("condition_comparison") or []
+            ],
+        ),
+        (
+            "Measured brake onsets",
+            ["Event", "Corner index", "Recorded onset ms", "Spline", "Corner association"],
+            [
+                [
+                    row.get(key)
+                    for key in ("event_id", "corner", "t_event_ms", "spline", "corner_reason")
+                ]
+                for row in shadow.get("measured_brake_events") or []
+            ],
+        ),
+    ]
+    for name, lane in (shadow.get("lanes") or {}).items():
+        label = "Coach v2" if name == "coach_v2" else "Observer"
+        tables.append(
+            (
+                label + " replay checks",
+                ["Check", "Result"],
+                [
+                    ["State", lane.get("reason")],
+                    ["Recorded frames", lane.get("frames_replayed")],
+                    ["Emitted cues", lane.get("emitted_count")],
+                    ["Simulated dispatches", lane.get("dispatched_count")],
+                    ["Suppressed or unprocessed", lane.get("suppressed_count")],
+                    *[[key, value] for key, value in (lane.get("checks") or {}).items()],
+                ],
+            )
+        )
+        tables.append(
+            (
+                label + " brake-event coverage",
+                [
+                    "Event",
+                    "Corner index",
+                    "Measured onset ms",
+                    "Emitted cue IDs",
+                    "Dispatched cue IDs",
+                    "Result",
+                ],
+                [
+                    [
+                        row.get(key)
+                        for key in (
+                            "event_id",
+                            "corner",
+                            "t_measured_brake_ms",
+                            "emitted_cue_ids",
+                            "dispatched_cue_ids",
+                            "reason",
+                        )
+                    ]
+                    for row in lane.get("brake_event_results") or []
+                ],
+            )
+        )
+        tables.append(
+            (
+                label + " cue timeline (silent)",
+                [
+                    "Cue ID",
+                    "Corner index",
+                    "Kind",
+                    "Phrase",
+                    "Advisory ms",
+                    "Dispatch ms",
+                    "Measured brake ms",
+                    "Lead ms",
+                    "Outcome",
+                ],
+                [
+                    [
+                        row.get(key)
+                        for key in (
+                            "cue_id",
+                            "corner",
+                            "kind",
+                            "phrase",
+                            "t_advisory_ms",
+                            "t_dispatch_ms",
+                            "t_measured_brake_ms",
+                            "lead_to_measured_brake_ms",
+                            "status",
+                        )
+                    ]
+                    for row in lane.get("cues") or []
+                ],
+            )
+        )
+        tables.append(
+            (
+                label + " cue timing budgets",
+                ["Cue ID", "Lead ms", "Producer budget ms", "Budget met", "Modeled finish lead ms"],
+                [
+                    [
+                        row.get(key)
+                        for key in (
+                            "cue_id",
+                            "lead_to_measured_brake_ms",
+                            "producer_lead_budget_ms",
+                            "lead_meets_producer_budget",
+                            "modeled_clip_finish_lead_ms",
+                        )
+                    ]
+                    for row in lane.get("cues") or []
+                ],
+            )
+        )
+        tables.append(
+            (
+                label + " scheduler decisions",
+                ["Cue ID", "Recorded time ms", "Queue age ms", "Decision"],
+                [
+                    [cue.get("cue_id"), event.get("t_ms"), event.get("age_ms"), event.get("reason")]
+                    for cue in lane.get("cues") or []
+                    for event in cue.get("decisions") or []
+                ],
+            )
+        )
+    tables.append(
+        (
+            "Replay assumptions",
+            ["Property", "Basis"],
+            [[key, value] for key, value in (shadow.get("assumptions") or {}).items()],
+        )
+    )
+    # Readable tables round display precision only; the JSON evidence keeps the measured values.
+    return [
+        (
+            heading,
+            headers,
+            [
+                [format(value, ".10g") if isinstance(value, float) else value for value in row]
+                for row in rows
+            ],
+        )
+        for heading, headers, rows in tables
+    ]
+
+
 def _offline_review_tables(
     review: Mapping[str, Any],
+    shadow: Mapping[str, Any] | None = None,
 ) -> list[tuple[str, list[str], list[list[Any]]]]:
     """One set of offline availability rows for the existing HTML/Markdown renderers."""
     selected = review.get("selected") or {}
@@ -1250,6 +1427,8 @@ def _offline_review_tables(
                 ],
             )
         )
+    if shadow is not None:
+        tables.extend(_shadow_replay_tables(shadow))
     tables.append(
         (
             "Channel availability",
@@ -1288,7 +1467,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     review = report.get("moza_review")
     if isinstance(review, Mapping):
         lines = [f"# Session Review - {title}", "", _OFFLINE_REVIEW_NOTE]
-        for heading, headers, rows in _offline_review_tables(review):
+        for heading, headers, rows in _offline_review_tables(review, report.get("moza_shadow")):
 
             def cell(value: Any) -> str:
                 return html_escape(_offline_value(value)).replace("|", "&#124;").replace("\n", " ")
@@ -1493,7 +1672,7 @@ def render_html(report: Mapping[str, Any]) -> str:
     offline_html = ""
     if offline:
         offline_html = f"<section><p>{_html(_OFFLINE_REVIEW_NOTE)}</p></section>"
-        for heading, headers, rows in _offline_review_tables(review):
+        for heading, headers, rows in _offline_review_tables(review, report.get("moza_shadow")):
             head = "".join(f"<th>{_html(value)}</th>" for value in headers)
             body = "".join(
                 "<tr>"
@@ -1502,8 +1681,8 @@ def render_html(report: Mapping[str, Any]) -> str:
                 for row in rows
             )
             offline_html += (
-                f"<section><h2>{_html(heading)}</h2><table><thead><tr>{head}</tr></thead>"
-                f"<tbody>{body}</tbody></table></section>"
+                f'<section><h2>{_html(heading)}</h2><div class="report-table">'
+                f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div></section>"
             )
     history = report.get("history") if isinstance(report.get("history"), Mapping) else {}
     trend = history.get("trend") if isinstance(history.get("trend"), Mapping) else {}
@@ -1582,6 +1761,7 @@ def render_html(report: Mapping[str, Any]) -> str:
     }}
     .meta {{ margin-top: 10px; color: var(--muted); }}
     section {{ padding: 22px 0; border-bottom: 1px solid var(--line); }}
+    .report-table {{ max-width: 100%; overflow-x: auto; }}
     .kpis {{
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));

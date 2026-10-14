@@ -62,6 +62,17 @@ class _Pending:
     enqueued_at: float
 
 
+@dataclass(frozen=True)
+class SchedulingDecision:
+    """Optional diagnostic event from the actual arbitration path; never a second policy."""
+
+    reason: str
+    now_s: float
+    enqueued_at_s: float
+    advisory: object | None = None
+    utterance: Utterance | None = None
+
+
 class Scheduler:
     """Arbitrates resolved utterances onto a single playback channel."""
 
@@ -72,11 +83,14 @@ class Scheduler:
         config: VoiceConfig,
         *,
         clock: Callable[[], float] = time.monotonic,
+        on_decision: Callable[[SchedulingDecision], None] | None = None,
     ) -> None:
         self._resolver = resolver
         self._playback = playback
         self._config = config
         self._clock = clock
+        self._on_decision = on_decision
+        self.decision_error_count = 0
 
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
@@ -92,6 +106,22 @@ class Scheduler:
         # last dedup_key spoken per kind — a DIFFERENT brake zone of a merged corner (#522)
         # must not be swallowed by the same-kind cooldown as if it repeated the previous cue.
         self._last_spoke_kind_key: dict[str, str] = {}
+
+    def _decision(
+        self,
+        reason: str,
+        now: float,
+        enqueued_at: float,
+        *,
+        advisory: object | None = None,
+        utterance: Utterance | None = None,
+    ) -> None:
+        if self._on_decision is not None:
+            try:
+                self._on_decision(SchedulingDecision(reason, now, enqueued_at, advisory, utterance))
+            except Exception:  # noqa: BLE001 — diagnostics must not alter arbitration
+                self.decision_error_count += 1
+                _log.exception("voice: scheduling decision callback failed")
 
     # ---- submission (any thread) -------------------------------------------------------------
 
@@ -125,6 +155,7 @@ class Scheduler:
             # Deferred prepare can sit behind an exit clip long enough to go stale — drop it
             # rather than speaking late (#675 phase-slot + existing TTL contract).
             if (now - enqueued_at) > self._config.ttl_s:
+                self._decision("stale_deferred", now, enqueued_at, utterance=winner)
                 _log.debug(
                     "voice: dropping stale deferred %s (age=%.3fs)",
                     winner.clip_id,
@@ -146,22 +177,35 @@ class Scheduler:
         winner, enqueued_at, _batch_index = max(
             candidates, key=lambda pair: (pair[0].rank, pair[1], pair[2])
         )
+        for candidate, queued_at, batch_index in candidates:
+            if batch_index != _batch_index:
+                self._decision("arbitration_lost", now, queued_at, utterance=candidate)
         return self._dispatch(winner, now, enqueued_at=enqueued_at)
 
     def _consider(self, item: _Pending, now: float) -> Utterance | None:
         """Resolve + filter one pending advisory; return a playable utterance or ``None``."""
         utt = self._resolver.resolve(item.advisory)  # type: ignore[arg-type]
+        self._decision(
+            "resolved" if utt is not None else "unresolved_phrase",
+            now,
+            item.enqueued_at,
+            advisory=item.advisory,
+            utterance=utt,
+        )
         if utt is None:
             return None
         if self._config.verbosity == Verbosity.OFF:
+            self._decision("verbosity_off", now, item.enqueued_at, utterance=utt)
             return None
         if not self._config.urgency_allowed(utt.urgency):
+            self._decision("verbosity_filtered", now, item.enqueued_at, utterance=utt)
             return None
 
         is_act = utt.rank >= _ACT_RANK
         # TTL: a stale advisory (car already past the point) is dropped. A *fresh* act has tiny age,
         # so this never delays a fresh act — it only discards old ones.
         if (now - item.enqueued_at) > self._config.ttl_s:
+            self._decision("stale", now, item.enqueued_at, utterance=utt)
             _log.debug("voice: dropping stale %s (age=%.3fs)", utt.clip_id, now - item.enqueued_at)
             return None
         # Dedup: same (kind, corner) within the pass collapses to one utterance. Fresh act cues are
@@ -169,6 +213,7 @@ class Scheduler:
         if not is_act:
             last_key = self._last_spoke_key.get(utt.dedup_key)
             if last_key is not None and (now - last_key) < self._config.dedup_window_s:
+                self._decision("dedup", now, item.enqueued_at, utterance=utt)
                 _log.debug("voice: dedup-suppress %s (key=%s)", utt.clip_id, utt.dedup_key)
                 return None
         # Cooldown: minimum gap between same-kind cues. ACT is exempt (never delayed/dropped).
@@ -183,6 +228,7 @@ class Scheduler:
                 utt.kind
             ) not in (None, utt.dedup_key)
             if last_kind is not None and (now - last_kind) < cooldown and not distinct_zone_brake:
+                self._decision("cooldown", now, item.enqueued_at, utterance=utt)
                 _log.debug("voice: cooldown-suppress %s (kind=%s)", utt.clip_id, utt.kind)
                 return None
         return utt
@@ -193,6 +239,7 @@ class Scheduler:
         """Play ``winner`` with barge-in semantics, or drop it if the channel is busy with >=
         cue."""
         current = self._playback.current
+        queued_at = enqueued_at if enqueued_at is not None else now
         if current is not None:
             higher_urgency = winner.rank > current.rank
             # A hotter escalation over a still-playing act clip shares the `act` urgency rank, so
@@ -206,6 +253,7 @@ class Scheduler:
                 # register at the same urgency — mid-word.
                 _log.info("voice: barge-in %s over %s", winner.clip_id, current.clip_id)
                 self._playback.cancel()
+                self._decision("barge_in", now, queued_at, utterance=winner)
             elif (
                 winner.rank >= _ACT_RANK
                 and winner.kind == "brake_release"
@@ -216,6 +264,7 @@ class Scheduler:
                 # equal/lower act cue.
                 with self._lock:
                     self._deferred.append((winner, enqueued_at if enqueued_at is not None else now))
+                self._decision("deferred", now, queued_at, utterance=winner)
                 _log.debug("voice: defer %s until %s finishes", winner.clip_id, current.clip_id)
                 return None
             elif winner.urgency == "prepare" and current.urgency == "info":
@@ -224,6 +273,7 @@ class Scheduler:
                 # the channel frees, then speak if still inside TTL.
                 with self._lock:
                     self._deferred.append((winner, enqueued_at if enqueued_at is not None else now))
+                self._decision("deferred", now, queued_at, utterance=winner)
                 _log.debug(
                     "voice: phase-slot reslot %s until %s finishes",
                     winner.clip_id,
@@ -235,12 +285,15 @@ class Scheduler:
                 # it
                 # rather than queue a backlog that would speak late.
                 _log.debug("voice: channel busy (%s); dropping %s", current.clip_id, winner.clip_id)
+                self._decision("channel_busy", now, queued_at, utterance=winner)
                 return None
         try:
             self._playback.play(winner)
         except Exception:  # noqa: BLE001 — never let a backend fault crash the scheduler thread
             _log.exception("voice: playback.play failed for %s — staying silent", winner.clip_id)
+            self._decision("playback_failed", now, queued_at, utterance=winner)
             return None
+        self._decision("dispatched", now, queued_at, utterance=winner)
         _log.info("voice: dispatched %s urgency=%s", winner.clip_id, winner.urgency)
         if winner.rank >= _ACT_RANK and enqueued_at is not None:
             latency_ms = (now - enqueued_at) * 1000.0

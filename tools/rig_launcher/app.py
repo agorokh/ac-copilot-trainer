@@ -145,6 +145,8 @@ def config_from_args(args: argparse.Namespace) -> GamePointConfig:
         moza_offline_native_file=config.moza_offline_native_file,
         moza_offline_evaluation_file=config.moza_offline_evaluation_file,
         moza_offline_oracle=config.moza_offline_oracle,
+        moza_offline_shadow=config.moza_offline_shadow,
+        moza_offline_reference_file=config.moza_offline_reference_file,
         manage_tablet_tunnel=config.manage_tablet_tunnel,
         adb_path=config.adb_path,
         adb_serial=config.adb_serial,
