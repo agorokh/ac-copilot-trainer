@@ -598,7 +598,7 @@ def test_guard_scans_every_file_pytest_reads(tmp_path: Path) -> None:
         target.parent.mkdir(exist_ok=True)
         target.write_text("", encoding="utf-8")
     found = [
-        str(path.relative_to(tmp_path.resolve())) for path in scanned_modules(tmp_path)
+        path.relative_to(tmp_path.resolve()).as_posix() for path in scanned_modules(tmp_path)
     ]
     assert found == [
         "b_test.py",

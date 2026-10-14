@@ -38,6 +38,10 @@ class LauncherSettings:
     resilient_cm_exe: str | None = None
     ac_user_dir: str | None = None
     keypad_profiles: str | None = None
+    moza_offline_file: str | None = None
+    moza_offline_native_file: str | None = None
+    moza_offline_evaluation_file: str | None = None
+    moza_offline_oracle: bool | None = None
 
     @classmethod
     def load(cls, path: Path) -> LauncherSettings:
@@ -66,6 +70,12 @@ class LauncherSettings:
             resilient_cm_exe=_optional_text(payload.get("resilient_cm_exe")),
             ac_user_dir=_optional_text(payload.get("ac_user_dir")),
             keypad_profiles=_optional_text(payload.get("keypad_profiles")),
+            moza_offline_file=_optional_text(payload.get("moza_offline_file")),
+            moza_offline_native_file=_optional_text(payload.get("moza_offline_native_file")),
+            moza_offline_evaluation_file=_optional_text(
+                payload.get("moza_offline_evaluation_file")
+            ),
+            moza_offline_oracle=_optional_bool(payload.get("moza_offline_oracle")),
         )
 
 
@@ -153,6 +163,10 @@ def default_settings_payload() -> dict[str, object]:
         "ac_user_dir": "",
         "external_bind": "",
         "keypad_profiles": "",
+        "moza_offline_file": "",
+        "moza_offline_native_file": "",
+        "moza_offline_evaluation_file": "",
+        "moza_offline_oracle": False,
         "alien_line": "",
         "reference_archive": "",
         "resilient_car": "",

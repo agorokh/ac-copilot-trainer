@@ -233,6 +233,11 @@ class GamePointConfig:
     #: CSP 0.2.11 legacy-menu prerequisite before Stable AC starts.
     ac_user_dir: str | None = None
     keypad_profiles: str | None = None
+    #: Explicit offline selections; never used to configure a live sidecar or voice source.
+    moza_offline_file: str | None = None
+    moza_offline_native_file: str | None = None
+    moza_offline_evaluation_file: str | None = None
+    moza_offline_oracle: bool = False
     #: Manage the tablet dashboard's ``adb reverse`` USB tunnel (issue #567). Opt-in
     #: (house pattern, cf. ``start_simhub``): off by default so CI / non-rig hosts never
     #: shell out to adb; the rig sets ``AC_COPILOT_MANAGE_TABLET_TUNNEL=1``.
@@ -333,6 +338,10 @@ class GamePointConfig:
                 settings.ac_user_dir,
             ),
             manage_tablet_tunnel=manage_tablet_tunnel,
+            moza_offline_file=settings.moza_offline_file,
+            moza_offline_native_file=settings.moza_offline_native_file,
+            moza_offline_evaluation_file=settings.moza_offline_evaluation_file,
+            moza_offline_oracle=bool(settings.moza_offline_oracle),
             paths=resolved_paths,
         )
 
@@ -356,6 +365,10 @@ class GamePointStatus:
     )
     checks: tuple[ProbeResult, ...] = field(default_factory=tuple)
     keypad: ProbeResult = field(default_factory=lambda: ProbeResult("keypad", True, "disabled"))
+    #: Advisory offline result; deliberately excluded from the rig readiness aggregate.
+    moza_review: ProbeResult = field(
+        default_factory=lambda: ProbeResult("moza_review", True, "not_run", "Offline report only")
+    )
 
     @property
     def ok(self) -> bool:
@@ -382,10 +395,19 @@ class GamePointStatus:
             "tablet": self.tablet.to_dict(),
             "resilient": self.resilient.to_dict(),
             "keypad": self.keypad.to_dict(),
+            "moza_review": self.moza_review.to_dict(),
             "log_path": self.log_path,
             "status_path": self.status_path,
             "checks": [check.to_dict() for check in self.checks],
         }
+
+
+@dataclass(frozen=True)
+class OfflineReportResult:
+    """Last explicit report result, without retaining personal trace payloads in status."""
+
+    status: ProbeResult
+    report_path: Path | None = None
 
 
 class GamePointSupervisor:
@@ -421,6 +443,131 @@ class GamePointSupervisor:
         # so it cannot re-introduce the UI freeze the worker thread was added to avoid (#568).
         self._proc_lock = threading.RLock()
         self._keypad_worker = None
+        self._moza_report_lock = threading.Lock()
+        self._moza_report = OfflineReportResult(
+            ProbeResult("moza_review", True, "not_run", "Choose a file in OFFLINE REPORT")
+        )
+
+    @property
+    def moza_offline_result(self) -> OfflineReportResult:
+        """Return cached status only; polling never reads a selected archive/cache."""
+        with self._proc_lock:
+            return self._moza_report
+
+    def run_moza_offline_report(
+        self,
+        selected_file: str,
+        *,
+        matched_native_file: str | None = None,
+        evaluation_file: str | None = None,
+        oracle_enabled: bool = False,
+    ) -> OfflineReportResult:
+        """Save deliberate selections and generate an offline report without starting the rig."""
+        if not self._moza_report_lock.acquire(blocking=False):
+            return OfflineReportResult(
+                ProbeResult("moza_review", True, "running", "An offline report is already running")
+            )
+        result = OfflineReportResult(
+            ProbeResult("moza_review", False, "error", "Report interrupted")
+        )
+        written_path: Path | None = None
+        try:
+            with self._proc_lock:
+                self._moza_report = OfflineReportResult(
+                    ProbeResult("moza_review", True, "running", "Reading selected files once")
+                )
+            from tools.rig_launcher.settings import update_settings
+            from tools.session_review import build_moza_session_report, write_session_report
+
+            def selected_path(value: str | None) -> str | None:
+                if not _none_if_blank(value):
+                    return None
+                resolved = _resolve_launcher_path(value, base=self._launcher_path_base())
+                if resolved is None:
+                    raise ValueError("Selected path escapes the Game Point data directory")
+                return resolved
+
+            selected = selected_path(selected_file)
+            if selected is None:
+                raise ValueError("Choose a native archive or readable MOZA cache JSON")
+            native = selected_path(matched_native_file)
+            evaluation = selected_path(evaluation_file)
+            protected = tuple(Path(path) for path in (selected, native, evaluation) if path)
+            settings_path = self.paths.settings_path.resolve()
+            for path in protected:
+                if path.resolve() == settings_path or (
+                    path.exists() and settings_path.exists() and path.samefile(settings_path)
+                ):
+                    raise ValueError(
+                        "Selected input aliases Game Point settings; choose another file"
+                    )
+            changes = {
+                "moza_offline_file": selected,
+                "moza_offline_native_file": native,
+                "moza_offline_evaluation_file": evaluation,
+                "moza_offline_oracle": bool(oracle_enabled),
+            }
+            report = build_moza_session_report(
+                selected,
+                matched_native_file=native,
+                evaluation_file=evaluation,
+                oracle_enabled=bool(oracle_enabled),
+            )
+            review = report.get("moza_review")
+            if not isinstance(review, Mapping) or review.get("status") not in {
+                "analysis_available",
+                "inspection_only",
+                "input_unavailable",
+            }:
+                raise ValueError("Report did not provide an offline qualification result")
+            written = write_session_report(
+                report,
+                output_dir=self.paths.root / "journal" / "reports",
+                protected_inputs=protected,
+            )
+            written_path = written.html_path
+            # The writer checks all destinations before writing. Persist selections later,
+            # so a report/input collision cannot change settings either.
+            with self._proc_lock:
+                update_settings(self.paths, **changes)
+                self.config = replace(self.config, **changes)
+            state = str(review["status"])
+            authority = str(review.get("authority") or "unknown")
+            reason = str(review.get("reason") or "qualification_unavailable")
+            oracle = review.get("oracle")
+            oracle_detail = "disabled"
+            if isinstance(oracle, Mapping):
+                oracle_detail = str(oracle.get("status") or "unavailable")
+                if oracle.get("reason"):
+                    oracle_detail += ": " + str(oracle["reason"])
+            elif oracle_enabled:
+                oracle_detail = "unavailable"
+            result = OfflineReportResult(
+                ProbeResult(
+                    "moza_review",
+                    state == "analysis_available",
+                    state,
+                    f"{Path(selected).name}; authority={authority}; {reason}; "
+                    f"offline advice={oracle_detail}",
+                ),
+                written_path,
+            )
+        except Exception as exc:  # noqa: BLE001 - a report failure must not disturb live rig state
+            result = OfflineReportResult(
+                ProbeResult(
+                    "moza_review",
+                    False,
+                    "error",
+                    ("Report saved; selections not saved: " if written_path else "")
+                    + (str(exc) or type(exc).__name__),
+                ),
+                written_path,
+            )
+        finally:
+            with self._proc_lock:
+                self._moza_report = result
+            self._moza_report_lock.release()
+        return result
 
     def sidecar_command(self) -> list[str]:
         if self._frozen:
@@ -1026,6 +1173,7 @@ class GamePointSupervisor:
             tablet=self.probe_tablet(health_payload),
             resilient=self._resilient_process_status(),
             keypad=self.probe_keypad(),
+            moza_review=self.moza_offline_result.status,
             log_path=str(self.paths.sidecar_log_path),
             status_path=str(self.paths.status_path),
             checks=checks,
@@ -1373,9 +1521,10 @@ class GamePointSupervisor:
         """
         from tools.rig_launcher.settings import update_settings
 
-        self.config = replace(self.config, start_simhub=bool(enabled))
         try:
-            update_settings(self.paths, start_simhub=bool(enabled))
+            with self._proc_lock:
+                self.config = replace(self.config, start_simhub=bool(enabled))
+                update_settings(self.paths, start_simhub=bool(enabled))
         except (OSError, ValueError) as exc:
             # Best-effort persistence: the runtime change already applied, so keep the UI
             # responsive — but surface the failure (not silently) so a console/dev run
@@ -1945,6 +2094,7 @@ def render_status_lines(status: GamePointStatus) -> list[str]:
         status.tablet,
         status.resilient,
         status.keypad,
+        status.moza_review,
         *status.checks,
     ]
     return [f"{row.name}: {row.state}{(' - ' + row.detail) if row.detail else ''}" for row in rows]

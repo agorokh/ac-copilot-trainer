@@ -141,6 +141,10 @@ def config_from_args(args: argparse.Namespace) -> GamePointConfig:
         resilient_cm_exe=args.resilient_cm_exe or config.resilient_cm_exe,
         ac_user_dir=config.ac_user_dir,
         keypad_profiles=config.keypad_profiles,
+        moza_offline_file=config.moza_offline_file,
+        moza_offline_native_file=config.moza_offline_native_file,
+        moza_offline_evaluation_file=config.moza_offline_evaluation_file,
+        moza_offline_oracle=config.moza_offline_oracle,
         manage_tablet_tunnel=config.manage_tablet_tunnel,
         adb_path=config.adb_path,
         adb_serial=config.adb_serial,
@@ -211,6 +215,47 @@ def run_setup_diff_gui(diff: dict[str, Any]) -> int:
         print(f"Setup diff window unavailable: {exc}", file=sys.stderr)
         print("\n".join(render_setup_diff_lines(diff)))
         return 0 if diff.get("ok", False) else 1
+
+
+def _open_moza_report_window(supervisor: GamePointSupervisor, *, parent: Any) -> Any:
+    """Wire one offline dialog to a worker; all Tk reads/updates stay on its main thread."""
+    import tkinter as tk
+
+    from tools.rig_launcher.view import MozaReviewView
+
+    busy = False
+
+    def generate(selection: dict[str, Any]) -> None:
+        nonlocal busy
+        if busy:
+            return
+        busy = True
+        view.set_running()
+
+        def worker() -> None:
+            result = supervisor.run_moza_offline_report(**selection)
+
+            def apply() -> None:
+                nonlocal busy
+                busy = False
+                try:
+                    if view.window.winfo_exists():
+                        view.show_result(result)
+                except tk.TclError:
+                    return
+
+            try:
+                parent.after(0, apply)
+            except (tk.TclError, RuntimeError):
+                return
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    view = MozaReviewView(
+        parent, config=supervisor.config, on_generate=generate, on_open=_open_path
+    )
+    view.show_result(supervisor.moza_offline_result)
+    return view
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -334,6 +379,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
 
     last_status: dict[str, GamePointStatus | None] = {"status": None}
     _poll_busy: dict[str, bool] = {"v": False}
+    offline_view: Any | None = None
 
     def _poll_worker() -> None:
         try:
@@ -446,6 +492,13 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
             _launch_simhub_and_report()
         refresh()
 
+    def open_offline_report() -> None:
+        nonlocal offline_view
+        if offline_view is not None and offline_view.window.winfo_exists():
+            offline_view.window.lift()
+            return
+        offline_view = _open_moza_report_window(supervisor, parent=root)
+
     view = build_launcher_view(
         root,
         actions={
@@ -456,6 +509,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
             "logs": open_logs,
             "settings": open_settings,
             "setup_diff": open_setup_diff,
+            "moza_offline_report": open_offline_report,
         },
         status_path=str(supervisor.paths.status_path),
         port=supervisor.config.port,
