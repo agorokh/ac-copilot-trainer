@@ -85,6 +85,7 @@ def _supervisor(
         voice_bank_source=voice_bank_source,
         ac_audio_device=ac_audio_device,
         paths=LauncherPaths(tmp_path),
+        rig_lock_path=tmp_path / "rig-session.lock",
     )
     resolved = _health_payload() if payload is None else payload
 

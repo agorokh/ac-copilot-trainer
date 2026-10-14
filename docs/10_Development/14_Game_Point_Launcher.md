@@ -60,6 +60,21 @@ pip install -e ".[launcher,voice-rtmixer]"
 also installs the `numpy` + `sounddevice` floor. Select the backend at runtime
 with `AC_COPILOT_VOICE_BACKEND` (`rtmixer` or `sounddevice`).
 
+Set `voice_channel_map` in Game Point `settings.json` to a comma-separated list
+of one-based output channels (for example, `"5,6"`) when the endpoint needs an
+explicit speaker route. `AC_COPILOT_VOICE_CHANNEL_MAP` overrides that setting;
+the sidecar also accepts `--voice-channel-map`. Omit the setting or use JSON
+`null` to retain the existing layout defaults. An explicit blank, duplicate,
+non-integer, non-positive, or unsupported channel fails closed. Mono speech is
+duplicated to every listed channel; a multichannel bank needs one destination
+per source channel. An explicit WASAPI map opens the endpoint's full advertised
+channel count: changing stream width changes Windows speaker positions, so a
+smaller accepted layout must not silently reroute the selected channel.
+Both audio backends report the actual negotiated mapping
+in `/health` as `voice.channel_map`; pyttsx3 cannot honor a channel map and is
+disabled when one is supplied. For an audible calibration, pass the same map
+to `tools.ai_sidecar.voice.audible_latency run --chirp-channel-map 5,6`.
+
 ## UI design handoff
 
 Before changing launcher screens, rig screen UI, or cross-surface status

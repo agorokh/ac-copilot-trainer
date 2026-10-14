@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from tools.ai_sidecar.voice.config import parse_channel_map
 from tools.ai_sidecar.voice.manifest import Manifest, sha256_bytes
 from tools.ai_sidecar.voice.utterance import Utterance
 
@@ -170,6 +171,7 @@ def resolve_output_layout(
     devices: list[dict],
     host_apis: list[dict],
     check_output_settings: Callable[..., object],
+    channel_map: tuple[int, ...] | str | None = None,
 ) -> OutputLayout:
     """Choose the smallest stream width the pinned device accepts at the bank sample rate.
 
@@ -179,6 +181,10 @@ def resolve_output_layout(
     when a multichannel layout is required. Device pinning remains authoritative, so this can never
     fall through to the similarly named haptic DAC.
     """
+    try:
+        channel_map = parse_channel_map(channel_map)
+    except ValueError as exc:
+        raise OutputLayoutError(str(exc)) from exc
     if not 0 <= device_index < len(devices):
         raise OutputLayoutError(f"invalid PortAudio output device index {device_index}")
     device = devices[device_index]
@@ -190,12 +196,28 @@ def resolve_output_layout(
             f"voice device {str(device.get('name', ''))!r} exposes {max_channels} output channels, "
             f"fewer than the phrase bank's {bank_channels}"
         )
+    if channel_map is not None:
+        if max(channel_map) > max_channels:
+            raise OutputLayoutError(
+                f"voice channel map {channel_map} exceeds device capacity {max_channels}"
+            )
+        if bank_channels != 1 and len(channel_map) != bank_channels:
+            raise OutputLayoutError(
+                f"voice channel map needs {bank_channels} destinations for this phrase bank"
+            )
 
     api_index = int(device.get("hostapi", -1))
     api_name = str(host_apis[api_index].get("name", "")) if 0 <= api_index < len(host_apis) else ""
     failures: list[str] = []
     stream_channels = 0
-    for candidate in range(bank_channels, max_channels + 1):
+    minimum_channels = max(bank_channels, max(channel_map or (1,)))
+    if channel_map is not None and "wasapi" in api_name.casefold():
+        # WASAPI speaker positions depend on the stream's channel mask. PortAudio's
+        # five-channel layout omits LFE, so channel 5 is right rear; in six channels
+        # it is left rear. Keep explicit endpoint indices in its full advertised
+        # layout instead of silently remapping them by choosing a smaller stream.
+        minimum_channels = max_channels
+    for candidate in range(minimum_channels, max_channels + 1):
         try:
             check_output_settings(
                 device=device_index,
@@ -211,13 +233,15 @@ def resolve_output_layout(
         tested = "; ".join(failures)
         raise OutputLayoutError(
             f"voice device {str(device.get('name', ''))!r} ({api_name or 'unknown host API'}) "
-            f"rejected every {bank_channels}..{max_channels}-channel layout at {samplerate} Hz "
+            f"rejected every {minimum_channels}..{max_channels}-channel layout at {samplerate} Hz "
             f"for a {bank_channels}-channel phrase bank ({tested}); set "
             "AC_COPILOT_VOICE_DEVICE/AC_COPILOT_VOICE_HOST_API to a compatible output or "
             "correct the Windows speaker configuration"
         )
 
-    if bank_channels == 1 and stream_channels >= 6:
+    if channel_map is not None:
+        pass  # Explicit routing is authoritative; never substitute a default channel.
+    elif bank_channels == 1 and stream_channels >= 6:
         # Standard 5.1/7.1 layouts place front-center at channel 3, which keeps coaching speech
         # anchored to the rig's center speaker.
         channel_map = (3,)
@@ -408,6 +432,7 @@ class RtMixerPlayback:
         *,
         device_name: str | None,
         host_api: str | None,
+        channel_map: tuple[int, ...] | str | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         import rtmixer  # noqa: F401 - imported to fail fast if the extra is missing
@@ -431,6 +456,7 @@ class RtMixerPlayback:
             devices=devices,
             host_apis=host_apis,
             check_output_settings=sd.check_output_settings,
+            channel_map=channel_map,
         )
         self._mixer = rtmixer.Mixer(
             device=device_index,
@@ -541,6 +567,7 @@ class SoundDevicePlayback:
         *,
         device_name: str | None,
         host_api: str | None,
+        channel_map: tuple[int, ...] | str | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         import sounddevice as sd
@@ -562,6 +589,7 @@ class SoundDevicePlayback:
             devices=devices,
             host_apis=host_apis,
             check_output_settings=sd.check_output_settings,
+            channel_map=channel_map,
         )
         # Estimated-completion tracking so the channel frees when a clip finishes (not just on
         # cancel/close) — otherwise the scheduler treats it as perpetually busy after the first cue.
@@ -581,7 +609,10 @@ class SoundDevicePlayback:
             _log.error("voice: clip %s absent from bank — staying silent", utterance.clip_id)
             return
         output = pcm
-        if self._layout.stream_channels != self._layout.bank_channels:
+        if (
+            self._layout.stream_channels != self._layout.bank_channels
+            or self._layout.channel_map != tuple(range(1, self._layout.bank_channels + 1))
+        ):
             import numpy as np
 
             output = np.zeros((len(pcm), self._layout.stream_channels), dtype=pcm.dtype)

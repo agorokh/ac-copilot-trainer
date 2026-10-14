@@ -1300,6 +1300,85 @@ def test_payload_allowlist_is_an_explicit_set_excluding_the_transport() -> None:
     assert "tools.ac_harness._remote_exec" not in rl._ALLOWED_PAYLOAD_MODULES
 
 
+@pytest.mark.parametrize("command", ["run", "start", "inspect", "", "reap"])
+def test_watchdog_transport_rejects_everything_except_scheduled_run(command):
+    with pytest.raises(rl.RemoteLaunchError, match="only its bounded scheduled-run"):
+        rl.validate_payload_argv(
+            ["-m", "tools.ac_harness.rig_watchdog", command]
+            if command
+            else ["-m", "tools.ac_harness.rig_watchdog"]
+        )
+
+
+def test_same_console_transport_is_allowed_only_for_watchdog_bootstrap(monkeypatch):
+    monkeypatch.setattr(rl, "current_session_id", lambda: 1)
+    monkeypatch.setattr(rl, "console_session_id", lambda: 1)
+    with pytest.raises(rl.RemoteLaunchError, match="already running"):
+        rl.assert_transport_needed()
+    assert rl.assert_transport_needed(watchdog_bootstrap=True) == (1, 1)
+    monkeypatch.setattr(rl, "console_session_id", lambda: rl._INVALID_SESSION)
+    with pytest.raises(rl.RemoteLaunchError, match="no active console"):
+        rl.assert_transport_needed(watchdog_bootstrap=True)
+
+
+def test_watchdog_bootstrap_uses_base_python_and_disables_oneshot(monkeypatch, tmp_path):
+    monkeypatch.setattr(rl, "current_session_id", lambda: 1)
+    monkeypatch.setattr(rl, "console_session_id", lambda: 1)
+    monkeypatch.setattr(rl, "short_path", lambda path: str(path))
+    monkeypatch.setenv("USERNAME", "someone")
+    calls = []
+
+    def run(args):
+        calls.append(args)
+        return rl.subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(rl, "_run", run)
+    handle = rl.start_run(
+        ["-m", "tools.ac_harness.rig_watchdog", "scheduled-run"],
+        label="guardian",
+        repo_root=tmp_path,
+    )
+    create = next(call for call in calls if "/create" in call)
+    definition = Path(create[create.index("/xml") + 1]).read_text(encoding="utf-16")
+    assert (
+        str(Path(getattr(rl.sys, "_base_executable", rl.sys.executable)).with_name("pythonw.exe"))
+        in definition
+    )
+    assert "PT660S" in definition
+    assert "LeastPrivilege" in definition and "InteractiveToken" in definition
+    assert ["schtasks", "/change", "/tn", handle.task, "/disable"] in calls
+    assert not any("/delete" in call for call in calls)
+
+
+def test_scheduled_guardian_runs_in_task_action_and_writes_sentinel_only_after_return(
+    monkeypatch, tmp_path
+):
+    from tools.ac_harness import rig_watchdog as wd
+
+    monkeypatch.setattr(rl, "harness_repo_root", lambda: tmp_path)
+    control = rl.control_dir_for("guardian")
+    control.mkdir(parents=True)
+    (control / rl.CONTROL_NAME).write_text(
+        json.dumps(
+            {
+                "repo_root": str(tmp_path),
+                "argv": ["-m", "tools.ac_harness.rig_watchdog", "scheduled-run"],
+            }
+        )
+    )
+    monkeypatch.setattr(wd, "require_scheduled_worker", lambda run_id: {"run_id": run_id})
+
+    def run(argv, *, scheduler_context):
+        assert argv == ["scheduled-run"]
+        assert scheduler_context == {"run_id": "guardian"}
+        assert not rl.sentinel_path_for("guardian").exists()
+        return 0
+
+    monkeypatch.setattr(wd, "main", run)
+    assert rl.execute_control_file("guardian") == 0
+    assert rl.parse_sentinel(rl.sentinel_path_for("guardian").read_text()) == 0
+
+
 def test_start_run_leaves_no_run_dir_when_the_argv_is_rejected(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

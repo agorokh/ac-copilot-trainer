@@ -72,6 +72,31 @@ def _check_finite_nonneg(name: str, value: float) -> float:
     return f
 
 
+def parse_channel_map(value: str | tuple[int, ...] | list[int] | None) -> tuple[int, ...] | None:
+    """Validate explicit one-based output channels; only ``None`` selects the default route.
+
+    Mono is duplicated to each listed output. For multichannel banks, list one destination per
+    source channel in source order. Device capacity and bank compatibility are checked at layout
+    resolution, where those facts are available.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        tokens = [token.strip() for token in value.split(",")]
+        if not all(token and token.isascii() and token.isdecimal() for token in tokens):
+            raise ValueError("voice channel map must list positive one-based integers, e.g. 5,6")
+        channels = tuple(int(token) for token in tokens)
+    elif isinstance(value, (tuple, list)):
+        channels = tuple(value)
+    else:
+        raise ValueError("voice channel map must be a comma-separated string or integer sequence")
+    if not channels or any(type(channel) is not int or channel <= 0 for channel in channels):
+        raise ValueError("voice channel map must contain positive one-based integers")
+    if len(set(channels)) != len(channels):
+        raise ValueError("voice channel map must not contain duplicate channels")
+    return channels
+
+
 @dataclass
 class VoiceConfig:
     """Operator-facing voice settings, validated at construction.
@@ -83,6 +108,7 @@ class VoiceConfig:
             uses the system default — but production should pin the headset by name so voice never
             lands on the haptic USB-DAC.
         host_api: PortAudio host-API name to disambiguate the device (e.g. ``"Windows WASAPI"``).
+        channel_map: explicit one-based output destinations; ``None`` keeps layout defaults.
         ttl_s: an advisory older than this (now - emit time) is dropped as stale before it speaks.
         dedup_window_s: a repeat of the same ``(kind, corner)`` within this window is suppressed;
             the window is shorter than a lap, so the next corner pass is never suppressed.
@@ -93,12 +119,14 @@ class VoiceConfig:
     cooldown_s: dict[str, float] = field(default_factory=dict)
     device_name: str | None = None
     host_api: str | None = None
+    channel_map: tuple[int, ...] | str | None = None
     ttl_s: float = 1.5
     dedup_window_s: float = 8.0
     high_cooldown_factor: float = 0.5
 
     def __post_init__(self) -> None:
         self.verbosity = Verbosity.parse(self.verbosity)
+        self.channel_map = parse_channel_map(self.channel_map)
         # Merge caller overrides on top of the defaults; validate every value.
         merged = dict(_DEFAULT_COOLDOWN_S)
         for k, v in (self.cooldown_s or {}).items():
