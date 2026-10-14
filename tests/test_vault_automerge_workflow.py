@@ -22,7 +22,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github/workflows/vault-automerge.yml"
 PUBLIC_WORKFLOW = REPO_ROOT / ".github/workflows/vault-automerge-public.yml"
-HUB_ACTION_REF = "5cc0059a7d5df25527408564bc259c3f901517dc"  # pragma: allowlist secret
+HUB_ACTION_REF = "5e00dad1e620c61125929af1fe5905dada36e6b2"  # pragma: allowlist secret
 
 # Copier renders `.copier-answers.yml` into every child (children pin the template
 # via its `_src_path`; `copier.yml` `_exclude` keeps it out of the template tree).
