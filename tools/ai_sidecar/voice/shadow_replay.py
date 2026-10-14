@@ -36,8 +36,8 @@ from tools.ai_sidecar.voice.manifest import MANIFEST_VERSION, ClipEntry, Manifes
 from tools.ai_sidecar.voice.playback import RecordingPlayback
 from tools.ai_sidecar.voice.resolver import Resolver
 from tools.ai_sidecar.voice.scheduler import Scheduler, SchedulingDecision
-from tools.lap_archive_export import _MOTEC_CHANNELS
 from tools.lap_qualification import (
+    NATIVE_ACCELERATION_UNIT,
     AttributionError,
     archive_combo,
     archive_identity,
@@ -49,9 +49,9 @@ from tools.lap_trace_validity import completed_trace_reason, finish_wrap_cut
 
 _REQUIRED = ("spline", "speed", "eMs", "brake", "throttle", "steer", "gear", "px", "py", "pz")
 _MODELED_CLIP_MS = 400.0
-# The native exporter/reader contract names measured lateral acceleration in G.
+# The shared native channel contract names measured lateral acceleration in G.
 # This optional channel does not inherit the ten canonical channels' qualification.
-_LATERAL_G_UNIT = next(unit for _, unit, field in _MOTEC_CHANNELS if field == "accG_lat")
+_LATERAL_G_UNIT = NATIVE_ACCELERATION_UNIT
 _GRIP_ALIASES = ("accG_lat", "lat_g", "latg", "accG", "grip", "grip_used")
 
 
