@@ -16,6 +16,8 @@ import math
 import re
 from typing import Any
 
+from tools.ai_sidecar.microphone import MIC_CHUNK, MIC_END, MIC_SUBSCRIBE, decode_chunk
+
 # Envelope key that identifies a v1 external-client frame.
 ENVELOPE_KEY = "v"
 ENVELOPE_VERSION = 1
@@ -918,6 +920,24 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         audio_armed = frame.get("audio_armed")
         if audio_armed is not None and not isinstance(audio_armed, bool):
             return "voice.echo optional 'audio_armed' must be a boolean"
+        for key, choices in (
+            ("playback_backend", {"observe", "webaudio", "fully"}),
+            ("output_route", {"wired", "speaker_or_other", "unknown"}),
+        ):
+            if key in frame and (not isinstance(frame[key], str) or frame[key] not in choices):
+                return f"voice.echo invalid {key}"
+        return None
+    if t == MIC_SUBSCRIBE:
+        if type(frame.get("enabled")) is not bool:
+            return "voice.mic.subscribe requires boolean enabled"
+        return None
+    if t == MIC_CHUNK:
+        try:
+            decode_chunk(frame)
+        except ValueError as exc:
+            return str(exc)
+        return None
+    if t == MIC_END:
         return None
     if t == TYPE_VOICE_DEMO:
         kind = frame.get("kind")

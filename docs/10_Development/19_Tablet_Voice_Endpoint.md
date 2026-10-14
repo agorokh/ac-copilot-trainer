@@ -1,7 +1,7 @@
 # Tablet voice endpoint + audible-latency harness
 
 **Status:** Active
-**Owns:** the remote coaching-audio endpoint (issue [#511](https://github.com/agorokh/ac-copilot-trainer/issues/511) Part D) and the end-to-end audible-timeliness measurement (issue [#381](https://github.com/agorokh/ac-copilot-trainer/issues/381) verification).
+**Owns:** the remote coaching-audio endpoint and the end-to-end audible-timeliness harness. Current native-audio/microphone acceptance belongs to [#531](https://github.com/agorokh/ac-copilot-trainer/issues/531) Parts G/I; closed #511/#381 are implementation history.
 **Protocol reference:** [12_WS_Sidecar_Protocol.md](12_WS_Sidecar_Protocol.md) § Tablet voice endpoint.
 
 ## Why
@@ -35,8 +35,47 @@ the PC scheduler stays the single arbiter (pre-baked-bank + one-arbiter invarian
 3. Start the sidecar with voice configured as usual (Game Point launcher or harness;
    `AC_COPILOT_VOICE_BANK` + `AC_COPILOT_REFERENCE_ARCHIVE`).
 4. On the tablet open `http://127.0.0.1:8765/tablet/voice` (Chrome or Fully Kiosk start URL).
-5. Plug the earpiece into the tablet, tap **TAP TO ARM AUDIO** once.
-6. Drive. Status pills show WS/audio/clip state; the big tile shows the last spoken cue.
+5. Leave **Observe PC audio (normal)** selected and tap **TAP TO ARM AUDIO**.
+   PC dispatches are displayed without being played a second time. PC WASAPI remains the
+   authoritative critical-cue device until the actual native+wired P7 acoustic gate passes.
+6. Status pills show WS/audio/clip state; the big tile shows the last dispatched cue.
+
+### Native measurement probe (#531 Part G)
+
+Select **Fully native measurement probe (wired)** before arming. Fully's JavaScript interface
+must be enabled for the trusted localhost page. The installed Fully version must expose
+`getInternalAppSpecificStoragePath`, `writeFileBase64`, `playSound`, `stopSound` and
+`isWiredHeadsetOn` ([official API](https://www.fully-kiosk.com/en/#websiteintegration)).
+The page checks each downloaded WAV against its manifest SHA-256 and caches it under Fully's
+own app-specific `ac-copilot-voice/` directory using the content hash as its filename.
+Critical dispatches request `fully.playSound(file:///…, false, 3)` only while a wired earpiece
+is reported. Other probe registers use WebAudio. Missing bridge, hash mismatch, cache-write
+failure or removed earpiece is an explicit unavailable result, never a production-route change.
+
+For an isolated bench, silence the PC coaching output (or inject a silent playback in the
+existing test seam) so the microphone cannot mistake PC speech for tablet output. Keep the
+PC sync-chirp speaker audible and position the wired earpiece next to the tablet microphone.
+The probe label is deliberately **UNMEASURED**. `voice.echo.t_play_ms` is a request timestamp,
+including for Fully; only matched acoustic evidence can satisfy the latency gate. Restore
+normal observation and PC output after the probe. This release does not automatically
+promote a tablet to the production critical route.
+
+### Opt-in microphone upstream (#531 Part I)
+
+Tap **START MIC** on the endpoint. The page requests microphone permission explicitly and
+checks the effective `getSettings()` processing flags, requiring echo cancellation, automatic
+gain and noise suppression to be off. AudioWorklet streams PCM16 mono at its actual context
+sample rate through the existing USB-loopback WS. No microphone audio is played back locally.
+The red **MIC LIVE** state and **STOP MIC** button remain visible. Capture automatically ends
+after 180 seconds, on page hide/exit, track mute/end, context suspension or WS loss/backpressure.
+Reconnection never rearms it.
+
+Only a local `voice` peer explicitly sending `voice.mic.subscribe` receives chunks; the
+sidecar does not persist, cache, or broadcast PCM to dashboards, Lua, remote peers or its
+dispatch/echo history. Pre-subscription audio is discarded. The recorder rejects sequence or
+sample gaps, duplicates, rate/identity changes, stream end, timeout and disconnect. A new run
+needs a new output directory; prior WAV evidence is never overwritten. Audio is personal
+local evidence and must not be committed or uploaded.
 
 No WiFi is involved — `adb reverse` carries the socket over the cable, which sidesteps both
 the mesh cross-AP TCP block and the tablet's 2.4 GHz/CGNAT limitation (#511).
@@ -48,23 +87,24 @@ with start/end chirps (5→15 kHz, DAC-stamped via PortAudio callback), matched-
 dispatched clip's own waveform out of the recording, and reports
 `audible_latency_ms = acoustic onset − dispatch stamp` per cue with P50/P95/max.
 
-For the measurement run play the tablet on its **speaker** (the mic must hear the cues);
-switch to the earpiece for the operator run.
+Start the harness, then tap **START MIC** within 30 seconds. For Part G's gate use the native
+probe with a **wired earpiece**, positioned so the microphone hears it. A speaker-only test
+can exercise capture but does not satisfy wired-path acceptance.
 
 ```powershell
 # bench burst — full path, no sim needed (voice.demo cues through the real scheduler)
 python -m tools.ai_sidecar.voice.audible_latency run `
   --bank $env:AC_COPILOT_VOICE_BANK --out-dir .scratch\audible-latency `
-  --burst 12 --scrcpy <path-to-scrcpy.exe>
+  --burst 12 --capture browser --require-native-wired
 
-# drive mode — passive window while the autonomous harness (18_Autonomous_Harness.md) drives
+# passive capture — operator drives; no autonomous-driving permission is implied
 python -m tools.ai_sidecar.voice.audible_latency run `
   --bank $env:AC_COPILOT_VOICE_BANK --out-dir .scratch\audible-latency-drive `
-  --observe-seconds 300 --scrcpy <path-to-scrcpy.exe>
+  --observe-seconds 60 --capture browser
 ```
 
 Artifacts land in `--out-dir`: `room_capture.wav`, `dispatches.json`, `echoes.json`,
-`chirps.json`, `audible_latency.json` + `audible_latency.md` (per-cue table + assertions).
+`chirps.json`, `capture.json`, `audible_latency.json` + `audible_latency.md` (per-cue table + assertions).
 Exit code 0 iff the clock map anchored, every dispatched cue was acoustically located, and
 act cues (+ stated systematic uncertainty) fit the 450 ms budget.
 
@@ -84,4 +124,5 @@ act cues (+ stated systematic uncertainty) fit the 450 ms budget.
 - WebAudio output latency on the P7 is measured, not assumed; if the drive-mode median audio
   stack exceeds ~150 ms or σ > 40 ms, the fallback is Fully Kiosk's native player (council
   recommendation, 2026-07-11).
-- scrcpy audio capture needs Android 11+ (P7 is Android 13 Go).
+- `--capture scrcpy --scrcpy <exe>` retains the legacy recorder for compatible devices;
+  scrcpy crashes on this P7 and is not the default proof transport.
