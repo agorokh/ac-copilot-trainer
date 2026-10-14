@@ -155,3 +155,33 @@ hashes, exact producer linkage where available, evaluation eligibility and
 unqualified event metadata. A score, event label or unknown eligibility string
 cannot create a coaching message or confidence value. Supporting a future
 producer advice schema requires separate evidence and tests.
+
+## Part D: silent voice validation
+
+Game Point's offline report can opt into silent voice validation with an
+explicitly selected reference archive. The driving recording and reference have
+different roles: AI/shared driving samples may exercise the observer and Coach v2,
+but cannot become a human technique reference through replay. Both inputs retain
+their original bytes and control attribution. The reference must pass the existing
+independent combo and reference checks; selecting it is not an eligibility grant.
+
+Replay uses the existing observer, Coach v2, phrase resolver and scheduler with
+recorded elapsed time, an injected clock and recording-only playback. Observer and
+Coach v2 are separate replay modes, not duplicate producers in one voice stream.
+No audio device, sidecar, simulator or controller is started. No live reference,
+voice setting, attribution ledger or driver profile is changed. Ambient alien-line
+or driver-profile configuration must not silently affect the selected-file test.
+
+Evidence distinguishes measured brake onsets from reference marks, emitted
+advisories from dispatched phrases, and suppression from missing evidence. Retain
+corner identity, expected and actual event times, lead time, staleness, deduplication
+and phrase choices. A modeled clip duration is not measured audible latency. A
+cue-free run cannot count as successful timing coverage. Synthetic contract tests
+remain labeled separately from replay of a retained recording.
+
+The report records separate engineering-validation and human-evaluation decisions.
+Legacy references permitted by the existing policy retain `legacy_unknown`
+authority; replay does not certify them human. Unknown control, unmatched conditions
+or unvalidated technique keep human evaluation unavailable even when the software
+replay succeeds. Known AI/shared references retain their existing rejection. The
+live-activation decision remains explicit and does not execute an activation.
