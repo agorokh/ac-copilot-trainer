@@ -53,6 +53,8 @@
   #arm p { color: var(--dim); font-size: 16px; max-width: 640px; text-align: center; }
   .r-calm { color: var(--calm); } .r-alert { color: var(--alert); }
   .r-urgent { color: var(--urgent); } .r-critical { color: var(--critical); }
+  #mic-btn, #playback-mode { font-size: 18px; min-height: 44px; padding: 8px 12px;
+    background: var(--panel); color: var(--text); border: 1px solid var(--edge); }
 </style>
 </head>
 <body>
@@ -63,6 +65,8 @@
     <span class="pill">Clips <b id="s-clips">0/0</b></span>
     <span class="pill">Latency <b id="s-lat">out=?</b></span>
     <span class="pill">Cues <b id="s-count">0</b></span>
+    <button id="mic-btn">START MIC (180s max)</button>
+    <span class="pill"><b id="s-mic">MIC OFF</b></span>
   </div>
   <div id="cue">
     <div id="cue-text" class="r-calm">— waiting for coaching —</div>
@@ -71,11 +75,18 @@
   <div id="log"></div>
 </div>
 <div id="arm">
+  <select id="playback-mode" aria-label="Playback mode">
+    <option value="observe">Observe PC audio (normal)</option>
+    <option value="webaudio">WebAudio measurement probe</option>
+    <option value="fully">Fully native measurement probe (wired)</option>
+  </select>
   <button id="arm-btn">TAP TO ARM AUDIO</button>
-  <p>One tap unlocks WebAudio (browser autoplay policy) and starts the silent keep-warm
-     loop so the first coaching cue plays without the Android audio-HAL wake-up penalty.
-     Plug the earpiece in first.</p>
+  <p>PC audio remains authoritative. Normal mode observes without replaying it.
+     Probe modes are for measurement only: silence the PC coaching output to avoid
+     duplicate audio, and plug in the wired earpiece before the native probe.
+     Microphone capture requires its own START tap and stops on disconnect or page exit.</p>
 </div>
+<script src="/voice/tablet_audio.js"></script>
 <script>
 "use strict";
 (function () {
@@ -89,6 +100,7 @@
     currentSource: null, currentSeq: -1,
     cueCount: 0, logLines: [],
     reconnectDelay: 1000,
+    mode: "observe", clipEntries: {}, native: new CopilotTabletAudio.NativePlayer(window.fully),
   };
 
   function setPill(id, text, cls) {
@@ -104,6 +116,16 @@
 
   // ---- audio ---------------------------------------------------------------------------
   function armAudio() {
+    state.mode = $("playback-mode").value;
+    if (state.mode === "observe") {
+      $("arm").style.display = "none";
+      setPill("s-audio", "PC authoritative", "ok");
+      return;
+    }
+    if (state.mode === "fully" && !state.native.wired()) {
+      setPill("s-audio", "native needs Fully + wired earpiece", "bad");
+      return;
+    }
     if (!state.ctx) {
       var AC = window.AudioContext || window.webkitAudioContext;
       state.ctx = new AC({ latencyHint: "interactive" });
@@ -111,7 +133,7 @@
     state.ctx.resume().then(function () {
       state.armed = true;
       $("arm").style.display = "none";
-      setPill("s-audio", "armed", "ok");
+      setPill("s-audio", "UNMEASURED " + state.mode + " probe", "warn");
       startKeepWarm();
       updateLatencyPill();
       loadBank(); // (re)load once armed so decodeAudioData has a running context
@@ -157,6 +179,7 @@
       entries.forEach(function (entry) {
         if (entry && entry.file && entry.clip_id) {
           state.clipFiles[entry.clip_id] = entry.file;
+          state.clipEntries[entry.clip_id] = entry;
           preloadClip(entry.clip_id);
         }
       });
@@ -172,7 +195,8 @@
     return fetch("/voice/clips/" + encodeURIComponent(file)).then(function (r) {
       if (!r.ok) throw new Error("clip " + r.status);
       return r.arrayBuffer();
-    }).then(function (raw) {
+    }).then(async function (raw) {
+      if (state.mode === "fully") await state.native.preload(state.clipEntries[clipId], raw);
       return state.ctx.decodeAudioData(raw);
     }).then(function (buf) {
       if (!state.buffers[clipId]) {
@@ -199,17 +223,31 @@
     }
     var tPlay = null;
     var buf = state.buffers[p.clip_id];
+    var backend = state.mode === "fully" && p.register !== "critical" ? "webaudio" : state.mode;
+    if (state.mode === "observe") {
+      bufferState = "decoded";
+    } else if (backend === "fully") {
+      try {
+        state.native.play(p.clip_id);
+        tPlay = Date.now(); // native request time only; the acoustic harness owns audible proof
+      } catch (err) {
+        bufferState = "missing";
+        logLine(err.message);
+        setPill("s-audio", "native unavailable; PC authoritative", "bad");
+      }
+    }
     // Android Go can suspend the context behind our back (backgrounding, route change);
     // a suspended context makes source.start() a silent no-op — never report a fake
     // t_play_ms for audio that cannot be sounding.
     var ctxRunning = state.ctx && state.ctx.state === "running";
-    if (state.armed && !ctxRunning) {
+    if (backend === "webaudio" && state.armed && !ctxRunning) {
       state.armed = false;
       setPill("s-audio", "suspended", "bad");
       document.getElementById("arm").style.display = "flex";
       if (state.ctx) state.ctx.resume();
     }
-    if (buf && state.armed && ctxRunning) {
+    if (backend === "webaudio" && buf && state.armed && ctxRunning) {
+      state.native.stop();
       var src = state.ctx.createBufferSource();
       src.buffer = buf;
       src.connect(state.ctx.destination);
@@ -217,7 +255,7 @@
       tPlay = Date.now();
       state.currentSource = src;
       src.onended = function () { if (state.currentSource === src) state.currentSource = null; };
-    } else {
+    } else if (backend === "webaudio") {
       bufferState = buf ? "decoded" : "missing";
       if (!buf && state.ctx) preloadClip(p.clip_id); // retry on demand — not permanent
     }
@@ -233,7 +271,7 @@
     logLine("#" + p.seq + " " + reg + " " + p.clip_id +
       (tPlay !== null ? " js+" + (tPlay - tReceive) + "ms" : " [" + bufferState + "]"));
     updateLatencyPill();
-    return { t_play_ms: tPlay, buffer_state: bufferState };
+    return { t_play_ms: tPlay, buffer_state: bufferState, backend: backend };
   }
 
   // ---- websocket -----------------------------------------------------------------------
@@ -253,13 +291,24 @@
       var tReceive = Date.now();
       var frame;
       try { frame = JSON.parse(event.data); } catch (e) { return; }
+      if (frame.type === "voice.mic.end") {
+        microphone.stop("MIC OFF — recorder finished");
+        return;
+      }
+      if (frame.type === "error" && frame.ref_type === "voice.mic.chunk") {
+        microphone.stop("MIC OFF — transport rejected capture");
+        return;
+      }
       if (frame.type !== "state.snapshot" || frame.topic !== "coaching.voice") return;
       var p = frame.payload || {};
       if (typeof p.seq !== "number" || !p.clip_id) return;
+      if (p.seq <= state.currentSeq) return;
       var played = playDispatch(p, tReceive);
       var echo = { v: 1, type: "voice.echo", seq: p.seq, clip_id: p.clip_id,
         t_dispatch_ms: p.t_wall_ms || 0, t_receive_ms: tReceive,
-        buffer_state: played.buffer_state, audio_armed: state.armed };
+        buffer_state: played.buffer_state, audio_armed: state.armed,
+        playback_backend: played.backend,
+        output_route: state.native.ready ? (state.native.wired() ? "wired" : "speaker_or_other") : "unknown" };
       // Echo the server's MONOTONIC dispatch stamp so the sidecar can compute RTT immune
       // to wall-clock steps (PR #523 review).
       if (typeof p.t_mono_ms === "number") echo.t_dispatch_mono_ms = p.t_mono_ms;
@@ -267,6 +316,9 @@
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(echo));
     };
     ws.onclose = function () {
+      microphone.stop("MIC OFF — disconnected");
+      state.native.stop();
+      state.currentSeq = -1;
       state.wsOpen = false;
       setPill("s-ws", "reconnecting…", "warn");
       setTimeout(connect, state.reconnectDelay);
@@ -276,6 +328,18 @@
   }
 
   $("arm-btn").addEventListener("click", armAudio);
+  var microphone = new CopilotTabletAudio.Microphone(function () { return state.ws; }, function (text, live) {
+    setPill("s-mic", text, live ? "bad" : "");
+    $("mic-btn").textContent = live ? "STOP MIC" : "START MIC (180s max)";
+  });
+  $("mic-btn").addEventListener("click", function () {
+    if (microphone.stream || microphone.starting) microphone.stop("MIC OFF");
+    else microphone.start();
+  });
+  window.addEventListener("pagehide", function () { microphone.stop(); state.native.stop(); });
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) { microphone.stop("MIC OFF — hidden"); state.native.stop(); }
+  });
   connect();
 })();
 </script>

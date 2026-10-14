@@ -177,14 +177,26 @@ Additive surface for a remote coaching-audio endpoint (7" tablet page over `adb 
   `{seq, clip_id, kind, urgency, register, corner, text, duration_ms, t_wall_ms, t_mono_ms}`.
   A remote endpoint plays exactly what the in-ear coach speaks — it never re-arbitrates.
 - client → sidecar `{"v":1,"type":"voice.echo","seq":N,"clip_id":"…","t_dispatch_ms":…,"t_receive_ms":…}`
-  (optional `t_play_ms`, `buffer_state` ∈ preloaded/decoded/missing, `audio_armed`): per-cue
+  (optional `t_play_ms`, `buffer_state` ∈ preloaded/decoded/missing, `audio_armed`,
+  `playback_backend` ∈ observe/webaudio/fully, `output_route` ∈ wired/speaker_or_other/unknown): per-cue
   client timestamps, recorded server-side for the audible-latency harness. Never relayed.
 - loopback-only `{"v":1,"type":"voice.demo","kind":"late_brake","urgency":"act","register":"critical"}`
   (optional `corner`, `message`): injects one synthetic advisory through the REAL voice path
   (scheduler → dispatch tap → `coaching.voice`). Bench entrypoint for #381 timeliness runs.
-- HTTP on the same port (read-only, ungated like `/health`): `/tablet/voice` (self-contained
+- HTTP on the same port (read-only, token-gated off loopback): `/tablet/voice` (self-contained
   page), `/voice/manifest.json`, `/voice/clips/<file>` (exact-match against the bank manifest
   allow-list — no traversal), `/voice/dispatches`, `/voice/echoes` (bounded ring buffers).
+- #531 microphone transport: local `voice` peers explicitly opt into PCM with
+  `{"v":1,"type":"voice.mic.subscribe","enabled":true}` (false unsubscribes; server echoes
+  the subscription). A separately armed tablet sends `voice.mic.chunk` with
+  `{capture_id,seq,sample_offset,sample_rate,pcm16}`: ASCII identifier, zero-based contiguous
+  integers, actual context sample rate and base64 little-endian signed PCM16 mono. Maximum
+  4096 samples/chunk and 180 seconds/stream. The sidecar accepts one local voice producer
+  and forwards PCM only to explicitly opted-in local voice consumers, without caching or
+  ordinary fan-out. `voice.mic.end` closes the producer stream. Consumers reject premature
+  end, discontinuity, identity/rate change and stalls; no gap is padded or spliced.
+  `/voice/tablet_audio.js` and `/voice/mic_worklet.js` are exact static routes with the same
+  token gate as the page. Audio never enters the snapshot replay or dispatch/echo ring.
 
 Full runbook + measurement methodology: [19_Tablet_Voice_Endpoint.md](19_Tablet_Voice_Endpoint.md).
 

@@ -41,6 +41,7 @@ from tools.ai_sidecar.external_protocol import (
     CLIENT_CLASS_KEY,
     CLIENT_CLASS_LUA,
     CLIENT_CLASS_SCREEN,
+    CLIENT_CLASS_VOICE,
     CLIENT_HEADER,
     ENVELOPE_KEY,
     ENVELOPE_VERSION,
@@ -107,6 +108,7 @@ from tools.ai_sidecar.external_protocol import (
     topics_are_sidecar_only,
     validate_inbound,
 )
+from tools.ai_sidecar.microphone import MIC_CHUNK, MIC_END, MIC_SUBSCRIBE, MicContinuity
 from tools.ai_sidecar.protocol import (
     EVENT_ANALYSIS_ERROR,
     EVENT_COACHING_RESPONSE,
@@ -243,6 +245,8 @@ _ABSOLUTE_PATH_RE = re.compile(r"(?:(?:[A-Za-z]:[\\/]|/)[^\s'\"<>]+)")
 _VOICE_EVENT_LOG_MAX = 512
 _voice_dispatch_log: deque[dict[str, Any]] = deque(maxlen=_VOICE_EVENT_LOG_MAX)
 _voice_echo_log: deque[dict[str, Any]] = deque(maxlen=_VOICE_EVENT_LOG_MAX)
+_voice_mic_subscribers: set[Any] = set()
+_voice_mic_streams: dict[Any, MicContinuity] = {}
 _event_loop: asyncio.AbstractEventLoop | None = None
 # Static-serving allow-list for the tablet page: the bank dir plus the EXACT clip file names
 # listed in its manifest. ``/voice/clips/<name>`` serves only names in this set, so no path
@@ -548,6 +552,8 @@ def _reset_external_state() -> None:
     _peripheral_rate_limiter.reset()
     _voice_dispatch_log.clear()
     _voice_echo_log.clear()
+    _voice_mic_subscribers.clear()
+    _voice_mic_streams.clear()
     if _race_manager is not None:
         _race_manager.reset()
     if _shift_observer is not None:
@@ -1352,6 +1358,17 @@ def _route_tablet_voice(connection: Any, request: Any, tail: str) -> Any:
     return _http_response(connection, HTTPStatus.OK, page, "text/html; charset=utf-8")
 
 
+def _route_voice_script(connection: Any, request: Any, tail: str) -> Any:
+    """Exact registered assets only; the request cannot choose a filesystem path."""
+    name = urllib.parse.urlparse(request.path).path.rsplit("/", 1)[-1]
+    if name not in {"tablet_audio.js", "mic_worklet.js"}:
+        return _http_response(connection, HTTPStatus.NOT_FOUND, "not found\n", "text/plain")
+    script = _TABLET_PAGE_PATH.with_name(name).read_text(encoding="utf-8")
+    response = _http_response(connection, HTTPStatus.OK, script, "text/javascript; charset=utf-8")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 def _route_tablet_dash(connection: Any, request: Any, tail: str) -> Any:
     page = _tablet_dash_page()
     if page is None:
@@ -1430,6 +1447,8 @@ _ROUTES: tuple[_Route, ...] = (
     _Route("/metrics", _route_metrics),
     _Route("/tablet/dash", _route_tablet_dash, token_gated=True),
     _Route("/tablet/voice", _route_tablet_voice, token_gated=True),
+    _Route("/voice/tablet_audio.js", _route_voice_script, token_gated=True),
+    _Route("/voice/mic_worklet.js", _route_voice_script, token_gated=True),
     _Route("/dash/fonts/", _route_dash_font, prefix=True, token_gated=True),
     _Route("/voice/manifest.json", _route_voice_manifest, token_gated=True),
     _Route("/voice/clips/", _route_voice_clip, prefix=True, token_gated=True),
@@ -1604,6 +1623,8 @@ def _drop_external_peer(peer: Any) -> None:
     _session_start_authorized_peers.discard(peer)
     _lua_authorized_peers.discard(peer)
     _external_peer_classes.pop(peer, None)
+    _voice_mic_subscribers.discard(peer)
+    _voice_mic_streams.pop(peer, None)
     _release_observer_feed(peer)
 
 
@@ -2591,6 +2612,62 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             make_error("peer must send hello before other frame types", ref_type=t),
         )
         return
+    if t in (MIC_SUBSCRIBE, MIC_CHUNK, MIC_END):
+        # PCM is sensitive: never use the ordinary broadcast-to-every-peer path,
+        # never cache it, and require an explicit local voice consumer subscription.
+        if not _is_loopback_peer(websocket) or _peer_class(websocket) != CLIENT_CLASS_VOICE:
+            await _safe_send(
+                websocket, make_error("microphone transport is local voice-only", ref_type=t)
+            )
+            return
+        if t == MIC_SUBSCRIBE:
+            if data["enabled"]:
+                _voice_mic_subscribers.add(websocket)
+            else:
+                _voice_mic_subscribers.discard(websocket)
+                if not _voice_mic_subscribers:
+                    await _broadcast_targets(
+                        {"v": 1, "type": MIC_END}, targets=list(_voice_mic_streams)
+                    )
+            await _safe_send(websocket, {"v": 1, "type": MIC_SUBSCRIBE, "enabled": data["enabled"]})
+            return
+        if t == MIC_END:
+            stream = _voice_mic_streams.pop(websocket, None)
+            if stream is None:
+                return
+            payload = {"v": 1, "type": MIC_END, "capture_id": stream.capture_id}
+        else:
+            if websocket not in _voice_mic_streams:
+                if _voice_mic_streams:
+                    await _safe_send(
+                        websocket, make_error("microphone already has a producer", ref_type=t)
+                    )
+                    return
+                _voice_mic_streams[websocket] = MicContinuity()
+            try:
+                _voice_mic_streams[websocket].accept(data)
+            except ValueError as exc:
+                _voice_mic_streams.pop(websocket, None)
+                await _safe_send(websocket, make_error(str(exc), ref_type=t))
+                return
+            payload = {
+                "v": 1,
+                "type": MIC_CHUNK,
+                **{
+                    k: data[k]
+                    for k in ("capture_id", "seq", "sample_offset", "sample_rate", "pcm16")
+                },
+            }
+        targets = [
+            p
+            for p in _voice_mic_subscribers
+            if p is not websocket
+            and p in _external_peers
+            and _is_loopback_peer(p)
+            and _peer_class(p) == CLIENT_CLASS_VOICE
+        ]
+        await _broadcast_targets(payload, targets=targets)
+        return
     if t == TYPE_SESSION_START and websocket not in _session_start_authorized_peers:
         await _safe_send(
             websocket,
@@ -2652,6 +2729,8 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             "t_play_ms": data.get("t_play_ms"),
             "buffer_state": data.get("buffer_state"),
             "audio_armed": data.get("audio_armed"),
+            "playback_backend": data.get("playback_backend"),
+            "output_route": data.get("output_route"),
             "t_server_ms": time.time() * 1000.0,
             "t_server_mono_ms": time.monotonic() * 1000.0,
         }
@@ -3054,6 +3133,19 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     brain_task.add_done_callback(_followup_done)
     finally:
         _external_peers.discard(websocket)
+        was_mic_subscriber = websocket in _voice_mic_subscribers
+        _voice_mic_subscribers.discard(websocket)
+        if was_mic_subscriber and not _voice_mic_subscribers:
+            await _broadcast_targets(
+                {"v": 1, "type": MIC_END},
+                targets=[p for p in _voice_mic_streams if p is not websocket],
+            )
+        mic_stream = _voice_mic_streams.pop(websocket, None)
+        if mic_stream is not None:
+            await _broadcast_targets(
+                {"v": 1, "type": MIC_END, "capture_id": mic_stream.capture_id},
+                targets=[p for p in _voice_mic_subscribers if p in _external_peers],
+            )
         _session_start_authorized_peers.discard(websocket)
         _lua_authorized_peers.discard(websocket)
         _external_peer_classes.pop(websocket, None)

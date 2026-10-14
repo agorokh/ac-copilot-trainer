@@ -12,7 +12,7 @@ A **GT race dashboard first**, for a 7″ tablet permanently mounted on the rig,
 
 `STINT ◀ · RACE (home) · COACH ▶ · MAP`
 
-**RACE** is the default and the calibre bar is a real GT3 wheel display (Porsche 992 GT3 R class). **COACH** is the post-lap debrief. **MAP** is the spatial/pace-note page. **STINT** is tyres+fuel+strategy detail. The hero (shift ribbon + gear + delta) and the electronics/tyres boards are never swept away; only the *detail* pages change.
+**RACE** is the default and the calibre bar is a real GT3 wheel display (Porsche 992 GT3 R class). **COACH** is the post-lap debrief. **MAP** is the spatial/pace-note page. **STINT** is tyres+fuel+strategy detail. Page selection sweeps the full page, as in the frozen reference mock; the five RACE bands retain their fixed geometry when RACE is selected. The coach lane repaints in place within RACE. This resolves #531's retained spec-versus-motion question in favour of the reference mock.
 
 **The point is coaching** — teaching the operator to drive. So coaching is woven into RACE (not bolted on): the live delta is the always-on coaching instrument, a quiet next-corner lane sits under it, and it repaints in place to a BRAKE takeover in the braking zone. Voice leads; the visual lane confirms.
 
@@ -208,6 +208,23 @@ The mock hardcodes illustrative telemetry; production binds the same DOM to the 
 ---
 
 ## 12. See also
+
+### Phase 3 disposition (#531, 2026-10-14)
+
+- **SimHub fusion: strike Part H.** The delivered telemetry already supplies tyre
+  pressure, core/tread temperature, wear and brake temperature; sidecar race status supplies
+  fuel and predicted lap fields. No additional computed vital has been requested. Adding a
+  community property-server dependency would duplicate these sources without supplying
+  base-AC's missing water/oil channels. Keep absent fields explicitly unknown. SimHub's
+  existing optional haptics role remains separate.
+- Native tablet audio is an **unmeasured probe** on the existing `/tablet/voice` endpoint.
+  Critical probes use Fully's local, SHA-256-verified bank files and require its wired-headset
+  readback. PC audio remains authoritative; a JavaScript/native request timestamp is not an
+  audible onset. The actual wired P7 acoustic gate remains <450 ms.
+- Microphone proof capture is explicitly armed on `/tablet/voice`, bounded to 180 seconds,
+  and stopped on disconnect, suspension, hidden page or exit. The existing audible-latency
+  harness defaults to browser AudioWorklet PCM over the existing WS; scrcpy is opt-in legacy.
+  See [the tablet voice runbook](../../19_Tablet_Voice_Endpoint.md).
 - Issue [#531](https://github.com/agorokh/ac-copilot-trainer/issues/531) — the implementation order.
 - Research: `.scratch/design2/{gt3-real-dashboards,sim-dashboard-bestpractice,car-adaptive-electronics,codebase-setup-electronics,codebase-telemetry-vitals,coaching-in-dash-ux,realestate-layout-critique}.md`.
 - Racing Atelier package: `docs/10_Development/design/racing-atelier/project/`.

@@ -7,9 +7,9 @@ endpoint's audio stack, and the speaker→mic path.
 
 Method (council-reviewed, 2026-07-11):
 
-* **Room capture** — the Android tablet's microphone is recorded ON THE PC over USB via
-  ``scrcpy --no-video --audio-source=mic* --audio-codec=raw --record=<wav>``. No mic hardware
-  on the PC is needed.
+* **Room capture** — the Android tablet's opt-in AudioWorklet microphone stream is recorded
+  ON THE PC over the existing USB-loopback WS. Legacy scrcpy capture is explicitly selectable.
+  No mic hardware on the PC is needed.
 * **Clock sync** — the PC plays a 5→15 kHz log chirp at the START and END of the capture,
   wall-stamped at the DAC via the PortAudio callback ``time_info``. Matched-filtering the known
   chirp in the recording maps recording samples ↔ PC wall clock; two anchors correct linear
@@ -41,6 +41,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import statistics
 import subprocess
 import time
@@ -50,6 +51,14 @@ import wave
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from tools.ai_sidecar.microphone import (
+    MAX_CAPTURE_SECONDS,
+    MIC_CHUNK,
+    MIC_END,
+    MIC_SUBSCRIBE,
+    MicWavCapture,
+)
 
 _log = logging.getLogger("ai_sidecar.voice.audible_latency")
 
@@ -90,6 +99,8 @@ class ChirpMark:
     t_wall_ms: float
     t_dac_wall_ms: float | None
     output_latency_ms: float | None
+    f0_hz: float = CHIRP_F0_HZ
+    f1_hz: float = CHIRP_F1_HZ
 
     def anchor_wall_ms(self) -> float:
         return self.t_dac_wall_ms if self.t_dac_wall_ms is not None else self.t_wall_ms
@@ -135,12 +146,16 @@ class AudibleLatencyReport:
 # --------------------------------------------------------------------------------------------
 
 
-def make_chirp(samplerate: int, np: Any) -> Any:
-    """Log-frequency chirp 5→15 kHz — cuts through engine roar (low/mid dominant)."""
+def make_chirp(
+    samplerate: int, np: Any, *, f0_hz: float = CHIRP_F0_HZ, f1_hz: float = CHIRP_F1_HZ
+) -> Any:
+    """Log-frequency chirp; the default 5→15 kHz band avoids low/mid engine noise."""
+    if not (math.isfinite(f0_hz) and math.isfinite(f1_hz) and 0 < f0_hz < f1_hz < samplerate / 2):
+        raise ValueError("chirp frequencies must be finite, ordered, positive and below Nyquist")
     n = int(CHIRP_DURATION_S * samplerate)
     t = np.arange(n, dtype=np.float64) / samplerate
-    k = (CHIRP_F1_HZ / CHIRP_F0_HZ) ** (1.0 / CHIRP_DURATION_S)
-    phase = 2.0 * np.pi * CHIRP_F0_HZ * (k**t - 1.0) / np.log(k)
+    k = (f1_hz / f0_hz) ** (1.0 / CHIRP_DURATION_S)
+    phase = 2.0 * np.pi * f0_hz * (k**t - 1.0) / np.log(k)
     sig = np.sin(phase)
     # 10 ms raised-cosine edges: no click transient to smear the matched-filter peak.
     edge = max(1, int(0.010 * samplerate))
@@ -220,6 +235,8 @@ def play_chirp(
     device: str | None,
     host_api: str | None,
     channel_map: tuple[int, ...] | str | None = None,
+    f0_hz: float = CHIRP_F0_HZ,
+    f1_hz: float = CHIRP_F1_HZ,
 ) -> ChirpMark:
     """Play the sync chirp on the PC output and wall-stamp its first sample at the DAC.
 
@@ -238,7 +255,7 @@ def play_chirp(
         samplerate=samplerate,
         channel_map=channel_map,
     )
-    chirp = make_chirp(samplerate, np)
+    chirp = make_chirp(samplerate, np, f0_hz=f0_hz, f1_hz=f1_hz)
     state: dict[str, Any] = {"pos": 0, "dac_wall_ms": None, "latency_ms": None}
     done = __import__("threading").Event()
 
@@ -277,6 +294,8 @@ def play_chirp(
         t_wall_ms=t_wall_ms,
         t_dac_wall_ms=state["dac_wall_ms"],
         output_latency_ms=state["latency_ms"],
+        f0_hz=f0_hz,
+        f1_hz=f1_hz,
     )
     _log.info(
         "chirp %s: wall=%.1f dac_wall=%s latency=%s",
@@ -401,12 +420,12 @@ def build_clock_map(
     samplerate is trusted. Raises ``ValueError`` when no chirp is found — without an anchor
     every downstream number would be fiction.
     """
-    template = make_chirp(samplerate, np)
     third = len(recording) // 3
     found: list[tuple[ChirpMark, int]] = []
     detail: list[dict[str, Any]] = []
     start_onset: int | None = None
     for mark in chirps:
+        template = make_chirp(samplerate, np, f0_hz=mark.f0_hz, f1_hz=mark.f1_hz)
         if mark.label == "start":
             onset, score, prom = find_onset(recording, template, np, start=0, end=2 * third)
             if onset is not None:
@@ -740,8 +759,128 @@ async def _ws_session(
             await _collect(time.monotonic() + observe_seconds)
 
 
+async def capture_browser_microphone(
+    url: str, path: Path, *, max_seconds: float, ready: asyncio.Event, stop: asyncio.Event
+) -> dict[str, Any]:
+    """Receive only explicitly subscribed, continuous local PCM; never fabricate gap silence."""
+    import websockets
+
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "ws" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError("browser microphone recording requires a loopback ws URL")
+    capture = MicWavCapture(path, max_seconds=max_seconds)
+    try:
+        async with websockets.connect(url, max_queue=8, max_size=16384) as ws:
+            await ws.send(
+                json.dumps(
+                    {
+                        "v": 1,
+                        "type": "hello",
+                        "client": "audible-microphone",
+                        "client_class": "voice",
+                    }
+                )
+            )
+            await ws.send(json.dumps({"v": 1, "type": MIC_SUBSCRIBE, "enabled": True}))
+            while not stop.is_set():
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                except TimeoutError:
+                    if ready.is_set() and not stop.is_set():
+                        raise ValueError("browser microphone stream stalled") from None
+                    continue
+                frame = json.loads(raw)
+                if frame.get("type") == MIC_CHUNK:
+                    capture.accept(frame)
+                    ready.set()
+                elif frame.get("type") == MIC_END:
+                    raise ValueError("browser microphone stopped before proof capture completed")
+                elif frame.get("type") == "error":
+                    raise ValueError(
+                        "browser microphone protocol error: " + str(frame.get("error"))
+                    )
+            await ws.send(json.dumps({"v": 1, "type": MIC_SUBSCRIBE, "enabled": False}))
+        if not capture.samples:
+            raise ValueError("browser microphone recording is empty")
+        return {
+            "backend": "browser",
+            "continuous": True,
+            "sample_rate": capture.stream.sample_rate,
+            "samples": capture.samples,
+            "capture_id": capture.stream.capture_id,
+        }
+    finally:
+        capture.close()
+
+
+async def _browser_probe(
+    args: argparse.Namespace, path: Path, total_s: float
+) -> tuple[list[ChirpMark], list[dict[str, Any]], dict[str, Any]]:
+    ready, stop = asyncio.Event(), asyncio.Event()
+    reader = asyncio.create_task(
+        capture_browser_microphone(
+            args.sidecar_url, path, max_seconds=total_s + 10, ready=ready, stop=stop
+        )
+    )
+    ready_task = asyncio.create_task(ready.wait())
+    work: asyncio.Task[Any] | None = None
+
+    async def probe() -> tuple[list[ChirpMark], list[dict[str, Any]]]:
+        await asyncio.sleep(args.lead_in)
+        kwargs = {
+            "device": args.chirp_device,
+            "host_api": args.chirp_host_api,
+            "channel_map": args.chirp_channel_map,
+            "f0_hz": getattr(args, "chirp_f0_hz", CHIRP_F0_HZ),
+            "f1_hz": getattr(args, "chirp_f1_hz", CHIRP_F1_HZ),
+        }
+        chirps = [await asyncio.to_thread(play_chirp, "start", **kwargs)]
+        collected: list[dict[str, Any]] = []
+        await _ws_session(
+            args.sidecar_url,
+            burst=args.burst,
+            burst_interval_s=args.burst_interval,
+            observe_seconds=float(args.observe_seconds),
+            collected=collected,
+        )
+        chirps.append(await asyncio.to_thread(play_chirp, "end", **kwargs))
+        await asyncio.sleep(args.tail)
+        return chirps, collected
+
+    try:
+        done, _ = await asyncio.wait(
+            {reader, ready_task}, timeout=30, return_when=asyncio.FIRST_COMPLETED
+        )
+        if reader in done:
+            reader.result()
+            raise ValueError("microphone capture ended before readiness")
+        if not ready.is_set():
+            raise ValueError("tap START MIC on /tablet/voice; no PCM arrived within 30s")
+        work = asyncio.create_task(probe())
+        done, _ = await asyncio.wait({reader, work}, return_when=asyncio.FIRST_COMPLETED)
+        if reader in done:
+            reader.result()
+            raise ValueError("microphone capture ended during the probe")
+        chirps, collected = work.result()
+        stop.set()
+        receipt = await reader
+        return chirps, collected, receipt
+    finally:
+        stop.set()
+        for task in (reader, ready_task, work):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *(t for t in (reader, ready_task, work) if t is not None), return_exceptions=True
+        )
+
+
 def run(args: argparse.Namespace) -> int:
     out_dir = Path(args.out_dir)
+    if out_dir.exists() and any(out_dir.iterdir()):
+        raise FileExistsError(
+            "proof output directory is not empty; preserve it and use a fresh run"
+        )
     out_dir.mkdir(parents=True, exist_ok=True)
     recording_path = out_dir / "room_capture.wav"
 
@@ -750,6 +889,68 @@ def run(args: argparse.Namespace) -> int:
     )
     total_s = int(args.lead_in + cue_phase_s + args.tail + 2 * CHIRP_DURATION_S) + 3
 
+    capture_backend = getattr(args, "capture", "browser")
+    if capture_backend == "browser":
+        if total_s + 10 > MAX_CAPTURE_SECONDS:
+            raise ValueError("browser capture exceeds 180s; use a shorter bounded probe")
+        try:
+            chirps, collected, receipt = asyncio.run(_browser_probe(args, recording_path, total_s))
+        except Exception as exc:
+            (out_dir / "capture.json").write_text(
+                json.dumps(
+                    {"backend": "browser", "continuous": False, "error": str(exc)}, indent=2
+                ),
+                encoding="utf-8",
+            )
+            raise
+        (out_dir / "capture.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
+    else:
+        chirps, collected = _capture_scrcpy(args, out_dir, recording_path, total_s)
+
+    http_base = args.http_url.rstrip("/")
+    dispatches = _http_get_json(f"{http_base}/voice/dispatches").get("dispatches", [])
+    echoes = _http_get_json(f"{http_base}/voice/echoes").get("echoes", [])
+    dispatches = filter_dispatches_to_window(dispatches, chirps)
+    (out_dir / "dispatches.json").write_text(json.dumps(dispatches, indent=2), encoding="utf-8")
+    (out_dir / "echoes.json").write_text(json.dumps(echoes, indent=2), encoding="utf-8")
+    (out_dir / "chirps.json").write_text(
+        json.dumps([asdict(c) for c in chirps], indent=2), encoding="utf-8"
+    )
+    (out_dir / "ws_frames.json").write_text(json.dumps(collected, indent=2), encoding="utf-8")
+    try:
+        report = analyze(
+            recording_path=recording_path,
+            bank_dir=Path(args.bank),
+            dispatches=dispatches,
+            chirps=chirps,
+            echoes=echoes,
+            act_budget_ms=args.act_budget_ms,
+            expected_dispatches=args.burst if args.burst > 0 else None,
+        )
+    except ValueError as exc:
+        (out_dir / "analysis_error.json").write_text(
+            json.dumps({"verified": False, "error": str(exc)}, indent=2), encoding="utf-8"
+        )
+        _log.error("acoustic proof failed: %s; capture preserved in %s", exc, out_dir)
+        return 2
+    if capture_backend == "browser":
+        report.assertions["browser_pcm_continuous"] = receipt["continuous"]
+    if getattr(args, "require_native_wired", False):
+        critical = [d for d in dispatches if d.get("register") == "critical"]
+        by_seq = {e.get("seq"): e for e in echoes}
+        report.assertions["native_wired_critical_observed"] = bool(critical) and all(
+            by_seq.get(d["seq"], {}).get("playback_backend") == "fully"
+            and by_seq.get(d["seq"], {}).get("output_route") == "wired"
+            and isinstance(by_seq.get(d["seq"], {}).get("t_play_ms"), (int, float))
+            for d in critical
+        )
+    return _emit_report(report, out_dir)
+
+
+def _capture_scrcpy(
+    args: argparse.Namespace, out_dir: Path, recording_path: Path, total_s: int
+) -> tuple[list[ChirpMark], list[dict[str, Any]]]:
+    """Legacy opt-in capture backend for devices on which scrcpy is stable."""
     scrcpy_cmd = [
         args.scrcpy,
         "--no-video",
@@ -768,7 +969,7 @@ def run(args: argparse.Namespace) -> int:
         time.sleep(args.lead_in)  # let the capture stream settle before the first anchor
         if proc.poll() is not None:
             _log.error("scrcpy exited early (rc=%s) — see %s", proc.returncode, scrcpy_log.name)
-            return 2
+            raise RuntimeError("scrcpy exited before recording")
 
         chirps = [
             play_chirp(
@@ -776,6 +977,8 @@ def run(args: argparse.Namespace) -> int:
                 device=args.chirp_device,
                 host_api=args.chirp_host_api,
                 channel_map=args.chirp_channel_map,
+                f0_hz=getattr(args, "chirp_f0_hz", CHIRP_F0_HZ),
+                f1_hz=getattr(args, "chirp_f1_hz", CHIRP_F1_HZ),
             )
         ]
 
@@ -796,6 +999,8 @@ def run(args: argparse.Namespace) -> int:
                 device=args.chirp_device,
                 host_api=args.chirp_host_api,
                 channel_map=args.chirp_channel_map,
+                f0_hz=getattr(args, "chirp_f0_hz", CHIRP_F0_HZ),
+                f1_hz=getattr(args, "chirp_f1_hz", CHIRP_F1_HZ),
             )
         )
         _log.info(
@@ -820,31 +1025,7 @@ def run(args: argparse.Namespace) -> int:
                     proc.wait(timeout=5)
         scrcpy_log.close()
 
-    http_base = args.http_url.rstrip("/")
-    dispatches = _http_get_json(f"{http_base}/voice/dispatches").get("dispatches", [])
-    echoes = _http_get_json(f"{http_base}/voice/echoes").get("echoes", [])
-    # The ring buffers span the whole sidecar process, not this run. Keep only cues
-    # dispatched between the two sync chirps — anything earlier/later is outside the
-    # recording and would be reported UNMATCHED, failing a perfectly good run (PR #519
-    # review). The chirps bound the capture by construction.
-    dispatches = filter_dispatches_to_window(dispatches, chirps)
-    (out_dir / "dispatches.json").write_text(json.dumps(dispatches, indent=2), encoding="utf-8")
-    (out_dir / "echoes.json").write_text(json.dumps(echoes, indent=2), encoding="utf-8")
-    (out_dir / "chirps.json").write_text(
-        json.dumps([asdict(c) for c in chirps], indent=2), encoding="utf-8"
-    )
-    (out_dir / "ws_frames.json").write_text(json.dumps(collected, indent=2), encoding="utf-8")
-
-    report = analyze(
-        recording_path=recording_path,
-        bank_dir=Path(args.bank),
-        dispatches=dispatches,
-        chirps=chirps,
-        echoes=echoes,
-        act_budget_ms=args.act_budget_ms,
-        expected_dispatches=args.burst if args.burst > 0 else None,
-    )
-    return _emit_report(report, out_dir)
+    return chirps, collected
 
 
 def analyze_cmd(args: argparse.Namespace) -> int:
@@ -904,12 +1085,25 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--tail", type=float, default=4.0)
     p_run.add_argument("--scrcpy", default="scrcpy", help="scrcpy executable path")
     p_run.add_argument(
+        "--capture",
+        choices=["browser", "scrcpy"],
+        default="browser",
+        help="microphone transport (default: opt-in browser AudioWorklet over WS)",
+    )
+    p_run.add_argument(
+        "--require-native-wired",
+        action="store_true",
+        help="fail unless critical dispatch echoes used Fully native + wired earpiece",
+    )
+    p_run.add_argument(
         "--audio-source",
         default="mic-unprocessed",
         choices=["mic", "mic-unprocessed", "mic-camcorder", "mic-voice-recognition"],
     )
     p_run.add_argument("--chirp-device", default=None, help="PC output device name substring")
     p_run.add_argument("--chirp-host-api", default=None)
+    p_run.add_argument("--chirp-f0-hz", type=float, default=CHIRP_F0_HZ)
+    p_run.add_argument("--chirp-f1-hz", type=float, default=CHIRP_F1_HZ)
     p_run.add_argument(
         "--chirp-channel-map", default=None, help="One-based output channels, e.g. 5,6"
     )

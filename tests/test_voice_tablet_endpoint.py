@@ -328,6 +328,16 @@ def test_http_tablet_page_served() -> None:
     assert b"coaching.voice" in resp.body
 
 
+@pytest.mark.parametrize("name", ["tablet_audio.js", "mic_worklet.js"])
+def test_tablet_script_routes_ship_and_keep_the_page_token_gate(name) -> None:
+    response = _get("/voice/" + name)
+    assert response.status == HTTPStatus.OK
+    assert "javascript" in response.headers.get("Content-Type")
+    assert response.headers.get("Cache-Control") == "no-store"
+    assert response.body
+    assert _get("/voice/" + name, token="secret").status == HTTPStatus.UNAUTHORIZED
+
+
 def test_http_voice_routes_404_without_bank() -> None:
     assert _get("/voice/manifest.json").status == HTTPStatus.NOT_FOUND
     assert _get("/voice/clips/anything.wav").status == HTTPStatus.NOT_FOUND
