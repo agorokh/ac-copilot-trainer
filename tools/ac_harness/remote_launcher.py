@@ -63,6 +63,7 @@ import re
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -128,6 +129,7 @@ _ALLOWED_PAYLOAD_MODULES = frozenset(
         "tools.ac_harness.plant_id",
         "tools.ac_harness.alien_scientist",
         "tools.ac_harness.corner_refine",
+        "tools.ac_harness.rig_watchdog",
     }
 )
 #: Exit code recorded when the console-session shim itself fails before/around the payload, so a
@@ -255,6 +257,8 @@ def validate_payload_argv(argv: Sequence[str]) -> list[str]:
             + " — the transport and its shim are deliberately excluded so a tampered control file "
             "cannot turn this into `reap --force` against a peer's live task."
         )
+    if tokens[1] == "tools.ac_harness.rig_watchdog" and tokens[2:3] != ["scheduled-run"]:
+        raise RemoteLaunchError("watchdog transport permits only its bounded scheduled-run payload")
     return tokens
 
 
@@ -330,6 +334,39 @@ def schtasks_create_argv(
         "/it",
         "/f",
     ]
+
+
+def watchdog_task_xml(
+    *, interpreter: Path, shim: Path, run_id: str, when: datetime, run_as: str
+) -> str:
+    """Bound the independent task itself; use the existing logged-on token, no elevation."""
+    root = ET.Element(
+        "Task", version="1.2", xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"
+    )
+    trigger = ET.SubElement(ET.SubElement(root, "Triggers"), "TimeTrigger")
+    ET.SubElement(trigger, "StartBoundary").text = when.replace(tzinfo=None).isoformat(
+        timespec="seconds"
+    )
+    ET.SubElement(trigger, "Enabled").text = "true"
+    principal = ET.SubElement(ET.SubElement(root, "Principals"), "Principal", id="Operator")
+    ET.SubElement(principal, "UserId").text = run_as
+    ET.SubElement(principal, "LogonType").text = "InteractiveToken"
+    ET.SubElement(principal, "RunLevel").text = "LeastPrivilege"
+    settings = ET.SubElement(root, "Settings")
+    for key, value in {
+        "MultipleInstancesPolicy": "IgnoreNew",
+        "DisallowStartIfOnBatteries": "false",
+        "StopIfGoingOnBatteries": "false",
+        "AllowStartOnDemand": "true",
+        "Enabled": "true",
+        "Hidden": "true",
+        "ExecutionTimeLimit": "PT660S",
+    }.items():
+        ET.SubElement(settings, key).text = value
+    action = ET.SubElement(ET.SubElement(root, "Actions", Context="Operator"), "Exec")
+    ET.SubElement(action, "Command").text = str(interpreter)
+    ET.SubElement(action, "Arguments").text = subprocess.list2cmdline([str(shim), run_id])
+    return ET.tostring(root, encoding="unicode")
 
 
 def parse_task_status(text: str) -> dict[str, str]:
@@ -418,7 +455,7 @@ def console_session_id() -> int:
     return int(ctypes.windll.kernel32.WTSGetActiveConsoleSessionId())  # type: ignore[attr-defined]
 
 
-def assert_transport_needed() -> tuple[int, int]:
+def assert_transport_needed(*, watchdog_bootstrap: bool = False) -> tuple[int, int]:
     """Refuse when the task hop is pure overhead, and fail loudly when it cannot work.
 
     Returns ``(current session, console session)``.
@@ -430,7 +467,7 @@ def assert_transport_needed() -> tuple[int, int]:
             "no active console session — nobody is logged on at the rig, so a /IT task can never "
             "run and AC has no desktop to render on. Log in at the rig first."
         )
-    if current == console:
+    if current == console and not watchdog_bootstrap:
         raise RemoteLaunchError(
             f"already running in the console session ({current}); run the harness directly — "
             "the scheduled-task hop would be pure overhead"
@@ -548,12 +585,30 @@ def _execute_validated(requested: str) -> int:
 
     run_dir = repo_root.joinpath(*RUN_DIR_RELPATH, requested)
     run_dir.mkdir(parents=True, exist_ok=True)
-    interpreter = repo_root / ".venv" / "Scripts" / "python.exe"
+    interpreter = (
+        Path(getattr(sys, "_base_executable", sys.executable))
+        if argv[:3] == ["-m", "tools.ac_harness.rig_watchdog", "scheduled-run"]
+        else repo_root / ".venv" / "Scripts" / "python.exe"
+    )
     env = dict(os.environ, PYTHONUNBUFFERED="1", AC_HARNESS_REMOTE_RUN_ID=requested)
     with (
         (run_dir / STDOUT_NAME).open("w", encoding="utf-8", errors="replace") as out,
         (run_dir / STDERR_NAME).open("w", encoding="utf-8", errors="replace") as err,
     ):
+        if argv[:3] == ["-m", "tools.ac_harness.rig_watchdog", "scheduled-run"]:
+            # Keep the guardian in the task action process. A detached child cannot escape
+            # this host's Task Scheduler Job; the task itself is independent of the agent.
+            from tools.ac_harness.rig_watchdog import main, require_scheduled_worker
+
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                try:
+                    lifetime = require_scheduled_worker(requested)
+                    code = main(argv[2:], scheduler_context=lifetime)
+                except BaseException as exc:
+                    print(f"{type(exc).__name__}: {exc}", file=err)
+                    raise
+            _write_sentinel(requested, code)
+            return code
         completed = subprocess.run(  # noqa: S603 - validated argv, shell=False, fixed interpreter
             [str(interpreter), "-u", *argv],
             cwd=str(repo_root),
@@ -583,7 +638,14 @@ def start_run(
     sleep=time.sleep,  # noqa: ANN001 - injectable for tests
 ) -> RemoteRun:
     """Create and start a per-run console-session task for ``argv``; returns its handle."""
-    assert_transport_needed()
+    validated = validate_payload_argv(argv)
+    watchdog_bootstrap = validated[:3] == ["-m", "tools.ac_harness.rig_watchdog", "scheduled-run"]
+    if watchdog_bootstrap:
+        # Same-console is necessary here: Task Scheduler separates the guardian from an
+        # agent host's kill-on-close Job. It grants no broader same-console driving hop.
+        assert_transport_needed(watchdog_bootstrap=True)
+    else:
+        assert_transport_needed()
     root = (repo_root or harness_repo_root()).resolve()
     # schtasks reads the rig's LOCAL wall clock, so /st and /sd must be local — not UTC.
     moment = now or datetime.now(UTC).astimezone()
@@ -651,8 +713,28 @@ def start_run(
     # peer could replace it between /create and first execution and have Task Scheduler run
     # anything in the console session as the logged-on user.
     shim = Path(__file__).resolve().with_name("_remote_exec.py")
-    tr_path = f"{short_path(root / '.venv' / 'Scripts' / 'python.exe')} {short_path(shim)} {run_id}"
-    created = _run(schtasks_create_argv(task=task, tr_path=tr_path, when=when, run_as=account))
+    interpreter = (
+        Path(getattr(sys, "_base_executable", sys.executable)).with_name("pythonw.exe")
+        if watchdog_bootstrap
+        else root / ".venv" / "Scripts" / "python.exe"
+    )
+    if watchdog_bootstrap:
+        definition = control / "task.xml"
+        definition.write_text(
+            watchdog_task_xml(
+                interpreter=interpreter,
+                shim=shim,
+                run_id=run_id,
+                when=when,
+                run_as=account,
+            ),
+            encoding="utf-16",
+        )
+        create_command = ["schtasks", "/create", "/tn", task, "/xml", str(definition)]
+    else:
+        tr_path = f"{short_path(interpreter)} {short_path(shim)} {run_id}"
+        create_command = schtasks_create_argv(task=task, tr_path=tr_path, when=when, run_as=account)
+    created = _run(create_command)
     if created.returncode != 0:
         # Nothing is registered, so reap_tasks will never find this run — discard its control
         # directory here or it leaks in the user's profile for every failed attempt.

@@ -260,6 +260,34 @@ def test_recorded_late_mistake_runs_real_coach_save_path():
     # No pedal event was recorded, so this is not evidence of a positive brake lead.
     assert report["measured_brake_events"] == []
     assert not lane["checks"]["measured_brake_timing_available"]
+    assert lane["cue_timing_counts"]["reactive_save"] == lane["dispatched_count"]
+    assert lane["cue_timing_counts"]["anticipatory_brake"] == 0
+    assert lane["checks"]["all_dispatched_brake_cues_before_measured_onset"] is None
+
+
+def test_reactive_save_after_a_real_brake_is_not_a_failed_anticipatory_instruction():
+    class Producer:
+        def observe(self, frame):
+            return [
+                make_advisory(kind="save", register="critical", corner=0, detail={"coach": "save"})
+            ]
+
+    lane = _lane(
+        Producer(),
+        [{"eMs": 1000}, {"eMs": 1500}],
+        [{"event_id": 0, "corner": 0, "spline": 0.2, "t_event_ms": 900}],
+        [CornerReference(0, 0.3, 0.1, 0.4, 80, best_brake_point_spline=0.2)],
+        track_m=1000,
+        manifest=build_manifest(),
+        durations={},
+        config=VoiceConfig(),
+    )
+    assert lane["dispatched_count"] > 0
+    assert lane["cue_timing_counts"]["reactive_save"] == lane["dispatched_count"]
+    assert all(cue["lead_to_measured_brake_ms"] is None for cue in lane["cues"])
+    assert lane["late_brake_onset_count"] == 0
+    assert lane["checks"]["all_dispatched_brake_cues_before_measured_onset"] is None
+    assert lane["checks"]["all_brake_prepare_leads_meet_producer_budget"] is None
 
 
 def test_replay_is_read_only_and_ignores_ambient_live_configuration(monkeypatch, isolated_ledger):
@@ -502,7 +530,10 @@ def test_late_and_duplicate_injected_contract_cues_have_falsifiable_evidence():
         def observe(self, frame):
             return [
                 make_advisory(
-                    corner=0, urgency="prepare", register="calm", detail={"brake_point_spline": 0.2}
+                    corner=0,
+                    urgency="prepare",
+                    register="calm",
+                    detail={"brake_point_spline": 0.2, "anticipatory": True},
                 )
             ]
 

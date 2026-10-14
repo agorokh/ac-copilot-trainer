@@ -1,0 +1,1117 @@
+"""Synthetic/offline harness tests. These are never receipts of live acoustic success."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+import threading
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+np = pytest.importorskip("numpy")
+
+from tools.ai_sidecar.voice import audible_latency as al  # noqa: E402
+from tools.ai_sidecar.voice import live_acceptance as live  # noqa: E402
+from tools.ai_sidecar.voice import vocabulary  # noqa: E402
+from tools.ai_sidecar.voice.manifest import MANIFEST_VERSION, ClipEntry, Manifest  # noqa: E402
+from tools.ai_sidecar.voice.playback import Bank  # noqa: E402
+
+RATE = 48000
+
+
+def voice_signal():
+    rng = np.random.default_rng(815)
+    signal = rng.normal(0, 0.12, int(RATE * 0.4))
+    signal = np.convolve(signal, np.ones(5) / 5, mode="same")
+    return signal
+
+
+def callback_evidence(*, frames=RATE * 10, period=1000 / RATE, buffer_frames=480):
+    return dict(
+        frames=frames,
+        samplerate=RATE,
+        statuses=[],
+        callback_stamps=[
+            dict(
+                sample=sample,
+                frames=min(buffer_frames, frames - sample),
+                mono_ms=100000 + sample * period,
+                wall_ms=100000 + sample * period,
+                adc_time=(100000 + sample * period - 10) / 1000,
+            )
+            for sample in range(0, frames, buffer_frames)
+        ],
+    )
+
+
+def test_exact_device_refuses_ambiguity_and_ignores_numeric_indices():
+    apis = [{"name": "Windows WASAPI"}, {"name": "MME"}]
+    devices = [
+        dict(name="Mic", hostapi=1, max_input_channels=1),
+        dict(name="Mic", hostapi=0, max_input_channels=1),
+    ]
+    assert live.exact_device(devices, apis, "Mic", "Windows WASAPI", "input") == 1
+    with pytest.raises(ValueError, match="found 2"):
+        live.exact_device(devices + devices[1:], apis, "Mic", "Windows WASAPI", "input")
+
+
+@pytest.mark.parametrize("cut", [None, 0.2])
+def test_whole_phrase_required_after_successful_onset_match(cut):
+    signal = voice_signal()
+    recording = np.zeros(RATE * 5)
+    played = signal if cut is None else signal[: int(RATE * cut)]
+    recording[RATE : RATE + len(played)] = played
+    bank = Bank(samplerate=RATE, clips={"brake": signal}, channels=1)
+    clock = al.ClockMap(0, 100000, 1000 / RATE, anchors_used=2)
+    result = live.match_audio(
+        recording, RATE, clock, [dict(seq=1, clip_id="brake", t_wall_ms=100800)], bank
+    )[0]
+    assert result["matched"]
+    assert result["latency_ms"] == pytest.approx(200, abs=2)
+    assert result["complete"] is (cut is None)
+    assert (result["completion_wall_ms"] is not None) is (cut is None)
+
+
+def test_silence_cannot_match_a_dispatched_phrase():
+    bank = Bank(samplerate=RATE, clips={"brake": voice_signal()}, channels=1)
+    result = live.match_audio(
+        np.zeros(RATE * 4),
+        RATE,
+        al.ClockMap(0, 100000, 1000 / RATE, anchors_used=2),
+        [dict(seq=1, clip_id="brake", t_wall_ms=100800)],
+        bank,
+    )[0]
+    assert not result["matched"]
+    assert not result["complete"]
+
+
+def test_one_sound_cannot_satisfy_two_different_dispatches():
+    signal = voice_signal()
+    recording = np.zeros(RATE * 5)
+    recording[RATE : RATE + len(signal)] = signal
+    bank = Bank(samplerate=RATE, clips={"one": signal, "two": signal}, channels=1)
+    dispatches = [
+        dict(seq=1, clip_id="one", t_wall_ms=100800),
+        dict(seq=2, clip_id="two", t_wall_ms=100850),
+    ]
+    results = live.match_audio(
+        recording, RATE, al.ClockMap(0, 100000, 1000 / RATE, anchors_used=2), dispatches, bank
+    )
+    assert results[0]["complete"]
+    assert not results[1]["complete"]
+    assert results[1]["reason"] == "acoustic_onset_already_assigned_to_another_dispatch"
+
+
+def test_brake_event_is_global_run_with_preceding_off_sample():
+    def tick(i, brake, lap=2):
+        return dict(
+            wall_ms=1000 + i * 50,
+            frame=dict(
+                seq=i, payload=dict(lap=lap, brake=brake, spline=0.1 + i * 0.001, speed_kmh=150)
+            ),
+        )
+
+    rows = [tick(i, b) for i, b in enumerate([0.8, 0.8, 0.8, 0, 0.06, 0.4, 0.6, 0.3, 0, 0.8, 0])]
+    events = live.brake_events(rows)
+    assert len(events) == 1  # beginning mid-braking and one-sample spike are not invented onsets
+    assert events[0]["onset_wall_ms"] == 1200
+    assert events[0]["earliest_wall_ms"] == 1150
+    assert events[0]["samples"] == 4
+
+
+def build_bundle(tmp_path):
+    """Synthetic bytes deliberately stamped synthetic, never windows_live."""
+    bank_dir = tmp_path / "bank"
+    bank_dir.mkdir()
+    reference = json.loads(
+        (Path(__file__).parent / "fixtures" / "magione_gt3r_reference.json").read_bytes()
+    )
+    reference.update(
+        source="in_game", session_uuid="synthetic-reference", lap_uuid="synthetic-reference"
+    )
+    reference["car"]["id"] = "test-car"
+    reference["track"].update(id="test-track", layout=None)
+    reference["lap"].update(lap_n=1, complete=True)
+    reference_path, ledger_path = tmp_path / "reference.json", tmp_path / "attributions.json"
+    live.write_json(reference_path, reference)
+    live.write_json(ledger_path, {"schema_version": 1, "entries": []})
+    mark = 0.6438819816816334  # Actual synthetic fixture corner 3, not its PRIME emission point.
+    signal = voice_signal()
+    live.write_wav(bank_dir / "brake.wav", signal, RATE)
+    entry = ClipEntry(
+        "brake",
+        "brake.wav",
+        "late_brake",
+        "act",
+        "critical",
+        None,
+        "Brake!",
+        live.sha(bank_dir / "brake.wav"),
+    )
+    manifest = Manifest(
+        MANIFEST_VERSION,
+        RATE,
+        "test+" + vocabulary.EXPECTED_SIGNATURE_SUFFIX,
+        vocabulary.vocabulary_hash(),
+        {"brake": entry},
+    )
+    live.write_json(bank_dir / "manifest.json", manifest.to_dict())
+    recording = np.zeros(RATE * 10)
+    chirp = al.make_chirp(RATE, np)
+    recording[RATE // 2 : RATE // 2 + len(chirp)] = chirp
+    recording[RATE * 9 : RATE * 9 + len(chirp)] = chirp
+    recording[RATE * 2 : RATE * 2 + len(signal)] = signal
+    live.write_wav(tmp_path / "microphone.wav", recording, RATE)
+    live.write_wav(tmp_path / "loopback.wav", recording[:, None], RATE)
+    session = dict(session_uuid="synthetic-session", car_id="test-car", track_id="test-track")
+    ticks, wire, taps = [], [], []
+    for i in range(160):
+        t = 100600 + i * 50
+        frame = dict(
+            v=1,
+            type="telemetry_tick",
+            seq=i + 1,
+            payload=dict(
+                lap=2,
+                speed_kmh=150,
+                spline=mark + (i - 88) * 0.001,
+                brake=0.8 if 88 <= i <= 94 else 0,
+            ),
+        )
+        row = dict(wall_ms=t, mono_ms=t, session=session, frame=frame)
+        ticks.append(row)
+        wire.append(row)
+        taps.append(
+            dict(
+                kind="producer_tick_ingress",
+                wall_ms=t,
+                mono_ms=t,
+                frame=frame,
+                tap_run_id="synthetic-tap",
+            )
+        )
+    dispatch = dict(
+        seq=1,
+        clip_id="brake",
+        kind="late_brake",
+        urgency="act",
+        register="critical",
+        corner=None,
+        text="Brake!",
+        duration_ms=400,
+        t_wall_ms=101800,
+        t_mono_ms=101800,
+        audio_routing="authoritative_pc",
+    )
+    advisory = dict(
+        kind="late_brake",
+        urgency="act",
+        register="critical",
+        corner=3,
+        spline=mark,
+        message="Brake",
+        detail={"anticipatory": True, "brake_point_spline": mark},
+    )
+    wire.append(
+        dict(
+            wall_ms=101801,
+            mono_ms=101801,
+            session=session,
+            frame=dict(type="state.snapshot", topic="coaching.voice", payload=dispatch),
+        )
+    )
+    wire.sort(key=lambda row: row["wall_ms"])
+    tap_start = dict(kind="tap_start", tap_run_id="synthetic-tap", wall_ms=99000, pid=123)
+    taps.insert(0, tap_start)
+    taps.append(
+        dict(
+            kind="advisory_submitted",
+            tap_run_id="synthetic-tap",
+            wall_ms=101800,
+            token="unique-advisory",
+            advisory=advisory,
+            producer_tick=dict(frame=ticks[24]["frame"], wall_ms=101800, mono_ms=101800),
+        )
+    )
+    taps.append(
+        dict(
+            kind="resolver_manifest",
+            tap_run_id="synthetic-tap",
+            wall_ms=99500,
+            canonical_sha256=hashlib.sha256(
+                json.dumps(manifest.to_dict(), sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        )
+    )
+    taps.append(
+        dict(
+            kind="playback_endpoint",
+            backend="RtMixerPlayback",
+            tap_run_id="synthetic-tap",
+            wall_ms=99500,
+            details=dict(device_name="Test speaker", host_api="Windows WASAPI"),
+        )
+    )
+    taps.append(
+        dict(
+            kind="voice_dispatch",
+            tap_run_id="synthetic-tap",
+            wall_ms=101800,
+            exact_object_identity=True,
+            dispatch=dispatch,
+            correlation=dict(
+                token="unique-advisory",
+                advisory=advisory,
+                producer_tick=dict(frame=ticks[24]["frame"], wall_ms=101800, mono_ms=101800),
+            ),
+        )
+    )
+    taps.append(
+        dict(
+            kind="tap_end",
+            tap_run_id="synthetic-tap",
+            wall_ms=111000,
+            dropped=0,
+            writer_error=None,
+            source_hashes_unchanged=True,
+        )
+    )
+    tap_path = tmp_path / "tap.jsonl"
+    for row in taps:
+        row.setdefault("mono_ms", row["wall_ms"])
+    for path, rows in ((tmp_path / "wire.jsonl", wire), (tap_path, taps)):
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    config = dict(
+        bank_dir=str(bank_dir),
+        instrument_tap=str(tap_path),
+        car_id="test-car",
+        track_id="test-track",
+        track_length_m=7000,
+        reference_archive=str(reference_path),
+        attribution_ledger=str(ledger_path),
+        microphone={"analysis_channel": 0},
+        output_device="Test speaker",
+        output_host_api="Windows WASAPI",
+    )
+    process = dict(pid=123, tap_run_id="synthetic-tap", create_time=12, port=8765)
+    capture = dict(
+        kind="synthetic_offline_test",
+        capture_code_sha256=live.sha(live.__file__),
+        capture_code_unchanged=True,
+        started_wall_ms=100000,
+        started_mono_ms=100000,
+        finished_wall_ms=110000,
+        finished_mono_ms=110000,
+        run_id="synthetic-run",
+        config=config,
+        recording_complete=True,
+        input_hashes_before={
+            str(path.resolve()): live.sha(path)
+            for path in (bank_dir / "brake.wav", reference_path, ledger_path)
+        },
+        sidecar_before=process,
+        sidecar_after=process,
+        chirps=[
+            dict(label="start", t_wall_ms=100500, t_dac_wall_ms=100500, output_latency_ms=0),
+            dict(label="end", t_wall_ms=109000, t_dac_wall_ms=109000, output_latency_ms=0),
+        ],
+        microphone=dict(sha256=live.sha(tmp_path / "microphone.wav"), **callback_evidence()),
+        loopback=dict(
+            sha256=live.sha(tmp_path / "loopback.wav"),
+            channels=1,
+            statuses=[],
+            warnings=[],
+            warning_capture_complete=True,
+        ),
+        wire_sha256=live.sha(tmp_path / "wire.jsonl"),
+        reference_qualification=dict(authority="legacy_unknown", allowed=True),
+    )
+    capture["input_hashes_after"] = capture["input_hashes_before"]
+    live.write_json(tmp_path / "capture.json", capture)
+    return capture, taps
+
+
+def test_full_math_pipeline_retains_synthetic_label_and_never_claims_live_pass(tmp_path):
+    build_bundle(tmp_path)
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert report["failed_gates"] == ["actual_capture_kind"]
+    assert report["engineering_acceptance"] == "NO_GO"
+    assert report["cues"][0]["corner"] == 3  # generic act dispatch had corner=None
+    assert report["cues"][0]["minimum_completion_lead_ms"] > 1200
+    assert report["timely_brake_coverage"] == 1
+    assert report["human_live_qualification"].startswith("NOT_ESTABLISHED")
+
+
+def test_explicit_cancellation_fails_even_if_waveform_was_captured(tmp_path):
+    capture, taps = build_bundle(tmp_path)
+    taps.insert(
+        -1,
+        dict(
+            kind="playback_cancel",
+            tap_run_id="synthetic-tap",
+            wall_ms=102100,
+            token="unique-advisory",
+        ),
+    )
+    Path(capture["config"]["instrument_tap"]).write_text(
+        "".join(json.dumps(row) + "\n" for row in taps)
+    )
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert not report["gates"]["no_canceled_phrases"]
+    assert report["cues"][0]["cancellations"]
+
+
+def test_ambiguous_exact_object_dispatch_is_not_guessed(tmp_path):
+    capture, taps = build_bundle(tmp_path)
+    taps.insert(-1, next(row for row in taps if row["kind"] == "voice_dispatch"))
+    Path(capture["config"]["instrument_tap"]).write_text(
+        "".join(json.dumps(row) + "\n" for row in taps)
+    )
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert not report["gates"]["all_cues_exactly_correlated"]
+    assert "minimum_completion_lead_ms" not in report["cues"][0]
+
+
+def test_input_hash_drift_cannot_pass(tmp_path):
+    capture, _ = build_bundle(tmp_path)
+    Path(capture["config"]["bank_dir"], "brake.wav").write_bytes(b"changed")
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert not report["gates"]["inputs_still_unchanged"]
+    assert not report["gates"]["all_phrases_captured_complete"]
+
+
+def test_read_jsonl_refuses_partial_tap(tmp_path):
+    path = tmp_path / "partial.jsonl"
+    path.write_text('{"kind":')
+    with pytest.raises(json.JSONDecodeError):
+        live.read_jsonl(path)
+
+
+def test_existing_outputs_are_not_overwritten(tmp_path):
+    path = tmp_path / "receipt.json"
+    live.write_json(path, {"original": True})
+    with pytest.raises(FileExistsError):
+        live.write_json(path, {"replacement": True})
+    assert json.loads(path.read_text()) == {"original": True}
+
+
+def recording_config():
+    return dict(
+        bank_dir="bank",
+        reference_archive="reference",
+        attribution_ledger="ledger",
+        car_id="car",
+        track_id="track",
+        track_length_m=7000,
+        seconds=5,
+        microphone={"name": "Mic"},
+        output_device="Speaker",
+        output_host_api="Windows WASAPI",
+        instrument_tap="tap",
+        sidecar_url="ws://127.0.0.1:8765",
+        http_url="http://127.0.0.1:8765",
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://127.0.0.1:8765",
+        "http://127.0.0.1.evil.test:8765",
+        "http://secret@127.0.0.1:8765",
+        "http://127.0.0.1:8765?token=secret",
+    ],
+)
+def test_config_rejects_nonlocal_or_credential_urls(url):
+    config = recording_config()
+    config["http_url"] = url
+    with pytest.raises(ValueError):
+        live.validate_config(config)
+
+
+def test_channel_map_uses_shared_validation_and_preserves_explicit_selection():
+    config = recording_config()
+    config["output_channel_map"] = "5,6"
+    assert live.validate_config(config)["output_channel_map"] == [5, 6]
+    config["output_channel_map"] = "5,5"
+    with pytest.raises(ValueError):
+        live.validate_config(config)
+
+
+def test_different_actual_playback_channel_map_fails(tmp_path):
+    capture, _ = build_bundle(tmp_path)
+    capture["config"]["output_channel_map"] = [5, 6]
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert not report["gates"]["one_matching_output_endpoint"]
+
+
+def test_failed_rig_ownership_never_opens_audio_or_network(tmp_path, monkeypatch):
+    def rejected(pid):
+        raise RuntimeError("different rig owner")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("must not reach hardware/network")
+
+    monkeypatch.setattr(live, "verify_owner", rejected)
+    monkeypatch.setattr(live, "health", forbidden)
+    monkeypatch.setattr(live, "Microphone", forbidden)
+    monkeypatch.setattr(live.al, "play_chirp", forbidden)
+    receipt = live.record(recording_config(), tmp_path / "new-run", 123)
+    assert not receipt["recording_complete"]
+    assert "different rig owner" in receipt["errors"][0]
+    assert not (tmp_path / "new-run" / "microphone.wav").exists()
+
+
+def test_capture_orchestration_closes_only_owned_resources(tmp_path, monkeypatch):
+    calls = []
+    original = tmp_path / "protected"
+    original.write_bytes(b"protected bytes")
+    config = recording_config()
+    config["loopback"] = {"speaker_name": "Speaker"}
+    monkeypatch.setattr(live, "verify_owner", lambda pid: dict(pid=pid))
+    monkeypatch.setattr(
+        live,
+        "immutable_inputs",
+        lambda cfg: ({str(original): live.sha(original)}, {"authority": "legacy_unknown"}),
+    )
+    monkeypatch.setattr(live, "health", lambda cfg: {"voice": "unit-test-double"})
+    monkeypatch.setattr(live, "sidecar_process", lambda cfg: {"pid": 456, "port": 8765})
+    monkeypatch.setitem(
+        sys.modules,
+        "sounddevice",
+        SimpleNamespace(
+            query_devices=lambda: [dict(name="Speaker", hostapi=0, max_output_channels=6)],
+            query_hostapis=lambda: [{"name": "Windows WASAPI"}],
+        ),
+    )
+
+    class CaptureDouble:
+        def __init__(self, *args):
+            self.tag = "microphone" if len(args) == 2 else "loopback"
+
+        def start(self):
+            calls.append(self.tag + ":start")
+
+        def finish(self, path):
+            calls.append(self.tag + ":finish")
+            path.write_bytes(b"unit test only; not WAV")
+            return dict(file=str(path), sha256=live.sha(path), statuses=[])
+
+    monkeypatch.setattr(live, "Microphone", CaptureDouble)
+    monkeypatch.setattr(live, "Loopback", CaptureDouble)
+    monkeypatch.setattr(live.al, "play_chirp", lambda label, **kwargs: al.ChirpMark(label, 1, 1, 0))
+    counter = [0]
+
+    def advancing_clock():
+        counter[0] += 0.25
+        return counter[0]
+
+    monkeypatch.setattr(live.time, "monotonic", advancing_clock)
+    monkeypatch.setattr(live.time, "sleep", lambda duration: None)
+
+    async def wire(cfg, path, ready, stop):
+        path.write_text("unit test fake wire", encoding="utf-8")
+        ready.set()
+        while not stop.is_set():
+            stop.wait(0.001)
+
+    monkeypatch.setattr(live, "record_wire", wire)
+    receipt = live.record(config, tmp_path / "new-run", 123)
+    assert receipt["recording_complete"]
+    assert receipt["input_hashes_before"] == receipt["input_hashes_after"]
+    assert calls == ["microphone:start", "loopback:start", "microphone:finish", "loopback:finish"]
+    assert not any(
+        t.name in ("acceptance-wire", "acceptance-loopback") for t in threading.enumerate()
+    )
+
+
+def test_wall_clock_step_is_an_explicit_failure(tmp_path):
+    capture, _ = build_bundle(tmp_path)
+    capture["finished_wall_ms"] += 1000
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert not report["gates"]["capture_wall_clock_stable"]
+
+
+@pytest.mark.parametrize(
+    "advisory, expected",
+    [
+        (
+            {"kind": "late_brake", "urgency": "prepare", "detail": {"anticipatory": True}},
+            "anticipatory_brake",
+        ),
+        ({"kind": "late_brake", "urgency": "act", "detail": {}}, "diagnostic_or_other"),
+        (
+            {"kind": "late_brake", "urgency": "info", "detail": {"anticipatory": True}},
+            "diagnostic_or_other",
+        ),
+        ({"kind": "save", "urgency": "act", "detail": {"coach": "save"}}, "reactive_save"),
+        (
+            {
+                "kind": "early_brake",
+                "urgency": "prepare",
+                "detail": {"coach": "prime", "root": "early_brake"},
+            },
+            "anticipatory_brake",
+        ),
+        (
+            {
+                "kind": "brake_late",
+                "urgency": "prepare",
+                "detail": {"coach": "prime", "root": "brake_late"},
+            },
+            "anticipatory_brake",
+        ),
+        (
+            {
+                "kind": "no_trail",
+                "urgency": "prepare",
+                "detail": {"coach": "prime", "root": "no_trail"},
+            },
+            "diagnostic_or_other",
+        ),
+    ],
+)
+def test_timing_class_uses_actual_producer_semantics(advisory, expected):
+    assert live.cue_timing_class(advisory) == expected
+
+
+def rewrite_taps(capture, taps):
+    Path(capture["config"]["instrument_tap"]).write_text(
+        "".join(json.dumps(row) + "\n" for row in taps)
+    )
+
+
+@pytest.mark.parametrize("kind", ["early_brake", "brake_late"])
+def test_prime_matches_reference_corner_not_emission_position(tmp_path, kind):
+    capture, taps = build_bundle(tmp_path)
+    advisory = next(row for row in taps if row["kind"] == "advisory_submitted")["advisory"]
+    advisory.update(kind=kind, spline=0.60, detail={"coach": "prime", "root": kind})
+    rewrite_taps(capture, taps)
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    cue = report["cues"][0]
+    assert cue["timing_class"] == "anticipatory_brake"
+    assert cue["brake_target_basis"] == "reference_corner_geometry"
+    assert abs(cue["brake_target_spline"] - advisory["spline"]) * 7000 > 50
+    assert cue["brake_match_count"] == 1
+    assert cue["minimum_completion_lead_ms"] > 1200
+    assert report["anticipatory_assessment"]["coverage_denominator"] == 1
+
+
+def test_reactive_save_keeps_acoustic_and_act_gates_without_false_anticipatory_pass(tmp_path):
+    capture, taps = build_bundle(tmp_path)
+    advisory = next(row for row in taps if row["kind"] == "advisory_submitted")["advisory"]
+    advisory.update(kind="save", detail={"coach": "save"})
+    rewrite_taps(capture, taps)
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert report["gates"]["all_phrases_captured_complete"]
+    assert report["gates"]["act_latency_budget"]
+    assert not report["gates"]["brake_cues_complete_with_reaction_lead"]
+    assert not report["gates"]["timely_brake_coverage"]
+    assert report["timely_brake_coverage"] is None
+    assert "minimum_completion_lead_ms" not in report["cues"][0]
+    assert report["cue_timing_counts"] == dict(
+        anticipatory_brake=0, reactive_save=1, diagnostic_or_other=0
+    )
+
+
+def test_brake_target_requires_same_corner_and_unambiguous_measured_event():
+    advisory = dict(corner=1, detail={"brake_point_spline": 0.2})
+    targets = {1: dict(spline_lo=0.19, spline_hi=0.3)}
+    event = dict(event_id=1, lap=2, spline=0.2, end_spline=0.21)
+    assert (
+        live.match_brake_target(advisory, {"lap": 2}, [event], targets, 7000)["brake_event_id"] == 1
+    )
+    assert (
+        live.match_brake_target(advisory, {"lap": 2}, [event, event], targets, 7000)[
+            "brake_match_count"
+        ]
+        == 2
+    )
+    assert "brake_event_id" not in live.match_brake_target(
+        {**advisory, "corner": 2}, {"lap": 2}, [event], targets, 7000
+    )
+    assert "brake_event_id" not in live.match_brake_target(
+        advisory, {"lap": 3}, [event], targets, 7000
+    )
+
+
+def test_coverage_counts_submitted_targets_including_dropped_cues_not_all_lap_brakes():
+    events = [
+        dict(event_id=i, lap=2, spline=s, end_spline=s + 0.01)
+        for i, s in enumerate([0.2, 0.4, 0.6])
+    ]
+    targets = {1: dict(spline_lo=0.19, spline_hi=0.5)}
+
+    def submission(mark):
+        return dict(
+            advisory=dict(
+                kind="late_brake",
+                urgency="prepare",
+                corner=1,
+                detail={"anticipatory": True, "brake_point_spline": mark},
+            ),
+            producer_tick={"frame": {"payload": {"lap": 2}}},
+        )
+
+    cues = [
+        dict(timing_class="anticipatory_brake", brake_event_id=0, minimum_completion_lead_ms=1300)
+    ]
+    config = {"track_length_m": 7000}
+    one = live.anticipatory_assessment(cues, [submission(0.2)], events, targets, config)
+    assert one["timely_brake_coverage"] == 1  # Two other pedal events were never selected to coach.
+    assert one["all_eligible_corner_coverage"].startswith("NOT_ESTABLISHED")
+    dropped = live.anticipatory_assessment(
+        cues, [submission(0.2), submission(0.4)], events, targets, config
+    )
+    assert dropped["timely_brake_coverage"] == 0.5
+    assert not dropped["coverage_gate"]
+    ambiguous = live.anticipatory_assessment(
+        cues, [submission(0.2), submission(0.9)], events, targets, config
+    )
+    assert ambiguous["unmatched_target_count"] == 1
+    assert ambiguous["timely_brake_coverage"] == 0.5
+
+
+@pytest.mark.parametrize("result, balanced", [(0, True), (1, True), (-2147417850, False)])
+def test_com_apartment_balances_only_owned_initialization_even_on_error(result, balanced):
+    calls = []
+    ole32 = SimpleNamespace(
+        CoInitializeEx=lambda reserved, mode: calls.append((reserved, mode)) or result,
+        CoUninitialize=lambda: calls.append("uninitialize"),
+    )
+    with pytest.raises(ValueError, match="record failure"):
+        with live.com_apartment(ole32):
+            raise ValueError("record failure")
+    assert calls == [(None, 0)] + (["uninitialize"] if balanced else [])
+
+
+def test_com_apartment_failure_cannot_open_recorder_or_uninitialize_unowned_state():
+    calls = []
+    ole32 = SimpleNamespace(
+        CoInitializeEx=lambda reserved, mode: -2147467259,  # E_FAIL
+        CoUninitialize=lambda: calls.append("uninitialize"),
+    )
+    with pytest.raises(RuntimeError, match="0x80004005"):
+        with live.com_apartment(ole32):
+            calls.append("unexpected recorder")
+    assert calls == []
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_loopback_com_and_recorder_lifecycle_share_the_worker_thread(monkeypatch, failure):
+    capture = live.Loopback.__new__(live.Loopback)
+    capture.spec = {"samplerate": RATE}
+    capture.stop, capture.ready = threading.Event(), threading.Event()
+    capture.blocks, capture.error = [], None
+    capture.warning_records = []
+    capture.warning_capture_complete = False
+    capture.warning_module = SimpleNamespace(warnings=SimpleNamespace(warn=lambda *a, **k: None))
+    calls = []
+
+    def note(event):
+        calls.append((event, threading.get_ident()))
+
+    ole32 = SimpleNamespace(
+        CoInitializeEx=lambda reserved, mode: note("initialize") or 0,
+        CoUninitialize=lambda: note("uninitialize"),
+    )
+    original = live.com_apartment
+    monkeypatch.setattr(live, "com_apartment", lambda: original(ole32))
+
+    class Recorder:
+        def __enter__(self):
+            note("recorder_enter")
+            return self
+
+        def record(self, numframes):
+            note("record")
+            capture.stop.set()
+            if failure:
+                raise RuntimeError("test failure")
+            return np.zeros((numframes, 2))
+
+        def __exit__(self, *args):
+            note("recorder_exit")
+
+    capture.device = SimpleNamespace(recorder=lambda **kwargs: Recorder())
+    worker = threading.Thread(target=capture._record)
+    worker.start()
+    worker.join(2)
+    assert not worker.is_alive()
+    assert [event for event, _ in calls] == [
+        "initialize",
+        "recorder_enter",
+        "record",
+        "recorder_exit",
+        "uninitialize",
+    ]
+    assert {thread_id for _, thread_id in calls} == {worker.ident}
+    assert worker.ident != threading.get_ident()
+    assert (capture.error is not None) is failure
+    assert capture.ready.is_set()
+
+
+def test_overlapping_suffix_cannot_count_as_a_second_complete_physical_phrase():
+    signal = voice_signal()
+    recording = np.zeros(RATE * 4)
+    recording[RATE : RATE + len(signal)] = signal
+    bank = Bank(samplerate=RATE, clips={"full": signal, "suffix": signal[480:]}, channels=1)
+    cues = live.match_audio(
+        recording,
+        RATE,
+        al.ClockMap(0, 100000, 1000 / RATE, anchors_used=2),
+        [
+            dict(seq=1, clip_id="full", t_wall_ms=100800),
+            dict(seq=2, clip_id="suffix", t_wall_ms=100850),
+        ],
+        bank,
+    )
+    assert cues[0]["complete"]
+    assert cues[1]["matched"]
+    assert not cues[1]["complete"]
+    assert cues[1]["completion_wall_ms"] is None
+    assert cues[1]["reason"] == "acoustic_interval_already_assigned"
+
+
+def test_physical_dispatch_missing_from_wire_is_not_silently_omitted(tmp_path):
+    capture, taps = build_bundle(tmp_path)
+    physical = json.loads(json.dumps(next(row for row in taps if row["kind"] == "voice_dispatch")))
+    physical.update(wall_ms=106000, mono_ms=106000)
+    physical["dispatch"].update(seq=2, t_wall_ms=106000, t_mono_ms=106000)
+    physical["correlation"]["token"] = "second-physical-cue"
+    taps.insert(-1, physical)
+    rewrite_taps(capture, taps)
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert not report["gates"]["physical_dispatch_wire_bijection"]
+
+
+def test_cue_producer_must_match_actual_current_session_ingress(tmp_path):
+    capture, taps = build_bundle(tmp_path)
+    for row in taps:
+        producer = row.get("producer_tick") or (row.get("correlation") or {}).get("producer_tick")
+        if producer:
+            producer["frame"] = {**producer["frame"], "seq": 999999}
+    rewrite_taps(capture, taps)
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert not report["gates"]["all_cues_exactly_correlated"]
+    assert not report["gates"]["submitted_producers_verified"]
+    assert not report["cues"][0]["producer_tick_verified"]
+    assert "minimum_completion_lead_ms" not in report["cues"][0]
+
+
+def test_temporary_wall_clock_step_cannot_improve_reaction_lead(tmp_path):
+    capture, taps = build_bundle(tmp_path)
+    wire_path = tmp_path / "wire.jsonl"
+    wire = live.read_jsonl(wire_path)
+    for row in wire + taps:
+        frame = row.get("frame") or {}
+        if frame.get("type") == "telemetry_tick" and 89 <= frame["seq"] <= 95:
+            row["wall_ms"] += 40  # Returns to the initial wall offset before capture ends.
+    wire_path.write_text("".join(json.dumps(row) + "\n" for row in wire))
+    capture["wire_sha256"] = live.sha(wire_path)
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    rewrite_taps(capture, taps)
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert report["gates"]["capture_wall_clock_stable"]  # Endpoint-only check missed this.
+    assert not report["gates"]["all_event_wall_clocks_stable"]
+    assert report["clock_offsets"]["spread_ms"] == 40
+
+
+def test_matching_corrects_template_time_scale_using_calibrated_sample_period():
+    signal = voice_signal()
+    effective_rate = RATE * 1.005
+    stretched = al._resample_linear(signal, RATE, effective_rate, np)
+    recording = np.zeros(RATE * 4)
+    onset = round(effective_rate)
+    recording[onset : onset + len(stretched)] = stretched
+    bank = Bank(samplerate=RATE, clips={"brake": signal}, channels=1)
+    cue = live.match_audio(
+        recording,
+        RATE,
+        al.ClockMap(0, 100000, 1000 / effective_rate, anchors_used=2),
+        [dict(seq=1, clip_id="brake", t_wall_ms=100800)],
+        bank,
+    )[0]
+    assert cue["complete"]
+    assert cue["template_effective_samplerate"] == pytest.approx(effective_rate)
+    assert cue["latency_ms"] == pytest.approx(200, abs=1)
+    assert cue["completion_wall_ms"] == pytest.approx(101400, abs=2)
+
+
+def test_microphone_records_every_callback_buffer_without_opening_hardware(monkeypatch):
+    callbacks = []
+    sd = SimpleNamespace(
+        query_devices=lambda: [dict(name="Mic", hostapi=0, max_input_channels=1)],
+        query_hostapis=lambda: [dict(name="Windows WASAPI")],
+        check_input_settings=lambda **kwargs: None,
+        get_portaudio_version=lambda: (190700, "synthetic-test"),
+        InputStream=lambda **kwargs: callbacks.append(kwargs["callback"]),
+    )
+    monkeypatch.setitem(sys.modules, "sounddevice", sd)
+    capture = live.Microphone(
+        dict(name="Mic", host_api="Windows WASAPI", channels=1, samplerate=RATE), 1
+    )
+    for i, frames in enumerate((480, 240, 480)):
+        callbacks[0](
+            np.zeros((frames, 1)),
+            frames,
+            SimpleNamespace(inputBufferAdcTime=1 + i, currentTime=1 + i),
+            None,
+        )
+    assert [(row["sample"], row["frames"]) for row in capture.stamps] == [
+        (0, 480),
+        (480, 240),
+        (720, 480),
+    ]
+
+
+@pytest.mark.parametrize(
+    "defect", ["sparse", "missing_size", "bad_count", "rate", "overflow", "adc", "warp"]
+)
+def test_independent_clock_evidence_rejects_incomplete_or_nonlinear_capture(defect):
+    metadata = callback_evidence()
+    rows = metadata["callback_stamps"]
+    if defect == "sparse":
+        metadata["callback_stamps"] = rows[::100]
+    elif defect == "missing_size":
+        del rows[3]["frames"]
+    elif defect == "bad_count":
+        metadata["frames"] -= 1
+    elif defect == "rate":
+        metadata["samplerate"] = 44100
+    elif defect == "overflow":
+        metadata["statuses"] = ["input overflow"]
+    elif defect == "adc":
+        rows[50]["adc_time"] = rows[49]["adc_time"]
+    else:
+        for i, row in enumerate(rows):
+            displacement = 25 * np.sin(i / len(rows) * 2 * np.pi)
+            row["mono_ms"] += displacement
+            row["adc_time"] += displacement / 1000
+    result = live.callback_clock_evidence(metadata, RATE * 10, RATE)
+    assert not result["passed"]
+    assert result["reasons"]
+
+
+def replace_bundle_audio(tmp_path, capture, *, effective_rate=RATE, onset_seconds=2):
+    recording = np.zeros(round(effective_rate * 10))
+    chirp = al.make_chirp(effective_rate, np)
+    for seconds in (0.5, 9):
+        onset = round(effective_rate * seconds)
+        recording[onset : onset + len(chirp)] = chirp
+    phrase = al._resample_linear(voice_signal(), RATE, effective_rate, np)
+    onset = round(effective_rate * onset_seconds)
+    recording[onset : onset + len(phrase)] = phrase
+    live.write_wav(tmp_path / "microphone.wav", recording, RATE)
+    capture["microphone"] = dict(
+        sha256=live.sha(tmp_path / "microphone.wav"),
+        **callback_evidence(frames=len(recording), period=1000 / effective_rate),
+    )
+
+
+def test_large_stable_skew_needs_independent_proof_and_preserves_nominal_diagnostic(tmp_path):
+    capture, _ = build_bundle(tmp_path)
+    replace_bundle_audio(tmp_path, capture, effective_rate=RATE / 0.9962)
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert report["failed_gates"] == ["actual_capture_kind"]
+    assert report["engineering_acceptance"] == "NO_GO"
+    clock = report["microphone_clock"]
+    assert not clock["nominal_drift_bounded"]
+    assert clock["nominal_drift_limit_ppm"] == 1000
+    assert clock["qualified"]
+    assert clock["chirp_template_samplerate"] == pytest.approx(RATE / 0.9962)
+    assert all(mark["score"] > 0.9 for mark in clock["chirps"])
+    assert clock["systematic_uncertainty_ms"] >= 15
+    assert report["cues"][0]["latency_ms"] == pytest.approx(200, abs=1)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "no_dac",
+        "one_anchor",
+        "different_clock",
+        "nan_period",
+        "negative_period",
+        "short_span",
+        "outside_samples",
+    ],
+)
+def test_two_acoustic_anchors_alone_do_not_qualify_timebase(defect):
+    metadata = callback_evidence()
+    independent = live.callback_clock_evidence(metadata, metadata["frames"], RATE)
+    period = 1000 / RATE
+    chirps = [al.ChirpMark("start", 100000, 100000, 0), al.ChirpMark("end", 109000, 109000, 0)]
+    marks = [dict(label="start", onset_sample=0), dict(label="end", onset_sample=RATE * 9)]
+    anchors = 2
+    if defect == "no_dac":
+        chirps[1] = al.ChirpMark("end", 109000, None, 0)
+    elif defect == "one_anchor":
+        anchors = 1
+    elif defect == "different_clock":
+        period *= 1.004
+    elif defect == "nan_period":
+        period = float("nan")
+    elif defect == "negative_period":
+        period = -period
+        marks[1]["onset_sample"] = 1
+    elif defect == "short_span":
+        marks[1]["onset_sample"] = RATE // 2
+    else:
+        marks[1]["onset_sample"] = RATE * 10
+    evidence = live.microphone_clock_evidence(
+        al.ClockMap(0, 100000, period, anchors),
+        marks,
+        chirps,
+        independent,
+        RATE,
+        dict(passed=True, spread_ms=0),
+    )
+    assert not evidence["qualified"]
+    assert evidence["reasons"]
+
+
+@pytest.mark.parametrize("onset_seconds", [2.23, 3.33])
+def test_measured_uncertainty_is_carried_into_act_latency_and_both_brake_bounds(
+    tmp_path, onset_seconds
+):
+    capture, _ = build_bundle(tmp_path)
+    replace_bundle_audio(tmp_path, capture, onset_seconds=onset_seconds)
+    capture["microphone"].update(callback_evidence(buffer_frames=4800))
+    for i, row in enumerate(capture["microphone"]["callback_stamps"]):
+        displacement = 7 * (-1) ** i
+        row["mono_ms"] += displacement
+        row["wall_ms"] += displacement
+        row["adc_time"] += displacement / 1000
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    uncertainty = report["microphone_clock"]["systematic_uncertainty_ms"]
+    assert report["gates"]["microphone_timebase_qualified"]
+    assert uncertainty > 20
+    cue = report["cues"][0]
+    if onset_seconds == 2.23:
+        assert cue["latency_ms"] + 15 < 450
+    assert cue["maximum_latency_ms"] == pytest.approx(cue["latency_ms"] + uncertainty)
+    assert cue["minimum_latency_ms"] == pytest.approx(cue["latency_ms"] - uncertainty)
+    assert not report["gates"]["act_latency_budget"]
+    event = report["brake_events"][0]
+    if onset_seconds == 3.33:
+        assert event["earliest_wall_ms"] - cue["completion_wall_ms"] - 15 >= 1200
+        assert cue["minimum_completion_lead_ms"] < 1200
+        assert not report["gates"]["brake_cues_complete_with_reaction_lead"]
+    assert cue["minimum_completion_lead_ms"] == pytest.approx(
+        event["earliest_wall_ms"] - cue["completion_wall_ms"] - uncertainty
+    )
+    assert cue["maximum_completion_lead_ms"] == pytest.approx(
+        event["onset_wall_ms"] - cue["completion_wall_ms"] + uncertainty
+    )
+
+
+@pytest.mark.parametrize("onset_seconds", [0.1, 8.8])
+def test_cues_must_fit_entirely_between_calibration_anchors(tmp_path, onset_seconds):
+    capture, _ = build_bundle(tmp_path)
+    replace_bundle_audio(tmp_path, capture, onset_seconds=onset_seconds)
+    dispatch_time = 100000 + onset_seconds * 1000 - 200
+    wire = live.read_jsonl(tmp_path / "wire.jsonl")
+    taps = live.read_jsonl(Path(capture["config"]["instrument_tap"]))
+    for row in wire:
+        if row["frame"].get("topic") == "coaching.voice":
+            row["frame"]["payload"]["t_wall_ms"] = dispatch_time
+            row["frame"]["payload"]["t_mono_ms"] = dispatch_time
+    for row in taps:
+        if row["kind"] == "voice_dispatch":
+            row["dispatch"]["t_wall_ms"] = dispatch_time
+            row["dispatch"]["t_mono_ms"] = dispatch_time
+    for path, rows in (
+        (tmp_path / "wire.jsonl", wire),
+        (Path(capture["config"]["instrument_tap"]), taps),
+    ):
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    capture["wire_sha256"] = live.sha(tmp_path / "wire.jsonl")
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert not report["gates"]["all_phrases_inside_calibration"]
+    assert "minimum_completion_lead_ms" not in report["cues"][0]
+
+
+def test_loopback_warning_capture_scopes_owner_and_preserves_foreign_dispatch():
+    import warnings
+
+    forwarded, recorded = [], []
+    original = SimpleNamespace(warn=lambda *args, **kwargs: forwarded.append((args, kwargs)))
+    backend = SimpleNamespace(warnings=original)
+    global_filters, global_dispatch = warnings.filters, warnings.showwarning
+    with live.soundcard_warning_capture(backend, recorded):
+        backend.warnings.warn("data discontinuity in recording", RuntimeWarning)
+        worker = threading.Thread(
+            target=lambda: backend.warnings.warn("foreign warning", UserWarning)
+        )
+        worker.start()
+        worker.join()
+        assert warnings.filters is global_filters and warnings.showwarning is global_dispatch
+    assert backend.warnings is original
+    assert [row["message"] for row in recorded] == ["data discontinuity in recording"]
+    assert [args[0] for args, _ in forwarded] == [
+        "data discontinuity in recording",
+        "foreign warning",
+    ]
+
+
+def test_loopback_warning_proxy_preserves_real_warning_filename_and_stacklevel():
+    import warnings
+
+    backend = SimpleNamespace(warnings=warnings)
+    recorded = []
+
+    def outer_warning():
+        backend.warnings.warn("outer caller", RuntimeWarning, stacklevel=2)
+
+    with pytest.warns(RuntimeWarning) as emitted:
+        with live.soundcard_warning_capture(backend, recorded):
+            backend.warnings.warn("owned caller", RuntimeWarning)
+            outer_warning()
+            worker = threading.Thread(
+                target=lambda: backend.warnings.warn("foreign caller", RuntimeWarning)
+            )
+            worker.start()
+            worker.join()
+    assert all(Path(row.filename).resolve() == Path(__file__).resolve() for row in emitted)
+    assert len(emitted) == 3
+    assert [row["message"] for row in recorded] == ["owned caller", "outer caller"]
+    assert backend.warnings is warnings
+
+
+def test_loopback_warning_capture_fails_closed_on_concurrent_owner_and_changed_proxy():
+    original = SimpleNamespace(warn=lambda *args, **kwargs: None)
+    backend = SimpleNamespace(warnings=original)
+    with live.soundcard_warning_capture(backend, []):
+        with pytest.raises(RuntimeError, match="another loopback"):
+            with live.soundcard_warning_capture(backend, []):
+                pytest.fail("concurrent capture acquired ownership")
+    replacement = SimpleNamespace(warn=lambda *args, **kwargs: None)
+    with pytest.raises(RuntimeError, match="proxy replaced"):
+        with live.soundcard_warning_capture(backend, []):
+            backend.warnings = replacement
+    assert backend.warnings is replacement  # Cleanup must not overwrite foreign state.
+    with live.soundcard_warning_capture(backend, []):
+        pass  # The ownership lock was released despite failed restoration.
+    assert backend.warnings is replacement
+
+
+@pytest.mark.parametrize("defect", ["warning", "legacy_no_warning_capture"])
+def test_loopback_cannot_be_clean_when_warnings_exist_or_were_not_observed(tmp_path, defect):
+    capture, _ = build_bundle(tmp_path)
+    if defect == "warning":
+        capture["loopback"]["warnings"] = [dict(message="data discontinuity in recording")]
+    else:
+        del capture["loopback"]["warning_capture_complete"]
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert not report["gates"]["loopback_no_discontinuities"]
+    assert report["engineering_acceptance"] == "NO_GO"

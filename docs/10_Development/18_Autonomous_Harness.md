@@ -469,6 +469,198 @@ traversed *and* the served tree matches the checkout the harness is running from
 | Two agents, one rig | **Yield**: a single AC instance cannot serve two autonomous sessions (see the issue-277 investigation). Check for a running `acs.exe`/peer sidecar before launching |
 | Sidecar port already in use | That's usually the Game Point launcher's supervised sidecar — the harness reuses it; don't spawn a second |
 
+## Independent bounded-run guardian (#815)
+
+For an operator-owned acceptance run, arm `tools.ac_harness.rig_watchdog` before enabling
+AI driving. The guardian is a separate Windows process with a fixed, nonrenewable deadline:
+600 seconds by default and at most 600 seconds. It does not depend on an agent heartbeat,
+UI polling, or the launching command remaining alive. This is an explicit harness step;
+ordinary Game Point launches do not automatically arm it.
+
+Keep the canonical rig-lock owner running. Read the exact identity of the AC process that
+owner launched, using its known PID (never choose a process by image name). `inspect` is
+read-only and returns the PID, executable path, and integer creation FILETIME in 100 ns ticks.
+Do not convert that creation value through a floating-point timestamp. With an existing,
+owned run directory and the two verified PIDs, the PowerShell sequence is:
+
+```powershell
+$ownedAc = python -m tools.ac_harness.rig_watchdog inspect --pid $ownedAcPid | ConvertFrom-Json
+python -m tools.ac_harness.remote_launcher start --label bounded-voice -- -m tools.ac_harness.rig_watchdog scheduled-run --owner-pid $rigOwnerPid --run-dir $runDir --ac-pid $ownedAc.pid --ac-created-filetime $ownedAc.created_filetime --ac-exe $ownedAc.exe --max-runtime-s 600
+```
+
+The remote launcher returns its exact task/run identity and disables the one-shot trigger.
+Before enabling driving, require `watchdog/armed.json` with `status=armed`, the matching
+`lifetime_basis.run_id`, a future monotonic deadline, and no final receipt. Starting a task
+alone is not arming. A failed or unconfirmed start means driving must remain disabled.
+The receipt is published only after exact process handles and canonical ownership have been
+verified; its deadline has already started. A later UI or capture failure does not cancel it.
+The run directory must not already contain a `watchdog` directory: restarting cannot reset
+the timer.
+
+This is the one supported same-console exception in the remote launcher, limited to
+`rig_watchdog scheduled-run`. The guardian is the task's action process, directly parented
+by the running Windows Schedule service. It verifies that parent PID, its exact canonical
+action/arguments, single unelevated interactive principal, and task execution limit before
+arming. The task has a fixed 660-second execution limit; the ordinary driving deadline stays
+at most 600 seconds. No credentials, elevation, or machine policy changes are requested.
+The receipt calls this `task_scheduler_owned_job`: it is independent of the agent's job,
+not outside every Windows Job. Direct `rig_watchdog start` remains available only from a
+host where detached breakaway and absence of a remaining Job can actually be proved.
+
+At the deadline the guardian posts `WM_CLOSE` only to windows belonging to the retained AC
+process. It gives healthy AC up to 15 seconds to close, then uses `TerminateProcess` on that
+same retained handle and waits at most another 5 seconds. It never targets an image name,
+a process tree, the owner, or unlisted peers. Optional explicit `--sidecar-pid`,
+`--sidecar-created-filetime`, `--sidecar-exe`, and `--sidecar-stop-file` bind the instrumented
+sidecar to the same cleanup. The fresh stop path must be directly inside the run directory;
+its graceful wait runs concurrently with AC's, followed by the same bounded handle fallback.
+Normal AC exit triggers sidecar cleanup immediately.
+
+If the original owner process exits after arming, the guardian immediately attempts a
+zero-timeout acquisition of the now-idle canonical lock. This grants only cleanup of the
+already pinned targets. It holds that lock through shutdown and handle release so a new
+owner cannot adopt the process midway through cleanup. An active replacement owner, a race
+lost acquiring the lock, a living owner releasing its lock, or an identity mismatch blocks
+actuation and produces an explicit failed receipt requiring operator intervention. The
+guardian never rediscovers or follows a replacement process.
+
+`watchdog/events.jsonl`, `watchdog/receipt.json`, and the remote launcher's per-run logs retain
+arming, deadline, ownership takeover, graceful/forced shutdown, and failure evidence. Keep
+the scheduled task until the guardian writes its final receipt and the wrapper writes its
+exit sentinel. Use `remote_launcher cleanup <run_id>` without `--force`; its existing
+sentinel/status/result checks refuse to delete a running guardian. Check the final receipt;
+an old arm receipt alone does not establish a currently protected run.
+
+The native disposable-fixture proof rejected the agent's nested kill-on-close jobs and a
+Task Scheduler child breakaway attempt. The task-owned implementation then stopped only
+the pinned sleeping fixture after a two-second deadline, preserved its same-name peer,
+retained canonical owner 51316, and passed checked task cleanup. These are synthetic native
+process-lifecycle results, not driving or audible acceptance. Focused tests also cover
+owner-death takeover, takeover races, PID reuse, shutdown failures, and live-task retention.
+
+## Live voice acceptance capture (#815)
+
+`tools.ac_harness.live_voice` opens the **existing Game Point UI** with its normal
+`GamePointConfig`, `GamePointSupervisor`, and sidecar arguments. The only sidecar substitution
+is `python -B -m tools.ai_sidecar.voice.instrumented_sidecar`: it runs the ordinary
+`tools.ai_sidecar` entrypoint with diagnostic taps around the actual producer, resolver,
+scheduler, and dispatch. It does not generate coaching cues, launch AC automatically, or
+activate AI. This source-checkout harness is not a separate packaged product launcher.
+
+An already-running canonical rig-lock owner must authorize the run. Supply that owner's
+positive PID; the helper verifies it before creating files and on Game Point preflight. It
+never reacquires or bypasses the lock. The new `--run-dir` must not exist and must be independent
+of the production Game Point root. The helper copies the effective production configuration
+into `<run>/GamePoint/settings.json`, preserving other settings and inherited environment
+entries, including secrets only in the environment. Production settings are never written.
+Run overrides pin the reference, bank, output endpoint and channel map, turn TTS and SimHub
+autostart off, and select `producer_mode` (`coach_v2`, the default, or `observer`). Observer mode
+rejects an inherited `alien_line`, because the production launcher would force Coach v2 for it.
+
+Prepare a private JSON configuration using absolute paths and exact enumerated endpoint names.
+This example is a shape, not a calibrated rig preset; substitute measured values and valid
+inputs. Neither channel 5 nor 48 kHz is assumed to be correct for another endpoint.
+
+```json
+{
+  "producer_mode": "coach_v2",
+  "reference_archive": "C:/owned/reference.json",
+  "bank_dir": "C:/owned/voice-bank",
+  "attribution_ledger": "C:/owned/lap-attributions.jsonl",
+  "car_id": "ks_porsche_911_gt3_r_2016",
+  "track_id": "spa",
+  "layout": null,
+  "track_length_m": 7004.0,
+  "seconds": 180,
+  "sidecar_url": "ws://127.0.0.1:8765",
+  "http_url": "http://127.0.0.1:8765",
+  "output_device": "EXACT PortAudio output name",
+  "output_host_api": "Windows WASAPI",
+  "output_channel_map": [5],
+  "microphone": {
+    "name": "EXACT PortAudio microphone name",
+    "host_api": "Windows WASAPI",
+    "channels": 2,
+    "samplerate": 48000,
+    "analysis_channel": 0
+  },
+  "loopback": {
+    "speaker_name": "EXACT SoundCard speaker name",
+    "samplerate": 48000
+  },
+  "protected_files": []
+}
+```
+
+`reference_archive`, `bank_dir`, and the explicit nonempty output route are required by the
+launcher. `output_channel_map` is one-based and follows the normal voice configuration guards.
+The recorder additionally requires the ledger, exact combo, positive measured track length,
+physical microphone specification, and explicit credential-free loopback WS/HTTP URLs matching
+the sidecar's port. `seconds` must be finite in `[5,600]`; budget startup, two chirps, and teardown
+inside the guardian deadline rather than setting both durations to 600. Input `instrument_tap`
+is replaced with the owned `<run>/sidecar-tap.jsonl` in `<run>/capture-config.json`. The selected
+reference must pass existing live-reference qualification. If the production sidecar uses an
+attribution-ledger override, it must designate this same ledger. `protected_files` adds immutable
+input receipts. Do not put tokens in JSON or URLs.
+
+The rig needs the normal voice/sidecar dependencies (`numpy`, `sounddevice`, `websockets`) plus
+`psutil` for listener identity; optional WASAPI loopback uses `soundcard`. Loopback may be omitted
+for diagnostics, but the analyzer then cannot pass its digital-output proof gate. An optional
+`loopback.speaker_id` disambiguates speakers sharing a name. `microphone.analysis_channel` is
+zero-based. Endpoint matching must be unique; backend/import/capture failures remain failures.
+The recorder emits real calibration chirps and opens recording devices; `analyze` is offline.
+
+With driving disabled, run this from the source checkout in the owning desktop session:
+
+```powershell
+python -m tools.ac_harness.live_voice --run-dir "$runDir" --capture-config "$captureConfig" --owner-pid $rigOwnerPid --start-sidecar
+```
+
+This command owns the canonical UI until it closes. In another terminal, check
+`<run>/launcher-receipt.json`, the instrumented sidecar's health and tap PID, and arm the guardian
+from the preceding section **before AI driving**. Include the owned sidecar identity and its
+stop file so the independent deadline also stops capture instrumentation:
+
+```powershell
+$tapStart = Get-Content -LiteralPath "$runDir/sidecar-tap.jsonl" -TotalCount 1 | ConvertFrom-Json
+$ownedSidecar = python -m tools.ac_harness.rig_watchdog inspect --pid $tapStart.pid | ConvertFrom-Json
+$ownedAc = python -m tools.ac_harness.rig_watchdog inspect --pid $ownedAcPid | ConvertFrom-Json
+python -m tools.ac_harness.remote_launcher start --label live-voice -- -m tools.ac_harness.rig_watchdog scheduled-run --owner-pid $rigOwnerPid --run-dir "$runDir" --ac-pid $ownedAc.pid --ac-created-filetime $ownedAc.created_filetime --ac-exe $ownedAc.exe --sidecar-pid $ownedSidecar.pid --sidecar-created-filetime $ownedSidecar.created_filetime --sidecar-exe $ownedSidecar.exe --sidecar-stop-file "$runDir/sidecar.stop" --max-runtime-s 600
+```
+
+Require the matching fresh `watchdog/armed.json` and future deadline as described above. A
+successful launcher call or healthy voice endpoint alone is insufficient. AI remains an
+explicit action through the existing rig controls; neither capture command enables it. Use a
+fresh capture directory for every recording:
+
+```powershell
+python -m tools.ai_sidecar.voice.live_acceptance record --config "$runDir/capture-config.json" --out "$runDir/capture" --owner-pid $rigOwnerPid
+```
+
+After recording finishes, stop driving and close the owned sidecar through Game Point (or let
+the guardian reach its fixed deadline). The stop request writes only the fresh owned
+`sidecar.stop`; the wrapper delivers SIGINT on the actual server loop so its normal cleanup
+flushes `tap_end`. A timeout is reported and falls back to the supervisor's existing cleanup
+of its own child. A peer sidecar is never signalled: `--start-sidecar` refuses an adopted peer
+as an instrumented capture. Reusing a run/tap/stop path is rejected; start a fresh run instead.
+Then analyze, after verifying the tap footer and guardian cleanup receipts:
+
+```powershell
+python -m tools.ai_sidecar.voice.live_acceptance analyze --capture "$runDir/capture" --out "$runDir/analysis.json"
+```
+
+The tap records exact advisory/utterance identities, producer timestamps, scheduler drops,
+actual output mapping, source hashes, and any writer loss. Captures retain microphone WAV,
+separate digital loopback WAV, wire events, and immutable-input receipts. Keep them private in
+ignored run storage; do not commit recordings or personal lap data. A completed recording is
+not an acceptance pass. Missing cues, source changes, lost tap rows, incomplete clocks or audio,
+and insufficient timing evidence remain explicit failed gates. Anticipatory coverage counts
+submitted brake targets, including scheduler drops; non-emitting eligible opportunities remain
+`NOT_ESTABLISHED`. Reactive SAVE cues cannot establish anticipatory brake timing. Acoustic
+waveform evidence does not establish human intelligibility, reference expertise, or permission
+to teach from an unproved reference. Offline parity tests are synthetic engineering evidence;
+physical rig/audio acceptance still requires the bounded measured run.
+
 ## Trusting the harness — the false-green KPI (EPIC #154 Part G)
 
 A harness is only worth its PASS if that PASS is *honest*. The ADR bar is **false-green rate vs

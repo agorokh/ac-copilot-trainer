@@ -55,6 +55,24 @@ _LATERAL_G_UNIT = NATIVE_ACCELERATION_UNIT
 _GRIP_ALIASES = ("accG_lat", "lat_g", "latg", "accG", "grip", "grip_used")
 
 
+def cue_timing_class(advisory: Mapping[str, Any]) -> str:
+    """Shared replay/acoustic timing scope, based on producer semantics."""
+    detail = advisory.get("detail") or {}
+    kind = advisory.get("kind")
+    if kind == "save" and detail.get("coach") == "save":
+        return "reactive_save"
+    if advisory.get("urgency") in ("prepare", "act") and (
+        (kind == "late_brake" and detail.get("anticipatory") is True)
+        or (
+            detail.get("coach") == "prime"
+            and kind in ("early_brake", "brake_late")
+            and detail.get("root") == kind
+        )
+    ):
+        return "anticipatory_brake"
+    return "diagnostic_or_other"
+
+
 def _finite(value: object) -> bool:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return False
@@ -237,8 +255,8 @@ def _brake_events(
 def _match_brake_event(
     advisory: Advisory, events: list[dict[str, Any]], refs: list[CornerReference], track_m: float
 ) -> dict[str, Any] | None:
-    # Only brake-targeted cues have a brake lead. A release/exit verdict is not a late brake cue.
-    if advisory.kind not in {"late_brake", "early_brake", "save"}:
+    # Reactive SAVE, release/exit and diagnostic cues do not promise anticipatory lead.
+    if cue_timing_class(asdict(advisory)) != "anticipatory_brake":
         return None
     ref = next((r for r in refs if r.index == advisory.corner), None)
     if ref is None:
@@ -318,6 +336,7 @@ def _lane(
                 "cue_id": len(cues),
                 "corner": advisory.corner,
                 "kind": advisory.kind,
+                "timing_class": cue_timing_class(asdict(advisory)),
                 "urgency": advisory.urgency,
                 "requested_register": advisory.register,
                 "detail": dict(advisory.detail),
@@ -408,6 +427,10 @@ def _lane(
         "emitted_count": len(cues),
         "dispatched_count": len(dispatched),
         "suppressed_count": len(cues) - len(dispatched),
+        "cue_timing_counts": {
+            category: sum(c["timing_class"] == category for c in dispatched)
+            for category in ("anticipatory_brake", "reactive_save", "diagnostic_or_other")
+        },
         "late_brake_onset_count": sum(
             c["onset_before_measured_brake"] is False for c in dispatched
         ),
