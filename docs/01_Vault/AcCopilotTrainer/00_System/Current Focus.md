@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-10-13T21:04:12Z
+last_updated: 2026-10-14T01:06:06Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-10-14-010606Z-post-merge-pr836-b43776.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-13-024744Z-issue813-recording-attempt-27327d.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-13-021316Z-post-merge-pr814-09f346.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-13-014209Z-pr814-review-recovery-d962bc.md
@@ -88,16 +89,18 @@ relates_to:
 
 # Current focus
 
-## Issue 815 Part B — native control provenance and MOZA import
+## Issue 815 Part C — MOZA offline reporting shipped
 
-Delivered in [PR #834](https://github.com/agorokh/ac-copilot-trainer/pull/834)
-as `b9dda48`, after exact-head independent review and full Windows/GitHub CI.
-Part B binds native AI/shared/unknown attribution without changing raw archives,
-applies shared consumer checks, and adds the explicit-path cache importer.
-Track Titan and the existing voice pipeline remain in place. Cache parsing grants
-inspection only; Part C reporting and Part D shadow voice/activation remain open
-and unassigned. Existing physical, C2 and parked owners below remain intact.
-See the [post-merge handoff](handoffs/2026-10-13-210412Z-post-merge-pr834-ad67.md) and
+Parts B/C shipped in [PR #834](https://github.com/agorokh/ac-copilot-trainer/pull/834)
+and [PR #836](https://github.com/agorokh/ac-copilot-trainer/pull/836).
+Part C merged as `54a3915` after exact-head independent review and full CI.
+Game Point now offers qualified native measurements and cache inspection through
+the existing report flow, plus optional MOZA advice-availability inspection.
+The observed producer schema supplies no validated expert advice. Track Titan and
+our voice pipeline remain in place; no rig, voice, live ledger or profile activation.
+Part D remains open for shadow voice evidence and a separate activation decision.
+Existing physical, C2 and parked owners below remain intact.
+See the [Part C handoff](handoffs/2026-10-14-010606Z-post-merge-pr836-b43776.md) and
 [implementation contract](../../../10_Development/16_MOZA_Qualification.md).
 
 ## Issue 813 display correctness and MAP delivery
