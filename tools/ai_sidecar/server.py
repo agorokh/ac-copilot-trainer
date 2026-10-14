@@ -1364,7 +1364,9 @@ def _route_voice_script(connection: Any, request: Any, tail: str) -> Any:
     if name not in {"tablet_audio.js", "mic_worklet.js"}:
         return _http_response(connection, HTTPStatus.NOT_FOUND, "not found\n", "text/plain")
     script = _TABLET_PAGE_PATH.with_name(name).read_text(encoding="utf-8")
-    return _http_response(connection, HTTPStatus.OK, script, "text/javascript; charset=utf-8")
+    response = _http_response(connection, HTTPStatus.OK, script, "text/javascript; charset=utf-8")
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def _route_tablet_dash(connection: Any, request: Any, tail: str) -> Any:
@@ -2623,6 +2625,10 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
                 _voice_mic_subscribers.add(websocket)
             else:
                 _voice_mic_subscribers.discard(websocket)
+                if not _voice_mic_subscribers:
+                    await _broadcast_targets(
+                        {"v": 1, "type": MIC_END}, targets=list(_voice_mic_streams)
+                    )
             await _safe_send(websocket, {"v": 1, "type": MIC_SUBSCRIBE, "enabled": data["enabled"]})
             return
         if t == MIC_END:
@@ -3127,7 +3133,13 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     brain_task.add_done_callback(_followup_done)
     finally:
         _external_peers.discard(websocket)
+        was_mic_subscriber = websocket in _voice_mic_subscribers
         _voice_mic_subscribers.discard(websocket)
+        if was_mic_subscriber and not _voice_mic_subscribers:
+            await _broadcast_targets(
+                {"v": 1, "type": MIC_END},
+                targets=[p for p in _voice_mic_streams if p is not websocket],
+            )
         mic_stream = _voice_mic_streams.pop(websocket, None)
         if mic_stream is not None:
             await _broadcast_targets(

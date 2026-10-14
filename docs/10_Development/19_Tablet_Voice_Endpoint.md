@@ -9,7 +9,7 @@
 The in-ear coach's hot path is proven off-sim (emit→dispatch asserted in CI), but "how timely
 is it *in the ear*" needs a real room: WS hop + endpoint audio stack + speaker→ear. The rig PC
 has no microphone; the 7" Android dashboard tablet (PRITOM P7, #511) provides both halves over
-one USB cable — its **mic** becomes the PC's room capture (scrcpy), and its **audio jack**
+one USB cable — its **mic** becomes the PC's room capture (opt-in AudioWorklet/WS), and its **audio jack**
 becomes the coaching output (earpiece), which also separates coaching from PC-speaker
 engine/game noise.
 
@@ -19,8 +19,10 @@ The sidecar's `VoiceCoach` playback is wrapped in a dispatch tap
 (`tools/ai_sidecar/voice/dispatch.py`): every clip the scheduler actually dispatches is
 broadcast as a `coaching.voice` frame stamped `t_wall_ms` at dispatch. The tablet opens
 `http://127.0.0.1:8765/tablet/voice` (reached over `adb reverse`), preloads every bank clip
-into WebAudio buffers, plays each `coaching.voice` frame (seq-based barge-in, silent-loop HAL
-keep-warm), and reports `voice.echo` timestamps back. The tablet never re-arbitrates cues —
+into WebAudio buffers and, in the explicit native probe, verified Fully app-local WAVs.
+Normal observation never duplicates PC playback; an armed measurement probe plays each
+`coaching.voice` frame with seq-based barge-in and reports `voice.echo` timestamps back.
+The tablet never re-arbitrates cues —
 the PC scheduler stays the single arbiter (pre-baked-bank + one-arbiter invariants hold).
 
 ## Runbook — coaching in the earpiece (operator)
@@ -114,6 +116,11 @@ act cues (+ stated systematic uncertainty) fit the 450 ms budget.
   uncertainty (±15 ms with DAC stamps, ±60 ms without) rather than hiding it.
 - Cross-device clocks are never subtracted: tablet-clock intervals (`t_play − t_receive`) and
   server-clock intervals (echo RTT) are reported separately.
+- For a capture path that cannot record the default 5–15 kHz anchors, explicitly select a
+  lower calibration band, for example `--chirp-f0-hz 800 --chirp-f1-hz 4000`. The frequency
+  pair is retained in each `chirps.json` mark and used by later analysis; historical marks
+  without those fields retain 5–15 kHz. Correlation, two-anchor drift correction and latency
+  thresholds are unchanged. Missing chirps produce `analysis_error.json` and exit 2.
 - An unmatched cue is a FAILED assertion, not a dropped row — silence must never read as
   timely.
 

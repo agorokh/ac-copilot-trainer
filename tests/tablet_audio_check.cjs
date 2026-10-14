@@ -9,9 +9,18 @@ const chunks = [];
 const context = vm.createContext({console, crypto: webcrypto, Uint8Array, ArrayBuffer, DataView,
   setTimeout, clearTimeout, btoa: s => Buffer.from(s, "binary").toString("base64"),
   AudioWorkletProcessor: class { constructor() { this.port = {postMessage: v => chunks.push(v)}; } },
-  registerProcessor: (name, cls) => context.Processor = cls, currentFrame: 0});
+  registerProcessor: (name, cls) => context.Processor = cls, currentFrame: 0, sampleRate: 48000});
 vm.runInContext(fs.readFileSync(path.join(dir, "tablet_audio.js"), "utf8"), context);
 vm.runInContext(fs.readFileSync(path.join(dir, "mic_worklet.js"), "utf8"), context);
+const dash = fs.readFileSync(path.join(dir, "../../dash/web/tablet_dash.html"), "utf8");
+const liveSpinner = dash.match(/  function liveDiscreteSpinner\(level, modes\) \{[\s\S]*?\n  \}/)[0];
+vm.runInContext(liveSpinner + ";globalThis.liveSpinner=liveDiscreteSpinner", context);
+assert.equal(context.liveSpinner(3, 12).max, 11);
+assert.equal(context.liveSpinner(0, 12).value, 0);
+assert.equal(context.liveSpinner(0, 0), null);
+assert.equal(context.liveSpinner(12, 12).value, null);
+assert.equal(context.liveSpinner(undefined, 12).value, null);
+assert.equal(context.liveSpinner(3, undefined).range_known, false);
 (async function () {
   const calls = [];
   let wired = true;
@@ -34,8 +43,11 @@ vm.runInContext(fs.readFileSync(path.join(dir, "mic_worklet.js"), "utf8"), conte
   assert.throws(() => player.play("bad"), /verified/);
 
   const processor = new context.Processor();
+  assert.equal(processor.process([[]]), true); // source warm-up emits no fake samples
+  assert.equal(chunks.length, 0);
+  assert.equal(processor.process([[new Float32Array(128)]]), true);
   for (let i = 0; i < 16; i++) {
-    context.currentFrame = i * 128;
+    context.currentFrame = 11648 + i * 128; // P7 initial capture-clock settlement
     const data = new Float32Array(128); data[0] = -1; data[1] = 1;
     assert.equal(processor.process([[data]]), true);
   }

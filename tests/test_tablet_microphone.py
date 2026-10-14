@@ -22,6 +22,7 @@ from tools.ai_sidecar.microphone import (
     MicWavCapture,
     decode_chunk,
 )
+from tools.ai_sidecar.voice import audible_latency as al
 from tools.ai_sidecar.voice.audible_latency import capture_browser_microphone
 
 
@@ -223,3 +224,13 @@ def test_native_helper_and_worklet_execute_in_node():
     script = Path(__file__).with_name("tablet_audio_check.cjs")
     result = subprocess.run([node, str(script)], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_run_preserves_all_existing_proof_files(tmp_path):
+    from types import SimpleNamespace
+
+    existing = tmp_path / "capture.json"
+    existing.write_text("prior evidence", encoding="utf-8")
+    with pytest.raises(FileExistsError, match="preserve"):
+        al.run(SimpleNamespace(out_dir=str(tmp_path)))
+    assert existing.read_text(encoding="utf-8") == "prior evidence"

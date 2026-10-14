@@ -53,6 +53,8 @@
   #arm p { color: var(--dim); font-size: 16px; max-width: 640px; text-align: center; }
   .r-calm { color: var(--calm); } .r-alert { color: var(--alert); }
   .r-urgent { color: var(--urgent); } .r-critical { color: var(--critical); }
+  #mic-btn, #playback-mode { font-size: 18px; min-height: 44px; padding: 8px 12px;
+    background: var(--panel); color: var(--text); border: 1px solid var(--edge); }
 </style>
 </head>
 <body>
@@ -289,6 +291,14 @@
       var tReceive = Date.now();
       var frame;
       try { frame = JSON.parse(event.data); } catch (e) { return; }
+      if (frame.type === "voice.mic.end") {
+        microphone.stop("MIC OFF — recorder finished");
+        return;
+      }
+      if (frame.type === "error" && frame.ref_type === "voice.mic.chunk") {
+        microphone.stop("MIC OFF — transport rejected capture");
+        return;
+      }
       if (frame.type !== "state.snapshot" || frame.topic !== "coaching.voice") return;
       var p = frame.payload || {};
       if (typeof p.seq !== "number" || !p.clip_id) return;

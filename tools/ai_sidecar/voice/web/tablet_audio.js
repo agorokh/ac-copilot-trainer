@@ -89,6 +89,7 @@
         var socket = self.getSocket();
         if (event.data.error || !socket || socket !== ws || socket.readyState !== 1 ||
             socket.bufferedAmount > 65536 || self.ctx.state !== "running") {
+          if (event.data.error) console.warn("microphone integrity", event.data);
           self.stop(event.data.error || "microphone disconnected/backpressured/suspended");
           return;
         }

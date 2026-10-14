@@ -89,6 +89,18 @@ relates_to:
 
 # Current focus
 
+## Issue 531 — native audio and microphone delivery in progress
+
+Operator relabelled authority supersedes the old not-this-cycle hold; live issue is OPEN
+with enhancement only. [PR #846](https://github.com/agorokh/ac-copilot-trainer/pull/846)
+implements bounded opt-in mic capture, an explicitly unmeasured native wired probe and
+preserves live TC/ABS mode ranges. PC critical routing remains authoritative. Actual P7
+speech and chirps are audible, but no valid acoustic clock map has been recovered.
+Target-device synthetic soak, final review and distribution remain in progress. See the
+[dated checkpoint](handoffs/2026-10-14-230100Z-issue531-p7-probe-76c9ab.md) for evidence,
+failed attempts, privacy and rig-cleanup boundaries. #813 physical/lap gates are retained.
+
+
 ## Issue 815 Part C — MOZA offline reporting shipped
 
 Parts B/C shipped in [PR #834](https://github.com/agorokh/ac-copilot-trainer/pull/834)

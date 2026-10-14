@@ -514,6 +514,17 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     return d;
   }
   var absTileRef = null, tcTileRef = null;
+  function liveDiscreteSpinner(level, modes) {
+    if (modes === 0) return null; // explicitly not fitted, distinct from level zero/OFF
+    var value = typeof level === "number" && Number.isFinite(level) ? level : null;
+    // CSP mode counts are the real per-car denominator. Do not drop them when
+    // replacing saved setup values with fresh physics values (#531 / #813).
+    if (Number.isInteger(modes) && modes > 1 && modes <= 256) {
+      if (!Number.isInteger(value) || value < 0 || value >= modes) value = null;
+      return {value: value, min: 0, max: modes - 1, step: 1};
+    }
+    return {value: value, range_known: false};
+  }
   function renderElectronics() {
     var host = $("etiles");
     host.innerHTML = "";
@@ -543,8 +554,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     var source = live ? "LIVE CAR" : sp.some(function(r){return r.source === "saved_setup";}) ? "SAVED" : "SETUP";
     if (live) {
       bias = {value:fin(S.tick.brake_bias_pct),unit:"%"};
-      tc = S.tick.tc_modes === 0 ? null : {value:fin(S.tick.tc_level)};
-      abs = S.tick.abs_modes === 0 ? null : {value:fin(S.tick.abs_level)};
+      tc = liveDiscreteSpinner(S.tick.tc_level, S.tick.tc_modes);
+      abs = liveDiscreteSpinner(S.tick.abs_level, S.tick.abs_modes);
     }
     var biasView=biasTile(bias);
     biasView.children[0].textContent="BRAKE BIAS · "+source;

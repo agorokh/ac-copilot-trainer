@@ -7,9 +7,9 @@ endpoint's audio stack, and the speaker→mic path.
 
 Method (council-reviewed, 2026-07-11):
 
-* **Room capture** — the Android tablet's microphone is recorded ON THE PC over USB via
-  ``scrcpy --no-video --audio-source=mic* --audio-codec=raw --record=<wav>``. No mic hardware
-  on the PC is needed.
+* **Room capture** — the Android tablet's opt-in AudioWorklet microphone stream is recorded
+  ON THE PC over the existing USB-loopback WS. Legacy scrcpy capture is explicitly selectable.
+  No mic hardware on the PC is needed.
 * **Clock sync** — the PC plays a 5→15 kHz log chirp at the START and END of the capture,
   wall-stamped at the DAC via the PortAudio callback ``time_info``. Matched-filtering the known
   chirp in the recording maps recording samples ↔ PC wall clock; two anchors correct linear
@@ -41,6 +41,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import statistics
 import subprocess
 import time
@@ -98,6 +99,8 @@ class ChirpMark:
     t_wall_ms: float
     t_dac_wall_ms: float | None
     output_latency_ms: float | None
+    f0_hz: float = CHIRP_F0_HZ
+    f1_hz: float = CHIRP_F1_HZ
 
     def anchor_wall_ms(self) -> float:
         return self.t_dac_wall_ms if self.t_dac_wall_ms is not None else self.t_wall_ms
@@ -143,12 +146,16 @@ class AudibleLatencyReport:
 # --------------------------------------------------------------------------------------------
 
 
-def make_chirp(samplerate: int, np: Any) -> Any:
-    """Log-frequency chirp 5→15 kHz — cuts through engine roar (low/mid dominant)."""
+def make_chirp(
+    samplerate: int, np: Any, *, f0_hz: float = CHIRP_F0_HZ, f1_hz: float = CHIRP_F1_HZ
+) -> Any:
+    """Log-frequency chirp; the default 5→15 kHz band avoids low/mid engine noise."""
+    if not (math.isfinite(f0_hz) and math.isfinite(f1_hz) and 0 < f0_hz < f1_hz < samplerate / 2):
+        raise ValueError("chirp frequencies must be finite, ordered, positive and below Nyquist")
     n = int(CHIRP_DURATION_S * samplerate)
     t = np.arange(n, dtype=np.float64) / samplerate
-    k = (CHIRP_F1_HZ / CHIRP_F0_HZ) ** (1.0 / CHIRP_DURATION_S)
-    phase = 2.0 * np.pi * CHIRP_F0_HZ * (k**t - 1.0) / np.log(k)
+    k = (f1_hz / f0_hz) ** (1.0 / CHIRP_DURATION_S)
+    phase = 2.0 * np.pi * f0_hz * (k**t - 1.0) / np.log(k)
     sig = np.sin(phase)
     # 10 ms raised-cosine edges: no click transient to smear the matched-filter peak.
     edge = max(1, int(0.010 * samplerate))
@@ -228,6 +235,8 @@ def play_chirp(
     device: str | None,
     host_api: str | None,
     channel_map: tuple[int, ...] | str | None = None,
+    f0_hz: float = CHIRP_F0_HZ,
+    f1_hz: float = CHIRP_F1_HZ,
 ) -> ChirpMark:
     """Play the sync chirp on the PC output and wall-stamp its first sample at the DAC.
 
@@ -246,7 +255,7 @@ def play_chirp(
         samplerate=samplerate,
         channel_map=channel_map,
     )
-    chirp = make_chirp(samplerate, np)
+    chirp = make_chirp(samplerate, np, f0_hz=f0_hz, f1_hz=f1_hz)
     state: dict[str, Any] = {"pos": 0, "dac_wall_ms": None, "latency_ms": None}
     done = __import__("threading").Event()
 
@@ -285,6 +294,8 @@ def play_chirp(
         t_wall_ms=t_wall_ms,
         t_dac_wall_ms=state["dac_wall_ms"],
         output_latency_ms=state["latency_ms"],
+        f0_hz=f0_hz,
+        f1_hz=f1_hz,
     )
     _log.info(
         "chirp %s: wall=%.1f dac_wall=%s latency=%s",
@@ -409,12 +420,12 @@ def build_clock_map(
     samplerate is trusted. Raises ``ValueError`` when no chirp is found — without an anchor
     every downstream number would be fiction.
     """
-    template = make_chirp(samplerate, np)
     third = len(recording) // 3
     found: list[tuple[ChirpMark, int]] = []
     detail: list[dict[str, Any]] = []
     start_onset: int | None = None
     for mark in chirps:
+        template = make_chirp(samplerate, np, f0_hz=mark.f0_hz, f1_hz=mark.f1_hz)
         if mark.label == "start":
             onset, score, prom = find_onset(recording, template, np, start=0, end=2 * third)
             if onset is not None:
@@ -820,6 +831,8 @@ async def _browser_probe(
             "device": args.chirp_device,
             "host_api": args.chirp_host_api,
             "channel_map": args.chirp_channel_map,
+            "f0_hz": getattr(args, "chirp_f0_hz", CHIRP_F0_HZ),
+            "f1_hz": getattr(args, "chirp_f1_hz", CHIRP_F1_HZ),
         }
         chirps = [await asyncio.to_thread(play_chirp, "start", **kwargs)]
         collected: list[dict[str, Any]] = []
@@ -864,6 +877,10 @@ async def _browser_probe(
 
 def run(args: argparse.Namespace) -> int:
     out_dir = Path(args.out_dir)
+    if out_dir.exists() and any(out_dir.iterdir()):
+        raise FileExistsError(
+            "proof output directory is not empty; preserve it and use a fresh run"
+        )
     out_dir.mkdir(parents=True, exist_ok=True)
     recording_path = out_dir / "room_capture.wav"
 
@@ -900,15 +917,22 @@ def run(args: argparse.Namespace) -> int:
         json.dumps([asdict(c) for c in chirps], indent=2), encoding="utf-8"
     )
     (out_dir / "ws_frames.json").write_text(json.dumps(collected, indent=2), encoding="utf-8")
-    report = analyze(
-        recording_path=recording_path,
-        bank_dir=Path(args.bank),
-        dispatches=dispatches,
-        chirps=chirps,
-        echoes=echoes,
-        act_budget_ms=args.act_budget_ms,
-        expected_dispatches=args.burst if args.burst > 0 else None,
-    )
+    try:
+        report = analyze(
+            recording_path=recording_path,
+            bank_dir=Path(args.bank),
+            dispatches=dispatches,
+            chirps=chirps,
+            echoes=echoes,
+            act_budget_ms=args.act_budget_ms,
+            expected_dispatches=args.burst if args.burst > 0 else None,
+        )
+    except ValueError as exc:
+        (out_dir / "analysis_error.json").write_text(
+            json.dumps({"verified": False, "error": str(exc)}, indent=2), encoding="utf-8"
+        )
+        _log.error("acoustic proof failed: %s; capture preserved in %s", exc, out_dir)
+        return 2
     if capture_backend == "browser":
         report.assertions["browser_pcm_continuous"] = receipt["continuous"]
     if getattr(args, "require_native_wired", False):
@@ -953,6 +977,8 @@ def _capture_scrcpy(
                 device=args.chirp_device,
                 host_api=args.chirp_host_api,
                 channel_map=args.chirp_channel_map,
+                f0_hz=getattr(args, "chirp_f0_hz", CHIRP_F0_HZ),
+                f1_hz=getattr(args, "chirp_f1_hz", CHIRP_F1_HZ),
             )
         ]
 
@@ -973,6 +999,8 @@ def _capture_scrcpy(
                 device=args.chirp_device,
                 host_api=args.chirp_host_api,
                 channel_map=args.chirp_channel_map,
+                f0_hz=getattr(args, "chirp_f0_hz", CHIRP_F0_HZ),
+                f1_hz=getattr(args, "chirp_f1_hz", CHIRP_F1_HZ),
             )
         )
         _log.info(
@@ -1074,6 +1102,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_run.add_argument("--chirp-device", default=None, help="PC output device name substring")
     p_run.add_argument("--chirp-host-api", default=None)
+    p_run.add_argument("--chirp-f0-hz", type=float, default=CHIRP_F0_HZ)
+    p_run.add_argument("--chirp-f1-hz", type=float, default=CHIRP_F1_HZ)
     p_run.add_argument(
         "--chirp-channel-map", default=None, help="One-based output channels, e.g. 5,6"
     )

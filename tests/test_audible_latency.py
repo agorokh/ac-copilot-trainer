@@ -26,6 +26,24 @@ SR = 48_000
 RNG = np.random.default_rng(20260711)
 
 
+def test_low_band_chirps_carry_their_own_historical_template() -> None:
+    recording = np.zeros(SR * 8, dtype=np.float32)
+    template = al.make_chirp(SR, np, f0_hz=800, f1_hz=4000)
+    recording[SR : SR + len(template)] = template
+    recording[SR * 6 : SR * 6 + len(template)] = template
+    marks = [
+        al.ChirpMark("start", 1000, 1000, 10, f0_hz=800, f1_hz=4000),
+        al.ChirpMark("end", 6000, 6000, 10, f0_hz=800, f1_hz=4000),
+    ]
+    clock, found = al.build_clock_map(recording, SR, marks, np)
+    assert clock.wall_ms(SR * 3) == pytest.approx(3000, abs=2)
+    assert all(row["onset_sample"] is not None for row in found)
+    # Legacy marks retain the original 5-15 kHz template, rather than reinterpreting old proof.
+    assert al.ChirpMark("start", 1000, 1000, 10).f0_hz == 5000
+    with pytest.raises(ValueError):
+        al.make_chirp(SR, np, f0_hz=4000, f1_hz=800)
+
+
 def _write_wav(path: Path, signal: np.ndarray, sr: int = SR) -> None:
     pcm = (np.clip(signal, -1.0, 1.0) * 32767.0).astype("<i2")
     with wave.open(str(path), "wb") as wf:
