@@ -6,19 +6,20 @@
 #   vault  : create branch `vault/post-merge-pr<N>` from main, restore vault edits onto it,
 #            commit with --no-verify (docs-only scope), push, label PR `vault-only`, enable auto-merge
 #
-# WIP handling: on entry, dirty tree is auto-stashed under a named ref.
-# On success the stash is restored; stash pop failure is a hard stop (exit 10).
+# WIP handling (governance-hub#814): never stashes. A dirty tree stays in place; the hub
+# primitive sync_fast_forward.py refuses (exit 10) when incoming changes would touch a dirty or
+# untracked path, and otherwise fast-forwards main around it.
 #
 # Exit codes (contract — agent prompt depends on these):
 #   0   success
 #   2   usage (bad args / missing tools)
-#   10  git conflict (ff-pull failed, stash conflict on pop, vault commit failed)
+#   10  git conflict (ff-pull failed, dirty paths overlap incoming changes, vault commit failed)
 #   11  branch-protection rejection (push to vault branch refused)
 #   12  PR state unexpected (neither OPEN nor MERGED), vault PR creation failed, or
 #       vault push rejected for recoverable reasons (e.g. non-fast-forward — fix remote and retry)
 #   13  linked issue still OPEN after merge (warning-class; agent should surface, not retry)
-#   20  infrastructure error (gh missing/auth, network, git fetch, stash push failure,
-#       missing local main, linked-issue verify failure)
+#   20  infrastructure error (gh missing/auth, network, git fetch, hub primitive missing for a
+#       dirty tree, missing local main, linked-issue verify failure)
 #   30  vault scope violation (would-be commit touches paths outside docs/01_Vault/)
 #
 # Usage:
@@ -65,79 +66,46 @@ if [[ -z "$REPO_ROOT" ]]; then
 fi
 cd "$REPO_ROOT"
 
-STASH_LABEL="post-merge-pr${PR}-wip"
-STASH_BASE_BRANCH=""
-STASH_BASE_OID=""
-SAVED_STASH=""
+# governance-hub#814: post-merge never stashes. The hub primitive owns the dirty-tree logic
+# (overlap check, pinned fast-forward). See the hub's scripts/sync_fast_forward.py.
+HUB_SCRIPTS="${FLEET_GOVERNANCE_ROOT:-${HOME:-}/.fleet-governance}/scripts"
+SYNC_FF="$HUB_SCRIPTS/sync_fast_forward.py"
 
-stash_wip_if_dirty() {
-  if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
-    echo "Working tree dirty; stashing as '${STASH_LABEL}'..."
-    if git stash push --include-untracked --message "$STASH_LABEL" >/dev/null 2>&1; then
-      SAVED_STASH="$(git stash list --grep="$STASH_LABEL" --pretty=format:'%gd' | head -n1)"
-      STASH_BASE_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-      STASH_BASE_OID="$(git rev-parse --verify HEAD 2>/dev/null || true)"
-      echo "Stashed: ${SAVED_STASH:-(unknown ref)}"
-    else
-      echo "error: git stash push failed; resolve the working tree and retry." >&2
-      exit 20
-    fi
-  fi
+tree_is_dirty() {
+  ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --others --exclude-standard)" ]]
 }
-
-restore_stash_best_effort() {
-  if [[ -n "$SAVED_STASH" ]]; then
-  # agent-factory#1778: a stash diff is computed against the branch it was taken on.
-  # This script checks out main between stash and restore, so a pop here would replay
-  # that diff onto a different tree and write conflict markers into the operator's own
-  # files. Refuse instead: the stash stays intact and recovery is exact.
-  local _head_now=""
-  _head_now="$(git rev-parse --verify HEAD 2>/dev/null || true)"
-  if [[ -n "$STASH_BASE_OID" && -n "$_head_now" && "$_head_now" != "$STASH_BASE_OID" ]]; then
-    echo "" >&2
-    echo "error: refusing to restore the stash here — it was taken on a different base." >&2
-    echo "       stashed on: ${STASH_BASE_BRANCH:-<unknown>} (${STASH_BASE_OID})" >&2
-    echo "       HEAD now:   $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '<detached>') (${_head_now})" >&2
-    echo "       Your WIP is intact. Restore it with:" >&2
-    echo "         git checkout ${STASH_BASE_BRANCH:-$STASH_BASE_OID}" >&2
-    echo "         git stash pop \"$SAVED_STASH\"" >&2
-    exit 10
-  fi
-    if git stash pop "$SAVED_STASH" >/dev/null 2>&1; then
-      echo "Restored stash $SAVED_STASH"
-      SAVED_STASH=""
-    else
-      echo "" >&2
-      echo "error: could not auto-restore stash $SAVED_STASH (likely conflicts with new main)." >&2
-      echo "      Recover manually: git stash list ; git stash apply $SAVED_STASH" >&2
-      exit 10
-    fi
-  fi
-}
-
-print_stash_on_exit() {
-  local code="$?"
-  if [[ -n "$SAVED_STASH" && "$code" -ne 0 ]]; then
-    echo "" >&2
-    echo "Your WIP is preserved as $SAVED_STASH (label: $STASH_LABEL)." >&2
-    echo "Recover with: git stash list ; git stash apply $SAVED_STASH" >&2
-  fi
-  exit "$code"
-}
-trap print_stash_on_exit EXIT
 
 # -----------------------------------------------------------------------------
 # Phase: sync
 # -----------------------------------------------------------------------------
 phase_sync() {
-  stash_wip_if_dirty
-
   STATE="$(gh pr view "$PR" --json state --jq '.state' 2>/dev/null || true)"
   case "$STATE" in
     MERGED)
       echo "PR #$PR already merged."
       ;;
     OPEN)
+      if [[ -f "$SYNC_FF" ]]; then
+        if ! git fetch origin; then
+          echo "error: git fetch origin failed (network or remote misconfiguration)" >&2
+          exit 20
+        fi
+        PR_FILES_TMP="$(mktemp "${TMPDIR:-/tmp}/post_merge_pr_files.XXXXXX")"
+        if gh pr diff "$PR" --name-only >"$PR_FILES_TMP" 2>/dev/null; then
+          python3 "$SYNC_FF" preflight --branch main --extra-paths-file "$PR_FILES_TMP" \
+            --label "scripts/post_merge_sync.sh sync $PR" || { rc=$?; rm -f "$PR_FILES_TMP"; exit "$rc"; }
+        elif tree_is_dirty; then
+          rm -f "$PR_FILES_TMP"
+          echo "error: could not list the files of PR #$PR; refusing to merge over a dirty tree." >&2
+          exit 20
+        else
+          echo "warning: could not list the files of PR #$PR; checking collisions after the merge only." >&2
+        fi
+        rm -f "$PR_FILES_TMP"
+      elif tree_is_dirty; then
+        echo "error: hub primitive sync_fast_forward.py not found; refusing to sync a dirty tree (governance-hub#814)." >&2
+        exit 20
+      fi
       echo "Merging PR #$PR (squash, delete remote branch)..."
       if ! gh pr merge "$PR" --squash --delete-branch; then
         echo "error: gh pr merge failed" >&2
@@ -166,10 +134,17 @@ phase_sync() {
     echo "error: local branch main not found" >&2
     exit 20
   fi
-  git checkout main
-  if ! git pull --ff-only origin main; then
-    echo "error: ff-pull failed (local main has divergent commits)" >&2
-    exit 10
+  if [[ -f "$SYNC_FF" ]]; then
+    python3 "$SYNC_FF" ff --branch main --label "scripts/post_merge_sync.sh sync $PR" || exit $?
+  elif tree_is_dirty; then
+    echo "error: hub primitive sync_fast_forward.py not found; refusing to sync a dirty tree (governance-hub#814)." >&2
+    exit 20
+  else
+    git checkout main
+    if ! git pull --ff-only origin main; then
+      echo "error: ff-pull failed (local main has divergent commits)" >&2
+      exit 10
+    fi
   fi
 
   if [[ -n "$HEAD_REF" && "$HEAD_REF" != "main" ]]; then
@@ -224,8 +199,6 @@ phase_sync() {
     echo "error: linked issue state could not be verified (auth or network); fix and re-run sync." >&2
     exit 20
   fi
-
-  restore_stash_best_effort
 
   # Session-boundary hygiene (issue #246): main is now reconciled with
   # origin/main and branches are pruned, so re-run the deterministic residue
