@@ -19,7 +19,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from tools.lap_qualification import AttributionError, _stable_bytes, resolve_archive_provenance
+from tools.lap_qualification import (
+    NATIVE_ACCELERATION_UNIT,
+    AttributionError,
+    _stable_bytes,
+    resolve_archive_provenance,
+)
 
 LAP_ARCHIVE_SCHEMA_VERSION = 1
 
@@ -290,8 +295,8 @@ _MOTEC_CHANNELS: tuple[tuple[str, str, str], ...] = (
     # Chassis dynamics (issue #478) — APPENDED so existing MoTeC column positions stay stable.
     # G-forces + yaw rate are prime MoTeC analysis channels; the per-wheel arrays (#266 omega/slip/
     # temp, #478 wheelsPressure) stay out of the curated MoTeC subset and ride the analysis CSV.
-    ("G Force Long", "G", "accG_long"),
-    ("G Force Lat", "G", "accG_lat"),
+    ("G Force Long", NATIVE_ACCELERATION_UNIT, "accG_long"),
+    ("G Force Lat", NATIVE_ACCELERATION_UNIT, "accG_lat"),
     ("Yaw Rate", "rad/s", "yaw_rate"),
 )
 

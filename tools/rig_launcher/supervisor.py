@@ -238,6 +238,8 @@ class GamePointConfig:
     moza_offline_native_file: str | None = None
     moza_offline_evaluation_file: str | None = None
     moza_offline_oracle: bool = False
+    moza_offline_shadow: bool = False
+    moza_offline_reference_file: str | None = None
     #: Manage the tablet dashboard's ``adb reverse`` USB tunnel (issue #567). Opt-in
     #: (house pattern, cf. ``start_simhub``): off by default so CI / non-rig hosts never
     #: shell out to adb; the rig sets ``AC_COPILOT_MANAGE_TABLET_TUNNEL=1``.
@@ -342,6 +344,8 @@ class GamePointConfig:
             moza_offline_native_file=settings.moza_offline_native_file,
             moza_offline_evaluation_file=settings.moza_offline_evaluation_file,
             moza_offline_oracle=bool(settings.moza_offline_oracle),
+            moza_offline_shadow=bool(settings.moza_offline_shadow),
+            moza_offline_reference_file=settings.moza_offline_reference_file,
             paths=resolved_paths,
         )
 
@@ -461,6 +465,8 @@ class GamePointSupervisor:
         matched_native_file: str | None = None,
         evaluation_file: str | None = None,
         oracle_enabled: bool = False,
+        shadow_enabled: bool = False,
+        reference_file: str | None = None,
     ) -> OfflineReportResult:
         """Save deliberate selections and generate an offline report without starting the rig."""
         if not self._moza_report_lock.acquire(blocking=False):
@@ -492,7 +498,10 @@ class GamePointSupervisor:
                 raise ValueError("Choose a native archive or readable MOZA cache JSON")
             native = selected_path(matched_native_file)
             evaluation = selected_path(evaluation_file)
-            protected = tuple(Path(path) for path in (selected, native, evaluation) if path)
+            reference = selected_path(reference_file)
+            protected = tuple(
+                Path(path) for path in (selected, native, evaluation, reference) if path
+            )
             settings_path = self.paths.settings_path.resolve()
             for path in protected:
                 if path.resolve() == settings_path or (
@@ -506,12 +515,16 @@ class GamePointSupervisor:
                 "moza_offline_native_file": native,
                 "moza_offline_evaluation_file": evaluation,
                 "moza_offline_oracle": bool(oracle_enabled),
+                "moza_offline_shadow": bool(shadow_enabled),
+                "moza_offline_reference_file": reference,
             }
             report = build_moza_session_report(
                 selected,
                 matched_native_file=native,
                 evaluation_file=evaluation,
                 oracle_enabled=bool(oracle_enabled),
+                shadow_enabled=bool(shadow_enabled),
+                reference_file=reference,
             )
             review = report.get("moza_review")
             if not isinstance(review, Mapping) or review.get("status") not in {
@@ -542,13 +555,38 @@ class GamePointSupervisor:
                     oracle_detail += ": " + str(oracle["reason"])
             elif oracle_enabled:
                 oracle_detail = "unavailable"
+            shadow_detail = ""
+            if shadow_enabled:
+                shadow = report.get("moza_shadow")
+                if not isinstance(shadow, Mapping):
+                    shadow = {}
+                shadow_detail = "; silent validation=" + str(shadow.get("status") or "unavailable")
+                if shadow.get("reason"):
+                    shadow_detail += ": " + str(shadow["reason"])
+                decision = shadow.get("decision")
+                if isinstance(decision, Mapping):
+                    shadow_detail += "; human evaluation=" + str(
+                        decision.get("human_evaluation") or "unavailable"
+                    )
+                    shadow_detail += "; live activation=" + str(
+                        decision.get("live_activation") or "unavailable"
+                    )
+                    reasons = decision.get("reasons")
+                    if isinstance(reasons, list):
+                        reason_text = ", ".join(
+                            item for item in reasons if isinstance(item, str) and item
+                        )
+                        if reason_text:
+                            shadow_detail += ": " + reason_text
+                else:
+                    shadow_detail += "; go/no-go=unavailable"
             result = OfflineReportResult(
                 ProbeResult(
                     "moza_review",
                     state == "analysis_available",
                     state,
                     f"{Path(selected).name}; authority={authority}; {reason}; "
-                    f"offline advice={oracle_detail}",
+                    f"offline advice={oracle_detail}{shadow_detail}",
                 ),
                 written_path,
             )

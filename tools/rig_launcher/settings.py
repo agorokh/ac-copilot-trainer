@@ -42,6 +42,8 @@ class LauncherSettings:
     moza_offline_native_file: str | None = None
     moza_offline_evaluation_file: str | None = None
     moza_offline_oracle: bool | None = None
+    moza_offline_shadow: bool | None = None
+    moza_offline_reference_file: str | None = None
 
     @classmethod
     def load(cls, path: Path) -> LauncherSettings:
@@ -76,6 +78,8 @@ class LauncherSettings:
                 payload.get("moza_offline_evaluation_file")
             ),
             moza_offline_oracle=_optional_bool(payload.get("moza_offline_oracle")),
+            moza_offline_shadow=_optional_bool(payload.get("moza_offline_shadow")),
+            moza_offline_reference_file=_optional_text(payload.get("moza_offline_reference_file")),
         )
 
 
@@ -167,6 +171,8 @@ def default_settings_payload() -> dict[str, object]:
         "moza_offline_native_file": "",
         "moza_offline_evaluation_file": "",
         "moza_offline_oracle": False,
+        "moza_offline_shadow": False,
+        "moza_offline_reference_file": "",
         "alien_line": "",
         "reference_archive": "",
         "resilient_car": "",

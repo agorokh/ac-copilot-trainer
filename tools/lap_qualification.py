@@ -27,6 +27,9 @@ USES = frozenset(
     {"analysis", "map", "live_reference", "reference_comparison", "human_progression", "plant_fit"}
 )
 AUTHORITIES = frozenset({"human", "ai", "shared", "unknown"})
+# Native archive acceleration channels use G; importing a channel still requires
+# bound measured-unit evidence and does not inherit eligibility from this constant.
+NATIVE_ACCELERATION_UNIT = "G"
 _IMPORT_FORMATS = frozenset({"motec_csv", "track_titan_reference_v1", "moza_tracecore_view_v1"})
 _CONTEXT_USES = frozenset({"map", "live_reference", "reference_comparison"})
 _UNITS = {
