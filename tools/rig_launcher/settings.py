@@ -24,6 +24,8 @@ class LauncherSettings:
     reference_archive: str | None = None
     alien_line: str | None = None
     voice_bank: str | None = None
+    # Retain malformed explicit values until effective-config validation; env may override them.
+    voice_channel_map: object = None
     voice_tts: bool | None = None
     #: Name of the output endpoint Assetto Corsa / FMOD plays through (issue #672). The
     #: launcher cannot see AC's device directly, so this declares it; the voice-endpoint
@@ -61,6 +63,7 @@ class LauncherSettings:
             reference_archive=_optional_text(payload.get("reference_archive")),
             alien_line=_optional_text(payload.get("alien_line")),
             voice_bank=_optional_text(payload.get("voice_bank")),
+            voice_channel_map=payload.get("voice_channel_map"),
             voice_tts=_optional_bool(payload.get("voice_tts")),
             ac_audio_device=_optional_text(payload.get("ac_audio_device")),
             setup_store=_optional_text(payload.get("setup_store")),
@@ -184,6 +187,7 @@ def default_settings_payload() -> dict[str, object]:
         "simhub_exe": "",
         "start_simhub": False,
         "voice_bank": "",
+        "voice_channel_map": None,
         "voice_tts": False,
     }
 

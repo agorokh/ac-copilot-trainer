@@ -156,6 +156,7 @@ def _resolve_chirp_output(
     device: str | None,
     host_api: str | None,
     samplerate: int,
+    channel_map: tuple[int, ...] | str | None = None,
 ) -> tuple[int, int, tuple[int, ...]]:
     """Resolve and negotiate the chirp output, including the system-default device."""
     from tools.ai_sidecar.voice.playback import (
@@ -204,6 +205,7 @@ def _resolve_chirp_output(
         devices=devices,
         host_apis=host_apis,
         check_output_settings=sd.check_output_settings,
+        channel_map=channel_map,
     )
     return (
         device_index,
@@ -212,7 +214,13 @@ def _resolve_chirp_output(
     )
 
 
-def play_chirp(label: str, *, device: str | None, host_api: str | None) -> ChirpMark:
+def play_chirp(
+    label: str,
+    *,
+    device: str | None,
+    host_api: str | None,
+    channel_map: tuple[int, ...] | str | None = None,
+) -> ChirpMark:
     """Play the sync chirp on the PC output and wall-stamp its first sample at the DAC.
 
     Uses the PortAudio callback's ``outputBufferDacTime`` to map the first callback buffer to
@@ -228,6 +236,7 @@ def play_chirp(label: str, *, device: str | None, host_api: str | None) -> Chirp
         device=device,
         host_api=host_api,
         samplerate=samplerate,
+        channel_map=channel_map,
     )
     chirp = make_chirp(samplerate, np)
     state: dict[str, Any] = {"pos": 0, "dac_wall_ms": None, "latency_ms": None}
@@ -761,7 +770,14 @@ def run(args: argparse.Namespace) -> int:
             _log.error("scrcpy exited early (rc=%s) — see %s", proc.returncode, scrcpy_log.name)
             return 2
 
-        chirps = [play_chirp("start", device=args.chirp_device, host_api=args.chirp_host_api)]
+        chirps = [
+            play_chirp(
+                "start",
+                device=args.chirp_device,
+                host_api=args.chirp_host_api,
+                channel_map=args.chirp_channel_map,
+            )
+        ]
 
         collected: list[dict[str, Any]] = []
         asyncio.run(
@@ -774,7 +790,14 @@ def run(args: argparse.Namespace) -> int:
             )
         )
 
-        chirps.append(play_chirp("end", device=args.chirp_device, host_api=args.chirp_host_api))
+        chirps.append(
+            play_chirp(
+                "end",
+                device=args.chirp_device,
+                host_api=args.chirp_host_api,
+                channel_map=args.chirp_channel_map,
+            )
+        )
         _log.info(
             "cue phase complete (%d coaching.voice frames); waiting for capture to close",
             len(collected),
@@ -887,6 +910,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_run.add_argument("--chirp-device", default=None, help="PC output device name substring")
     p_run.add_argument("--chirp-host-api", default=None)
+    p_run.add_argument(
+        "--chirp-channel-map", default=None, help="One-based output channels, e.g. 5,6"
+    )
     p_run.set_defaults(func=run)
 
     p_an = sub.add_parser("analyze", parents=[common], help="analyze an existing capture")

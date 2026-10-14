@@ -127,6 +127,7 @@ def config_from_args(args: argparse.Namespace) -> GamePointConfig:
         reference_archive=config.reference_archive,
         alien_line=config.alien_line,
         voice_bank=config.voice_bank,
+        voice_channel_map=config.voice_channel_map,
         voice_bank_source=config.voice_bank_source,
         voice_tts=config.voice_tts,
         ac_audio_device=config.ac_audio_device,

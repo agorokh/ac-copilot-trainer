@@ -262,6 +262,7 @@ class VoiceRuntimeConfig:
     backend: str | None = None
     device: str | None = None
     host_api: str | None = None
+    channel_map: tuple[int, ...] | str | None = None
     verbosity: str | None = None
 
 
@@ -3393,6 +3394,11 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
             config = VoiceConfig(
                 device_name=voice_settings.device or os.environ.get("AC_COPILOT_VOICE_DEVICE"),
                 host_api=voice_settings.host_api or os.environ.get("AC_COPILOT_VOICE_HOST_API"),
+                channel_map=(
+                    voice_settings.channel_map
+                    if voice_settings.channel_map is not None
+                    else os.environ.get("AC_COPILOT_VOICE_CHANNEL_MAP")
+                ),
                 verbosity=(
                     voice_settings.verbosity
                     or os.environ.get("AC_COPILOT_VOICE_VERBOSITY")
@@ -3458,6 +3464,11 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
             logger.exception("voice: failed to initialize voice coach from %s", bank_dir)
     elif voice_settings.tts_enabled:
         try:
+            if (
+                voice_settings.channel_map is not None
+                or "AC_COPILOT_VOICE_CHANNEL_MAP" in os.environ
+            ):
+                raise ValueError("explicit voice channel map is unsupported by pyttsx3")
             from tools.ai_sidecar.voice.client import (
                 DEFAULT_TTS_RATE,
                 DEFAULT_TTS_VOLUME,
@@ -3699,6 +3710,11 @@ def main() -> None:
         help="Voice-bank verbosity. Falls back to $AC_COPILOT_VOICE_VERBOSITY.",
     )
     p.add_argument(
+        "--voice-channel-map",
+        default=None,
+        help="One-based voice outputs, e.g. 5,6. Falls back to $AC_COPILOT_VOICE_CHANNEL_MAP.",
+    )
+    p.add_argument(
         "--voice-tts",
         action="store_true",
         help=(
@@ -3809,6 +3825,7 @@ def main() -> None:
             backend=args.voice_backend,
             device=args.voice_device,
             host_api=args.voice_host_api,
+            channel_map=args.voice_channel_map,
             verbosity=args.voice_verbosity,
         )
     )

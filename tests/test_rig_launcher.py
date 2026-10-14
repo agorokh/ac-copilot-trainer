@@ -77,6 +77,12 @@ def _isolate_ac_user_dir(tmp_path_factory, monkeypatch):
     # Legacy menu: the configuration Stable AC requires on CSP 0.2.11.
     gui_ini.write_text("[NEW_UI]\nREPLACE_MAIN_MENU=0\n", encoding="utf-8")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    # Status polling also consults the machine-wide rig lock. Keep an active real acceptance run
+    # from changing unit-test outcomes; tests of ownership supply their own explicit lock paths.
+    monkeypatch.setattr(
+        "tools.ac_harness.rig_lock.default_rig_session_lock_path",
+        lambda **kwargs: home / "Harness" / "rig-session.lock",
+    )
     return home
 
 

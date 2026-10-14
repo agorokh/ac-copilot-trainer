@@ -159,19 +159,21 @@ def _pyttsx3_speaker(
     import queue
     import threading
 
-    import pyttsx3
-
     if rate is not None:
         base_rate = rate
     if volume is not None:
         base_volume = volume
 
     env = os.environ if environ is None else environ
+    if "AC_COPILOT_VOICE_CHANNEL_MAP" in env:
+        raise ValueError("explicit voice channel map is unsupported by pyttsx3")
     if require_opt_in:
         if not _env_truthy(env.get("AC_COPILOT_VOICE_TTS")):
             return _disabled_speaker("AC_COPILOT_VOICE_TTS=1 is required")
         if env.get("AC_COPILOT_VOICE_BANK"):
             return _disabled_speaker("AC_COPILOT_VOICE_BANK is configured")
+
+    import pyttsx3
 
     logger = logging.getLogger(__name__)
     q: queue.Queue[tuple[str, str] | None] = queue.Queue(maxsize=_VOICE_QUEUE_MAX)

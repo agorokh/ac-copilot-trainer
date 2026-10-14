@@ -231,12 +231,18 @@ class VoiceCoach:
         bank = Bank.from_manifest(manifest, bank_dir)
         if backend == "sounddevice":
             return SoundDevicePlayback(
-                bank, device_name=config.device_name, host_api=config.host_api
+                bank,
+                device_name=config.device_name,
+                host_api=config.host_api,
+                channel_map=config.channel_map,
             )
         if backend == "rtmixer":
             try:
                 return RtMixerPlayback(
-                    bank, device_name=config.device_name, host_api=config.host_api
+                    bank,
+                    device_name=config.device_name,
+                    host_api=config.host_api,
+                    channel_map=config.channel_map,
                 )
             except ImportError:
                 # rtmixer (or its native PortAudio dep) is not installed/bundled. Degrade to
@@ -246,6 +252,9 @@ class VoiceCoach:
                     "falling back to the sounddevice backend"
                 )
                 return SoundDevicePlayback(
-                    bank, device_name=config.device_name, host_api=config.host_api
+                    bank,
+                    device_name=config.device_name,
+                    host_api=config.host_api,
+                    channel_map=config.channel_map,
                 )
         raise ValueError(f"unknown audio backend {backend!r}")

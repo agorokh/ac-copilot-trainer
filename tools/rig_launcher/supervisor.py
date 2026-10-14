@@ -211,6 +211,7 @@ class GamePointConfig:
     reference_archive: str | None = None
     alien_line: str | None = None
     voice_bank: str | None = None
+    voice_channel_map: str | None = None
     voice_tts: bool = False
     #: Where the resolved ``voice_bank`` came from — ``"env"`` (``AC_COPILOT_VOICE_BANK``
     #: was present, including set-but-blank, which *clears* the settings value), ``"settings"``
@@ -253,6 +254,15 @@ class GamePointConfig:
     #: Harness LocalAppData path from ``default_rig_session_lock_path``.
     rig_lock_path: Path | None = None
     paths: LauncherPaths | None = None
+
+    def __post_init__(self) -> None:
+        from tools.ai_sidecar.voice.config import parse_channel_map
+
+        if self.voice_channel_map is not None and not isinstance(self.voice_channel_map, str):
+            raise ValueError("voice_channel_map must be a comma-separated string or null")
+        channels = parse_channel_map(self.voice_channel_map)
+        if channels is not None:
+            object.__setattr__(self, "voice_channel_map", ",".join(map(str, channels)))
 
     @classmethod
     def from_env(
@@ -301,6 +311,9 @@ class GamePointConfig:
                 settings.alien_line,
             ),
             voice_bank=_configured_text(env_map.get("AC_COPILOT_VOICE_BANK"), settings.voice_bank),
+            voice_channel_map=env_map.get(
+                "AC_COPILOT_VOICE_CHANNEL_MAP", settings.voice_channel_map
+            ),
             voice_bank_source=_configured_source(
                 env_map.get("AC_COPILOT_VOICE_BANK"),
                 settings.voice_bank,
@@ -699,6 +712,7 @@ class GamePointSupervisor:
         )
         if self.config.voice_tts:
             env["AC_COPILOT_VOICE_TTS"] = "1"
+        _put_or_clear(env, "AC_COPILOT_VOICE_CHANNEL_MAP", self.config.voice_channel_map)
         return env
 
     def simhub_environment(self) -> dict[str, str]:
