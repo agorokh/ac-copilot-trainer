@@ -594,3 +594,159 @@ def test_telemetry_tick_publisher_respects_hello_gate_across_reconnect():
     )
     assert out4["r"] is True
     assert out4["delta"] == 1
+
+
+def test_between_lap_focus_is_post_lap_only_and_preserves_later_brain_hints():
+    rt = _runtime()
+    _open(rt)
+    focus = {
+        "protocol": 1,
+        "event": "corner_advice",
+        "slot": "between_lap",
+        "corner": "T2",
+        "lap": 3,
+        "text": "NEXT LAP T2: BRAKE LATER.",
+    }
+    _inject(rt, focus)
+    # A next-lap instruction must never enter the immediate command cache.
+    assert rt.eval('require("ws_bridge").takeCornerAdvisory("T2",3)') is None
+    rt.execute('focus_hints, focus_debrief = require("ws_bridge").takeCoachingForLap(3)')
+    assert rt.eval("focus_hints[1].text") == focus["text"]
+    assert rt.eval("focus_debrief") is None
+    assert rt.eval('(require("ws_bridge").takeCoachingForLap(3))') is None
+    # A later CPU brain response preserves this focus and every original brain hint/debrief.
+    _inject(
+        rt,
+        {
+            "protocol": 1,
+            "event": "coaching_response",
+            "lap": 3,
+            "debriefSource": "brain",
+            "debrief": "CPU attribution",
+            "hints": [
+                {"kind": "line", "text": "Brain technique"},
+                {"kind": "setup", "text": "Brain setup"},
+            ],
+        },
+    )
+    rt.execute('merged, debrief = require("ws_bridge").takeCoachingForLap(3)')
+    assert rt.eval("#merged") == 3
+    assert rt.eval("merged[1].text") == focus["text"]
+    assert rt.eval("merged[2].text") == "Brain technique"
+    assert rt.eval("merged[3].text") == "Brain setup"
+    assert rt.eval("debrief") == "CPU attribution"
+
+
+def test_between_lap_focus_lap_gate_and_clear_do_not_resurrect_stale_focus():
+    rt = _runtime()
+    _open(rt)
+    focus = {
+        "protocol": 1,
+        "event": "corner_advice",
+        "slot": "between_lap",
+        "corner": "T2",
+        "lap": 3,
+        "text": "NEXT LAP T2: BRAKE LATER.",
+    }
+    _inject(rt, focus)
+    assert rt.eval('(require("ws_bridge").takeCoachingForLap(2))') is None
+    assert rt.eval('(require("ws_bridge").takeCoachingForLap(4))') is None
+    assert rt.eval('(require("ws_bridge").takeCoachingForLap(3))') is None
+    _inject(rt, focus)
+    rt.execute('require("ws_bridge").clearPendingCoaching()')
+    assert rt.eval('(require("ws_bridge").takeCoachingForLap(3))') is None
+    _inject(rt, focus)
+    rt.execute('require("ws_bridge").reset()')
+    assert rt.eval('(require("ws_bridge").takeCoachingForLap(3))') is None
+
+
+def test_between_lap_focus_merges_when_brain_arrives_first_and_deduplicates():
+    rt = _runtime()
+    _open(rt)
+    _inject(
+        rt,
+        {
+            "protocol": 1,
+            "event": "coaching_response",
+            "lap": 3,
+            "debriefSource": "brain",
+            "debrief": "CPU attribution",
+            "hints": [{"kind": "line", "text": "Brain technique"}],
+        },
+    )
+    focus = {
+        "protocol": 1,
+        "event": "corner_advice",
+        "slot": "between_lap",
+        "corner": "T2",
+        "lap": 3,
+        "text": "NEXT LAP T2: BRAKE LATER.",
+    }
+    _inject(rt, focus)
+    rt.execute('merged, debrief = require("ws_bridge").takeCoachingForLap(3)')
+    assert rt.eval("#merged") == 2
+    assert rt.eval("debrief") == "CPU attribution"
+    _inject(rt, focus)
+    assert rt.eval('(require("ws_bridge").takeCoachingForLap(3))') is None
+
+
+def test_applied_model_focus_projects_through_real_lua_snapshot_and_expires():
+    rt = _runtime()
+    _open(rt)
+    _inject(
+        rt,
+        {
+            "protocol": 1,
+            "event": "corner_advice",
+            "slot": "between_lap",
+            "adviceSource": "model",
+            "corner": "T2",
+            "lap": 3,
+            "text": "NEXT LAP T2: BRAKE LATER.",
+        },
+    )
+    assert rt.eval('require("ws_bridge").betweenLapFocusSnapshot(3)') is None
+    rt.execute("""
+      local wb = require('ws_bridge')
+      applied_hints = wb.takeCoachingForLap(3)
+      local publisher = require('coaching_publisher')
+      publisher.publishIfDue({dt=0.1, completedLap=3,
+        postLapFocus=wb.betweenLapFocusSnapshot(3,applied_hints),
+        car={speedKmh=90}, view={primaryLine='ON PACE',action='HOLD'},
+        wsBridge={publishTopic=function(topic,payload) projected=payload; return true end}})
+    """)
+    assert rt.eval("projected.post_lap_focus.text") == "NEXT LAP T2: BRAKE LATER."
+    assert rt.eval("projected.post_lap_focus.source") == "model"
+    assert rt.eval("projected.completed_lap") == 3
+    assert rt.eval("projected.primary_line") == "ON PACE"
+    assert rt.eval("projected.action") == "HOLD"
+    assert rt.eval("projected.post_lap_focus.remaining_ms") == 12000
+    assert rt.eval('require("ws_bridge").betweenLapFocusSnapshot(3,{})') is None
+    assert rt.eval('require("ws_bridge").betweenLapFocusSnapshot(4,applied_hints)') is None
+    rt.execute('require("ws_bridge").tick(13)')
+    assert rt.eval('require("ws_bridge").betweenLapFocusSnapshot(3)') is None
+
+
+def test_rules_focus_cannot_claim_model_in_screen_projection():
+    rt = _runtime()
+    _open(rt)
+    _inject(
+        rt,
+        {
+            "protocol": 1,
+            "event": "corner_advice",
+            "slot": "between_lap",
+            "adviceSource": "rules",
+            "corner": "T2",
+            "lap": 3,
+            "text": "NEXT LAP T2: Brake later.",
+        },
+    )
+    rt.execute("""
+      local wb = require('ws_bridge')
+      local hints = wb.takeCoachingForLap(3)
+      require('coaching_publisher').publishIfDue({dt=0.1,completedLap=3,
+        postLapFocus=wb.betweenLapFocusSnapshot(3,hints),car={speedKmh=90},
+        wsBridge={publishTopic=function(topic,payload) projected=payload; return true end}})
+    """)
+    assert rt.eval("projected.post_lap_focus") is None

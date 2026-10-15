@@ -121,16 +121,16 @@ def compose_between_lap_advice(
     if not _corner_in_refs(corner, refs):
         return None
     text: str | None = None
+    source = "rules"
     if use_ollama and debrief_feature_enabled():
         root_s = str(root) if root and root != RootError.NONE else "general"
-        phrase = PHRASE.get(root, "improve the corner") if root else "improve the corner"
         label = _turn_label(corner)
+        approved = _rules_phrase(root, corner).upper()
         prompt = (
             "You coach Assetto Corsa. Reply with ONE short next-lap focus command.\n"
-            "RULES: Max 10 words. UPPERCASE. Name the corner as "
-            f"{label}. Use verbs BRAKE/LIFT/CARRY/TURN/HOLD only.\n"
-            f"Focus root={root_s}; suggested={phrase}\n"
-            f"NOW: next-lap focus for {label} ->"
+            "The deterministic coach has selected the action and corner; do not add targets.\n"
+            f"Focus root={root_s}; corner={label}.\n"
+            f"Return exactly this approved command, without commentary:\n{approved}"
         )
         raw = call_ollama_generate(
             prompt,
@@ -157,10 +157,14 @@ def compose_between_lap_advice(
                     normalized = candidate.upper().rstrip(".!")
                     if normalized == expected:
                         text = candidate.upper()[:120]
+                        source = "model"
                     break
     if not text:
         text = _rules_phrase(root, corner)
-    return validate_corner_advice(corner=corner, text=text, refs=refs)
+    advice = validate_corner_advice(corner=corner, text=text, refs=refs)
+    if advice is not None:
+        advice["source"] = source
+    return advice
 
 
 def select_between_lap_advice(

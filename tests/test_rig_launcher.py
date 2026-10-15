@@ -185,6 +185,16 @@ def test_sidecar_command_uses_env_for_token_and_voice(tmp_path: Path) -> None:
     assert env["AC_COPILOT_VOICE_TTS"] == "1"
 
 
+def test_reference_selection_enables_coach_v2_without_voice_or_alien(tmp_path):
+    cfg = GamePointConfig(reference_archive="ref.json", paths=LauncherPaths(tmp_path))
+    env = GamePointSupervisor(cfg, environ={}).sidecar_environment()
+    assert env["AC_COPILOT_COACH_V2"] == "1"
+    assert "AC_COPILOT_VOICE_BANK" not in env
+    assert env.get("AC_COPILOT_VOICE_TTS") != "1"
+    parked = GamePointSupervisor(cfg, environ={"AC_COPILOT_COACH_V2": "0"})
+    assert parked.sidecar_environment()["AC_COPILOT_COACH_V2"] == "0"
+
+
 def test_inference_feature_off_and_explicit_profile_reach_sidecar(tmp_path):
     parent = {"AC_COPILOT_OLLAMA_ENABLE": "0", "AC_COPILOT_INFERENCE_MODEL": "qualified-alias"}
     supervisor = GamePointSupervisor(GamePointConfig(paths=LauncherPaths(tmp_path)), environ=parent)

@@ -354,6 +354,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     tires: null, tiresAt: 0,        // {fl,fr,rl,rr} core degC + receive time
     lap: null,                      // {lap,last_lap_ms,best_lap_ms,laps_completed,valid}
     coach: null, coachAt: 0,        // coaching.snapshot payload
+    focusSeenId: null, focusExpiresAt: 0, focusWasRendered: false,
     setupName: null,                // setup.active .name
     carName: null, trackName: null, // setup.list.result identity
     carClass: "unknown",            // sidecar-enriched session identity (#534)
@@ -736,6 +737,44 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       setText("cMicro", micro);
     }
   }
+  // ---- bounded applied model focus (existing coaching.snapshot, post-lap only) -----------
+  function currentPostLapFocus(now) {
+    var snap = S.coach, focus = snap && snap.post_lap_focus;
+    if (!focus || focus.source !== "model" || typeof focus.text !== "string"
+        || !focus.text || focus.text.length > 120 || typeof focus.focus_id !== "string"
+        || !focus.focus_id || focus.focus_id.length > 64 || !/^T[0-9]+$/.test(focus.corner || "")
+        || fin(focus.lap) === null || focus.lap < 0 || Math.floor(focus.lap) !== focus.lap
+        || focus.lap !== snap.completed_lap || fin(focus.remaining_ms) === null
+        || focus.remaining_ms <= 0 || focus.remaining_ms > 12000
+        || now - S.coachAt < 0 || now - S.coachAt >= STALE_MS) return null;
+    if (S.lap && fin(S.lap.laps_completed) !== null && focus.lap !== S.lap.laps_completed) return null;
+    var expiry = now + focus.remaining_ms;
+    if (S.focusSeenId !== focus.focus_id) {
+      S.focusSeenId = focus.focus_id; S.focusExpiresAt = expiry;
+    } else {
+      // Receiving the same obsolete snapshot repeatedly must never renew its lifetime.
+      S.focusExpiresAt = Math.min(S.focusExpiresAt, expiry);
+    }
+    return now < S.focusExpiresAt ? focus : null;
+  }
+  function renderPostLapFocus() {
+    if (S.review) {S.focusWasRendered = false; return false;}
+    var focus = currentPostLapFocus(Date.now());
+    if (focus) {
+      setText("dbHead", focus.text);
+      setText("dbBody", "Next lap focus · " + focus.corner);
+      S.focusWasRendered = true;
+      return true;
+    }
+    if (S.focusWasRendered) {
+      setText("dbHead", "—");
+      setText("dbBody", "Live coaching lines appear here as they arrive; the full debrief lands with the post-session review.");
+      S.focusWasRendered = false;
+    }
+    return false;
+  }
+  // ---- end bounded applied model focus --------------------------------------------------
+
   // ---- COACH page (#531 Part F): bound to the sidecar session.review topic ---------------
   var reviewDirty = false;
   function renderCoachPage() {
@@ -1276,7 +1315,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     setText("dbLast", S.lap ? fmtLap(fin(S.lap.last_lap_ms)) : "—");
     setText("dbBest", S.lap ? fmtLap(fin(S.lap.best_lap_ms)) : "—");
     setText("dbLaps", S.lap && fin(S.lap.laps_completed) !== null ? String(S.lap.laps_completed) : "—");
-    if (S.lastCue && !S.review) {
+    if (!renderPostLapFocus() && S.lastCue && !S.review) {
       // Pre-review fallback only (#531 Part F): once a session.review lands, the debrief
       // owns dbHead/dbBody (renderCoachPage) and the live-cue line must not clobber it.
       // coaching.cue contract: `message` is the human-readable line (kind/corner/urgency/
@@ -1458,7 +1497,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               S.burns = []; // burn is per car AND per track length (Codex on PR #547)
               S.race = null; S.raceAt = 0; // sidecar race.status is per identity too (#531)
               if (hadIdentity) {
-                S.coach=null; S.coachAt=0; S.tick=null; S.tickAt=0;
+                S.coach=null; S.coachAt=0; S.focusSeenId=null; S.focusExpiresAt=0; S.focusWasRendered=false; S.tick=null; S.tickAt=0;
                 S.mapComparison=null; mapComparisonKey=null;
                 // A REAL identity switch drops the debrief — the new session must not
                 // render the previous one's report (Codex #618 R2). The FIRST session
@@ -1502,7 +1541,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               // live cues, not stay pinned to the previous stint's review (#618 R4). The
               // MAP geometry survives: it is reference-tied, not stint-tied.
               S.review = null; reviewDirty = true;
-              S.mapComparison=null;mapComparisonKey=null;S.coach=null;S.coachAt=0;
+              S.mapComparison=null;mapComparisonKey=null;S.coach=null;S.coachAt=0;S.focusSeenId=null;S.focusExpiresAt=0;S.focusWasRendered=false;
               S.lastCue = null; S.cueAt = 0; // and the stale cue must not refill it (R6)
               requestSetupData(ws); // pit work may have changed the setup during the reset
             }
@@ -1543,7 +1582,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     };
     ws.onclose = function () {
       S.wsOpen = false;
-      S.tick=null;S.tickAt=0;S.coach=null;S.coachAt=0;
+      S.tick=null;S.tickAt=0;S.coach=null;S.coachAt=0;S.focusSeenId=null;S.focusExpiresAt=0;S.focusWasRendered=false;
       S.mapComparison=null;mapComparisonKey=null;S.lastCue=null;S.cueAt=0;
       if (setupPollTimer) { clearInterval(setupPollTimer); setupPollTimer = null; }
       setTimeout(connect, reconnectDelay);

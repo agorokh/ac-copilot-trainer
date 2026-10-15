@@ -52,6 +52,9 @@ end
 
 --- Latest coaching_response waiting for application (lap index matches lapsCompleted).
 local pendingCoaching ---@type { lap: number, hints: table[], debrief: string|nil }|nil
+-- A next-lap focus belongs to the post-lap panel, never the immediate command cache.
+-- Retain one focus for this completed lap so a later CPU brain response can keep it.
+local betweenLapFocus ---@type { lap: number, hint: table, delivered: boolean }|nil
 
 --- Round 10: per-corner LLM advisories keyed by corner label.
 --- Populated by pollInbound when corner_advice events arrive.
@@ -165,6 +168,7 @@ function M.configure(u)
   sidecarMaintenanceElapsed = 0
   lastLaunchAttemptElapsed = -1e9
   pendingCoaching = nil
+  betweenLapFocus = nil
   _recvQueue = {}
   sidecarProtocolReady = false
   -- Explicit URL/socket reset must not leave zombie-latch set for the next dial (Codex #78).
@@ -370,6 +374,7 @@ function M.reset()
   sock = nil
   lastTry = -RECONNECT_SEC
   pendingCoaching = nil
+  betweenLapFocus = nil
   cornerAdvisories = {}
   lastCornerQueryAt = {}
   currentSimT = 0
@@ -392,6 +397,7 @@ end
 --- Drop queued sidecar response without closing the socket (e.g. lap counter reset).
 function M.clearPendingCoaching()
   pendingCoaching = nil
+  betweenLapFocus = nil
 end
 
 --- Drop cached corner_advice payloads (e.g. rolling session reset / lap rewind).
@@ -1022,20 +1028,28 @@ function M.pollInbound(maxPerTick)
         -- the sidecar handles `hello`/`hello_ack` and we silently accept the
         -- rest until Phase-2 telemetry push lands.
       elseif ev == "corner_advice" and pv == PROTOCOL_VERSION then
-        -- Round 10: in-race per-corner LLM hint reply.
         local corner = tostring(data.corner or "")
         local text = tostring(data.text or "")
-        local lap = tonumber(data.lap) or 0
-        if corner ~= "" and text ~= "" then
-          cornerAdvisories[corner] = {
-            lap = lap,
-            text = text,
-            ts = currentSimT,
-          }
+        local lap = tonumber(data.lap)
+        local validLap = lap and lap == lap and lap >= 0 and lap < math.huge and lap % 1 == 0
+        if corner ~= "" and text ~= "" and validLap then
+          if data.slot == "between_lap" then
+            -- Slot is semantic: NEXT LAP must not become a live BRAKE/HOLD command.
+            if corner:match("^T%d+$") and #text <= 120 and text:upper():match("^NEXT LAP") then
+              local old = betweenLapFocus
+              if not old or old.lap < lap or (old.lap == lap and old.hint.text ~= text) then
+                betweenLapFocus = {lap = lap, hint = {kind = "general", text = text}, delivered = false,
+                  ts = currentSimT, id = tostring(lap) .. ":" .. tostring(currentSimT), corner = corner,
+                  source = data.adviceSource == "model" and "model" or "rules"}
+              end
+            end
+          else
+            cornerAdvisories[corner] = {lap = lap, text = text, ts = currentSimT}
+          end
           if ac and type(ac.log) == "function" then
             ac.log(string.format(
-              "[COPILOT][WS-DIAG] corner_advice %s lap=%d text=%q",
-              corner, lap, text:sub(1, 60)))
+              "[COPILOT][WS-DIAG] corner_advice %s lap=%d slot=%s source=%s text=%q",
+              corner, lap, tostring(data.slot or "in_race"), tostring(data.adviceSource or "rules"), text:sub(1, 120)))
           end
         end
       end
@@ -1047,24 +1061,52 @@ end
 --- and optional LLM/rules ``debrief`` paragraph (issue #46).
 ---@param currentLapCompleted number|nil
 ---@return table[]|nil, string|nil
+local function currentBetweenLapFocus(cur)
+  local focus = betweenLapFocus
+  if not focus then return nil end
+  local age = currentSimT - focus.ts
+  if focus.lap < cur or age < 0 or age >= 12 then
+    betweenLapFocus = nil
+    return nil
+  end
+  return focus.lap == cur and focus or nil
+end
+
+-- Only an already-consumed post-lap focus can be projected to the existing screen topic.
+function M.betweenLapFocusSnapshot(currentLapCompleted, appliedHints)
+  local focus = currentBetweenLapFocus(tonumber(currentLapCompleted) or 0)
+  if not focus or not focus.delivered then return nil end
+  -- Practice filtering or another consumer can replace the returned hints. Project only
+  -- text still present in the app's applied state, rather than merely received advice.
+  local applied = false
+  for i = 1, #(appliedHints or {}) do
+    if appliedHints[i].text == focus.hint.text then applied = true; break end
+  end
+  if not applied then return nil end
+  return {text = focus.hint.text, source = focus.source, lap = focus.lap,
+    focus_id = focus.id, corner = focus.corner,
+    remaining_ms = math.max(0, math.floor((12 - (currentSimT - focus.ts)) * 1000))}
+end
+
 function M.takeCoachingForLap(currentLapCompleted)
   local cur = tonumber(currentLapCompleted) or 0
-  if not pendingCoaching then
-    return nil, nil
-  end
-  if pendingCoaching.lap < cur then
+  if pendingCoaching and pendingCoaching.lap < cur then pendingCoaching = nil end
+  if betweenLapFocus and betweenLapFocus.lap < cur then betweenLapFocus = nil end
+  local h, d
+  if pendingCoaching and pendingCoaching.lap == cur then
+    h, d = pendingCoaching.hints, pendingCoaching.debrief
     pendingCoaching = nil
-    return nil, nil
   end
-  if pendingCoaching.lap ~= cur then
-    return nil, nil
+  local focus = currentBetweenLapFocus(cur)
+  if focus and focus.lap == cur and (h ~= nil or not focus.delivered) then
+    local merged = {focus.hint}
+    for i = 1, #(h or {}) do
+      if h[i].text ~= focus.hint.text then merged[#merged + 1] = h[i] end
+    end
+    focus.delivered = true
+    return merged, d
   end
-  local h = pendingCoaching.hints
-  local d = pendingCoaching.debrief
-  pendingCoaching = nil
-  if h and #h > 0 then
-    return h, d
-  end
+  if h and #h > 0 then return h, d end
   return nil, d
 end
 

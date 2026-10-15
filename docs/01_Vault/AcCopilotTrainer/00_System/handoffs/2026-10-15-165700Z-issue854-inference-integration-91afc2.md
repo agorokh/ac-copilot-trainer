@@ -73,7 +73,31 @@ Root live capture rules-2 initially failed closed invalid_frame with zero sample
 Added guarded LuaJIT FFI scalar conversion and exact 2^53-1 counter bound, plus
 bounded raw scalar type/value diagnostics. Real LuaJIT uint64 fixtures now cover
 conversion, duplicate handling and rejection beyond exact integer precision.
-Next live run must confirm actual runtime type; SDK-derived theory is not proof.
+Root's rules-3 live capture confirmed cdata `713ULL` and numeric UI delta:
+90.0088 seconds,5206 consecutive active samples,0 gaps/invalid/paused;
+p50 17.2242,p95 18.4169,p99 18.9083,max20.5598 ms. This is rules-only proof;
+inference comparison and actual model-panel consumption remain acceptance work.
 Corrected Settings connection caption to sidecar coaching, avoiding an unproved
 LLM-active claim while rules-only is selected. Focused Lua42 passed and CSP guards
 passed. Root preserves all actual evidence and owns subsequent capture acceptance.
+
+The consumer audit found between-lap NEXT LAP replies were entering the immediate
+corner cache. The repaired route preserves a separate bounded focus, merges every
+CPU brain hint/debrief, and projects only an applied, validated model focus into
+existing coaching.snapshot with lap/ID/countdown/source. The existing P7 COACH
+fallback renders its exact text without renewing repeated stale payloads; full
+session.review still owns that screen. Real Lua receive/consume/projection tests
+and executable shipped browser-function tests cover source, lap, expiry and review
+priority. The prompt now includes the exact approved command required by validation.
+Python and embedded HTML changes require a fresh Game Point build before acceptance.
+
+Root recovered a preservation incident during autonomous acceptance: a later game
+restarted with archives enabled and quota rotation removed four old files. Root
+restored them create-new, byte-verified/backed-up all186 original archives totaling
+532873576 bytes, and moved its own AI lap outside the personal journal with provenance.
+Receipt: local GPUHealth/delivery-854/archive-restoration.json. This agent performed
+read-only recovery comparison, no personal-data mutation. Each new game now requires
+authenticated set/get boolean-false archive proof before the first lap plus before/
+after journal hashes and preserved combo snapshot. Persistence alone is insufficient.
+The restored 102183ms native Porsche/Magione archive builds five reference corners
+but qualifies legacy_unknown; using it for transport acceptance certifies no human PB.

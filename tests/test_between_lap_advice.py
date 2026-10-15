@@ -84,6 +84,7 @@ def test_enabled_model_path_supplies_endpoint_and_model_and_keeps_selected_actio
     def generate(prompt, *, base_url, model, temperature, num_predict, timeout_sec, deadline):
         calls.append((base_url, model, deadline))
         assert temperature == 0 and num_predict <= 24 and timeout_sec <= 8
+        assert prompt.endswith("NEXT LAP T2: BRAKE LATER.")
         return "NEXT LAP T2: BRAKE LATER."
 
     monkeypatch.setattr(between, "call_ollama_generate", generate)
@@ -93,6 +94,7 @@ def test_enabled_model_path_supplies_endpoint_and_model_and_keeps_selected_actio
     advice = between.select_between_lap_advice(refs=_refs(0, 1), ledger=ledger, deadline=123.0)
     assert calls == [("http://127.0.0.1:11435/v1", "llama3.2:3b", 123.0)]
     assert advice["text"] == "NEXT LAP T2: BRAKE LATER."
+    assert advice["source"] == "model"
 
 
 def test_enabled_model_bad_corner_or_contradiction_uses_rules(monkeypatch):
@@ -112,3 +114,4 @@ def test_enabled_model_bad_corner_or_contradiction_uses_rules(monkeypatch):
             corner=1, root=RootError.EARLY_BRAKE, refs=_refs(0, 1)
         )
         assert advice["text"] == "NEXT LAP T2: Brake later."
+        assert advice["source"] == "rules"

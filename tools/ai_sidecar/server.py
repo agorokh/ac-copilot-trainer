@@ -965,6 +965,7 @@ async def _coach_v2_between_lap(
             "lap": inbound.get("lap"),
             "text": advice["text"],
             "slot": "between_lap",
+            "adviceSource": advice.get("source", "rules"),
         },
     )
 

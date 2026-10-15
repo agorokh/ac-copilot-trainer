@@ -2371,6 +2371,8 @@ function script.update(dt)
       coachingPublisher.publishIfDue({
         dt = dt,
         view = rtView,
+        completedLap = state.lapsCompleted,
+        postLapFocus = wsBridge.betweenLapFocusSnapshot(state.lapsCompleted, state.coachingLines),
         car = car,
         sim = sim,
         wsBridge = wsBridge,

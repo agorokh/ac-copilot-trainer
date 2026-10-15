@@ -242,6 +242,21 @@ function M.publishIfDue(opts)
     corner_catalog_reason = "canonical corners unavailable",
   }
 
+  -- Existing topic carries the applied post-lap focus separately from the immediate
+  -- action. The producer owns its lap identity and countdown; repeats cannot renew it.
+  local focus = opts.postLapFocus
+  local completed = tonumber(opts.completedLap)
+  if readOk and type(focus) == "table" and focus.source == "model"
+      and type(focus.text) == "string" and #focus.text > 0 and #focus.text <= 120
+      and type(focus.focus_id) == "string" and #focus.focus_id <= 64
+      and type(focus.corner) == "string" and focus.corner:match("^T%d+$")
+      and completed and completed == completed and completed >= 0 and completed % 1 == 0
+      and focus.lap == completed and type(focus.remaining_ms) == "number"
+      and focus.remaining_ms > 0 and focus.remaining_ms <= 12000 then
+    payload.completed_lap = completed
+    payload.post_lap_focus = focus
+  end
+
   if readOk and type(view) == "table" then
     payload.corner_catalog_reason = label(view.cornerCatalogReason) or payload.corner_catalog_reason
     local carId = cspHelpers.safeCarIdRaw()

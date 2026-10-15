@@ -47,6 +47,28 @@ the current deterministic action; a previously valid brake hint cannot survive a
 change to hold/acceleration. Primary action and colour remain rules-driven. The legacy
 `debriefSource:"ollama"` Lua discriminator is retained for both providers.
 
+Between-lap `corner_advice` uses `slot:"between_lap"`; it never enters the immediate
+corner command cache. Its `adviceSource:"model"` is set only for text accepted against
+the selected deterministic command. Lua merges that focus with CPU brain hints,
+keeps the completed-lap identity, and expires it after twelve seconds. Only focus
+text still in applied coaching state appears in the existing `coaching.snapshot`
+as `post_lap_focus` (`source`, `text`, `corner`, `lap`, `focus_id`, `remaining_ms`) with
+`completed_lap`. This is the observation point for live panel acceptance. The P7
+COACH fallback renders that exact text until expiry; repeating a snapshot cannot
+renew the same focus. An existing full `session.review` retains screen authority.
+
+This path needs an existing reference with usable corners and Coach v2 enabled.
+Game Point's normal `reference_archive` setting passes `AC_COPILOT_REFERENCE_ARCHIVE`
+to the sidecar and selects Coach v2 unless explicitly parked with
+`AC_COPILOT_COACH_V2=0`. The sidecar still qualifies the archive before activation.
+An alien line also selects v2. Empty voice bank and TTS off support silent observation.
+Legacy-unmanaged references remain `legacy_unknown`, never certified human laps.
+For autonomous acceptance, disable archives with the existing authenticated
+`config.set` for `lapArchiveEnabled:false`, then assert `config.get` returns a
+`config.value` with boolean `false` **each new game before the first lap**. Preserve
+and compare the personal journal and combo snapshot; do not rely on persistence
+across game restarts or allow quota rotation to touch personal history.
+
 ## Bounded render interval acceptance
 
 The existing authenticated harness connection can subscribe to `performance.frames`
