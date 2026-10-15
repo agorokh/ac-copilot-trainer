@@ -13,14 +13,27 @@ const context = vm.createContext({console, crypto: webcrypto, Uint8Array, ArrayB
 vm.runInContext(fs.readFileSync(path.join(dir, "tablet_audio.js"), "utf8"), context);
 vm.runInContext(fs.readFileSync(path.join(dir, "mic_worklet.js"), "utf8"), context);
 const dash = fs.readFileSync(path.join(dir, "../../dash/web/tablet_dash.html"), "utf8");
-const liveSpinner = dash.match(/  function liveDiscreteSpinner\(level, modes\) \{[\s\S]*?\n  \}/)[0];
-vm.runInContext(liveSpinner + ";globalThis.liveSpinner=liveDiscreteSpinner", context);
-assert.equal(context.liveSpinner(3, 12).max, 11);
-assert.equal(context.liveSpinner(0, 12).value, 0);
-assert.equal(context.liveSpinner(0, 0), null);
-assert.equal(context.liveSpinner(12, 12).value, null);
-assert.equal(context.liveSpinner(undefined, 12).value, null);
-assert.equal(context.liveSpinner(3, undefined).range_known, false);
+const liveSpinner = dash.match(/  function liveDiscreteSpinner\(level, modes, setupRange\) \{[\s\S]*?\n  \}/)[0];
+const stepsOf = dash.match(/  function stepsOf\(sp\) \{[\s\S]*?\n  \}/)[0];
+const fin = dash.match(/  function fin\([^\n]+/)[0];
+vm.runInContext(fin + "\n" + stepsOf + "\n" + liveSpinner + ";globalThis.liveSpinner=liveDiscreteSpinner", context);
+// Real Porsche/CSP response: modes=11, but spinner OFF..11 exposes 12 positions.
+const porscheRange = {value:8, min:0, max:11, step:1};
+const liveTc = context.liveSpinner(3, 11, porscheRange);
+assert.equal(liveTc.value, 3); // actual physics, never the saved/setup value 8
+assert.equal(liveTc.max, 11);
+assert.equal((liveTc.max-liveTc.min)/liveTc.step+1, 12);
+assert.equal(context.liveSpinner(0, 11, porscheRange).value, 0);
+assert.equal(context.liveSpinner(11, 11, porscheRange).value, 11);
+assert.equal(context.liveSpinner(12, 11, porscheRange).value, null);
+assert.equal(context.liveSpinner(undefined, 11, porscheRange).value, null);
+assert.equal(context.liveSpinner(0, 0, porscheRange), null);
+for (const modes of [undefined, 11, 12]) {
+  assert.equal(context.liveSpinner(3, modes).range_known, false);
+}
+assert.equal(context.liveSpinner(3, 11, {...porscheRange,range_known:false}).range_known, false);
+assert.equal(context.liveSpinner(3, 11, {min:1,max:5,step:2}).value, 3);
+assert.equal(context.liveSpinner(2, 11, {min:1,max:5,step:2}).value, null);
 (async function () {
   const calls = [];
   let wired = true;
