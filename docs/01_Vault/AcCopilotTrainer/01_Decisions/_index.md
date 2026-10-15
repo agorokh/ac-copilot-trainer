@@ -12,6 +12,8 @@ relates_to:
 
 Architecture Decision Records for this vault.
 
+- [Autonomous lab observation](adr-2026-10-14-autonomous-lab-observation.md) — agents own routine driving, screen/telemetry observation and session-spanning proof; no operator lap-status question loop.
+
 - [local-reviewer-model](local-reviewer-model.md) — Tier 3 local reviewer model scope and phases (epic #26).
 - [csp-api-field-safety](csp-api-field-safety.md) — CSP C-struct field access rules, valid/invalid fields, render API (issue #24).
 - [screen-firmware-in-trainer-monorepo](screen-firmware-in-trainer-monorepo.md) — `firmware/` lives inside the trainer repo.
