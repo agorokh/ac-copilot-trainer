@@ -67,3 +67,13 @@ normal-game frame distribution comparisons; build/install source proof. Issue854
 stays OPEN and PR uses Refs. The previous NVIDIA0x133 is unresolved; this change
 cannot certify PSU/noise/physicalRGB persistence or a hardware/driver cure.
 Detailed configuration and capture instructions: docs/10_Development/15_Local_Inference.md.
+
+
+Root live capture rules-2 initially failed closed invalid_frame with zero samples.
+Added guarded LuaJIT FFI scalar conversion and exact 2^53-1 counter bound, plus
+bounded raw scalar type/value diagnostics. Real LuaJIT uint64 fixtures now cover
+conversion, duplicate handling and rejection beyond exact integer precision.
+Next live run must confirm actual runtime type; SDK-derived theory is not proof.
+Corrected Settings connection caption to sidecar coaching, avoiding an unproved
+LLM-active claim while rules-only is selected. Focused Lua42 passed and CSP guards
+passed. Root preserves all actual evidence and owns subsequent capture acceptance.

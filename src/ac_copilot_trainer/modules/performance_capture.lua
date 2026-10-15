@@ -5,12 +5,20 @@ local function finite(v)
   return type(v) == "number" and v == v and v > -math.huge and v < math.huge
 end
 
+local function scalar(v)
+  if type(v) == "cdata" then
+    local ok, number = pcall(tonumber, v)
+    return ok and number or nil
+  end
+  return v
+end
+
 function M.new()
   local self = { active = false }
 
   function self:start(args, now)
     args = type(args) == "table" and args or {}
-    local seconds = tonumber(args.seconds) or 60
+    local seconds = args.seconds == nil and 60 or scalar(args.seconds)
     local id = args.capture_id
     if self.active then return false, "capture already active" end
     if type(id) ~= "string" or #id < 1 or #id > 64 or not id:match("^[%w_-]+$") then
@@ -22,6 +30,7 @@ function M.new()
     self.active, self.id, self.started, self.seconds = true, id, now, seconds
     self.rows, self.count, self.duplicates, self.gaps, self.invalid = {}, 0, 0, 0, 0
     self.lastFrame, self.lastClock, self.chunk = nil, now, 0
+    self.rawFrameType, self.rawFrameValue, self.rawDtType = nil, nil, nil
     return true, "CSP UI/render interval capture armed"
   end
 
@@ -32,6 +41,8 @@ function M.new()
       rows = self.rows, complete = reason ~= nil, reason = reason,
       elapsed_s = math.max(0, now - self.started), sample_count = self.count,
       duplicates = self.duplicates, gaps = self.gaps, invalid_dt = self.invalid,
+      raw_frame_type = self.rawFrameType, raw_frame_value = self.rawFrameValue,
+      raw_dt_type = self.rawDtType,
     })
     self.rows = {}
     if reason then self.active = false end
@@ -39,6 +50,11 @@ function M.new()
 
   function self:tick(frame, dt, paused, now, publish)
     if not self.active then return end
+    if self.rawFrameType == nil then
+      self.rawFrameType, self.rawFrameValue = type(frame), tostring(frame):sub(1, 64)
+      self.rawDtType = type(dt)
+    end
+    frame, dt = scalar(frame), scalar(dt)
     if not finite(now) or now < self.lastClock then
       self:flush(self.lastClock, publish, "clock_reset")
       return
@@ -48,7 +64,7 @@ function M.new()
       self:flush(now, publish, "duration")
       return
     end
-    if not finite(frame) or frame % 1 ~= 0 then
+    if not finite(frame) or frame < 0 or frame > 9007199254740991 or frame % 1 ~= 0 then
       self:flush(now, publish, "invalid_frame")
       return
     end

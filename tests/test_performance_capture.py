@@ -99,3 +99,29 @@ def test_existing_protocol_accepts_diagnostic_action_and_topic():
         validate_inbound({"v": 1, "type": "state.subscribe", "topics": ["performance.frames"]})
         is None
     )
+
+
+def test_luajit_ffi_integer_frame_identity_is_exactly_bounded():
+    luajit = pytest.importorskip("lupa.luajit21")
+    lua = luajit.LuaRuntime(unpack_returned_tuples=True)
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src/ac_copilot_trainer/modules/performance_capture.lua"
+    )
+    lua.globals().capture_module = lua.execute(source.read_text())
+    lua.execute("""
+      local ffi = require('ffi')
+      local cap = capture_module.new()
+      chunks = {}
+      local publish = function(_, p) chunks[#chunks + 1] = p end
+      assert(cap:start({capture_id='ffi-proof', seconds=1}, 0))
+      cap:tick(ffi.new('uint64_t', 100), 0.016, false, 0.01, publish)
+      cap:tick(ffi.new('uint64_t', 100), 0.016, false, 0.02, publish)
+      cap:tick(ffi.new('uint64_t', 101), 0.020, false, 0.03, publish)
+      cap:tick(ffi.new('uint64_t', 102), 0.020, false, 1.01, publish)
+      assert(chunks[1].sample_count == 2 and chunks[1].duplicates == 1)
+      assert(chunks[1].raw_frame_type == 'cdata' and chunks[1].rows[1].frame == 100)
+      assert(cap:start({capture_id='unsafe-int', seconds=1}, 2))
+      cap:tick(ffi.new('uint64_t', 9007199254740992), 0.02, false, 2.01, publish)
+      assert(chunks[2].reason == 'invalid_frame' and chunks[2].sample_count == 0)
+    """)
