@@ -151,6 +151,7 @@ def build_health_json(
     browser_peers: int = 0,
     endpoints: Sequence[str] = (),
     voice: Mapping[str, object] | None = None,
+    inference: Mapping[str, object] | None = None,
 ) -> str:
     """Instant health body: the endpoint answering IS liveness.
 
@@ -175,6 +176,8 @@ def build_health_json(
     }
     if voice is not None:
         payload["voice"] = dict(voice)
+    if inference is not None:
+        payload["inference"] = dict(inference)
     return json.dumps(payload, separators=(",", ":"))
 
 

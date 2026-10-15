@@ -10,11 +10,15 @@ from __future__ import annotations
 import http.client
 import json
 import logging
+import math
 import os
 import re
+import threading
+import time
 import urllib.error
 import urllib.request
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -30,13 +34,17 @@ _ENV_DEBRIEF_TIMEOUT = "AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC"
 _DEFAULT_MODEL = "llama3.2"
 _DEFAULT_HOST = "http://127.0.0.1:11434"
 _DEFAULT_TEMPERATURE = 0.35
-_DEFAULT_NUM_PREDICT = 320
-_DEFAULT_TIMEOUT_SEC = 45.0
-_DEFAULT_DEBRIEF_TIMEOUT_SEC = 12.0
+_DEFAULT_NUM_PREDICT = 64
+_DEFAULT_TIMEOUT_SEC = 8.0
+_DEFAULT_DEBRIEF_TIMEOUT_SEC = 8.0
 
 
 def debrief_feature_enabled() -> bool:
-    v = (os.environ.get(_ENV_ENABLE) or "").strip().lower()
+    v = (
+        os.environ.get("AC_COPILOT_INFERENCE_ENABLE", os.environ.get(_ENV_ENABLE, ""))
+        .strip()
+        .lower()
+    )
     return v in ("1", "true", "yes", "on")
 
 
@@ -45,9 +53,12 @@ def _float_env(name: str, default: float) -> float:
     if raw is None or raw.strip() == "":
         return default
     try:
-        return float(raw)
-    except ValueError:
-        return default
+        value = float(raw)
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite")
+        return value
+    except ValueError as exc:
+        raise ValueError(f"invalid inference setting {name}") from exc
 
 
 def _int_env(name: str, default: int) -> int:
@@ -56,17 +67,22 @@ def _int_env(name: str, default: int) -> int:
         return default
     try:
         return int(raw)
-    except ValueError:
-        return default
+    except ValueError as exc:
+        raise ValueError(f"invalid inference setting {name}") from exc
 
 
 def ollama_base_url() -> str:
-    raw = (os.environ.get(_ENV_HOST) or "").strip()
+    raw = os.environ.get("AC_COPILOT_INFERENCE_BASE_URL", os.environ.get(_ENV_HOST, "")).strip()
     return (raw or _DEFAULT_HOST).rstrip("/")
 
 
 def ollama_model() -> str:
-    return (os.environ.get(_ENV_MODEL) or _DEFAULT_MODEL).strip() or _DEFAULT_MODEL
+    return (
+        os.environ.get(
+            "AC_COPILOT_INFERENCE_MODEL", os.environ.get(_ENV_MODEL, _DEFAULT_MODEL)
+        ).strip()
+        or _DEFAULT_MODEL
+    )
 
 
 def read_generation_options() -> tuple[float, int, float]:
@@ -75,15 +91,15 @@ def read_generation_options() -> tuple[float, int, float]:
     n = _int_env(_ENV_TOKENS, _DEFAULT_NUM_PREDICT)
     timeout = _float_env(_ENV_TIMEOUT, _DEFAULT_TIMEOUT_SEC)
     t = max(0.0, min(2.0, t))
-    n = max(64, min(4096, n))
-    timeout = max(5.0, min(300.0, timeout))
+    n = max(1, min(128, n))
+    timeout = max(0.1, min(12.0, timeout))
     return t, n, timeout
 
 
 def read_debrief_ollama_timeout_sec() -> float:
     """Shorter cap for post-lap debrief so the sidecar answers before CSP coaching hold expires."""
     t = _float_env(_ENV_DEBRIEF_TIMEOUT, _DEFAULT_DEBRIEF_TIMEOUT_SEC)
-    return max(2.0, min(45.0, t))
+    return max(0.1, min(12.0, t))
 
 
 def _lap_time_s(lap_time_ms: Any) -> str | None:
@@ -105,7 +121,7 @@ def _hints_lines(inbound: dict[str, Any]) -> list[str]:
     out: list[str] = []
     for item in raw:
         if isinstance(item, str) and item.strip():
-            out.append(item.strip())
+            out.append(item.strip()[:400])
         if len(out) >= 8:
             break
     return out
@@ -184,7 +200,7 @@ def build_llm_prompt(inbound: dict[str, Any], improvement_ranking: list[dict[str
     lap_s = _lap_time_s(inbound.get("lapTimeMs"))
     hints = _hints_lines(inbound)
     rank_lines = [
-        str(item.get("suggestion") or "").strip()
+        str(item.get("suggestion") or "").strip()[:400]
         for item in improvement_ranking[:6]
         if str(item.get("suggestion") or "").strip()
     ]
@@ -204,6 +220,78 @@ def build_llm_prompt(inbound: dict[str, Any], improvement_ranking: list[dict[str
     )
 
 
+# The legacy name remains a compatibility entrypoint. All providers pass this
+# same boundary, so callers cannot accidentally create concurrent generations.
+_generation_lock = threading.Lock()
+_status_lock = threading.Lock()
+_generation_status: dict[str, Any] = {"ready": False, "fallback_reason": "not_checked"}
+
+
+def _set_generation_status(**values: Any) -> None:
+    with _status_lock:
+        _generation_status.update(values)
+
+
+def inference_status() -> dict[str, Any]:
+    """Cached readback only: /health must never block the WebSocket event loop."""
+    with _status_lock:
+        status = dict(_generation_status)
+    status.update(
+        enabled=debrief_feature_enabled(), model=ollama_model(), provider=inference_provider()
+    )
+    checked = status.get("checked_at")
+    if not isinstance(checked, (float, int)) or time.time() - checked > 5:
+        status.update(ready=False, fallback_reason="not_checked_or_stale")
+    return status
+
+
+def inference_provider() -> str:
+    return os.environ.get("AC_COPILOT_INFERENCE_PROVIDER", "ollama").strip().lower()
+
+
+def _local_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return (
+        parsed.scheme == "http"
+        and parsed.hostname in ("127.0.0.1", "localhost", "::1")
+        and not parsed.username
+        and not parsed.password
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _placement_ready(model: str, deadline: float) -> bool:
+    required_gpu = os.environ.get("AC_COPILOT_INFERENCE_GPU_UUID", "").strip()
+    if not required_gpu:
+        return True  # Explicit non-rig compatibility: no GPU placement claim.
+    health_url = os.environ.get("AC_COPILOT_INFERENCE_HEALTH_URL", "").strip()
+    if not _local_url(health_url):
+        raise ValueError("a loopback placement health endpoint is required")
+    with urllib.request.urlopen(
+        health_url, timeout=min(0.5, max(0.01, deadline - time.monotonic()))
+    ) as resp:  # nosec B310
+        health = json.loads(resp.read(65537))
+    epoch = health.get("utc_epoch") if isinstance(health, dict) else None
+    placement = health.get("placement") if isinstance(health, dict) else None
+    ready = (
+        isinstance(health, dict)
+        and health.get("ready") is True
+        and health.get("gpu_uuid") == required_gpu
+        and health.get("model") == model
+        and isinstance(placement, list)
+        and bool(placement)
+        and all(isinstance(row, dict) and row.get("gpu_uuid") == required_gpu for row in placement)
+        and isinstance(epoch, (int, float))
+        and not isinstance(epoch, bool)
+        and math.isfinite(epoch)
+        and -2 <= time.time() - epoch <= 5
+    )
+    if ready:
+        _set_generation_status(backend_provider=health.get("provider"))
+    return ready
+
+
 def call_ollama_generate(
     prompt: str,
     *,
@@ -212,78 +300,111 @@ def call_ollama_generate(
     temperature: float,
     num_predict: int,
     timeout_sec: float,
+    deadline: float | None = None,
 ) -> str | None:
-    """POST /api/generate; returns assistant text or None on failure."""
-    raw = ""
-    status: int | None = None
+    """Generate through native Ollama or the common chat API; finite and fail closed.
+
+    A deadline starts at request receipt when supplied. A socket timeout is not
+    proof of cancellation in the model server; the supervised host admission
+    service must keep its slot until the real backend finishes.
+    """
+    now = time.monotonic()
+    deadline = min(deadline, now + timeout_sec) if deadline is not None else now + timeout_sec
+    provider = inference_provider()
+    if not _generation_lock.acquire(blocking=False):
+        _set_generation_status(ready=False, fallback_reason="busy", checked_at=time.time())
+        return None
     try:
-        base = base_url.rstrip("/")
-        url = f"{base}/api/generate"
-        if not url.startswith(("http://", "https://")):
-            raise ValueError(f"unsupported Ollama URL: {url!r}")
-        body = json.dumps(
-            {
+        if (
+            provider not in ("ollama", "openai")
+            or not _local_url(base_url)
+            or not model.strip()
+            or len(model) > 256
+            or not all(math.isfinite(x) for x in (temperature, timeout_sec, deadline))
+            or not 0 <= temperature <= 2
+            or not 1 <= num_predict <= 128
+            or not 0 < timeout_sec <= 12
+        ):
+            raise ValueError("invalid inference provider, loopback URL or bounded profile")
+        if deadline <= time.monotonic():
+            _set_generation_status(ready=False, fallback_reason="expired", checked_at=time.time())
+            return None
+        if not _placement_ready(model, deadline):
+            _set_generation_status(
+                ready=False, fallback_reason="placement_unavailable", checked_at=time.time()
+            )
+            return None
+        if provider == "openai":
+            url = base_url.rstrip("/") + "/chat/completions"
+            body = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "temperature": temperature,
+                "max_tokens": num_predict,
+                "seed": 42,
+            }
+        else:
+            url = base_url.rstrip("/") + "/api/generate"
+            body = {
                 "model": model,
                 "prompt": prompt,
                 "stream": False,
                 "options": {
                     "temperature": temperature,
                     "num_predict": num_predict,
+                    "num_ctx": 4096,
+                    "num_thread": 2,
+                    "seed": 42,
                 },
-                # Round 9: pin model in Ollama memory for 30 minutes after
-                # each call so subsequent lap_completes don't incur cold-load
-                # latency (>30s). Default keep_alive is 5 min which can
-                # expire mid-session if the user takes a break between laps.
                 "keep_alive": "30m",
-            },
-            separators=(",", ":"),
-        ).encode("utf-8")
+            }
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
         req = urllib.request.Request(
             url,
-            data=body,
+            data=json.dumps(body, allow_nan=False).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        # Local Ollama only; synchronous urllib (server runs this in asyncio.to_thread).
-        # For heavy multi-client workloads, consider aiohttp/httpx async clients later.
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:  # nosec B310
-            status = resp.getcode()
+        with urllib.request.urlopen(req, timeout=remaining) as resp:  # nosec B310
             raw = resp.read().decode("utf-8", errors="replace")
+        if time.monotonic() >= deadline:
+            _set_generation_status(ready=False, fallback_reason="expired", checked_at=time.time())
+            return None
+        data = json.loads(raw)
+        text = None
+        if isinstance(data, dict):
+            if provider == "ollama":
+                text = data.get("response")
+            else:
+                choices = data.get("choices")
+                if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                    message = choices[0].get("message")
+                    if isinstance(message, dict):
+                        text = message.get("content")
+        if not isinstance(text, str) or not text.strip():
+            _set_generation_status(
+                ready=False, fallback_reason="invalid_response", checked_at=time.time()
+            )
+            return None
+        _set_generation_status(ready=True, fallback_reason=None, checked_at=time.time())
+        return _sanitize_debrief(text)[:2000]
     except (
         ValueError,
         urllib.error.URLError,
         TimeoutError,
         OSError,
         http.client.HTTPException,
-    ) as e:
-        logger.info("ollama generate failed: %s", e)
-        return None
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as e:
-        prefix = raw[:400].replace("\n", " ")
-        logger.info(
-            "ollama generate: invalid JSON (status=%s err=%s) body_prefix=%r",
-            status,
-            e,
-            prefix,
+    ) as exc:
+        logger.info("inference unavailable: %s", exc)
+        _set_generation_status(
+            ready=False, fallback_reason="request_failed", checked_at=time.time()
         )
         return None
-    if not isinstance(data, dict):
-        logger.info(
-            "ollama generate: expected JSON object, got %s",
-            type(data).__name__,
-        )
-        return None
-    text = data.get("response")
-    if not isinstance(text, str) or not text.strip():
-        logger.info(
-            "ollama generate: missing/empty response field (status=%s keys=%s)",
-            status,
-            list(data.keys())[:8],
-        )
-        return None
-    return _sanitize_debrief(text)
+    finally:
+        _generation_lock.release()
 
 
 def compose_debrief(
@@ -296,8 +417,15 @@ def compose_debrief(
     rules = rules_fallback_debrief(inbound, improvement_ranking)
     base = ollama_base_url()
     model = ollama_model()
-    temp, n_pred, _ = read_generation_options()
-    debrief_timeout = read_debrief_ollama_timeout_sec()
+    try:
+        temp, n_pred, _ = read_generation_options()
+        debrief_timeout = read_debrief_ollama_timeout_sec()
+    except ValueError as exc:
+        logger.warning("invalid inference configuration: %s", exc)
+        _set_generation_status(
+            ready=False, fallback_reason="invalid_configuration", checked_at=time.time()
+        )
+        return rules
     prompt = build_llm_prompt(inbound, improvement_ranking)
     llm = call_ollama_generate(
         prompt,
@@ -306,6 +434,7 @@ def compose_debrief(
         temperature=temp,
         num_predict=n_pred,
         timeout_sec=debrief_timeout,
+        deadline=inbound.get("_inference_deadline"),
     )
     if llm:
         return llm
@@ -320,6 +449,7 @@ def compose_corner_hint(
     dist_m: float,
     car: str | None = None,
     track: str | None = None,
+    deadline: float | None = None,
 ) -> str | None:
     """Round 10: real-time per-corner coaching hint (sub-1s).
 
@@ -373,9 +503,10 @@ def compose_corner_hint(
         prompt,
         base_url=base,
         model=model,
-        temperature=0.2,
+        temperature=0.0,
         num_predict=20,
-        timeout_sec=10.0,
+        timeout_sec=2.0,
+        deadline=deadline,
     )
     if not text:
         return None
@@ -403,7 +534,19 @@ def compose_corner_hint(
             break
     if not candidate:
         return None
-    return candidate.upper()[:60]
+    candidate = candidate.upper().rstrip(".!")
+    if delta >= 15:
+        allowed = {"BRAKE HARD NOW", "BRAKE HARD, HEAVY STOP"}
+    elif delta >= 5:
+        allowed = {"BRAKE EARLIER", "LIFT NOW"}
+    elif delta <= -5:
+        allowed = {"ACCELERATE, BUILD SPEED", "HOLD THROTTLE, ON PACE"}
+    else:
+        allowed = {"ON PACE", "HOLD STEADY", "ON PACE, HOLD STEADY"}
+    if candidate not in allowed:
+        _set_generation_status(fallback_reason="invalid_advice")
+        return None
+    return candidate
 
 
 def compose_llm_debrief_only(
@@ -421,8 +564,15 @@ def compose_llm_debrief_only(
         return None
     base = ollama_base_url()
     model = ollama_model()
-    temp, n_pred, _ = read_generation_options()
-    debrief_timeout = read_debrief_ollama_timeout_sec()
+    try:
+        temp, n_pred, _ = read_generation_options()
+        debrief_timeout = read_debrief_ollama_timeout_sec()
+    except ValueError as exc:
+        logger.warning("invalid inference configuration: %s", exc)
+        _set_generation_status(
+            ready=False, fallback_reason="invalid_configuration", checked_at=time.time()
+        )
+        return None
     prompt = build_llm_prompt(inbound, improvement_ranking)
     return call_ollama_generate(
         prompt,
@@ -431,4 +581,5 @@ def compose_llm_debrief_only(
         temperature=temp,
         num_predict=n_pred,
         timeout_sec=debrief_timeout,
+        deadline=inbound.get("_inference_deadline"),
     )

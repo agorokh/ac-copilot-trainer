@@ -682,7 +682,10 @@ class GamePointSupervisor:
         return str(_repo_root())
 
     def sidecar_environment(self) -> dict[str, str]:
+        from tools.ai_sidecar.coaching.generation import apply_rig_inference_defaults
+
         env = dict(self._environ)
+        apply_rig_inference_defaults(env)
         base = self._launcher_path_base()
         _put_if_present(env, "AC_COPILOT_SIDECAR_TOKEN", self.config.token)
         _put_if_present(

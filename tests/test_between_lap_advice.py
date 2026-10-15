@@ -70,3 +70,45 @@ def test_select_between_lap_uses_ranking_when_ledger_empty(monkeypatch) -> None:
         use_ollama=False,
     )
     assert advice is not None and advice["corner"] == 3 and advice["corner_label"] == "T4"
+
+
+def test_enabled_model_path_supplies_endpoint_and_model_and_keeps_selected_action(monkeypatch):
+    from tools.ai_sidecar.coaching import between_lap as between
+
+    monkeypatch.setenv("AC_COPILOT_OLLAMA_ENABLE", "1")
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_BASE_URL", "http://127.0.0.1:11435/v1")
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_MODEL", "llama3.2:3b")
+    calls = []
+
+    # Required keyword arguments reproduce the original integration defect.
+    def generate(prompt, *, base_url, model, temperature, num_predict, timeout_sec, deadline):
+        calls.append((base_url, model, deadline))
+        assert temperature == 0 and num_predict <= 24 and timeout_sec <= 8
+        return "NEXT LAP T2: BRAKE LATER."
+
+    monkeypatch.setattr(between, "call_ollama_generate", generate)
+    ledger = CoachingLedger(hysteresis=1, assess_laps=0, lap_budget=4)
+    ledger.begin_lap(1)
+    ledger.record_pass(1, Diagnosis(RootError.EARLY_BRAKE, {}), time_lost_s=0.5, valid=True)
+    advice = between.select_between_lap_advice(refs=_refs(0, 1), ledger=ledger, deadline=123.0)
+    assert calls == [("http://127.0.0.1:11435/v1", "llama3.2:3b", 123.0)]
+    assert advice["text"] == "NEXT LAP T2: BRAKE LATER."
+
+
+def test_enabled_model_bad_corner_or_contradiction_uses_rules(monkeypatch):
+    from tools.ai_sidecar.coaching import between_lap as between
+
+    monkeypatch.setenv("AC_COPILOT_OLLAMA_ENABLE", "1")
+    for response in (
+        None,
+        "NEXT LAP T1: BRAKE LATER.",
+        "NEXT LAP T2: BRAKE EARLIER.",
+        "NEXT LAP T2: BRAKE LATER AT 50 METRES.",
+    ):
+        monkeypatch.setattr(
+            between, "call_ollama_generate", lambda *a, response=response, **kw: response
+        )
+        advice = between.compose_between_lap_advice(
+            corner=1, root=RootError.EARLY_BRAKE, refs=_refs(0, 1)
+        )
+        assert advice["text"] == "NEXT LAP T2: Brake later."

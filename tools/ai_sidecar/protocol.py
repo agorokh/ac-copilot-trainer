@@ -14,6 +14,7 @@ from tools.ai_sidecar.coaching.llm_coach import (
     compose_corner_hint,
     compose_llm_debrief_only,
     debrief_feature_enabled,
+    inference_provider,
     rules_fallback_debrief,
 )
 from tools.ai_sidecar.features import _as_float
@@ -110,8 +111,6 @@ def build_brain_followup(inbound: dict[str, Any]) -> dict[str, Any] | None:
     coaching_response carrying the rich text debrief + a machine-readable ``cornerAnalysis``.
     Returns None on any failure or when no usable trace exists (the client keeps the rules debrief).
     """
-    if not debrief_feature_enabled():
-        return None
     archive = resolve_lap_archive(inbound)
     if archive is None:
         return None
@@ -292,6 +291,7 @@ def prepare_outbound_message(
             cur_kmh=cur_kmh,
             ref_kmh=ref_kmh,
             dist_m=dist_m,
+            deadline=inbound.get("_inference_deadline"),
         )
         if not hint:
             return None
@@ -365,9 +365,10 @@ def build_ollama_followup(
         "hints": [
             {
                 "kind": "general",
-                "text": "Ollama debrief",
+                "text": "Model debrief",
             },
         ],
         "debrief": debrief,
-        "debriefSource": "ollama",
+        "debriefSource": "ollama",  # Legacy Lua narration discriminator, independent of provider.
+        "inferenceProvider": inference_provider(),
     }

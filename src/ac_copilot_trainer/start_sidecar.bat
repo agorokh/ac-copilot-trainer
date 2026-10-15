@@ -31,14 +31,25 @@ echo [start_sidecar] Set AC_COPILOT_REPO_ROOT to your repo root, or deploy the f
 exit /b 2
 
 :have_root
-REM Ollama coaching env (defaults from PR #75). Do not override user-set vars (inheritEnvironment=true).
-if not defined AC_COPILOT_OLLAMA_ENABLE set "AC_COPILOT_OLLAMA_ENABLE=1"
-if not defined AC_COPILOT_OLLAMA_HOST set "AC_COPILOT_OLLAMA_HOST=http://127.0.0.1:11434"
-if not defined AC_COPILOT_OLLAMA_MODEL set "AC_COPILOT_OLLAMA_MODEL=llama3.2:3b"
-if not defined AC_COPILOT_OLLAMA_TEMPERATURE set "AC_COPILOT_OLLAMA_TEMPERATURE=0.35"
-if not defined AC_COPILOT_OLLAMA_NUM_PREDICT set "AC_COPILOT_OLLAMA_NUM_PREDICT=160"
-if not defined AC_COPILOT_OLLAMA_TIMEOUT_SEC set "AC_COPILOT_OLLAMA_TIMEOUT_SEC=60"
-if not defined AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC set "AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC=60"
+REM Supervised inference admission (workstation-ops#4004). The host service owns
+REM CUDA placement; this HTTP client must never start an unrestricted model server.
+REM Defaults match Game Point's apply_rig_inference_defaults; explicit feature-off wins.
+if not defined AC_COPILOT_INFERENCE_ENABLE (
+  if defined AC_COPILOT_OLLAMA_ENABLE (
+    set "AC_COPILOT_INFERENCE_ENABLE=!AC_COPILOT_OLLAMA_ENABLE!"
+  ) else (
+    set "AC_COPILOT_INFERENCE_ENABLE=1"
+  )
+)
+if not defined AC_COPILOT_INFERENCE_PROVIDER set "AC_COPILOT_INFERENCE_PROVIDER=openai"
+if not defined AC_COPILOT_INFERENCE_BASE_URL set "AC_COPILOT_INFERENCE_BASE_URL=http://127.0.0.1:11435/v1"
+if not defined AC_COPILOT_INFERENCE_MODEL set "AC_COPILOT_INFERENCE_MODEL=llama3.2:3b"
+if not defined AC_COPILOT_INFERENCE_HEALTH_URL set "AC_COPILOT_INFERENCE_HEALTH_URL=http://127.0.0.1:11435/health"
+if not defined AC_COPILOT_INFERENCE_GPU_UUID set "AC_COPILOT_INFERENCE_GPU_UUID=GPU-1b2968de-307e-8a39-093d-24ebdc1366dc"
+if not defined AC_COPILOT_OLLAMA_TEMPERATURE set "AC_COPILOT_OLLAMA_TEMPERATURE=0"
+if not defined AC_COPILOT_OLLAMA_NUM_PREDICT set "AC_COPILOT_OLLAMA_NUM_PREDICT=64"
+if not defined AC_COPILOT_OLLAMA_TIMEOUT_SEC set "AC_COPILOT_OLLAMA_TIMEOUT_SEC=8"
+if not defined AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC set "AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC=8"
 if not defined AC_COPILOT_SIDECAR_PORT set "AC_COPILOT_SIDECAR_PORT=8765"
 if "!AC_COPILOT_SIDECAR_PORT!"=="" set "AC_COPILOT_SIDECAR_PORT=8765"
 

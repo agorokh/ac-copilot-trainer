@@ -11,7 +11,12 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from tools.ai_sidecar.coaching.llm_coach import call_ollama_generate, debrief_feature_enabled
+from tools.ai_sidecar.coaching.llm_coach import (
+    call_ollama_generate,
+    debrief_feature_enabled,
+    ollama_base_url,
+    ollama_model,
+)
 from tools.ai_sidecar.coaching_diagnosis import PHRASE, RootError
 from tools.ai_sidecar.coaching_ledger import CoachingLedger, Status
 from tools.ai_sidecar.track_reference import CornerReference
@@ -110,6 +115,7 @@ def compose_between_lap_advice(
     root: RootError | None,
     refs: Sequence[CornerReference],
     use_ollama: bool = True,
+    deadline: float | None = None,
 ) -> dict[str, Any] | None:
     """Build one validated between-lap advice payload (Ollama optional, rules fallback)."""
     if not _corner_in_refs(corner, refs):
@@ -128,9 +134,12 @@ def compose_between_lap_advice(
         )
         raw = call_ollama_generate(
             prompt,
-            temperature=0.2,
+            base_url=ollama_base_url(),
+            model=ollama_model(),
+            temperature=0.0,
             num_predict=24,
-            timeout_sec=10.0,
+            timeout_sec=8.0,
+            deadline=deadline,
         )
         if raw:
             for line in raw.strip().splitlines():
@@ -142,7 +151,12 @@ def compose_between_lap_advice(
                     candidate = candidate.split(".", 1)[0].strip() + "."
                 words = [w for w in candidate.split() if w]
                 if len(words) >= 2 and len(candidate) >= 4:
-                    text = candidate.upper()[:120]
+                    # A model may only restate the selected deterministic action.
+                    # Exact acceptance rejects other corners, numbers and opposing verbs.
+                    expected = _rules_phrase(root, corner).upper().rstrip(".!")
+                    normalized = candidate.upper().rstrip(".!")
+                    if normalized == expected:
+                        text = candidate.upper()[:120]
                     break
     if not text:
         text = _rules_phrase(root, corner)
@@ -155,6 +169,7 @@ def select_between_lap_advice(
     ledger: CoachingLedger | None = None,
     improvement_ranking: Sequence[Mapping[str, Any]] | None = None,
     use_ollama: bool = True,
+    deadline: float | None = None,
 ) -> dict[str, Any] | None:
     """Select and validate exactly one next-lap improvement point for ``corner_advice``."""
     valid = [r.index for r in refs]
@@ -166,4 +181,6 @@ def select_between_lap_advice(
         st = ledger.state(corner)
         if st is not None and st.root != RootError.NONE:
             root = st.root
-    return compose_between_lap_advice(corner=corner, root=root, refs=refs, use_ollama=use_ollama)
+    return compose_between_lap_advice(
+        corner=corner, root=root, refs=refs, use_ollama=use_ollama, deadline=deadline
+    )

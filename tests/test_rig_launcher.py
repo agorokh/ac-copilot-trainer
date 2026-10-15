@@ -178,8 +178,20 @@ def test_sidecar_command_uses_env_for_token_and_voice(tmp_path: Path) -> None:
     assert env["AC_COPILOT_REFERENCE_ARCHIVE"] == str((tmp_path / "ref.json").resolve())
     assert env["AC_COPILOT_ALIEN_LINE"] == str((tmp_path / "alien.json").resolve())
     assert env["AC_COPILOT_COACH_V2"] == "1"
+    assert env["AC_COPILOT_INFERENCE_BASE_URL"] == "http://127.0.0.1:11435/v1"
+    assert env["AC_COPILOT_INFERENCE_GPU_UUID"] == "GPU-1b2968de-307e-8a39-093d-24ebdc1366dc"
+    assert "CUDA_VISIBLE_DEVICES" not in env  # HTTP client placement is not server isolation.
     assert env["AC_COPILOT_VOICE_BANK"] == str((tmp_path / "voice-bank").resolve())
     assert env["AC_COPILOT_VOICE_TTS"] == "1"
+
+
+def test_inference_feature_off_and_explicit_profile_reach_sidecar(tmp_path):
+    parent = {"AC_COPILOT_OLLAMA_ENABLE": "0", "AC_COPILOT_INFERENCE_MODEL": "qualified-alias"}
+    supervisor = GamePointSupervisor(GamePointConfig(paths=LauncherPaths(tmp_path)), environ=parent)
+    env = supervisor.sidecar_environment()
+    assert env["AC_COPILOT_INFERENCE_ENABLE"] == "0"
+    assert env["AC_COPILOT_INFERENCE_MODEL"] == "qualified-alias"
+    assert "AC_COPILOT_INFERENCE_GPU_UUID" not in parent
 
 
 def test_sidecar_command_includes_serial_port_when_configured(tmp_path: Path) -> None:

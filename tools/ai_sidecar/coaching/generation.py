@@ -1,0 +1,110 @@
+"""Bounded model admission and the rig's supervised inference profile (#854).
+
+This is client policy. GPU isolation is enforced and attested by the host service;
+putting CUDA variables on this HTTP client would not constrain that service.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import math
+import time
+from collections.abc import Callable, MutableMapping
+from dataclasses import dataclass
+from typing import Any
+
+RIG_GPU_UUID = "GPU-1b2968de-307e-8a39-093d-24ebdc1366dc"
+RIG_DEFAULTS = {
+    "AC_COPILOT_INFERENCE_ENABLE": "1",
+    "AC_COPILOT_INFERENCE_PROVIDER": "openai",
+    "AC_COPILOT_INFERENCE_BASE_URL": "http://127.0.0.1:11435/v1",
+    "AC_COPILOT_INFERENCE_MODEL": "llama3.2:3b",
+    "AC_COPILOT_INFERENCE_HEALTH_URL": "http://127.0.0.1:11435/health",
+    "AC_COPILOT_INFERENCE_GPU_UUID": RIG_GPU_UUID,
+    "AC_COPILOT_OLLAMA_TEMPERATURE": "0",
+    "AC_COPILOT_OLLAMA_NUM_PREDICT": "64",
+    "AC_COPILOT_OLLAMA_TIMEOUT_SEC": "8",
+    "AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC": "8",
+}
+
+
+def apply_rig_inference_defaults(env: MutableMapping[str, str]) -> None:
+    """Set child-only defaults; keep an explicit operator feature-off authoritative."""
+    if "AC_COPILOT_INFERENCE_ENABLE" not in env and "AC_COPILOT_OLLAMA_ENABLE" in env:
+        env["AC_COPILOT_INFERENCE_ENABLE"] = env["AC_COPILOT_OLLAMA_ENABLE"]
+    for key, value in RIG_DEFAULTS.items():
+        env.setdefault(key, value)
+
+
+@dataclass
+class _Request:
+    call: Callable[[], Any]
+    deadline: float
+    priority: int
+    future: asyncio.Future[Any]
+
+
+class LatestGenerationQueue:
+    """One active blocking job and one replaceable pending job per event loop.
+
+    Cancellation of a submitter never cancels the worker or releases its slot.
+    urllib timeout still cannot certify backend cancellation: the supervised
+    host must retain its own admission slot until its upstream request ends.
+    """
+
+    def __init__(self) -> None:
+        self._pending: _Request | None = None
+        self._worker: asyncio.Task[None] | None = None
+        self.active = False
+        self.discarded = 0
+
+    async def submit(self, call: Callable[[], Any], *, deadline: float, priority: int = 0) -> Any:
+        if not math.isfinite(deadline) or time.monotonic() >= deadline:
+            self.discarded += 1
+            return None
+        future = asyncio.get_running_loop().create_future()
+        if self._pending is not None and self._pending.priority > priority:
+            self.discarded += 1
+            return None
+        if self._pending is not None:
+            self.discarded += 1
+            self._pending.future.set_result(None)
+        self._pending = _Request(call, deadline, priority, future)
+        if self._worker is None or self._worker.done():
+            self._worker = asyncio.create_task(self._drain())
+        # Shield also leaves the future readable by _drain after caller cancellation.
+        try:
+            return await asyncio.shield(future)
+        except asyncio.CancelledError:
+            # A disconnected client no longer reads this outcome. Keep the work
+            # owned, but consume a later exception so it is not lost to asyncio.
+            future.add_done_callback(
+                lambda done: done.exception() if not done.cancelled() else None
+            )
+            raise
+
+    async def _drain(self) -> None:
+        while self._pending is not None:
+            request, self._pending = self._pending, None
+            if time.monotonic() >= request.deadline:
+                self.discarded += 1
+                request.future.set_result(None)
+                continue
+            self.active = True
+            try:
+                result = await asyncio.to_thread(request.call)
+                if time.monotonic() >= request.deadline:
+                    self.discarded += 1
+                    result = None
+                request.future.set_result(result)
+            except Exception as exc:
+                request.future.set_exception(exc)
+            finally:
+                self.active = False
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "active": self.active,
+            "pending": int(self._pending is not None),
+            "discarded": self.discarded,
+        }
