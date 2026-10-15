@@ -27,7 +27,7 @@ local coachingHints = require("coaching_hints")
 local lapArchive = require("lap_archive")
 local coachingOverlay = require("coaching_overlay")
 local wsBridge = require("ws_bridge")
-local performanceCapture = require("performance_capture").new()
+wsBridge.performanceCapture = require("performance_capture").new()
 local sessionJournal = require("session_journal")
 local ch = require("csp_helpers")
 local renderDiag = require("render_diag")
@@ -670,7 +670,7 @@ end
 -- `action.ack` back to the originator.
 if wsBridge.registerActionHandler then
   wsBridge.registerActionHandler("capturePerformance", function(args)
-    return performanceCapture:start(args, os.preciseClock())
+    return wsBridge.performanceCapture:start(args, os.preciseClock())
   end)
   wsBridge.registerActionHandler("toggleFocusPractice", function()
     state.focusPracticeActive = not (state.focusPracticeActive or false)
@@ -2313,9 +2313,9 @@ end
 
 function script.update(dt)
   sim = ac.getSim()
-  if performanceCapture.active then
+  if wsBridge.performanceCapture.active then
     local perfUI = ac.getUI()
-    performanceCapture:tick(sim and sim.frame, perfUI and perfUI.dt,
+    wsBridge.performanceCapture:tick(sim and sim.frame, perfUI and perfUI.dt,
       sim and sim.isPaused, os.preciseClock(), function(_topic, payload)
         wsBridge.publishTopic("performance.frames", payload)
       end)

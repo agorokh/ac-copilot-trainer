@@ -138,9 +138,11 @@ def test_brain_followup_rejects_unsafe_archive_path(tmp_path, monkeypatch):
     assert build_brain_followup({"archivePath": str(bad)}) is None
 
 
-def test_brain_followup_disabled_when_feature_off(monkeypatch):
-    monkeypatch.delenv(_ENABLE, raising=False)
-    assert build_brain_followup(_corner_archive()) is None
+def test_cpu_brain_remains_available_when_model_feature_off(monkeypatch):
+    monkeypatch.setenv(_ENABLE, "0")
+    out = build_brain_followup(_corner_archive())
+    assert out is not None and out["debriefSource"] == "brain"
+    assert out["cornerAnalysis"]
 
 
 def test_brain_followup_rejects_traversal_archive_path(tmp_path, monkeypatch):
