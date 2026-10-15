@@ -16,6 +16,7 @@ import os
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -280,7 +281,9 @@ def _same_selected_identity(left: Mapping[str, Any], right: Mapping[str, Any]) -
     )
 
 
-def _binding_reason(record: Mapping[str, Any], envelope: Mapping[str, Any]) -> str | None:
+def _binding_reason(
+    record: Mapping[str, Any], envelope: Mapping[str, Any], *, digest: str | None = None
+) -> str | None:
     if type(envelope.get("schema_version")) is not int or envelope.get("schema_version") != 1:
         return "qualification_schema_unsupported"
     binding = _map(envelope.get("binding"))
@@ -290,7 +293,8 @@ def _binding_reason(record: Mapping[str, Any], envelope: Mapping[str, Any]) -> s
     ):
         return "qualification_identity_mismatch"
     try:
-        digest = payload_sha256(record)
+        if digest is None:
+            digest = payload_sha256(record)
     except AttributionError as exc:
         return str(exc)
     if binding.get("payload_sha256") != digest:
@@ -311,11 +315,24 @@ def resolve_archive_provenance(
     Errors are carried to policy as a deny envelope, so callers cannot fall back to
     a permissive raw record after an attribution read error.
     """
+    return _resolve_archive_provenance(
+        record, source_path=source_path, source_sha256=source_sha256
+    )[0]
+
+
+def _resolve_archive_provenance(
+    record: Mapping[str, Any],
+    *,
+    source_path: str | Path | None = None,
+    source_sha256: str | None = None,
+) -> tuple[dict[str, Any], str | None]:
+    """Return the digest actually checked in this call, never a caller-supplied claim."""
     result = dict(record)
+    digest = None
     # A byte-hash failure from a path reader cannot disappear on the subsequent
     # direct-dict boundary, where those original bytes are no longer available.
     if _map(record.get("qualification")).get("resolution_error"):
-        return result
+        return result, digest
     try:
         entries = _read_ledger(default_attribution_path(), required=ATTRIBUTIONS_ENV in os.environ)
         identity = archive_identity(record)
@@ -323,24 +340,25 @@ def resolve_archive_provenance(
         if len(selected) > 1:
             raise AttributionError("duplicate_attribution_identity")
         if not selected:
-            return result
+            return result, digest
         entry = selected[0]
         if entry["identity"] != identity:
             raise AttributionError("attribution_identity_mismatch")
-        if entry["payload_sha256"] != payload_sha256(record):
+        digest = payload_sha256(record)
+        if entry["payload_sha256"] != digest:
             raise AttributionError("attribution_payload_mismatch")
         if source_sha256 is None and source_path is not None:
             source_sha256 = hashlib.sha256(_stable_bytes(Path(source_path))).hexdigest()
         if source_sha256 is not None and entry["source_sha256"] != source_sha256:
             raise AttributionError("attribution_source_hash_mismatch")
         envelope = entry["qualification"]
-        reason = _binding_reason(record, envelope)
+        reason = _binding_reason(record, envelope, digest=digest)
         if reason:
             raise AttributionError(reason)
         result["qualification"] = dict(envelope)
     except (AttributionError, OSError) as exc:
         result["qualification"] = {"schema_version": 1, "resolution_error": str(exc)}
-    return result
+    return result, digest
 
 
 def _decision(
@@ -376,7 +394,7 @@ def _identity_reasons(identity: Mapping[str, Any]) -> list[str]:
     return reasons
 
 
-def _trace_reasons(record: Mapping[str, Any], envelope: Mapping[str, Any], use: str) -> list[str]:
+def _trace_reasons(record: Mapping[str, Any], envelope: Mapping[str, Any]) -> list[str]:
     reasons: list[str] = []
     trace = _map(record.get("trace"))
     fields, samples = trace.get("fields"), trace.get("samples")
@@ -428,105 +446,194 @@ def _trace_reasons(record: Mapping[str, Any], envelope: Mapping[str, Any], use: 
     return reasons
 
 
+def _attribution_revision() -> tuple[str | None, str | None]:
+    """Change detector only; canonical resolution still decides eligibility/errors."""
+    try:
+        path = default_attribution_path()
+    except AttributionError as exc:
+        return None, str(exc)
+    try:
+        raw = _stable_bytes(path)
+    except FileNotFoundError:
+        return str(path), None
+    except (AttributionError, OSError) as exc:
+        return str(path), f"unavailable:{type(exc).__name__}"
+    return str(path), hashlib.sha256(raw).hexdigest()
+
+
+class ArchiveQualificationSnapshot:
+    """Request-owned, unmodified record; no result survives a new archive load.
+
+    Callers own this private record for the duration of analysis. Common byte/value
+    binding and trace validation run once; use/combo decisions still run the same
+    policy below. Assert current inputs before publishing a derived report. The
+    ordinary qualify_archive API always makes a fresh snapshot.
+    """
+
+    def __init__(
+        self,
+        record: Mapping[str, Any],
+        *,
+        source_path: str | Path | None = None,
+        source_sha256: str | None = None,
+    ) -> None:
+        self._record = record
+        self._source_path = source_path
+        self._source_sha256 = source_sha256
+        self._ledger_revision: tuple[str | None, str | None] | None = None
+
+    @cached_property
+    def _provenance(self) -> tuple[dict[str, Any], str | None]:
+        before = _attribution_revision()
+        resolved, digest = _resolve_archive_provenance(
+            self._record, source_path=self._source_path, source_sha256=self._source_sha256
+        )
+        self._ledger_revision = before
+        if before != _attribution_revision():
+            resolved["qualification"] = {
+                "schema_version": 1,
+                "resolution_error": "attribution_changed_during_analysis",
+            }
+        return resolved, digest
+
+    @property
+    def record(self) -> dict[str, Any]:
+        """The resolved record owned by this analysis, including fail-closed errors."""
+        return self._provenance[0]
+
+    def assert_current(self) -> None:
+        """Refuse publication if a ledger revocation or raw-file edit raced analysis."""
+        _ = self.record
+        if self._ledger_revision != _attribution_revision():
+            raise AttributionError("attribution_changed_during_analysis")
+        if self._source_path is not None and self._source_sha256 is not None:
+            try:
+                current = hashlib.sha256(_stable_bytes(Path(self._source_path))).hexdigest()
+            except (AttributionError, OSError) as exc:
+                raise AttributionError("archive_changed_during_analysis") from exc
+            if current != self._source_sha256:
+                raise AttributionError("archive_changed_during_analysis")
+
+    @cached_property
+    def _binding_error(self) -> str | None:
+        resolved, digest = self._provenance
+        return _binding_reason(resolved, _map(resolved.get("qualification")), digest=digest)
+
+    @cached_property
+    def _trace_errors(self) -> list[str]:
+        resolved = self._provenance[0]
+        return _trace_reasons(resolved, _map(resolved.get("qualification")))
+
+    def qualify(
+        self, *, use: str, expected_combo: tuple[str, str, str | None] | None = None
+    ) -> Qualification:
+        record = self._record
+        if not isinstance(record, Mapping):
+            return _decision(False, ["archive_root_invalid"], managed=True, authority="unknown")
+        if use not in USES:
+            return _decision(False, ["unsupported_use"], managed=True, authority="unknown")
+        if "schema_version" in record and (
+            type(record["schema_version"]) is not int or record["schema_version"] != 1
+        ):
+            return _decision(
+                False, ["archive_schema_unsupported"], managed=True, authority="unknown"
+            )
+        if _map(_map(record.get("generator")).get("tt_reference")).get("partial") is True:
+            return _decision(
+                False, ["partial_tt_reference"], managed=False, authority="legacy_unknown"
+            )
+        resolved = self._provenance[0]
+        envelope = resolved.get("qualification")
+        managed = "qualification" in resolved or str(resolved.get("import_format", "")).startswith(
+            "moza_"
+        )
+        source = record.get("source")
+        if (
+            use == "human_progression"
+            and isinstance(source, str)
+            and source in {"imported", "reference", "reference_archive"}
+        ):
+            return _decision(
+                False,
+                [f"non_driver_source:{source}"],
+                managed=managed,
+                authority=str(_map(envelope).get("authority") or "legacy_unknown"),
+            )
+        if not managed:
+            return _decision(True, ["legacy_unknown"], managed=False, authority="legacy_unknown")
+        if not isinstance(envelope, Mapping):
+            return _decision(False, ["qualification_missing"], managed=True, authority="unknown")
+        if envelope.get("resolution_error"):
+            return _decision(
+                False, [str(envelope["resolution_error"])], managed=True, authority="unknown"
+            )
+        authority = str(envelope.get("authority") or "unknown")
+        reasons = []
+        binding_error = self._binding_error
+        if binding_error:
+            reasons.append(binding_error)
+        if authority not in AUTHORITIES:
+            reasons.append("unknown_control_authority")
+        if authority != "human" and use != "analysis":
+            reasons.append(f"control_authority_not_human:{authority}")
+        evidence = envelope.get("evidence")
+        if authority == "human" and not any(
+            isinstance(item, Mapping)
+            and item.get("kind") == "verified_human_control"
+            and _is_hash(item.get("sha256"))
+            for item in (evidence if isinstance(evidence, list) else [])
+        ):
+            reasons.append("human_control_evidence_missing")
+        if type(record.get("schema_version")) is not int or record.get("schema_version") != 1:
+            reasons.append("archive_schema_unsupported")
+        if not isinstance(source, str) or source not in {"in_game", "imported"}:
+            reasons.append("archive_source_unsupported")
+        if source == "imported" and (
+            not isinstance(record.get("import_format"), str)
+            or record.get("import_format") not in _IMPORT_FORMATS
+        ):
+            reasons.append("import_format_unsupported")
+        if source == "in_game" and record.get("import_format") is not None:
+            reasons.append("native_import_format_conflict")
+        identity = archive_identity(record)
+        reasons.extend(_identity_reasons(identity))
+        if _map(record.get("lap")).get("is_valid") is not True:
+            reasons.append("lap_validity_unproved")
+        lap = _map(record.get("lap"))
+        if lap.get("complete") is False or lap.get("partial") is True:
+            reasons.append("lap_incomplete")
+        if _map(envelope.get("supported_uses")).get(use) is not True:
+            reasons.append(f"unsupported_use:{use}")
+        actual = archive_combo(record)
+        if actual is None:
+            reasons.append("combo_identity_unavailable")
+        if use in _CONTEXT_USES and expected_combo is None:
+            reasons.append("expected_combo_unavailable")
+        if expected_combo is not None:
+            expected = None
+            if isinstance(expected_combo, (tuple, list)) and len(expected_combo) == 3:
+                expected = archive_combo(
+                    {
+                        "car": {"id": expected_combo[0]},
+                        "track": {"id": expected_combo[1], "layout": expected_combo[2]},
+                    }
+                )
+            if actual != expected:
+                reasons.append("combo_mismatch")
+            elif expected is None:
+                reasons.append("expected_combo_unavailable")
+        reasons.extend(self._trace_errors)
+        return _decision(not reasons, reasons, managed=True, authority=authority)
+
+
 def qualify_archive(
     record: Mapping[str, Any],
     *,
     use: str,
     expected_combo: tuple[str, str, str | None] | None = None,
 ) -> Qualification:
-    """One policy for path-loaded archives and direct dictionary constructors."""
-    if not isinstance(record, Mapping):
-        return _decision(False, ["archive_root_invalid"], managed=True, authority="unknown")
-    if use not in USES:
-        return _decision(False, ["unsupported_use"], managed=True, authority="unknown")
-    if "schema_version" in record and (
-        type(record["schema_version"]) is not int or record["schema_version"] != 1
-    ):
-        return _decision(False, ["archive_schema_unsupported"], managed=True, authority="unknown")
-    if _map(_map(record.get("generator")).get("tt_reference")).get("partial") is True:
-        return _decision(False, ["partial_tt_reference"], managed=False, authority="legacy_unknown")
-    resolved = resolve_archive_provenance(record)
-    envelope = resolved.get("qualification")
-    managed = "qualification" in resolved or str(resolved.get("import_format", "")).startswith(
-        "moza_"
-    )
-    source = record.get("source")
-    if (
-        use == "human_progression"
-        and isinstance(source, str)
-        and source in {"imported", "reference", "reference_archive"}
-    ):
-        return _decision(
-            False,
-            [f"non_driver_source:{source}"],
-            managed=managed,
-            authority=str(_map(envelope).get("authority") or "legacy_unknown"),
-        )
-    if not managed:
-        return _decision(True, ["legacy_unknown"], managed=False, authority="legacy_unknown")
-    if not isinstance(envelope, Mapping):
-        return _decision(False, ["qualification_missing"], managed=True, authority="unknown")
-    if envelope.get("resolution_error"):
-        return _decision(
-            False, [str(envelope["resolution_error"])], managed=True, authority="unknown"
-        )
-    authority = str(envelope.get("authority") or "unknown")
-    reasons = []
-    binding_error = _binding_reason(resolved, envelope)
-    if binding_error:
-        reasons.append(binding_error)
-    if authority not in AUTHORITIES:
-        reasons.append("unknown_control_authority")
-    if authority != "human" and use != "analysis":
-        reasons.append(f"control_authority_not_human:{authority}")
-    evidence = envelope.get("evidence")
-    if authority == "human" and not any(
-        isinstance(item, Mapping)
-        and item.get("kind") == "verified_human_control"
-        and _is_hash(item.get("sha256"))
-        for item in (evidence if isinstance(evidence, list) else [])
-    ):
-        reasons.append("human_control_evidence_missing")
-    if type(record.get("schema_version")) is not int or record.get("schema_version") != 1:
-        reasons.append("archive_schema_unsupported")
-    if not isinstance(source, str) or source not in {"in_game", "imported"}:
-        reasons.append("archive_source_unsupported")
-    if source == "imported" and (
-        not isinstance(record.get("import_format"), str)
-        or record.get("import_format") not in _IMPORT_FORMATS
-    ):
-        reasons.append("import_format_unsupported")
-    if source == "in_game" and record.get("import_format") is not None:
-        reasons.append("native_import_format_conflict")
-    identity = archive_identity(record)
-    reasons.extend(_identity_reasons(identity))
-    if _map(record.get("lap")).get("is_valid") is not True:
-        reasons.append("lap_validity_unproved")
-    lap = _map(record.get("lap"))
-    if lap.get("complete") is False or lap.get("partial") is True:
-        reasons.append("lap_incomplete")
-    if _map(envelope.get("supported_uses")).get(use) is not True:
-        reasons.append(f"unsupported_use:{use}")
-    actual = archive_combo(record)
-    if actual is None:
-        reasons.append("combo_identity_unavailable")
-    if use in _CONTEXT_USES and expected_combo is None:
-        reasons.append("expected_combo_unavailable")
-    if expected_combo is not None:
-        expected = None
-        if isinstance(expected_combo, (tuple, list)) and len(expected_combo) == 3:
-            expected = archive_combo(
-                {
-                    "car": {"id": expected_combo[0]},
-                    "track": {"id": expected_combo[1], "layout": expected_combo[2]},
-                }
-            )
-        if actual != expected:
-            reasons.append("combo_mismatch")
-        elif expected is None:
-            reasons.append("expected_combo_unavailable")
-    reasons.extend(_trace_reasons(resolved, envelope, use))
-    return _decision(not reasons, reasons, managed=True, authority=authority)
+    """One policy, with fresh provenance checks on every ordinary boundary call."""
+    return ArchiveQualificationSnapshot(record).qualify(use=use, expected_combo=expected_combo)
 
 
 def duplicate_identity_reasons(records: Sequence[Mapping[str, Any]]) -> dict[int, str]:
@@ -536,25 +643,30 @@ def duplicate_identity_reasons(records: Sequence[Mapping[str, Any]]) -> dict[int
     behavior; any collision involving a selected/managed artifact fails closed.
     """
     groups: dict[tuple[Any, ...], list[int]] = {}
-    managed: set[int] = set()
     for index, record in enumerate(records):
         if not isinstance(record, Mapping):
             continue
-        resolved = resolve_archive_provenance(record)
-        if "qualification" in resolved or str(resolved.get("import_format", "")).startswith(
-            "moza_"
-        ):
-            managed.add(index)
         identity = archive_identity(record)
         lap_id, session, lap_n = (identity[key] for key in ("lap_uuid", "session_uuid", "lap_n"))
         if isinstance(lap_id, str) and lap_id:
             groups.setdefault(("lap", lap_id), []).append(index)
         if isinstance(session, str) and session and type(lap_n) is int:
             groups.setdefault(("session_lap", session, lap_n), []).append(index)
+    collisions = [group for group in groups.values() if len(group) > 1]
+    managed: set[int] = set()
+    # Unique identities cannot collide. Resolve provenance only for contenders,
+    # once per record even when both identity keys collide. Qualification itself
+    # still validates every selected archive through its normal policy boundary.
+    for index in sorted({index for group in collisions for index in group}):
+        resolved = resolve_archive_provenance(records[index])
+        if "qualification" in resolved or str(resolved.get("import_format", "")).startswith(
+            "moza_"
+        ):
+            managed.add(index)
     return {
         index: "duplicate_archive_identity"
-        for group in groups.values()
-        if len(group) > 1 and managed.intersection(group)
+        for group in collisions
+        if managed.intersection(group)
         for index in group
     }
 
