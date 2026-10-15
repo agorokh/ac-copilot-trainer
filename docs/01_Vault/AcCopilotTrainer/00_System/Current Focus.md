@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-10-15T02:05:00Z
+last_updated: 2026-10-15T15:55:25Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-10-15-155525Z-issue804-acceptance-b0dc.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-14-010606Z-post-merge-pr836-b43776.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-13-024744Z-issue813-recording-attempt-27327d.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-13-021316Z-post-merge-pr814-09f346.md
@@ -166,15 +167,17 @@ The [post-merge packet receipt](handoffs/2026-10-13-161111Z-post-merge-pr829-key
 [PR #829](https://github.com/agorokh/ac-copilot-trainer/pull/829), clean independent
 review and verified inactive PC staging. Hardware acceptance remains on #3863.
 
-Game Point sizing and current EXE are deployed (#805/#806/#807/#809/#810).
-Normal-state telemetry and actual P7 pixels pass with all archives restored.
-The operator then drove Porsche/Magione: USB video matches changing telemetry,
-gears 1..5, speed up to 184 km/h, throttle/braking and T4..T8 coaching.
-Photos prove physical ESP32 rendering at idle; its changing display readback is
-still pending on #804. The operator explicitly exited AC; it is now stopped.
-Stable AC auto-Drive remains unresolved. At that operator-driven verification,
-no autonomous C1 run had resumed; subsequent C1 evidence is recorded below.
-See [the driven verification handoff](handoffs/2026-10-12-181458Z-operator-driven-rigcheck-f3b1cc.md).
+Game Point #804 acceptance is reconciled in the
+[October 15 SAVE](handoffs/2026-10-15-155525Z-issue804-acceptance-b0dc.md).
+Original October 12 phone video was decoded and inspected: actual ESP32 speed
+changes 107 to 170 km/h alongside game/P7 109/108 to 170/169 km/h. This settles
+the remaining physical-consumption/render clause independently of #813's waiver.
+Current installed build 1282a9d, Desktop target/hash, screen/browser peers and
+878x700 launcher pixels pass; all eight current actions and rows fit. Both actual
+Tk layout tests pass. Earlier full-archive telemetry/P7 and normal START proof
+remain retained. Close #804 after its governed SAVE merges. No new AC run or
+firmware pixel verification is claimed. Existing running launcher/sidecar/SimHub
+were preserved; this session started no rig software.
 The operator subsequently released the rig for C1. Verification finished and owned AC
 closed gracefully; no further autonomous C1 run is armed.
 
