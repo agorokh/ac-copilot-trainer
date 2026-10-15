@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-10-14T23:50:00Z
+last_updated: 2026-10-15T02:05:00Z
 relates_to:
   - AcCopilotTrainer/00_System/handoffs/2026-10-14-010606Z-post-merge-pr836-b43776.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-13-024744Z-issue813-recording-attempt-27327d.md
@@ -89,21 +89,20 @@ relates_to:
 
 # Current focus
 
-## Issue 531 — native audio/microphone merged and installed
+## Issue 531 — deployed and autonomous live acceptance verified
 
-Operator-authorized delivery removed the not-this-cycle hold. [PR #846](https://github.com/agorokh/ac-copilot-trainer/pull/846)
-merged as `5ef99d4`; the matching Game Point package is installed at the existing desktop
-shortcut target and passed installed self-test. The actual wired P7 acoustic gate passed:
-critical onset 227.6/239.5 ms, ±15 ms uncertainty; all six cues and both sync anchors matched.
-PC remains the production audio owner; explicit native probe is measured. Raw evidence stays
-private. Part H is struck and opt-in mic capture/harness repoint are delivered. Initial
-665 s synthetic soak had one 268 ms task; the fresh 665 s warm repeat passed with no
-detected long tasks/errors/reloads and stable memory. Retained real-lap Part F/#813 physical
-acceptance continues through autonomous observation per the operator direction. A real
-autonomous Porsche/Magione run passed one valid 145.833 s lap with zero recoveries; actual
-P7 pixels show colored phases and T1-T9 again. Live electronics still render /11 despite
-twelve CSP spinner positions; repair remains owned by #531. MAP comparison and exit proof
-remain open. See [autonomous evidence and ADR](handoffs/2026-10-15-012100Z-issue531-autonomous-lab-57e89c.md). See the [post-merge handoff](handoffs/2026-10-14-232000Z-post-merge-pr846-57e89c.md).
+PRs #846/#847/#848 merged; installed Game Point build `422c399` passed self-test and
+restart with a persisted native reference. Fully PLUS is activated on the actual P7.
+The autonomous Content Manager Porsche/Magione run passed two valid timed laps
+(145814/133526 ms), zero recoveries, with actual P7 TC 3/12, ABS 8/12, real red ABS
+intervention, colored T1-T9 MAP and measured selected-corner comparison. Native-session
+COACH debrief rendered; post-exit STALE cleared live values. Full-journal review was slow
+but completed; no automatic menu-review claim is made. Earlier wired audio and warm
+performance gates passed. Final original-archive audit and graceful rig cleanup passed.
+See [final deployment/live SAVE](handoffs/2026-10-15-020500Z-post-merge-pr848-57e89c.md).
+Close #531 with the final evidence record; separate #813 acceptance remains owned there.
+The [autonomous lab ADR](../01_Decisions/adr-2026-10-14-autonomous-lab-observation.md)
+assigns routine driving and screen/lap observation to the agent without operator status questions.
 
 ## Issue 815 Part C — MOZA offline reporting shipped
 
