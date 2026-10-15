@@ -148,6 +148,16 @@ class CoachRuntime:
     track_id: str | None = None
     track_layout: str | None = None
     reference_lap_ms: float | None = None
+    # A dynamic index remains internal; only a geometry-bound canonical name may leave the engine.
+    corner_identity: dict[str, Any] = field(
+        default_factory=lambda: {
+            "ready": False,
+            "reason": "canonical_catalog_unavailable",
+            "labels": {},
+            "eligible_count": 0,
+        }
+    )
+    corner_identity_generation: int = 0
     #: per-corner driver brake action-point EMA (issue #675 Parts 0/3): (spline, n_laps).
     _driver_brake_points: dict[int, tuple[float, int]] = field(default_factory=dict)
     _rolling_best_lap_ms: float | None = None
@@ -176,6 +186,14 @@ class CoachRuntime:
         (driver knowledge).
         """
         self.ledger.clear_session()
+        self.set_corner_identity(
+            {
+                "ready": False,
+                "reason": "canonical_catalog_unavailable",
+                "labels": {},
+                "eligible_count": 0,
+            }
+        )
         self._pass = {r.index: _PassState() for r in self.refs}
         self._last_spline = None
         self._last_lap = None
@@ -183,6 +201,16 @@ class CoachRuntime:
         self._pending_wrap_finals = False
         self._pending_pre_lap = None
         self.ledger.begin_lap(self._lap)
+
+    def set_corner_identity(self, binding: dict[str, Any]) -> None:
+        if binding != self.corner_identity:
+            self.corner_identity = binding
+            self.corner_identity_generation += 1
+
+    def named_advisory(self, advisory: Advisory) -> Advisory | None:
+        """The single output gate for Coach v2 cues, including voice and rules commands."""
+        label = self.corner_identity.get("labels", {}).get(advisory.corner)
+        return replace(advisory, corner=int(label[1:]) - 1) if label else None
 
     def note_completed_lap(self, lap_time_ms: float | None, *, is_valid: bool = True) -> None:
         """Fold a finished lap into the rolling-best / off-pace-reference gate (#675 Part 4)."""

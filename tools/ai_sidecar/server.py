@@ -345,6 +345,16 @@ def public_voice_runtime_status() -> dict[str, object]:
     suppress = getattr(_coach_runtime, "cue_suppress_reason", "") or ""
     if isinstance(suppress, str) and re.fullmatch(r"[a-z0-9_]+", suppress):
         status["cue_suppress_reason"] = suppress
+    identity = getattr(_coach_runtime, "corner_identity", None)
+    if isinstance(identity, dict):
+        status["coach_corner_identity"] = {
+            key: identity[key]
+            for key in ("ready", "reason", "eligible_count", "reference_count")
+            if key in identity
+        }
+        identity_reason = str(status["coach_corner_identity"].get("reason") or "")
+        if not re.fullmatch(r"[a-z0-9_]+", identity_reason):
+            status["coach_corner_identity"]["reason"] = "canonical_identity_error"
     return status
 
 
@@ -921,9 +931,23 @@ async def _coach_v2_between_lap(
         coach.note_completed_lap(lap_ms, is_valid=is_valid)
     if not is_valid or not reply_coaching or key in _recent_between_lap_advice_keys:
         return
+    identity_generation = coach.corner_identity_generation
+
+    def binding_is_current() -> bool:
+        return (
+            is_current()
+            and _coach_runtime is coach
+            and coach.corner_identity_generation == identity_generation
+        )
+
     ranking = inbound.get("improvementRanking")
     if not isinstance(ranking, list):
         ranking = None
+    labels = dict(coach.corner_identity.get("labels", {}))
+    refs = [ref for ref in coach.refs if ref.index in labels]
+    if not refs:
+        logger.info("coach v2 named focus skipped: %s", coach.corner_identity.get("reason"))
+        return
     try:
         from tools.ai_sidecar.coaching.between_lap import select_between_lap_advice
 
@@ -931,28 +955,30 @@ async def _coach_v2_between_lap(
         advice = await _get_generation_queue().submit(
             lambda: (
                 select_between_lap_advice(
-                    refs=coach.refs,
+                    refs=refs,
                     ledger=coach.ledger,
                     improvement_ranking=ranking,
                     use_ollama=True,
                     deadline=deadline,
+                    corner_labels=labels,
                 )
-                if is_current()
+                if binding_is_current()
                 else None
             ),
             deadline=deadline,
         )
-        if advice is None and is_current():
+        if advice is None and binding_is_current():
             advice = select_between_lap_advice(
-                refs=coach.refs,
+                refs=refs,
                 ledger=coach.ledger,
                 improvement_ranking=ranking,
                 use_ollama=False,
+                corner_labels=labels,
             )
     except Exception:
         logger.exception("coach v2 between-lap selector failed")
         return
-    if advice is None or not is_current():
+    if advice is None or not binding_is_current():
         return
     _recent_between_lap_advice_keys.append(key)
     await _safe_send(
@@ -961,7 +987,7 @@ async def _coach_v2_between_lap(
             "protocol": PROTOCOL_VERSION,
             "event": EVENT_CORNER_ADVICE,
             "corner": advice["corner_label"],
-            "cornerIndex": advice["corner"],
+            "cornerIndex": int(advice["corner_label"][1:]) - 1,
             "lap": inbound.get("lap"),
             "text": advice["text"],
             "slot": "between_lap",
@@ -1849,7 +1875,16 @@ async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None
     advisories: list[Any] = []
     if observer is not None:
         try:
-            advisories.extend(observer.observe(frame))
+            observed = observer.observe(frame)
+            if observer is _coach_runtime:
+                # All Coach v2 names (voice AND coaching.cue) use the same geometry gate.
+                # Keep diagnoses/internal indexes unchanged; ambiguous regions stay silent.
+                observed = [
+                    mapped
+                    for advisory in observed
+                    if (mapped := observer.named_advisory(advisory)) is not None
+                ]
+            advisories.extend(observed)
         except Exception:
             logger.exception("realtime observer failed on telemetry_tick")
     if race_manager is not None:
@@ -2295,7 +2330,7 @@ async def _publish_completed_lap_map(inbound: dict[str, Any], producer: Any) -> 
 
 async def _refresh_map_corner_catalog(payload: dict[str, Any], producer: Any) -> None:
     global _map_corner_catalog, _map_comparison_generation, _track_map_frame
-    from tools.ai_sidecar.track_map import build_track_map
+    from tools.ai_sidecar.track_map import bind_reference_corners, build_track_map
 
     catalog = {
         "available": payload.get("corner_catalog_available") is True,
@@ -2308,6 +2343,16 @@ async def _refresh_map_corner_catalog(payload: dict[str, Any], producer: Any) ->
         "reference_source": payload.get("corner_catalog_reference_source"),
         "reference_lap_ms": payload.get("corner_catalog_reference_lap_ms"),
     }
+    if (
+        _coach_runtime is not None
+        and _map_reference_archive is not None
+        and producer in _lua_authorized_peers
+        and _peer_class(producer) == CLIENT_CLASS_LUA
+        and (_observer_feed_peer is None or producer is _observer_feed_peer)
+    ):
+        _coach_runtime.set_corner_identity(
+            bind_reference_corners(_map_reference_archive, _coach_runtime.refs, catalog)
+        )
     if catalog == _map_corner_catalog:
         return
     _map_corner_catalog = catalog
@@ -2329,6 +2374,16 @@ def _clear_completed_map_state() -> None:
     _map_corner_catalog = None
     _map_latest_archive = None
     _map_latest_lap_n = None
+    clear_identity = getattr(_coach_runtime, "set_corner_identity", None)
+    if callable(clear_identity):
+        clear_identity(
+            {
+                "ready": False,
+                "reason": "canonical_catalog_unavailable",
+                "labels": {},
+                "eligible_count": 0,
+            }
+        )
     _sidecar_state_cache.pop(TOPIC_SESSION_REVIEW, None)
     _sidecar_state_cache.pop("track.map", None)
     if _map_reference_archive is not None:

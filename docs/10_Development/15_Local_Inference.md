@@ -57,6 +57,22 @@ as `post_lap_focus` (`source`, `text`, `corner`, `lap`, `focus_id`, `remaining_m
 COACH fallback renders that exact text until expiry; repeating a snapshot cannot
 renew the same focus. An existing full `session.review` retains screen authority.
 
+Coach v2's speed-minimum regions do not establish turn names. Named voice/cue and
+between-lap advice share a geometry binding to the authenticated active Lua corner
+catalogue, using MAP's existing combo/range validation. A measured window must
+overlap exactly one canonical region containing its apex; split/multiple measured
+regions sharing one turn and merged regions stay unnamed. Eligible regions are
+filtered before focus selection, preserving the internal diagnostic ledger and
+allowing another uniquely mapped focus to win. Binding changes discard in-flight
+post-lap output. Public voice health reports `coach_corner_identity` readiness,
+reason and counts without personal geometry/targets. Same-combo files or matching
+corner counts alone do not qualify ordinal labels.
+
+The restored102183ms Magione trace has five dynamic regions, whereas Lua's active
+reference has nine canonical turns. This difference is material: only the first
+two regions uniquely map; later merged regions cannot emit named coaching. The
+previous T5 screenshot proved text transport, not correct physical-turn semantics.
+
 This path needs an existing reference with usable corners and Coach v2 enabled.
 Game Point's normal `reference_archive` setting passes `AC_COPILOT_REFERENCE_ARCHIVE`
 to the sidecar and selects Coach v2 unless explicitly parked with
@@ -91,6 +107,16 @@ telemetry. These are **CSP UI/render frame intervals**, not OS displayed/present
 timings or ETW metrics. Do not invert CSP's rolling FPS estimate or treat simulation
 `dt` as raw render timing. The installed CSP Lua SDK documents the chosen UI delta
 as unaffected by pause/replay speed and both structures as updating per graphics frame.
+
+New captures additionally record `os.preciseClock()` intervals between callbacks
+for consecutive unique render-frame IDs. The installed SDK describes this as
+high-precision seconds since script start; it does not specify OS wall-versus-CPU
+clock implementation. UI delta stays a separate diagnostic; its apparent ceiling
+must not hide longer callback gaps. These script-clock callback intervals include
+scheduling/update gaps and are not OS displayed/presentation timings.
+Producer capture elapsed time and client acknowledgement/arrival time are separate
+observations; network/relay delay is not silently attributed to GPU rendering.
+Older captures retain UI-only provenance and cannot prove script-clock callback tails.
 
 Neither a passing HTTP call nor these software readings establish physical PSU,
 noise, RGB persistence or resolution of the previously observed NVIDIA 0x133 crash.

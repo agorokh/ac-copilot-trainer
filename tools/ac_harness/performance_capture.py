@@ -70,7 +70,7 @@ def summarize_capture(chunks: Sequence[dict[str, Any]]) -> dict[str, Any]:
     def percentile(fraction: float) -> float:
         return ordered[max(0, math.ceil(fraction * len(ordered)) - 1)]
 
-    return {
+    result = {
         "capture_id": identity,
         "source": "csp_ui_dt",
         "units": "ms",
@@ -88,3 +88,59 @@ def summarize_capture(chunks: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "over_50ms": sum(value > 50 for value in intervals),
         "limitation": "CSP UI/render intervals; not OS displayed/presentation frame timings",
     }
+    clocks = [chunk.get("callback_clock") for chunk in chunks]
+    if any(clock is not None for clock in clocks):
+        if any(clock != "os.preciseClock" for clock in clocks):
+            raise ValueError("mixed callback clock provenance")
+        callbacks = []
+        last_offset = None
+        for number, row in enumerate(rows):
+            offset = row.get("clock_offset_s")
+            if (
+                isinstance(offset, bool)
+                or not isinstance(offset, (int, float))
+                or not math.isfinite(offset)
+                or offset < 0
+                or offset > elapsed
+                or (last_offset is not None and offset <= last_offset)
+            ):
+                raise ValueError("invalid callback clock offset")
+            interval = row.get("callback_ms")
+            if number == 0:
+                if interval is not None:
+                    raise ValueError("first callback interval has no predecessor")
+            else:
+                expected = (offset - last_offset) * 1000
+                if (
+                    isinstance(interval, bool)
+                    or not isinstance(interval, (int, float))
+                    or not math.isfinite(interval)
+                    or interval <= 0
+                    or not math.isclose(interval, expected, rel_tol=1e-6, abs_tol=0.001)
+                ):
+                    raise ValueError("callback interval does not match producer clock")
+                if row["paused"] is False and rows[number - 1]["paused"] is False:
+                    callbacks.append(float(interval))
+            last_offset = offset
+        if not callbacks:
+            raise ValueError("capture contains no complete active callback intervals")
+        ordered_callbacks = sorted(callbacks)
+
+        def callback_percentile(fraction):
+            return ordered_callbacks[max(0, math.ceil(fraction * len(callbacks)) - 1)]
+
+        result["callback_intervals"] = {
+            "source": "csp_os_precise_clock",
+            "units": "ms",
+            "active_samples": len(callbacks),
+            "excluded_boundary_or_pause_samples": len(rows) - len(callbacks),
+            "mean_ms": sum(callbacks) / len(callbacks),
+            "p50_ms": callback_percentile(0.5),
+            "p95_ms": callback_percentile(0.95),
+            "p99_ms": callback_percentile(0.99),
+            "max_ms": max(callbacks),
+            "over_33ms": sum(value > 33.333 for value in callbacks),
+            "over_50ms": sum(value > 50 for value in callbacks),
+            "limitation": "Intervals between CSP callbacks; not OS presentation timings",
+        }
+    return result

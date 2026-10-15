@@ -8,6 +8,7 @@ identity / empty text before anything is spoken.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -35,8 +36,8 @@ def _turn_label(corner: int) -> str:
     return f"T{corner + 1}"
 
 
-def _rules_phrase(root: RootError | None, corner: int) -> str:
-    label = _turn_label(corner)
+def _rules_phrase(root: RootError | None, corner: int, label: str | None = None) -> str:
+    label = label or _turn_label(corner)
     if root is not None and root != RootError.NONE and root in PHRASE:
         return f"NEXT LAP {label}: {PHRASE[root]}"
     return f"NEXT LAP: FOCUS {label}"
@@ -88,6 +89,7 @@ def validate_corner_advice(
     corner: int | None,
     text: str | None,
     refs: Sequence[CornerReference],
+    corner_label: str | None = None,
 ) -> dict[str, Any] | None:
     """Fail-closed validator: known corner identity + non-empty text, or ``None``."""
     if corner is None or not isinstance(corner, int) or isinstance(corner, bool):
@@ -103,7 +105,9 @@ def validate_corner_advice(
         return None
     if len(cleaned) > 120:
         cleaned = cleaned[:120].rstrip()
-    label = _turn_label(corner)
+    label = corner_label or _turn_label(corner)
+    if corner_label is not None and not re.fullmatch(r"T(?:[1-9]|[12][0-9]|3[0-2])", label):
+        return None
     if len(label) > _CORNER_LABEL_MAX:
         return None
     return {"corner": corner, "corner_label": label, "text": cleaned}
@@ -116,6 +120,7 @@ def compose_between_lap_advice(
     refs: Sequence[CornerReference],
     use_ollama: bool = True,
     deadline: float | None = None,
+    corner_label: str | None = None,
 ) -> dict[str, Any] | None:
     """Build one validated between-lap advice payload (Ollama optional, rules fallback)."""
     if not _corner_in_refs(corner, refs):
@@ -124,8 +129,8 @@ def compose_between_lap_advice(
     source = "rules"
     if use_ollama and debrief_feature_enabled():
         root_s = str(root) if root and root != RootError.NONE else "general"
-        label = _turn_label(corner)
-        approved = _rules_phrase(root, corner).upper()
+        label = corner_label or _turn_label(corner)
+        approved = _rules_phrase(root, corner, corner_label).upper()
         prompt = (
             "You coach Assetto Corsa. Reply with ONE short next-lap focus command.\n"
             "The deterministic coach has selected the action and corner; do not add targets.\n"
@@ -153,15 +158,15 @@ def compose_between_lap_advice(
                 if len(words) >= 2 and len(candidate) >= 4:
                     # A model may only restate the selected deterministic action.
                     # Exact acceptance rejects other corners, numbers and opposing verbs.
-                    expected = _rules_phrase(root, corner).upper().rstrip(".!")
+                    expected = _rules_phrase(root, corner, corner_label).upper().rstrip(".!")
                     normalized = candidate.upper().rstrip(".!")
                     if normalized == expected:
                         text = candidate.upper()[:120]
                         source = "model"
                     break
     if not text:
-        text = _rules_phrase(root, corner)
-    advice = validate_corner_advice(corner=corner, text=text, refs=refs)
+        text = _rules_phrase(root, corner, corner_label)
+    advice = validate_corner_advice(corner=corner, text=text, refs=refs, corner_label=corner_label)
     if advice is not None:
         advice["source"] = source
     return advice
@@ -174,9 +179,10 @@ def select_between_lap_advice(
     improvement_ranking: Sequence[Mapping[str, Any]] | None = None,
     use_ollama: bool = True,
     deadline: float | None = None,
+    corner_labels: Mapping[int, str] | None = None,
 ) -> dict[str, Any] | None:
     """Select and validate exactly one next-lap improvement point for ``corner_advice``."""
-    valid = [r.index for r in refs]
+    valid = [r.index for r in refs if corner_labels is None or r.index in corner_labels]
     corner = select_focus_corner(ledger, improvement_ranking, valid_corners=valid)
     if corner is None:
         return None
@@ -186,5 +192,10 @@ def select_between_lap_advice(
         if st is not None and st.root != RootError.NONE:
             root = st.root
     return compose_between_lap_advice(
-        corner=corner, root=root, refs=refs, use_ollama=use_ollama, deadline=deadline
+        corner=corner,
+        root=root,
+        refs=refs,
+        use_ollama=use_ollama,
+        deadline=deadline,
+        corner_label=corner_labels.get(corner) if corner_labels is not None else None,
     )

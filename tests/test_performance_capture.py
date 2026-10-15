@@ -40,10 +40,12 @@ def test_render_interval_dedup_pause_and_complete_round_trip():
     capture.tick(capture, 103, 0.020, False, 1.01, publish)
     assert capture.active is False
     result = summarize_capture(chunks)
-    assert result["sample_count"] == 3 and result["active_samples"] == 2
+    assert result["sample_count"] == 4 and result["active_samples"] == 3
     assert result["paused_samples"] == 1 and result["duplicates_ignored"] == 1
-    assert result["p50_ms"] == 16 and result["p99_ms"] == 30
+    assert result["p50_ms"] == 20 and result["p99_ms"] == 30
     assert result["elapsed_s"] == 1.01
+    assert result["callback_intervals"]["active_samples"] == 1
+    assert result["callback_intervals"]["max_ms"] == pytest.approx(950)
 
 
 @pytest.mark.parametrize(
@@ -101,6 +103,54 @@ def test_existing_protocol_accepts_diagnostic_action_and_topic():
     )
 
 
+def test_precise_callback_clock_retains_terminal_stall_and_ignores_duplicate():
+    capture, chunks, publish = recorder()
+    capture.tick(capture, 1, 0.016, False, 0.01, publish)
+    capture.tick(capture, 1, 0.016, False, 0.50, publish)
+    capture.tick(capture, 2, 0.200, False, 1.20, publish)
+    result = summarize_capture(chunks)
+    assert result["sample_count"] == 2
+    assert result["max_ms"] == 200
+    assert result["callback_intervals"]["max_ms"] == pytest.approx(1190)
+    assert result["callback_intervals"]["over_50ms"] == 1
+    assert result["duplicates_ignored"] == 1
+    assert chunks[-1]["reason"] == "duration"
+
+
+@pytest.mark.parametrize("bad_clock", [None, "wall_time"])
+def test_mixed_callback_clock_provenance_is_rejected(bad_clock):
+    capture, chunks, publish = recorder()
+    for frame in range(1, 130):
+        capture.tick(capture, frame, 0.005, False, frame / 1000, publish)
+    capture.tick(capture, 130, 0.005, False, 1.1, publish)
+    chunks[-1]["callback_clock"] = bad_clock
+    with pytest.raises(ValueError, match="mixed callback clock"):
+        summarize_capture(chunks)
+
+
+def test_callback_clock_values_must_match_offsets():
+    capture, chunks, publish = recorder()
+    capture.tick(capture, 1, 0.016, False, 0.01, publish)
+    capture.tick(capture, 2, 0.200, False, 1.20, publish)
+    chunks[0]["rows"][1]["callback_ms"] = 200
+    with pytest.raises(ValueError, match="does not match producer clock"):
+        summarize_capture(chunks)
+
+
+def test_legacy_capture_remains_readable_without_new_clock_claim():
+    capture, chunks, publish = recorder()
+    capture.tick(capture, 1, 0.016, False, 0.01, publish)
+    capture.tick(capture, 2, 0.020, False, 1.01, publish)
+    for chunk in chunks:
+        del chunk["callback_clock"]
+        for row in chunk["rows"]:
+            row.pop("callback_ms", None)
+            del row["clock_offset_s"]
+    result = summarize_capture(chunks)
+    assert result["sample_count"] == 2
+    assert "callback_intervals" not in result
+
+
 def test_luajit_ffi_integer_frame_identity_is_exactly_bounded():
     luajit = pytest.importorskip("lupa.luajit21")
     lua = luajit.LuaRuntime(unpack_returned_tuples=True)
@@ -119,7 +169,7 @@ def test_luajit_ffi_integer_frame_identity_is_exactly_bounded():
       cap:tick(ffi.new('uint64_t', 100), 0.016, false, 0.02, publish)
       cap:tick(ffi.new('uint64_t', 101), 0.020, false, 0.03, publish)
       cap:tick(ffi.new('uint64_t', 102), 0.020, false, 1.01, publish)
-      assert(chunks[1].sample_count == 2 and chunks[1].duplicates == 1)
+      assert(chunks[1].sample_count == 3 and chunks[1].duplicates == 1)
       assert(chunks[1].raw_frame_type == 'cdata' and chunks[1].rows[1].frame == 100)
       assert(cap:start({capture_id='unsafe-int', seconds=1}, 2))
       cap:tick(ffi.new('uint64_t', 9007199254740992), 0.02, false, 2.01, publish)
