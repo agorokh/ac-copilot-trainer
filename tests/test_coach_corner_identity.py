@@ -104,6 +104,20 @@ def test_geometry_mapping_is_unique_not_ordinal(refs, live, labels, reason):
         assert result["reason"] == "no_unique_corner_geometry"
 
 
+def test_merged_rejected_neighbour_cannot_leave_shared_canonical_name_eligible():
+    result = bind_reference_corners(
+        archive(),
+        [ref(0, 0.2, 0.3, 0.35), ref(1, 0.3, 0.5, 0.6)],
+        catalog(("T1", 0.2, 0.4), ("T2", 0.45, 0.6)),
+    )
+    assert result["labels"] == {}
+    assert result["rejected"] == {
+        0: "split_reference_region",
+        1: "merged_or_unresolved_reference_region",
+    }
+    assert result["reason"] == "no_unique_corner_geometry"
+
+
 def test_unknown_malformed_and_wrong_combo_do_not_supply_names():
     refs = [ref(0, 0.60, 0.70, 0.75)]
     for live in (

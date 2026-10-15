@@ -263,6 +263,7 @@ def bind_reference_corners(
     catalog = _canonical_catalog(archive, live)
     labels: dict[int, str] = {}
     rejected: dict[int, str] = {}
+    owners: dict[str, set[int]] = {}
     result: dict[str, Any] = {
         "ready": False,
         "reason": "canonical_catalog_unavailable",
@@ -301,6 +302,8 @@ def bind_reference_corners(
             for row in catalog["corners"]
             if overlap(ref.spline_lo, ref.spline_hi, row["s0"], row["s1"])
         ]
+        for row in touched:
+            owners.setdefault(row["corner_id"], set()).add(ref.index)
         if len(touched) != 1:
             rejected[ref.index] = "merged_or_unresolved_reference_region"
             continue
@@ -311,7 +314,8 @@ def bind_reference_corners(
         labels[ref.index] = row["corner_id"]
     for label in set(labels.values()):
         indexes = [index for index, value in labels.items() if value == label]
-        if len(indexes) > 1:
+        # A merged/rejected neighbour still makes canonical ownership ambiguous.
+        if len(owners[label]) > 1:
             for index in indexes:
                 del labels[index]
                 rejected[index] = "split_reference_region"

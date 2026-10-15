@@ -883,15 +883,6 @@ async def _coach_v2_between_lap(
     coach = _coach_runtime
     if coach is None:
         return
-    identity_generation = coach.corner_identity_generation
-
-    def binding_is_current() -> bool:
-        return (
-            is_current()
-            and _coach_runtime is coach
-            and coach.corner_identity_generation == identity_generation
-        )
-
     lap_n, lap_ms = inbound.get("lap"), inbound.get("lapTimeMs")
     if lap_n is not None and lap_ms is not None:
         key = f"lap:{lap_n}:{lap_ms}"
@@ -940,6 +931,15 @@ async def _coach_v2_between_lap(
         coach.note_completed_lap(lap_ms, is_valid=is_valid)
     if not is_valid or not reply_coaching or key in _recent_between_lap_advice_keys:
         return
+    identity_generation = coach.corner_identity_generation
+
+    def binding_is_current() -> bool:
+        return (
+            is_current()
+            and _coach_runtime is coach
+            and coach.corner_identity_generation == identity_generation
+        )
+
     ranking = inbound.get("improvementRanking")
     if not isinstance(ranking, list):
         ranking = None
