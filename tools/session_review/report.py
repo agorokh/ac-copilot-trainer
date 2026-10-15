@@ -17,7 +17,7 @@ import sys
 import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from html import escape as html_escape
 from pathlib import Path
@@ -25,8 +25,18 @@ from statistics import median
 from typing import Any, TextIO
 
 from tools.ai_sidecar.coach_report import build_structured_debrief
-from tools.lap_archive_export import iter_lap_archive_paths, lap_is_valid, load_lap_archive
-from tools.lap_qualification import archive_combo, duplicate_identity_reasons, qualify_archive
+from tools.lap_archive_export import (
+    iter_lap_archive_paths,
+    lap_is_valid,
+    load_lap_archive_snapshot,
+)
+from tools.lap_qualification import (
+    ArchiveQualificationSnapshot,
+    Qualification,
+    archive_combo,
+    duplicate_identity_reasons,
+    qualify_archive,
+)
 
 REPORT_SCHEMA_VERSION = 2
 DEFAULT_OUTPUT_DIR = Path("journal/reports")
@@ -54,7 +64,7 @@ class SessionReviewError(ValueError):
 
 @dataclass(frozen=True)
 class LoadedLap:
-    """One loaded lap archive plus normalized metadata."""
+    """One report's private, unmodified archive snapshot and normalized metadata."""
 
     path: Path
     record: dict[str, Any]
@@ -69,6 +79,22 @@ class LoadedLap:
     source: str | None
     import_format: str | None
     reference_kind: str
+    _snapshot: ArchiveQualificationSnapshot = field(compare=False, repr=False)
+    _qualification_cache: dict[tuple[str, tuple[str, str, str | None] | None], Qualification] = (
+        field(default_factory=dict, compare=False, repr=False)
+    )
+
+    def qualify(
+        self, *, use: str, expected_combo: tuple[str, str, str | None] | None = None
+    ) -> Qualification:
+        # Report helpers revisit the same snapshot many times. Keep policy results only
+        # for this LoadedLap: the next request reloads bytes and restrictive ledger facts.
+        key = use, expected_combo
+        if key not in self._qualification_cache:
+            self._qualification_cache[key] = self._snapshot.qualify(
+                use=use, expected_combo=expected_combo
+            )
+        return self._qualification_cache[key]
 
 
 @dataclass(frozen=True)
@@ -148,7 +174,7 @@ def normalize_reference_source(value: str | None) -> str:
     return source
 
 
-def _reference_kind(record: Mapping[str, Any]) -> str:
+def _reference_kind(record: Mapping[str, Any], progression: Qualification | None = None) -> str:
     source = _clean_text(record.get("source"))
     import_format = _clean_text(record.get("import_format"))
     generator = record.get("generator") if isinstance(record.get("generator"), Mapping) else {}
@@ -166,7 +192,7 @@ def _reference_kind(record: Mapping[str, Any]) -> str:
     ):
         return "generated"
     if source == "in_game":
-        qualification = qualify_archive(record, use="human_progression")
+        qualification = progression or qualify_archive(record, use="human_progression")
         if qualification.managed and not qualification.allowed:
             return f"{qualification.authority}-control"
         return "your-best"
@@ -183,11 +209,20 @@ def _is_partial_tt_reference(record: Mapping[str, Any]) -> bool:
     return isinstance(tt_reference, Mapping) and tt_reference.get("partial") is True
 
 
-def _loaded_lap(path: Path, record: dict[str, Any]) -> LoadedLap:
+def _loaded_lap(
+    path: Path,
+    record: dict[str, Any],
+    *,
+    snapshot: ArchiveQualificationSnapshot | None = None,
+) -> LoadedLap:
     lap = record.get("lap") if isinstance(record.get("lap"), Mapping) else {}
     car = record.get("car") if isinstance(record.get("car"), Mapping) else {}
     track = record.get("track") if isinstance(record.get("track"), Mapping) else {}
     lap_n = lap.get("lap_n")
+    snapshot = snapshot or ArchiveQualificationSnapshot(record)
+    progression = (
+        snapshot.qualify(use="human_progression") if record.get("source") == "in_game" else None
+    )
     return LoadedLap(
         path=path,
         record=record,
@@ -203,7 +238,11 @@ def _loaded_lap(path: Path, record: dict[str, Any]) -> LoadedLap:
         is_valid=lap_is_valid(record),
         source=_clean_text(record.get("source")),
         import_format=_clean_text(record.get("import_format")),
-        reference_kind=_reference_kind(record),
+        reference_kind=_reference_kind(record, progression),
+        _snapshot=snapshot,
+        _qualification_cache={}
+        if progression is None
+        else {("human_progression", None): progression},
     )
 
 
@@ -216,11 +255,12 @@ def _load_laps(inputs: Iterable[str | Path]) -> tuple[list[LoadedLap], list[str]
         raise SessionReviewError(str(exc)) from exc
     for path in paths:
         try:
-            record = load_lap_archive(path)
+            snapshot = load_lap_archive_snapshot(path)
+            record = snapshot.record
         except Exception as exc:  # noqa: BLE001 - one corrupt archive should not erase the review
             skipped.append(f"{Path(path).name}: {type(exc).__name__}")
             continue
-        laps.append(_loaded_lap(Path(path), record))
+        laps.append(_loaded_lap(Path(path), record, snapshot=snapshot))
     duplicates = duplicate_identity_reasons([lap.record for lap in laps])
     skipped.extend(f"{laps[index].path.name}: {reason}" for index, reason in duplicates.items())
     return [lap for index, lap in enumerate(laps) if index not in duplicates], skipped
@@ -273,16 +313,12 @@ def _valid_laps(laps: Iterable[LoadedLap]) -> list[LoadedLap]:
         if index not in duplicates
         and lap.is_valid
         and lap.lap_ms is not None
-        and qualify_archive(lap.record, use="analysis").allowed
+        and lap.qualify(use="analysis").allowed
     ]
 
 
 def _progression_laps(laps: Iterable[LoadedLap]) -> list[LoadedLap]:
-    return [
-        lap
-        for lap in _valid_laps(laps)
-        if qualify_archive(lap.record, use="human_progression").allowed
-    ]
+    return [lap for lap in _valid_laps(laps) if lap.qualify(use="human_progression").allowed]
 
 
 def _reference_candidates(
@@ -292,9 +328,7 @@ def _reference_candidates(
         lap
         for lap in _valid_laps(laps)
         if not _is_partial_tt_reference(lap.record)
-        and qualify_archive(
-            lap.record, use="reference_comparison", expected_combo=expected_combo
-        ).allowed
+        and lap.qualify(use="reference_comparison", expected_combo=expected_combo).allowed
     ]
 
 
@@ -357,9 +391,7 @@ def _select_reference(
             except (OSError, RuntimeError):
                 candidate_resolved = candidate.path.absolute()
             if candidate_resolved == resolved:
-                qualification = qualify_archive(
-                    candidate.record, use="reference_comparison", expected_combo=combo
-                )
+                qualification = candidate.qualify(use="reference_comparison", expected_combo=combo)
                 if not qualification.allowed:
                     raise SessionReviewError(
                         f"{requested_name}: reference qualification: {qualification.reason}"
@@ -382,9 +414,7 @@ def _select_reference(
                 q.reason
                 for lap in laps
                 if _combo_key(lap) == matching_combo
-                for q in [
-                    qualify_archive(lap.record, use="reference_comparison", expected_combo=combo)
-                ]
+                for q in [lap.qualify(use="reference_comparison", expected_combo=combo)]
                 if not q.allowed
             }
         )
@@ -715,7 +745,7 @@ def _build_report_from_laps(
     qualification_skipped = [
         f"{lap.path.name}: qualification: {q.reason}"
         for lap in selected
-        for q in [qualify_archive(lap.record, use="analysis")]
+        for q in [lap.qualify(use="analysis")]
         if not q.allowed
     ]
     if not stats["valid_laps"]:
@@ -849,7 +879,7 @@ def _same_combo_laps(laps: Iterable[LoadedLap], selected: list[LoadedLap]) -> li
 
 
 def _lap_browser_row(lap: LoadedLap, *, include_trace: bool = False) -> dict[str, Any]:
-    progression = qualify_archive(lap.record, use="human_progression")
+    progression = lap.qualify(use="human_progression")
     row: dict[str, Any] = {
         "lap_uuid": _lap_uuid(lap),
         "session_uuid": lap.session_uuid,
@@ -985,7 +1015,7 @@ def _sample_indices(count: int, limit: int = _MAX_TRACE_POINTS) -> list[int]:
 
 
 def _trace_payload(lap: LoadedLap) -> dict[str, Any]:
-    qualification = qualify_archive(lap.record, use="analysis")
+    qualification = lap.qualify(use="analysis")
     if not qualification.allowed:
         return {
             "sample_count": 0,
@@ -1077,9 +1107,7 @@ def _comparison_payload(
     )
     if (
         reference is not None
-        and not qualify_archive(
-            reference.record, use="reference_comparison", expected_combo=combo
-        ).allowed
+        and not reference.qualify(use="reference_comparison", expected_combo=combo).allowed
     ):
         reference = None
     best_path = best_selected.path if best_selected is not None else None

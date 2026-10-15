@@ -21,9 +21,9 @@ from typing import Any, TextIO
 
 from tools.lap_qualification import (
     NATIVE_ACCELERATION_UNIT,
+    ArchiveQualificationSnapshot,
     AttributionError,
     _stable_bytes,
-    resolve_archive_provenance,
 )
 
 LAP_ARCHIVE_SCHEMA_VERSION = 1
@@ -348,6 +348,13 @@ def _format_cell(value: Any) -> str:
 
 def load_lap_archive(path: str | Path, *, allow_legacy_schema: bool = False) -> dict[str, Any]:
     """Load one JSON archive file and validate the minimal schema envelope."""
+    return load_lap_archive_snapshot(path, allow_legacy_schema=allow_legacy_schema).record
+
+
+def load_lap_archive_snapshot(
+    path: str | Path, *, allow_legacy_schema: bool = False
+) -> ArchiveQualificationSnapshot:
+    """Load stable bytes once for one private analysis and retain their binding checks."""
     archive_path = Path(path)
     try:
         raw = _stable_bytes(archive_path)
@@ -362,7 +369,7 @@ def load_lap_archive(path: str | Path, *, allow_legacy_schema: bool = False) -> 
     if not isinstance(parsed, dict):
         raise LapArchiveExportError(f"{archive_path}: root must be an object")
     if allow_legacy_schema and "schema_version" not in parsed:
-        return resolve_archive_provenance(
+        return ArchiveQualificationSnapshot(
             parsed, source_path=archive_path, source_sha256=hashlib.sha256(raw).hexdigest()
         )
     if (
@@ -379,7 +386,7 @@ def load_lap_archive(path: str | Path, *, allow_legacy_schema: bool = False) -> 
         raise LapArchiveExportError(f"{archive_path}: trace.fields must be an array")
     if not isinstance(trace.get("samples"), list):
         raise LapArchiveExportError(f"{archive_path}: trace.samples must be an array")
-    return resolve_archive_provenance(
+    return ArchiveQualificationSnapshot(
         parsed, source_path=archive_path, source_sha256=hashlib.sha256(raw).hexdigest()
     )
 

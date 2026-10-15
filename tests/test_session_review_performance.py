@@ -1,7 +1,7 @@
 """Bound repeated policy work without weakening fresh-request qualification."""
 
-from collections import Counter
 import json
+from collections import Counter
 
 import pytest
 
@@ -21,13 +21,15 @@ def isolated_ledger(tmp_path, monkeypatch):
 
 def test_report_qualifies_each_snapshot_once_per_use_and_combo(session_corpus, monkeypatch):
     calls = Counter()
-    original = report.qualify_archive
+    snapshots = []
+    original = lap_qualification.ArchiveQualificationSnapshot.qualify
 
-    def counted(record, *, use, expected_combo=None):
-        calls[(record["lap_uuid"], use, expected_combo)] += 1
-        return original(record, use=use, expected_combo=expected_combo)
+    def counted(self, *, use, expected_combo=None):
+        snapshots.append(self)  # Keep object identities distinct during the measurement.
+        calls[(id(self), use, expected_combo)] += 1
+        return original(self, use=use, expected_combo=expected_combo)
 
-    monkeypatch.setattr(report, "qualify_archive", counted)
+    monkeypatch.setattr(lap_qualification.ArchiveQualificationSnapshot, "qualify", counted)
     actual = report.build_session_report([session_corpus], generated_at="fixed")
     assert actual["session"]["valid_laps"] == 2
     assert max(calls.values()) == 1
@@ -36,11 +38,46 @@ def test_report_qualifies_each_snapshot_once_per_use_and_combo(session_corpus, m
     monkeypatch.setattr(
         report.LoadedLap,
         "qualify",
-        lambda self, *, use, expected_combo=None: original(
+        lambda self, *, use, expected_combo=None: report.qualify_archive(
             self.record, use=use, expected_combo=expected_combo
         ),
     )
     assert report.build_session_report([session_corpus], generated_at="fixed") == actual
+
+
+def test_snapshot_reuses_integrity_and_trace_checks_without_cross_call_cache(monkeypatch):
+    from tests.test_lap_qualification import archive
+
+    record = archive()
+    record["qualification"] = assessment(record, authority="human", promoted=True)
+    combo = lap_qualification.archive_combo(record)
+    expected = {
+        use: lap_qualification.qualify_archive(record, use=use, expected_combo=combo)
+        for use in lap_qualification.USES
+    }
+    calls = Counter()
+    digest = lap_qualification.payload_sha256
+    trace = lap_qualification._trace_reasons
+
+    def counted_digest(record):
+        calls["digest"] += 1
+        return digest(record)
+
+    def counted_trace(record, envelope):
+        calls["trace"] += 1
+        return trace(record, envelope)
+
+    monkeypatch.setattr(lap_qualification, "payload_sha256", counted_digest)
+    monkeypatch.setattr(lap_qualification, "_trace_reasons", counted_trace)
+    snapshot = lap_qualification.ArchiveQualificationSnapshot(record)
+    for use, result in expected.items():
+        assert snapshot.qualify(use=use, expected_combo=combo) == result
+    assert calls == {"digest": 1, "trace": 1}
+    record["trace"]["samples"][20][1] += 1
+    assert (
+        "qualification_payload_mismatch"
+        in lap_qualification.qualify_archive(record, use="analysis").reasons
+    )
 
 
 def test_next_report_observes_new_restriction_and_unavailable_ledger(
