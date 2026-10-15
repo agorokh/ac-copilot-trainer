@@ -514,14 +514,18 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     return d;
   }
   var absTileRef = null, tcTileRef = null;
-  function liveDiscreteSpinner(level, modes) {
+  function liveDiscreteSpinner(level, modes, setupRange) {
     if (modes === 0) return null; // explicitly not fitted, distinct from level zero/OFF
     var value = typeof level === "number" && Number.isFinite(level) ? level : null;
-    // CSP mode counts are the real per-car denominator. Do not drop them when
-    // replacing saved setup values with fresh physics values (#531 / #813).
-    if (Number.isInteger(modes) && modes > 1 && modes <= 256) {
-      if (!Number.isInteger(value) || value < 0 || value >= modes) value = null;
-      return {value: value, min: 0, max: modes - 1, step: 1};
+    // The real P7/CSP probe reports modes=11 for OFF,1,...,11 (12 positions).
+    // Keep physics authoritative for the value and CSP setup spinners for the range.
+    // A modes field alone cannot establish the denominator (#531).
+    var steps = setupRange ? stepsOf(setupRange) : null;
+    if (steps !== null && steps > 1 && steps <= 256) {
+      var min = fin(setupRange.min), max = fin(setupRange.max), step = fin(setupRange.step);
+      var index = value === null ? null : (value - min) / step;
+      if (value !== null && (value < min || value > max || Math.abs(index - Math.round(index)) > 1e-6)) value = null;
+      return {value: value, min: min, max: max, step: step};
     }
     return {value: value, range_known: false};
   }
@@ -554,8 +558,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     var source = live ? "LIVE CAR" : sp.some(function(r){return r.source === "saved_setup";}) ? "SAVED" : "SETUP";
     if (live) {
       bias = {value:fin(S.tick.brake_bias_pct),unit:"%"};
-      tc = liveDiscreteSpinner(S.tick.tc_level, S.tick.tc_modes);
-      abs = liveDiscreteSpinner(S.tick.abs_level, S.tick.abs_modes);
+      tc = liveDiscreteSpinner(S.tick.tc_level, S.tick.tc_modes, tc);
+      abs = liveDiscreteSpinner(S.tick.abs_level, S.tick.abs_modes, abs);
     }
     var biasView=biasTile(bias);
     biasView.children[0].textContent="BRAKE BIAS · "+source;
