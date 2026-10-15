@@ -42,7 +42,9 @@ does not release the blocking worker; an HTTP timeout is not proof the backend h
 stopped, so the host admission service also retains exclusivity. Existing lap and
 corner identities remain enforced. Corner wording is restricted to approved
 state-consistent phrases; between-lap text may only restate the selected corner's
-deterministic action. Primary action and colour remain rules-driven. The legacy
+deterministic action. Cached corner text is also rejected on each Lua render update if it conflicts with
+the current deterministic action; a previously valid brake hint cannot survive a
+change to hold/acceleration. Primary action and colour remain rules-driven. The legacy
 `debriefSource:"ollama"` Lua discriminator is retained for both providers.
 
 ## Bounded render interval acceptance

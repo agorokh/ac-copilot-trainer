@@ -185,6 +185,35 @@ def test_realtime_coaching_should_brake_says_brake_now(harness: TraceReplayHarne
     assert view["targetSpeedKmh"] == 95, f"targetSpeedKmh must be 95, got {view['targetSpeedKmh']}"
 
 
+def test_cached_model_brake_command_cannot_override_changed_live_action(harness):
+    rtc = harness.require("realtime_coaching")
+    brakes, segments = _brake_points_and_segments(harness)
+    opts = harness.lua.table_from(
+        dict(
+            splinePos=0.193,
+            currentSpeedKmh=142,
+            brakingPoints=brakes,
+            segments=segments,
+            trackLengthM=4500,
+        )
+    )
+    opts["cornerAdvisories"] = harness.lua.table_from({"T1": "BRAKE HARD NOW"})
+    view = rtc.tick(opts)
+    assert view["action"] == "BRAKE" and view["advisory"] == "BRAKE HARD NOW"
+    opts["currentSpeedKmh"] = 90  # cached command remains, current primary now changes
+    view = rtc.tick(opts)
+    assert view["action"] != "BRAKE" and view["advisory"] is None
+    assert view["secondaryLine"] != "BRAKE HARD NOW"
+
+
+def test_model_advisory_requires_exact_current_action_compatible_vocabulary(harness):
+    rtc = harness.require("realtime_coaching")
+    assert rtc.advisoryFitsAction("HOLD", "HOLD STEADY")
+    assert not rtc.advisoryFitsAction("HOLD", "BRAKE HARD NOW")
+    assert not rtc.advisoryFitsAction("BRAKE", "ACCELERATE, BUILD SPEED")
+    assert not rtc.advisoryFitsAction("BRAKE", "BRAKE HARD AT 50 METRES")
+
+
 def test_realtime_coaching_on_pace_clean(harness: TraceReplayHarness) -> None:
     """L0-05 (FALSE-POSITIVE GUARD): on a straight far from the next brake point and
     not over-speed, the viewmodel must be informational ('ON PACE' / 'APPROACHING'),

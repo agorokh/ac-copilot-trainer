@@ -50,7 +50,13 @@ CSP UI/render intervals, not OS presentation timings. Normal capture is disabled
 
 Verification at initial checkpoint: existing focused suite199 passed; inference
 admission23 passed; render capture/topic guards24 passed; CSP API/UI checks passed.
-Full make ci-fast is in progress, not yet certified. Global Python had incompatible
+Full make ci-fast completed4957 passed/26 declared skips/14 failures,86.93% coverage.
+Five path-sensitive failures came from placing isolated temp under Git/.scratch;
+all five passed with outside-Git cache temp. One legacy brain-off assertion was
+updated to the required independent CPU behavior and passed. Eight native firmware
+tests require `cc`, absent from PATH and checked standard compiler locations on this
+Windows host; no firmware tests were weakened/skipped/changed. Authoritative full
+Linux CI and independent review remain required, rather than claiming local fullCIgreen. Global Python had incompatible
 MCP1.26; existing primary .venv has requiredMCP2.3 and is used without repointing an
 editable install. Isolated explicit pytest basetemp avoids unrelated sharedTemp ACLs.
 Branch policy rejects codex/ on this spoke, so compliant fix/ prefix is used.
