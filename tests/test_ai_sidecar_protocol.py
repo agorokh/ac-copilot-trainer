@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import threading
 
 import pytest
 
@@ -82,6 +83,80 @@ def test_brain_followup_forwards_structured_blocks(monkeypatch: pytest.MonkeyPat
     assert set(out["tyres"]["status"]) == {"fl", "fr", "rl", "rr"}
     assert out.get("conditions") is not None
     assert out["conditions"]["grip_band"] == "green"
+
+
+def test_cpu_brain_remains_available_with_model_disabled(monkeypatch):
+    monkeypatch.setattr(proto, "debrief_feature_enabled", lambda: False)
+    out = build_brain_followup(_rich_corner_archive())
+    assert out is not None and out["debriefSource"] == "brain"
+    assert out["cornerAnalysis"]
+
+
+def test_chat_provider_preserves_lua_narration_discriminator(monkeypatch):
+    monkeypatch.setattr(proto, "debrief_feature_enabled", lambda: True)
+    monkeypatch.setattr(proto, "compose_llm_debrief_only", lambda *args: "grounded prose")
+    monkeypatch.setattr(proto, "inference_provider", lambda: "openai")
+    out = proto.build_ollama_followup({"lap": 1}, [])
+    assert out["debriefSource"] == "ollama"
+    assert out["inferenceProvider"] == "openai"
+
+
+def test_live_ws_drops_superseded_corner_without_overlapping_blocking_workers(monkeypatch):
+    websockets = pytest.importorskip("websockets", minversion="12")
+    from tools.ai_sidecar import server as srv
+
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    def hint(**kwargs):
+        calls.append(kwargs["corner"])
+        if kwargs["corner"] == "T1":
+            entered.set()
+            assert release.wait(3)
+        return "HOLD STEADY"
+
+    monkeypatch.setattr(proto, "compose_corner_hint", hint)
+    monkeypatch.setattr(srv, "debrief_feature_enabled", lambda: False)
+
+    async def run():
+        async with websockets.serve(lambda ws: srv._handler(ws, True), "127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+
+                def query(corner):
+                    return json.dumps(
+                        dict(
+                            protocol=1,
+                            event="corner_query",
+                            corner=corner,
+                            lap=1,
+                            cur=100,
+                            ref=100,
+                            dist=80,
+                            _inference_deadline=0,
+                        )
+                    )
+
+                await ws.send(query("T1"))
+                assert await asyncio.to_thread(entered.wait, 2)
+                await ws.send(query("T2"))
+                await ws.send(query("T3"))
+                # A lap ack stays immediate while model work is blocked.
+                await ws.send(json.dumps(dict(protocol=1, event="lap_complete", lap=2)))
+                out = json.loads(await asyncio.wait_for(ws.recv(), 1))
+                assert out["event"] == "coaching_response" and out["lap"] == 2
+                await ws.send(query("T4"))
+                release.set()
+                advice = json.loads(await asyncio.wait_for(ws.recv(), 2))
+                assert advice["corner"] == "T4"
+                assert calls == ["T1", "T4"]
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(ws.recv(), 0.1)
+
+    try:
+        asyncio.run(run())
+    finally:
+        release.set()
 
 
 def test_brain_followup_loads_history_paths_for_consistency(

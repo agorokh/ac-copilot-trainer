@@ -17,6 +17,22 @@
 
 local M = {}
 
+-- A cached model command describes older telemetry. Never let it oppose the
+-- primary deterministic action selected for THIS render frame.
+local MODEL_ACTION_PHRASES = {
+  BRAKE = { ["BRAKE HARD NOW"] = true, ["BRAKE EARLIER"] = true,
+    ["BRAKE HARD, HEAVY STOP"] = true },
+  LIFT = { ["LIFT NOW"] = true },
+  CARRY_MORE_SPEED = { ["ACCELERATE, BUILD SPEED"] = true },
+  HOLD = { ["HOLD STEADY"] = true, ["ON PACE"] = true,
+    ["ON PACE, HOLD STEADY"] = true, ["HOLD THROTTLE, ON PACE"] = true },
+}
+function M.advisoryFitsAction(action, text)
+  if type(text) ~= "string" then return false end
+  local allowed = MODEL_ACTION_PHRASES[action]
+  return allowed ~= nil and allowed[text:upper()] == true
+end
+
 local shiftProfile = require("shift_profile")
 
 -- ---------------------------------------------------------------------------
@@ -564,7 +580,7 @@ function M.tick(opts)
     end
     if opts.cornerAdvisories and type(opts.cornerAdvisories) == "table" then
       local advice = opts.cornerAdvisories[topLabel]
-      if type(advice) == "string" and advice ~= "" then
+      if M.advisoryFitsAction(view.action, advice) then
         view.secondaryLine = advice
         -- Marked separately so the coaching tile can distinguish real LLM
         -- coaching from rules-engine context lines (which duplicate the main

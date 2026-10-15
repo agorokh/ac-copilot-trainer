@@ -33,7 +33,8 @@ from typing import Any
 
 from tools.ai_sidecar import observability
 from tools.ai_sidecar.car_class import CarClassResolution, resolve_installed_car
-from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled
+from tools.ai_sidecar.coaching.generation import LatestGenerationQueue
+from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled, inference_status
 from tools.ai_sidecar.external_protocol import (
     AUTH_HEADER,
     CLIENT_CLASS_BROWSER,
@@ -161,10 +162,8 @@ logger = logging.getLogger(__name__)
 
 # Strong refs so asyncio.Task objects are not GC'd mid-flight (Python docs).
 _background_tasks: set[asyncio.Task[Any]] = set()
-_OLLAMA_FOLLOWUP_CONCURRENCY = 4
-# Best-effort cap: cancelling a task waiting in asyncio.to_thread can release this
-# semaphore before the worker thread finishes (Python limitation).
-_ollama_followup_sem: asyncio.Semaphore | None = None
+_generation_queue: LatestGenerationQueue | None = None
+_generation_loop: asyncio.AbstractEventLoop | None = None
 
 # Connected external-protocol peers (any client that has spoken a `{v,type}`
 # frame, including the Lua loopback client). Used for hub-style fan-out.
@@ -567,11 +566,12 @@ def _reset_external_state() -> None:
     _observer_feed_warned = False
 
 
-def _get_ollama_followup_sem() -> asyncio.Semaphore:
-    global _ollama_followup_sem
-    if _ollama_followup_sem is None:
-        _ollama_followup_sem = asyncio.Semaphore(_OLLAMA_FOLLOWUP_CONCURRENCY)
-    return _ollama_followup_sem
+def _get_generation_queue() -> LatestGenerationQueue:
+    global _generation_queue, _generation_loop
+    loop = asyncio.get_running_loop()
+    if _generation_queue is None or _generation_loop is not loop:
+        _generation_queue, _generation_loop = LatestGenerationQueue(), loop
+    return _generation_queue
 
 
 def _run_compare_laps(last_path: str, ref_path: str) -> None:
@@ -810,6 +810,8 @@ async def _send_ollama_followup(
     websocket: Any,
     inbound: dict[str, Any],
     improvement_ranking: list[dict[str, Any]],
+    *,
+    is_current: Callable[[], bool] = lambda: True,
 ) -> None:
     """Call Ollama in a background task and send a follow-up coaching_response.
 
@@ -818,12 +820,11 @@ async def _send_ollama_followup(
     discards on any error (the socket may have closed in the meantime).
     """
     try:
-        async with _get_ollama_followup_sem():
-            followup = await asyncio.to_thread(
-                build_ollama_followup,
-                inbound,
-                improvement_ranking,
-            )
+        deadline = inbound.get("_inference_deadline", time.monotonic() + 8.0)
+        followup = await _get_generation_queue().submit(
+            lambda: build_ollama_followup(inbound, improvement_ranking) if is_current() else None,
+            deadline=deadline,
+        )
     except asyncio.CancelledError:
         raise
     except Exception as e:
@@ -833,7 +834,8 @@ async def _send_ollama_followup(
     if followup is None:
         observability.METRICS.record_ollama_followup_error()
         return
-    await _safe_send(websocket, followup)
+    if is_current():
+        await _safe_send(websocket, followup)
 
 
 async def _send_brain_followup(websocket: Any, inbound: dict[str, Any]) -> None:
@@ -856,7 +858,11 @@ async def _send_brain_followup(websocket: Any, inbound: dict[str, Any]) -> None:
 
 
 async def _coach_v2_between_lap(
-    websocket: Any, inbound: dict[str, Any], *, reply_coaching: bool
+    websocket: Any,
+    inbound: dict[str, Any],
+    *,
+    reply_coaching: bool,
+    is_current: Callable[[], bool] = lambda: True,
 ) -> None:
     """#675 Parts 2/4: update off-pace gate and emit one between-lap ``corner_advice``.
 
@@ -921,17 +927,32 @@ async def _coach_v2_between_lap(
     try:
         from tools.ai_sidecar.coaching.between_lap import select_between_lap_advice
 
-        advice = await asyncio.to_thread(
-            select_between_lap_advice,
-            refs=coach.refs,
-            ledger=coach.ledger,
-            improvement_ranking=ranking,
-            use_ollama=True,
+        deadline = inbound.get("_inference_deadline", time.monotonic() + 8.0)
+        advice = await _get_generation_queue().submit(
+            lambda: (
+                select_between_lap_advice(
+                    refs=coach.refs,
+                    ledger=coach.ledger,
+                    improvement_ranking=ranking,
+                    use_ollama=True,
+                    deadline=deadline,
+                )
+                if is_current()
+                else None
+            ),
+            deadline=deadline,
         )
+        if advice is None and is_current():
+            advice = select_between_lap_advice(
+                refs=coach.refs,
+                ledger=coach.ledger,
+                improvement_ranking=ranking,
+                use_ollama=False,
+            )
     except Exception:
         logger.exception("coach v2 between-lap selector failed")
         return
-    if advice is None:
+    if advice is None or not is_current():
         return
     _recent_between_lap_advice_keys.append(key)
     await _safe_send(
@@ -944,6 +965,7 @@ async def _coach_v2_between_lap(
             "lap": inbound.get("lap"),
             "text": advice["text"],
             "slot": "between_lap",
+            "adviceSource": advice.get("source", "rules"),
         },
     )
 
@@ -1334,6 +1356,12 @@ def _route_health(connection: Any, request: Any, tail: str) -> Any:
             browser_peers=_browser_peer_count(),
             endpoints=SERVED_ENDPOINTS,
             voice=public_voice_runtime_status(),
+            inference={
+                **inference_status(),
+                "queue": _generation_queue.status()
+                if _generation_queue
+                else {"active": False, "pending": 0, "discarded": 0},
+            },
         ),
         observability.HEALTH_CONTENT_TYPE,
     )
@@ -2963,6 +2991,8 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
     # Monotonic id so a slow to_thread from a superseded corner_query does not
     # send corner_advice after a newer query has already been issued (Codex).
     corner_job_gen: list[int] = [0]
+    lap_job_gen: list[int] = [0]
+    latest_lap_identity: tuple[Any, Any] | None = None
 
     def _followup_done(t: asyncio.Task[Any]) -> None:
         _background_tasks.discard(t)
@@ -3012,10 +3042,20 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                 continue
 
             event_name = data.get("event")
+            # Receipt is the origin of the deadline. Never trust a peer-supplied
+            # private field or reset this budget after waiting in a queue.
+            data["_inference_deadline"] = time.monotonic() + (
+                2.0 if event_name == EVENT_CORNER_QUERY else 8.0
+            )
             if event_name is not None:
                 observability.METRICS.record_message("event", str(event_name))
 
             if data.get("event") == "lap_complete":
+                identity = (data.get("lap"), data.get("lapTimeMs"))
+                if identity != latest_lap_identity:
+                    latest_lap_identity = identity
+                    lap_job_gen[0] += 1
+                    corner_job_gen[0] += 1
                 hints = data.get("coachingHints") or []
                 logger.info(
                     "lap_complete lap=%s lapTimeMs=%s hints=%s",
@@ -3040,7 +3080,12 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                 # #675 Parts 2/4: off-pace gate always; between-lap corner_advice when coaching on.
                 if _coach_runtime is not None:
                     v2_task = asyncio.create_task(
-                        _coach_v2_between_lap(websocket, data, reply_coaching=reply_coaching)
+                        _coach_v2_between_lap(
+                            websocket,
+                            data,
+                            reply_coaching=reply_coaching,
+                            is_current=lambda gen=lap_job_gen[0]: gen == lap_job_gen[0],
+                        )
                     )
                     _background_tasks.add(v2_task)
                     v2_task.add_done_callback(_background_tasks.discard)
@@ -3066,11 +3111,18 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
 
                 async def _corner_job(d: dict[str, Any], gen: int) -> None:
                     try:
-                        out_c = await asyncio.to_thread(
-                            prepare_outbound_message,
-                            d,
-                            reply_coaching=reply_coaching,
-                            lap_state=lap_state,
+                        out_c = await _get_generation_queue().submit(
+                            lambda: (
+                                prepare_outbound_message(
+                                    d,
+                                    reply_coaching=reply_coaching,
+                                    lap_state=lap_state,
+                                )
+                                if gen == corner_job_gen[0]
+                                else None
+                            ),
+                            deadline=d["_inference_deadline"],
+                            priority=1,
                         )
                         if gen != corner_job_gen[0]:
                             return
@@ -3118,13 +3170,24 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     # diverges on PB laps (Bugbot).
                     imp_for_bg = out.get("improvementRanking") or []
                     bg_task = asyncio.create_task(
-                        _send_ollama_followup(websocket, data, imp_for_bg)
+                        _send_ollama_followup(
+                            websocket,
+                            data,
+                            imp_for_bg,
+                            is_current=lambda gen=lap_job_gen[0]: gen == lap_job_gen[0],
+                        )
                     )
                     _background_tasks.add(bg_task)
                     pending_followups.add(bg_task)
                     bg_task.add_done_callback(_followup_done)
 
-                    # Also spawn the setup-vs-technique attribution brain (issue #275): a deeper,
+                if (
+                    reply_coaching
+                    and data.get("event") == "lap_complete"
+                    and isinstance(out, dict)
+                    and out.get("event") == EVENT_COACHING_RESPONSE
+                ):
+                    # Spawn the setup-vs-technique attribution brain (issue #275): a deeper,
                     # archive-grounded follow-up that the rules ack + Ollama narration cannot
                     # produce. Independent task so neither blocks the other.
                     brain_task = asyncio.create_task(_send_brain_followup(websocket, data))

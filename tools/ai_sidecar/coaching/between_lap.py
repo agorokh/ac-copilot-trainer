@@ -11,7 +11,12 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from tools.ai_sidecar.coaching.llm_coach import call_ollama_generate, debrief_feature_enabled
+from tools.ai_sidecar.coaching.llm_coach import (
+    call_ollama_generate,
+    debrief_feature_enabled,
+    ollama_base_url,
+    ollama_model,
+)
 from tools.ai_sidecar.coaching_diagnosis import PHRASE, RootError
 from tools.ai_sidecar.coaching_ledger import CoachingLedger, Status
 from tools.ai_sidecar.track_reference import CornerReference
@@ -110,27 +115,31 @@ def compose_between_lap_advice(
     root: RootError | None,
     refs: Sequence[CornerReference],
     use_ollama: bool = True,
+    deadline: float | None = None,
 ) -> dict[str, Any] | None:
     """Build one validated between-lap advice payload (Ollama optional, rules fallback)."""
     if not _corner_in_refs(corner, refs):
         return None
     text: str | None = None
+    source = "rules"
     if use_ollama and debrief_feature_enabled():
         root_s = str(root) if root and root != RootError.NONE else "general"
-        phrase = PHRASE.get(root, "improve the corner") if root else "improve the corner"
         label = _turn_label(corner)
+        approved = _rules_phrase(root, corner).upper()
         prompt = (
             "You coach Assetto Corsa. Reply with ONE short next-lap focus command.\n"
-            "RULES: Max 10 words. UPPERCASE. Name the corner as "
-            f"{label}. Use verbs BRAKE/LIFT/CARRY/TURN/HOLD only.\n"
-            f"Focus root={root_s}; suggested={phrase}\n"
-            f"NOW: next-lap focus for {label} ->"
+            "The deterministic coach has selected the action and corner; do not add targets.\n"
+            f"Focus root={root_s}; corner={label}.\n"
+            f"Return exactly this approved command, without commentary:\n{approved}"
         )
         raw = call_ollama_generate(
             prompt,
-            temperature=0.2,
+            base_url=ollama_base_url(),
+            model=ollama_model(),
+            temperature=0.0,
             num_predict=24,
-            timeout_sec=10.0,
+            timeout_sec=8.0,
+            deadline=deadline,
         )
         if raw:
             for line in raw.strip().splitlines():
@@ -142,11 +151,20 @@ def compose_between_lap_advice(
                     candidate = candidate.split(".", 1)[0].strip() + "."
                 words = [w for w in candidate.split() if w]
                 if len(words) >= 2 and len(candidate) >= 4:
-                    text = candidate.upper()[:120]
+                    # A model may only restate the selected deterministic action.
+                    # Exact acceptance rejects other corners, numbers and opposing verbs.
+                    expected = _rules_phrase(root, corner).upper().rstrip(".!")
+                    normalized = candidate.upper().rstrip(".!")
+                    if normalized == expected:
+                        text = candidate.upper()[:120]
+                        source = "model"
                     break
     if not text:
         text = _rules_phrase(root, corner)
-    return validate_corner_advice(corner=corner, text=text, refs=refs)
+    advice = validate_corner_advice(corner=corner, text=text, refs=refs)
+    if advice is not None:
+        advice["source"] = source
+    return advice
 
 
 def select_between_lap_advice(
@@ -155,6 +173,7 @@ def select_between_lap_advice(
     ledger: CoachingLedger | None = None,
     improvement_ranking: Sequence[Mapping[str, Any]] | None = None,
     use_ollama: bool = True,
+    deadline: float | None = None,
 ) -> dict[str, Any] | None:
     """Select and validate exactly one next-lap improvement point for ``corner_advice``."""
     valid = [r.index for r in refs]
@@ -166,4 +185,6 @@ def select_between_lap_advice(
         st = ledger.state(corner)
         if st is not None and st.root != RootError.NONE:
             root = st.root
-    return compose_between_lap_advice(corner=corner, root=root, refs=refs, use_ollama=use_ollama)
+    return compose_between_lap_advice(
+        corner=corner, root=root, refs=refs, use_ollama=use_ollama, deadline=deadline
+    )

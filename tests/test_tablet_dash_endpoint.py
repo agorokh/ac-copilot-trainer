@@ -649,3 +649,56 @@ def test_map_live_canonical_catalogue_replay_is_not_independently_numbered(monke
         assert broadcasts[-1]["payload"]["corners"] == []
 
     asyncio.run(run())
+
+
+def test_actual_p7_model_focus_fallback_expiry_lap_and_review_authority(tmp_path):
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required for executable browser consumer check")
+    body = _TABLET_DASH_PAGE_PATH.read_text(encoding="utf-8")
+    block = body.split("// ---- bounded applied model focus", 1)[1].split(
+        "// ---- end bounded applied model focus", 1
+    )[0]
+    # Keep only the actual shipped function definitions, avoiding the marker's comment text.
+    block = block[block.index("  function currentPostLapFocus") :]
+    assert "if (!renderPostLapFocus() && S.lastCue && !S.review)" in body
+    script = tmp_path / "focus.cjs"
+    script.write_text(
+        """
+      const assert = require('node:assert/strict');
+      const values = {}; let now = 1000;
+      const S = {coachAt:1000, lap:{laps_completed:3}, review:null,
+        coach:{completed_lap:3,post_lap_focus:{source:'model',text:'NEXT LAP T2: BRAKE LATER.',
+          focus_id:'focus-1',corner:'T2',lap:3,remaining_ms:1000}}};
+      const STALE_MS=2500;
+      function fin(v) {return typeof v==='number' && isFinite(v) ? v : null;}
+      function setText(id,value) {values[id]=value;}
+      Date.now=()=>now;
+    """
+        + block
+        + """
+      assert.equal(renderPostLapFocus(),true);
+      assert.equal(values.dbHead,'NEXT LAP T2: BRAKE LATER.');
+      // Same old payload received repeatedly cannot extend its first-observed expiry.
+      now=1900; S.coachAt=1900; assert.equal(renderPostLapFocus(),true);
+      now=2001; S.coachAt=2001; assert.equal(renderPostLapFocus(),false);
+      assert.equal(values.dbHead,'—');
+      S.coach.post_lap_focus.focus_id='focus-2';
+      S.coach.post_lap_focus.lap=2;
+      assert.equal(renderPostLapFocus(),false);
+      S.coach.post_lap_focus.lap=3; S.coach.post_lap_focus.source='rules';
+      assert.equal(renderPostLapFocus(),false);
+      S.coach.post_lap_focus.source='model';
+      S.review={screen_summary:['CPU analysis']}; values.dbHead='Authoritative full review';
+      assert.equal(renderPostLapFocus(),false);
+      assert.equal(values.dbHead,'Authoritative full review');
+      S.review=null; now=6000;
+      assert.equal(renderPostLapFocus(),false); // stale producer despite unexpired payload claim
+    """,
+        encoding="utf-8",
+    )
+    result = subprocess.run([node, str(script)], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr

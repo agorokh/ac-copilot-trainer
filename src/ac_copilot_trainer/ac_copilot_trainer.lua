@@ -27,6 +27,7 @@ local coachingHints = require("coaching_hints")
 local lapArchive = require("lap_archive")
 local coachingOverlay = require("coaching_overlay")
 local wsBridge = require("ws_bridge")
+wsBridge.performanceCapture = require("performance_capture").new()
 local sessionJournal = require("session_journal")
 local ch = require("csp_helpers")
 local renderDiag = require("render_diag")
@@ -668,6 +669,9 @@ end
 -- Each handler returns (applied:boolean, reason:string|nil); the bridge fans an
 -- `action.ack` back to the originator.
 if wsBridge.registerActionHandler then
+  wsBridge.registerActionHandler("capturePerformance", function(args)
+    return wsBridge.performanceCapture:start(args, os.preciseClock())
+  end)
   wsBridge.registerActionHandler("toggleFocusPractice", function()
     state.focusPracticeActive = not (state.focusPracticeActive or false)
     return true, nil
@@ -2309,6 +2313,13 @@ end
 
 function script.update(dt)
   sim = ac.getSim()
+  if wsBridge.performanceCapture.active then
+    local perfUI = ac.getUI()
+    wsBridge.performanceCapture:tick(sim and sim.frame, perfUI and perfUI.dt,
+      sim and sim.isPaused, os.preciseClock(), function(_topic, payload)
+        wsBridge.publishTopic("performance.frames", payload)
+      end)
+  end
   car = ac.getCar(0)
 
   autoPlaceOnce()
@@ -2360,6 +2371,8 @@ function script.update(dt)
       coachingPublisher.publishIfDue({
         dt = dt,
         view = rtView,
+        completedLap = state.lapsCompleted,
+        postLapFocus = wsBridge.betweenLapFocusSnapshot(state.lapsCompleted, state.coachingLines),
         car = car,
         sim = sim,
         wsBridge = wsBridge,

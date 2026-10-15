@@ -236,6 +236,7 @@ def server_capabilities(*, include_loopback_only: bool = True) -> list[str]:
 KNOWN_ACTIONS: frozenset[str] = frozenset(
     {
         "toggleFocusPractice",
+        "capturePerformance",
         "cycleRacingLine",
         "tareDelta",
         "reloadSetup",
@@ -295,6 +296,7 @@ KNOWN_TOPICS: frozenset[str] = frozenset(
         "tire_temps",
         # Already-produced topics (made subscribable; were missing).
         "coaching.snapshot",
+        "performance.frames",
         "setup.active",
         # Sidecar-originated live coaching cues (issue #341).
         TOPIC_COACHING_CUE,

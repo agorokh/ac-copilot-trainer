@@ -221,7 +221,7 @@ function M.draw(vm)
       if ok then connected = c end
     end
     if connected then
-      ui.textColored("Status: connected (LLM coaching active)", COLOR_OK)
+      ui.textColored("Status: connected (sidecar coaching)", COLOR_OK)
     elseif spawned then
       ui.textColored("Status: process launched, waiting for handshake...", COLOR_WAIT)
     else

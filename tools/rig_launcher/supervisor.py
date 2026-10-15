@@ -682,7 +682,10 @@ class GamePointSupervisor:
         return str(_repo_root())
 
     def sidecar_environment(self) -> dict[str, str]:
+        from tools.ai_sidecar.coaching.generation import apply_rig_inference_defaults
+
         env = dict(self._environ)
+        apply_rig_inference_defaults(env)
         base = self._launcher_path_base()
         _put_if_present(env, "AC_COPILOT_SIDECAR_TOKEN", self.config.token)
         _put_if_present(
@@ -699,6 +702,10 @@ class GamePointSupervisor:
             # An alien frontier is a Coach v2 feature; make the launcher setting operational rather
             # than silently leaving the legacy observer active behind an undocumented prerequisite.
             env["AC_COPILOT_COACH_V2"] = "1"
+        elif self.config.reference_archive:
+            # Normal reference selection must reach the diagnosed post-lap consumer.
+            # Runtime qualification still rejects unusable references; an explicit off wins.
+            env.setdefault("AC_COPILOT_COACH_V2", "1")
         # The launcher's RESOLVED config must win over whatever it inherited. `env` starts as a
         # copy of the parent environment, and `_put_if_present` only ever *sets* — so a
         # set-but-blank AC_COPILOT_VOICE_BANK (which `_configured_text` resolves to None, i.e.

@@ -626,6 +626,40 @@ def test_calibrate_brake_marks_from_lap_updates_coach_v2(tmp_path, monkeypatch):
     assert any(coach.anchors[i].brake != before[i] for i in before) or coach._driver_brake_points
 
 
+def test_between_lap_validated_model_source_survives_server_wire(monkeypatch):
+    from tools.ai_sidecar.coaching import between_lap
+    from tools.ai_sidecar.coaching.generation import LatestGenerationQueue
+    from tools.ai_sidecar.coaching_runtime import build_coach_runtime
+
+    monkeypatch.setattr(server, "_coach_runtime", build_coach_runtime(_corner_archive()))
+    monkeypatch.setattr(server, "_recent_between_lap_advice_keys", [])
+    monkeypatch.setattr(server, "_recent_between_lap_fold_keys", [])
+    monkeypatch.setattr(between_lap, "debrief_feature_enabled", lambda: True)
+    monkeypatch.setattr(between_lap, "call_ollama_generate", lambda *a, **kw: "NEXT LAP: FOCUS T1")
+    sent = []
+
+    async def send(_socket, frame):
+        sent.append(frame)
+
+    monkeypatch.setattr(server, "_safe_send", send)
+
+    async def run():
+        queue = LatestGenerationQueue()
+        monkeypatch.setattr(server, "_get_generation_queue", lambda: queue)
+        await server._coach_v2_between_lap(
+            object(),
+            {"lap": 3, "lapTimeMs": 100000, "improvementRanking": [{"corner": 0}]},
+            reply_coaching=True,
+        )
+
+    asyncio.run(run())
+    assert len(sent) == 1
+    assert sent[0]["slot"] == "between_lap"
+    assert sent[0]["adviceSource"] == "model"
+    assert sent[0]["lap"] == 3
+    assert sent[0]["text"] == "NEXT LAP: FOCUS T1"
+
+
 def test_between_lap_plain_frame_does_not_poison_rolling_best(tmp_path, monkeypatch):
     """#687 daemon: validity-blind plain lap_complete must not fold into rolling-best."""
     from tools.ai_sidecar.coaching_runtime import build_coach_runtime
