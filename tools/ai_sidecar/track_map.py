@@ -32,6 +32,7 @@ from tools.ai_sidecar.lap_dynamics import (
     lap_trace_from_archive,
     segment_corners,
 )
+from tools.ai_sidecar.track_reference import CornerReference
 from tools.lap_qualification import archive_combo, qualify_archive
 from tools.lap_trace_validity import completed_trace_reason, finish_wrap_cut
 
@@ -246,6 +247,86 @@ def _canonical_catalog(archive: dict[str, Any], live: dict[str, Any] | None) -> 
         "reference_source": (live or {}).get("reference_source"),
         "reference_lap_ms": (live or {}).get("reference_lap_ms"),
     }
+
+
+def bind_reference_corners(
+    archive: dict[str, Any],
+    references: list[CornerReference],
+    live: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Bind measured regions to canonical names without renumbering their diagnostic facts.
+
+    A speed-minimum window is not a turn identity. Merged regions, multiple measured
+    regions sharing one canonical turn, and unknown geometry cannot supply named advice.
+    Uses the same combo/catalogue authority as MAP; no trace parsing or telemetry I/O.
+    """
+    catalog = _canonical_catalog(archive, live)
+    labels: dict[int, str] = {}
+    rejected: dict[int, str] = {}
+    result: dict[str, Any] = {
+        "ready": False,
+        "reason": "canonical_catalog_unavailable",
+        "labels": labels,
+        "rejected": rejected,
+        "reference_count": len(references),
+        "eligible_count": 0,
+        "catalog_id": catalog.get("id"),
+        "source": catalog.get("source"),
+    }
+    if not catalog:
+        return result
+
+    def parts(lo: float, hi: float) -> list[tuple[float, float]]:
+        return [(lo, hi)] if lo < hi else [(lo, 1.0), (0.0, hi)]
+
+    def overlap(a: float, b: float, c: float, d: float) -> bool:
+        return any(min(y, v) - max(x, u) > 1e-9 for x, y in parts(a, b) for u, v in parts(c, d))
+
+    for ref in references:
+        values = (ref.spline_lo, ref.apex_spline, ref.spline_hi)
+        if any(
+            not isinstance(v, (int, float))
+            or isinstance(v, bool)
+            or not math.isfinite(v)
+            or not 0 <= v <= 1
+            for v in values
+        ):
+            rejected[ref.index] = "invalid_reference_geometry"
+            continue
+        if ref.spline_lo >= ref.spline_hi or not ref.spline_lo <= ref.apex_spline <= ref.spline_hi:
+            rejected[ref.index] = "invalid_reference_geometry"
+            continue
+        touched = [
+            row
+            for row in catalog["corners"]
+            if overlap(ref.spline_lo, ref.spline_hi, row["s0"], row["s1"])
+        ]
+        if len(touched) != 1:
+            rejected[ref.index] = "merged_or_unresolved_reference_region"
+            continue
+        row = touched[0]
+        if not any(lo <= ref.apex_spline <= hi for lo, hi in parts(row["s0"], row["s1"])):
+            rejected[ref.index] = "apex_outside_canonical_region"
+            continue
+        labels[ref.index] = row["corner_id"]
+    for label in set(labels.values()):
+        indexes = [index for index, value in labels.items() if value == label]
+        if len(indexes) > 1:
+            for index in indexes:
+                del labels[index]
+                rejected[index] = "split_reference_region"
+    result.update(
+        ready=bool(labels),
+        eligible_count=len(labels),
+        reason=(
+            "unique_corner_geometry"
+            if not rejected and labels
+            else "partial_unique_corner_geometry"
+            if labels
+            else "no_unique_corner_geometry"
+        ),
+    )
+    return result
 
 
 def _slice_circular(lap: LapTrace, start: float, end: float) -> LapTrace:

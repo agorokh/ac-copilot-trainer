@@ -30,6 +30,7 @@ function M.new()
     self.active, self.id, self.started, self.seconds = true, id, now, seconds
     self.rows, self.count, self.duplicates, self.gaps, self.invalid = {}, 0, 0, 0, 0
     self.lastFrame, self.lastClock, self.chunk = nil, now, 0
+    self.lastSampleClock = nil
     self.rawFrameType, self.rawFrameValue, self.rawDtType = nil, nil, nil
     return true, "CSP UI/render interval capture armed"
   end
@@ -43,6 +44,7 @@ function M.new()
       duplicates = self.duplicates, gaps = self.gaps, invalid_dt = self.invalid,
       raw_frame_type = self.rawFrameType, raw_frame_value = self.rawFrameValue,
       raw_dt_type = self.rawDtType,
+      callback_clock = "os.preciseClock",
     })
     self.rows = {}
     if reason then self.active = false end
@@ -60,24 +62,33 @@ function M.new()
       return
     end
     self.lastClock = now
-    if now - self.started >= self.seconds then
-      self:flush(now, publish, "duration")
-      return
-    end
+    local expired = now - self.started >= self.seconds
     if not finite(frame) or frame < 0 or frame > 9007199254740991 or frame % 1 ~= 0 then
       self:flush(now, publish, "invalid_frame")
       return
     end
     if self.lastFrame ~= nil then
       if frame < self.lastFrame then self:flush(now, publish, "frame_reset"); return end
-      if frame == self.lastFrame then self.duplicates = self.duplicates + 1; return end
+      if frame == self.lastFrame then
+        self.duplicates = self.duplicates + 1
+        if expired then self:flush(now, publish, "duration") end
+        return
+      end
       if frame > self.lastFrame + 1 then self.gaps = self.gaps + frame - self.lastFrame - 1 end
     end
     self.lastFrame = frame
-    if not finite(dt) or dt <= 0 or dt > 10 then self.invalid = self.invalid + 1; return end
+    if not finite(dt) or dt <= 0 or dt > 10 then
+      self.invalid = self.invalid + 1
+      if expired then self:flush(now, publish, "duration") end
+      return
+    end
     self.count = self.count + 1
-    self.rows[#self.rows + 1] = {frame = frame, dt_ms = dt * 1000, paused = paused == true}
-    if self.count >= 20000 then self:flush(now, publish, "sample_limit")
+    self.rows[#self.rows + 1] = {frame = frame, dt_ms = dt * 1000, paused = paused == true,
+      callback_ms = self.lastSampleClock and (now - self.lastSampleClock) * 1000 or nil,
+      clock_offset_s = now - self.started}
+    self.lastSampleClock = now
+    if expired then self:flush(now, publish, "duration")
+    elseif self.count >= 20000 then self:flush(now, publish, "sample_limit")
     elseif #self.rows >= 128 then self:flush(now, publish, nil) end
   end
 

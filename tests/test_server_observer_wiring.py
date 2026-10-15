@@ -631,7 +631,9 @@ def test_between_lap_validated_model_source_survives_server_wire(monkeypatch):
     from tools.ai_sidecar.coaching.generation import LatestGenerationQueue
     from tools.ai_sidecar.coaching_runtime import build_coach_runtime
 
-    monkeypatch.setattr(server, "_coach_runtime", build_coach_runtime(_corner_archive()))
+    coach = build_coach_runtime(_corner_archive())
+    coach.set_corner_identity({"labels": {0: "T1"}, "ready": True})
+    monkeypatch.setattr(server, "_coach_runtime", coach)
     monkeypatch.setattr(server, "_recent_between_lap_advice_keys", [])
     monkeypatch.setattr(server, "_recent_between_lap_fold_keys", [])
     monkeypatch.setattr(between_lap, "debrief_feature_enabled", lambda: True)

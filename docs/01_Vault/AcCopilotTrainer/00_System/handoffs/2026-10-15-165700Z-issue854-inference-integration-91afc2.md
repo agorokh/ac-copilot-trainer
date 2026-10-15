@@ -101,3 +101,27 @@ authenticated set/get boolean-false archive proof before the first lap plus befo
 after journal hashes and preserved combo snapshot. Persistence alone is insufficient.
 The restored 102183ms native Porsche/Magione archive builds five reference corners
 but qualifies legacy_unknown; using it for transport acceptance certifies no human PB.
+
+Follow-up after merged855 (49de38b): actual P7 text transport succeeded, but the
+five independently segmented102183ms reference regions did not share Lua's nine
+canonical names. Dynamic T5 covered canonical T7/T8/T9, so that screenshot proves
+transport only. Bounded4KiB headers of186 archives found five same-combo candidates;
+none had matching dynamic/canonical geometry. Two102s traces have extendedPhysics
+true; the133–145s traces recordfalse. Neither legacy_unknown nor identity binding
+certifies compatible physics, control provenance or reference target quality.
+
+Same854 follow-up preserves internal dynamic facts and uses MAP's existing canonical
+catalogue validator for named outputs. Only unique one-to-one geometry may name a
+CoachV2 cue or between-lap focus; split/merged/unknown regions fail closed with a
+public machine reason/counts. Both model and rules focus exclude ambiguous regions
+before ranking. All voice/coaching.cue outputs share this gate; authenticated live
+Lua supplies names. In-flight results die when binding changes. Compact measured
+five-versus-nine geometry and executable server consumer regressions cover the fault.
+
+Root also found UI dt reaching exactly200ms while client elapsed exceeded producer
+duration. Added separate precise-script-clock callback intervals, terminal crossing
+sample and provenance checks through the same bounded capture. Installed CSP SDK
+ac_apps/lib.lua3713 describes os.preciseClock as high-precision seconds since script
+start, without specifying its OS clock implementation. Actual callback/producer/client
+time agreement and correct physical-turn P7 proof remain root-owned acceptance.
+No new game runs, archive writes or runtime mutations by the implementation agent.
