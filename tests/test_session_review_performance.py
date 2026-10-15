@@ -96,6 +96,28 @@ def test_next_report_observes_new_restriction_and_unavailable_ledger(
         report.build_session_report([session_corpus], **args)
 
 
+@pytest.mark.parametrize("change", ["ledger", "archive"])
+def test_report_refuses_publication_when_inputs_change_during_analysis(
+    session_corpus, monkeypatch, change
+):
+    reference = session_corpus / "lap_ref.json"
+    original = report._history_payload
+
+    def changed_history(laps, selected):
+        result = original(laps, selected)
+        record = json.loads(reference.read_text())
+        if change == "ledger":
+            lap_qualification.register_attribution(reference, assessment(record))
+        else:
+            record["lap"]["lap_ms"] += 1
+            reference.write_text(json.dumps(record))
+        return result
+
+    monkeypatch.setattr(report, "_history_payload", changed_history)
+    with pytest.raises(report.SessionReviewError, match="changed_during_analysis"):
+        report.build_session_report([session_corpus], reference_path=reference)
+
+
 def test_duplicate_scan_resolves_only_colliding_identities(monkeypatch):
     from tests.test_lap_qualification import archive
 

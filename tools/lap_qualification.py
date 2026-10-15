@@ -446,12 +446,28 @@ def _trace_reasons(record: Mapping[str, Any], envelope: Mapping[str, Any]) -> li
     return reasons
 
 
+def _attribution_revision() -> tuple[str | None, str | None]:
+    """Change detector only; canonical resolution still decides eligibility/errors."""
+    try:
+        path = default_attribution_path()
+    except AttributionError as exc:
+        return None, str(exc)
+    try:
+        raw = _stable_bytes(path)
+    except FileNotFoundError:
+        return str(path), None
+    except (AttributionError, OSError) as exc:
+        return str(path), f"unavailable:{type(exc).__name__}"
+    return str(path), hashlib.sha256(raw).hexdigest()
+
+
 class ArchiveQualificationSnapshot:
     """Request-owned, unmodified record; no result survives a new archive load.
 
     Callers own this private record for the duration of analysis. Common byte/value
     binding and trace validation run once; use/combo decisions still run the same
-    policy below. The ordinary qualify_archive API always makes a fresh snapshot.
+    policy below. Assert current inputs before publishing a derived report. The
+    ordinary qualify_archive API always makes a fresh snapshot.
     """
 
     def __init__(
@@ -464,17 +480,39 @@ class ArchiveQualificationSnapshot:
         self._record = record
         self._source_path = source_path
         self._source_sha256 = source_sha256
+        self._ledger_revision: tuple[str | None, str | None] | None = None
 
     @cached_property
     def _provenance(self) -> tuple[dict[str, Any], str | None]:
-        return _resolve_archive_provenance(
+        before = _attribution_revision()
+        resolved, digest = _resolve_archive_provenance(
             self._record, source_path=self._source_path, source_sha256=self._source_sha256
         )
+        self._ledger_revision = before
+        if before != _attribution_revision():
+            resolved["qualification"] = {
+                "schema_version": 1,
+                "resolution_error": "attribution_changed_during_analysis",
+            }
+        return resolved, digest
 
     @property
     def record(self) -> dict[str, Any]:
         """The resolved record owned by this analysis, including fail-closed errors."""
         return self._provenance[0]
+
+    def assert_current(self) -> None:
+        """Refuse publication if a ledger revocation or raw-file edit raced analysis."""
+        _ = self.record
+        if self._ledger_revision != _attribution_revision():
+            raise AttributionError("attribution_changed_during_analysis")
+        if self._source_path is not None and self._source_sha256 is not None:
+            try:
+                current = hashlib.sha256(_stable_bytes(Path(self._source_path))).hexdigest()
+            except (AttributionError, OSError) as exc:
+                raise AttributionError("archive_changed_during_analysis") from exc
+            if current != self._source_sha256:
+                raise AttributionError("archive_changed_during_analysis")
 
     @cached_property
     def _binding_error(self) -> str | None:

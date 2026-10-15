@@ -32,6 +32,7 @@ from tools.lap_archive_export import (
 )
 from tools.lap_qualification import (
     ArchiveQualificationSnapshot,
+    AttributionError,
     Qualification,
     archive_combo,
     duplicate_identity_reasons,
@@ -786,6 +787,11 @@ def _build_report_from_laps(
     map_comparison = build_corner_comparison(
         latest_valid.record, reference.record if reference else None
     )
+    try:
+        for lap in laps:
+            lap._snapshot.assert_current()
+    except AttributionError as exc:
+        raise SessionReviewError(str(exc)) from exc
     return {
         **({"corner_observations": observations} if observations is not None else {}),
         "schema_version": REPORT_SCHEMA_VERSION,
