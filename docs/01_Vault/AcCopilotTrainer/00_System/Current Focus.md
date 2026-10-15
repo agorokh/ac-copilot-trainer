@@ -99,10 +99,11 @@ PC remains the production audio owner; explicit native probe is measured. Raw ev
 private. Part H is struck and opt-in mic capture/harness repoint are delivered. Initial
 665 s synthetic soak had one 268 ms task; the fresh 665 s warm repeat passed with no
 detected long tasks/errors/reloads and stable memory. Retained real-lap Part F/#813 physical
-acceptance awaits the operator driving. The Stable AC retry loop was released; normal Content
-Manager Quick Drive loaded Porsche/Magione. The saved reference is intact; current pre-drive
-snapshots supply no canonical corner catalogue, explaining the outline-only MAP. No MAP
-renderer rollback occurred. See the [post-merge handoff](handoffs/2026-10-14-232000Z-post-merge-pr846-57e89c.md).
+acceptance continues through autonomous observation per the operator direction. A real
+autonomous Porsche/Magione run passed one valid 145.833 s lap with zero recoveries; actual
+P7 pixels show colored phases and T1-T9 again. Live electronics still render /11 despite
+twelve CSP spinner positions; repair remains owned by #531. MAP comparison and exit proof
+remain open. See [autonomous evidence and ADR](handoffs/2026-10-15-012100Z-issue531-autonomous-lab-57e89c.md). See the [post-merge handoff](handoffs/2026-10-14-232000Z-post-merge-pr846-57e89c.md).
 
 ## Issue 815 Part C — MOZA offline reporting shipped
 
