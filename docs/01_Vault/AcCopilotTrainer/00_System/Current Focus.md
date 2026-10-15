@@ -89,20 +89,23 @@ relates_to:
 
 # Current focus
 
-## Issue 531 — deployed and autonomous live acceptance verified
+## Issue 531 — full-journal debrief performance delivered
 
-PRs #846/#847/#848 merged; installed Game Point build `422c399` passed self-test and
-restart with a persisted native reference. Fully PLUS is activated on the actual P7.
-The autonomous Content Manager Porsche/Magione run passed two valid timed laps
-(145814/133526 ms), zero recoveries, with actual P7 TC 3/12, ABS 8/12, real red ABS
-intervention, colored T1-T9 MAP and measured selected-corner comparison. Native-session
-COACH debrief rendered; post-exit STALE cleared live values. Full-journal review was slow
-but completed; no automatic menu-review claim is made. Earlier wired audio and warm
-performance gates passed. Final original-archive audit and graceful rig cleanup passed.
-See [final deployment/live SAVE](handoffs/2026-10-15-020500Z-post-merge-pr848-57e89c.md).
-Close #531 with the final evidence record; separate #813 acceptance remains owned there.
+PR #851 merged as `1282a9d`, installed at the existing Desktop target and verified on
+an actual freshly reloaded P7 COACH page. The exact full 186-archive production request
+fell from 319.868 s to **24.899 s**; tablet rendering was observed by **27.998 s**.
+The result, visible text and fixed-time full report match the original; all input hashes
+are unchanged. No history reduction or scoped-corpus substitution. Request-owned reuse
+preserves fresh qualification, with ledger/source changes during analysis failing closed.
+Full CI passed: 4936 tests passed, 26 skipped; exact-head review and package self-test passed.
+Game Point/sidecar and owned SimHub exited gracefully; production USB reverse is retained.
+See [performance deployment SAVE](handoffs/2026-10-15-030700Z-post-merge-pr851-c3b1.md).
+Close #531 after this SAVE lands. Earlier audio, license, live Content Manager laps,
+colored MAP/electronics and soak acceptance remain carried by the
+[prior live SAVE](handoffs/2026-10-15-020500Z-post-merge-pr848-57e89c.md).
 The [autonomous lab ADR](../01_Decisions/adr-2026-10-14-autonomous-lab-observation.md)
 assigns routine driving and screen/lap observation to the agent without operator status questions.
+Separate #813/#815 scopes are not resumed.
 
 ## Issue 815 Part C — MOZA offline reporting shipped
 
