@@ -200,6 +200,30 @@ Additive surface for a remote coaching-audio endpoint (7" tablet page over `adb 
 
 Full runbook + measurement methodology: [19_Tablet_Voice_Endpoint.md](19_Tablet_Voice_Endpoint.md).
 
+## Native Setup Exchange (issue #86)
+
+The screen continues to send `se.search` (`car_id`, optional `track_id`, `search`,
+`order_by`, `offset`, `limit`) and `se.download` (`setup_id`, `car_id`, optional
+`track_id`, `name`). Results are `se.search.result` and `se.download.ack`; only the
+sidecar can produce these public frames. A successful download acknowledgment
+contains the safe installer's exact `path` and filename for the existing
+`setup.load` handoff. Its pits/reset permission remains mandatory.
+
+With the default endpoint, the sidecar sends private `se.csp.request` frames to
+exactly one authenticated trainer Lua peer. Fields are `request_id` (32 lowercase
+hex digits), `operation` (`search`/`download`) and the bounded request fields above.
+The matching `se.csp.result` has the same ID/operation, `ok` and either `response`
+(public service metadata/INI data, optional `total_count`) or a bounded `error`.
+Correlation is scoped to the original requester and trainer connection; clients
+cannot inject requests or impersonate a Lua result using a JSON class claim.
+Raw results are never broadcast. The sidecar caps outstanding work and waits in
+background tasks so serial registration and heartbeat reads keep running.
+
+The Lua provider uses the fixed HTTPS community endpoint and CSP's supported signed
+session API. Service session IDs, challenges, machine keys and signatures do not
+enter this protocol. Missing trainers, stale context and timeouts fail visibly.
+A nondefault `AC_COPILOT_SE_ENDPOINT` retains custom proxy/testing support.
+
 ## Tests
 
 `tests/test_ai_sidecar_protocol.py` — `prepare_outbound_message` unit tests and asyncio WebSocket round-trip (requires `websockets`). `tests/test_llm_coach.py` — Ollama debrief helpers with mocked HTTP (issue **#46**). `tests/test_voice_tablet_endpoint.py` — coaching.voice/voice.echo/voice.demo protocol, dispatch tap, and tablet HTTP routes. `tests/test_audible_latency.py` — matched-filter + clock-map math on synthetic room recordings.

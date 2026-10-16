@@ -253,11 +253,18 @@ the operator already started.
 ## Setup Exchange
 
 The rig-screen Setup Exchange tile talks to the Python sidecar with
-`se.search` / `se.download`. The sidecar can proxy an authenticated
-Setup Exchange-compatible endpoint and installs downloaded `.ini` files under
-the Assetto Corsa user setups folder without overwriting existing files. It
-does not make anonymous direct calls to `se.acstuff.club`; the official app uses
-a signed `/session` handshake that is not implemented in the sidecar.
+`se.search` / `se.download`. With an Assetto Corsa practice session and the trainer
+app running, the sidecar routes these requests to the trainer's CSP client. It
+uses the same signed `/session` flow and community service as the installed
+Setup Exchange app. No separate proxy is required. Community authors and download
+counts appear on the screen; downloaded `.ini` files are installed under the
+Assetto Corsa user setups folder without overwriting existing files. Loading
+continues through the existing pits/reset permission check.
+
+The native route requires exactly one authenticated trainer connection. Missing
+or ambiguous trainers, stale car/session context, timeouts and service failures
+produce a visible error. Signing material and service session IDs stay inside
+CSP. The installed third-party app is not modified.
 
 Optional environment overrides:
 

@@ -58,10 +58,13 @@ void tick(int ms = 150) {
     lv_refr_now(nullptr);
 }
 
-lv_obj_t* find_label(lv_obj_t* root, const char* text) {
-    if (lv_obj_check_type(root, &lv_label_class) && strcmp(lv_label_get_text(root), text) == 0) return root;
+lv_obj_t* find_label(lv_obj_t* root, const char* text, bool prefix = false) {
+    if (lv_obj_check_type(root, &lv_label_class)) {
+        const char* rendered = lv_label_get_text(root);
+        if (prefix ? strncmp(rendered, text, strlen(text)) == 0 : strcmp(rendered, text) == 0) return root;
+    }
     for (uint32_t i = 0; i < lv_obj_get_child_cnt(root); ++i) {
-        if (auto* found = find_label(lv_obj_get_child(root, i), text)) return found;
+        if (auto* found = find_label(lv_obj_get_child(root, i), text, prefix)) return found;
     }
     return nullptr;
 }
@@ -221,6 +224,8 @@ void setup_exchange() {
     screen_setup_exchange_add_result(86, "Simulator community setup", "Fixture driver", 125,
                                       "ks_porsche_911_gt3_r_2016", "magione");
     screen_setup_exchange_finish_results();
+    tick();
+    require(has_label("BY Fixture driver"), "Setup Exchange shows the community author");
     capture("08-setup-exchange");
     tap("Simulator community setup");
     bool download = false;
@@ -237,6 +242,64 @@ void setup_exchange() {
     screen_setup_exchange_set_sidecar_link_up(0);
     tap("Simulator community setup");
     require(screen_setup_exchange_pop_request().kind == SE_REQ_NONE, "offline Setup Exchange refuses download");
+    screen_setup_exchange_set_sidecar_link_up(1);
+    screen_setup_exchange_apply_search_error("Start an Assetto Corsa practice session");
+    tick();
+    require(has_label("Search failed"), "missing CSP service is a visible search error");
+    capture("10-setup-exchange-unavailable");
+    tap("REFRESH");
+    bool retry_search = false;
+    for (int i = 0; i < 12; ++i) {
+        auto request = screen_setup_exchange_pop_request();
+        if (request.kind == SE_REQ_NONE) break;
+        if (request.kind == SE_REQ_SEARCH &&
+            strcmp(request.car_id, "ks_porsche_911_gt3_r_2016") == 0 &&
+            strcmp(request.track_id, "magione") == 0) retry_search = true;
+    }
+    require(retry_search, "refresh retries the active car/track through CSP");
+    screen_setup_exchange_clear_results();
+    screen_setup_exchange_add_result(86, "Simulator community setup", "Fixture driver", 125,
+                                      "ks_porsche_911_gt3_r_2016", "magione");
+    screen_setup_exchange_finish_results();
+    tap("Simulator community setup");
+    bool retry_download = false;
+    for (int i = 0; i < 12; ++i) {
+        auto request = screen_setup_exchange_pop_request();
+        if (request.kind == SE_REQ_NONE) break;
+        if (request.kind == SE_REQ_DOWNLOAD && request.setup_id == 86) retry_download = true;
+    }
+    require(retry_download, "download can be retried after a failure");
+    constexpr const char* installed_path = "C:/simulator/Simulator community setup.ini";
+    screen_setup_exchange_apply_download_ack(true, 86, "Simulator community setup.ini", installed_path, nullptr);
+    tick(3500);  // Let the earlier search-error toast expire before image review.
+    require(find_label(lv_scr_act(), "Installed: ", true) != nullptr,
+            "successful install is visible even when the filename ellipsizes");
+    capture("11-setup-exchange-installed");
+    back();
+    screen_pocket_technician_set_sidecar_link_up(1);
+    tap("POCKET TECHNICIAN");
+    screen_pocket_technician_clear_setups();
+    pt_setup_summary_t summary{64, 2, 3, -1, 8};
+    screen_pocket_technician_add_setup("Simulator community setup", "2026-10-16", -1,
+                                      installed_path, &summary);
+    screen_pocket_technician_finish_setup_list();
+    while (screen_pocket_technician_pop_request().kind != PT_REQ_NONE) {}
+    tap("Simulator community setup");
+    require(screen_pocket_technician_pop_request().kind == PT_REQ_NONE,
+            "installed setup cannot load without fresh pits/reset permission");
+    screen_pocket_technician_apply_live_electronics(64, 3, 12, 2, 12, true, "");
+    tap("Simulator community setup");
+    bool installed_load = false;
+    for (int i = 0; i < 12; ++i) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_LOAD && strcmp(request.path, installed_path) == 0) installed_load = true;
+    }
+    require(installed_load, "Pocket Technician loads the exact installed community path");
+    screen_pocket_technician_apply_load_ack(true, "Simulator community setup", installed_path, nullptr);
+    tick();
+    require(has_label("ACTIVE: Simulator community setup"), "installed setup is visibly active in Pocket Technician");
+    capture("12-community-setup-active");
     back();
 }
 
@@ -269,7 +332,7 @@ int main(int argc, char** argv) {
         app_state_set(APP_DISCONNECTED);
         tick(600);
         require(has_label("DISCONNECTED"), "launcher shows disconnected");
-        capture("10-disconnected");
+        capture("13-disconnected");
         report();
         std::cout << "Verified " << assertions << " assertions using production UI and fonts\n";
         return 0;

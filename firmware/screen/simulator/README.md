@@ -21,7 +21,8 @@ The build compiles the **production** `src/ui/*.cpp`, generated fonts and
 The scenarios send pointer press/release coordinates through LVGL hit testing.
 They cover Launcher/Back navigation, WAIT/BRAKE/UPSHIFT/STALE states, four-digit
 distance fitting, Pocket Technician setup-load requests and offline gating,
-Setup Exchange download requests/failure reporting, and disconnected state.
+Setup Exchange author attribution, search/download failures, install acknowledgments,
+the installed setup's Pocket Technician load and permission gate, and disconnected state.
 
 Each invocation creates fresh evidence under
 `.scratch/screen-simulator/runs/<UTC>-<unique-id>/`:

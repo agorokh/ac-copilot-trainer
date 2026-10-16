@@ -2,8 +2,8 @@
 
 The original CSP Setup Exchange app talks to ``se.acstuff.club`` from Lua and
 then writes downloaded ``.ini`` data into Assetto Corsa's user setups folder.
-The rig screen cannot reach that endpoint directly, so the Python sidecar owns
-the HTTP call and the filesystem write.
+The native CSP bridge owns its session-authenticated calls; this module retains
+explicit proxy support and the shared non-overwriting filesystem installer.
 """
 
 from __future__ import annotations
@@ -21,6 +21,9 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_SETUP_EXCHANGE_ENDPOINT = "http://se.acstuff.club"
+NATIVE_SETUP_EXCHANGE_ENDPOINTS = frozenset(
+    (DEFAULT_SETUP_EXCHANGE_ENDPOINT, "https://se.acstuff.club")
+)
 ENV_SETUP_EXCHANGE_ENDPOINT = "AC_COPILOT_SE_ENDPOINT"
 ENV_USER_SETUPS_DIR = "AC_COPILOT_USER_SETUPS_DIR"
 MAX_SEARCH_TEXT = 80
@@ -113,7 +116,7 @@ class SetupExchangeClient:
         urlopen: Callable[..., Any] | None = None,
     ) -> None:
         self.endpoint = _normalize_endpoint(endpoint or os.environ.get(ENV_SETUP_EXCHANGE_ENDPOINT))
-        if self.endpoint == DEFAULT_SETUP_EXCHANGE_ENDPOINT:
+        if self.endpoint in NATIVE_SETUP_EXCHANGE_ENDPOINTS:
             raise SetupExchangeError(
                 "default Setup Exchange endpoint requires CSP session auth; "
                 f"set {ENV_SETUP_EXCHANGE_ENDPOINT} to an authenticated proxy/test endpoint"
@@ -257,7 +260,7 @@ def _normalize_setup_rows(payload: Any) -> list[dict[str, Any]]:
                 "car_id": str(row.get("carID") or row.get("car_id") or ""),
                 "track_id": str(row.get("trackID") or row.get("track_id") or ""),
                 "downloads": _coerce_int(
-                    _row_value(row, "downloads", "downloadCount", "download_count")
+                    _row_value(row, "downloads", "statDownloads", "downloadCount", "download_count")
                 ),
                 "rating": _coerce_float(_row_value(row, "rating", "score")),
                 "created_at": str(row.get("createdAt") or row.get("created_at") or ""),
