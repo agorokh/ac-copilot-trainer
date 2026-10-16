@@ -91,8 +91,9 @@ Skill: `~/.agents/skills/vault-memory/SKILL.md` (mirrored under `.cursor/skills/
 - **ESP32 pre-flash verification (#86):** Before every screen firmware flash,
   run `python -m tools.screen_simulator` and inspect its generated PNGs yourself.
   Fix UI/software failures in the simulator before involving the operator.
-  `make ci-fast` includes the same native suite; PlatformIO uploads automatically
-  rerun it and fail closed. Never use a direct uploader to bypass this prerequisite.
+  CI's required build runs the native suite alongside `make ci-fast`; PlatformIO
+  uploads automatically rerun it and fail closed. Never use a direct uploader to
+  bypass this prerequisite.
   Ask the operator only for checks that require physical hardware; perform routine
   UI and available backend checks with tools. See
   [the simulator runbook](firmware/screen/simulator/README.md) for coverage and the

@@ -4,7 +4,7 @@ Run from the repository root:
 
 ```console
 python -m tools.screen_simulator
-# Same suite, also included in make ci-fast:
+# Same suite, run by the required CI build alongside make ci-fast:
 make ci-screen
 ```
 
@@ -29,7 +29,8 @@ Each invocation creates fresh evidence under
 - `index.html` and PNG/PPM framebuffers: actual rendered screens for inspection.
 - `configure.log`, `build.log`, `test.log`: native toolchain and scenario output.
 
-CI runs this through the required `build` job's `make ci-fast` and uploads the
+CI installs CMake/G++ explicitly and runs `make ci-screen` alongside `make ci-fast`
+in the required `build` job, then uploads the
 screenshots/results as `screen-simulator-<sha>`. A failed native scenario fails CI.
 An earlier green run never substitutes for the current run. Changes during a run
 invalidate its result. To isolate builds, pass `--build-dir <path>`.

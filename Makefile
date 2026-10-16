@@ -11,7 +11,7 @@ clean:
 	@find . -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
 	@find . -type f -name '*.pyc' -delete 2>/dev/null || true
 
-ci-fast: ci-conventional ci-format ci-lint ci-test ci-security ci-secrets ci-policy ci-agent-proof ci-csp-api ci-csp-ui-safety ci-screen
+ci-fast: ci-conventional ci-format ci-lint ci-test ci-security ci-secrets ci-policy ci-agent-proof ci-csp-api ci-csp-ui-safety
 	@echo "ci-fast: OK"
 
 # ci-vault — what the CI `build` job runs INSTEAD of ci-fast for a PR whose every changed path is
