@@ -608,12 +608,19 @@ end
 function M.save(car, sim, data)
   data.version = DATA_VERSION
   local path = M.dataPath(car, sim)
-  ensureDir(path)
-  local raw = jsonEncode(data)
+  -- This runs on the lap-crossing render frame. Pretty formatting recursively
+  -- reparses the large trace in CSP; persisted machine state needs no whitespace.
+  local raw = jsonEncodeCompact(data)
   if not raw then
     return false
   end
   local f = io.open(path, "w")
+  if not f then
+    -- Existing writable parents are the normal path. Only bootstrap/recover a
+    -- missing directory after an open failure, rather than spawning mkdir per lap.
+    ensureDir(path)
+    f = io.open(path, "w")
+  end
   if not f then
     return false
   end
