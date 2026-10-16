@@ -290,7 +290,8 @@ void apply_to_widgets(ac_copilot_ctx_t* ctx) {
     else snprintf(buf, sizeof(buf), "--");
     set_label(ctx->corner_label, buf);
 
-    if (g_snap.current_speed_kmh >= 0 && !stale) {
+    if (g_snap.has_data && g_snap.current_speed_available &&
+        g_snap.current_speed_kmh >= 0 && !stale) {
         snprintf(buf, sizeof(buf), "%ld", (long)g_snap.current_speed_kmh);
     } else {
         snprintf(buf, sizeof(buf), "--");
