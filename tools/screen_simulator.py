@@ -7,6 +7,7 @@ import hashlib
 import html
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -57,6 +58,14 @@ def source_digest(root: Path) -> str:
     return digest.hexdigest()
 
 
+def firmware_lvgl_version(root: Path) -> str:
+    text = (root / "firmware/screen/platformio.ini").read_text(encoding="utf-8")
+    pins = re.findall(r"^\s*lvgl/lvgl\s*@\s*(\d+\.\d+\.\d+)\s*$", text, re.MULTILINE)
+    if len(pins) != 1:
+        raise RuntimeError("Firmware must pin exactly one LVGL version before simulation/upload")
+    return pins[0]
+
+
 def ppm_to_png(source: Path) -> Path:
     """Convert the simulator's exact RGB framebuffer without an imaging dependency."""
     header = b"P6\n320 480\n255\n"
@@ -99,6 +108,7 @@ def run(root: Path, build_dir: Path, firmware_binary: Path | None = None) -> Pat
     artifacts = build_dir / "runs" / run_id
     artifacts.mkdir(parents=True, exist_ok=False)
     before = source_digest(root)
+    lvgl_version = firmware_lvgl_version(root)
     binary_hash = (
         hashlib.sha256(firmware_binary.read_bytes()).hexdigest() if firmware_binary else None
     )
@@ -131,6 +141,8 @@ def run(root: Path, build_dir: Path, firmware_binary: Path | None = None) -> Pat
     report = json.loads(report_path.read_text(encoding="utf-8"))
     if report.get("passed") is not True or not report.get("captures"):
         raise RuntimeError("Simulator produced no successful scenario evidence; upload refused")
+    if report.get("lvgl") != lvgl_version:
+        raise RuntimeError("Simulator and firmware LVGL versions differ; upload refused")
     images = []
     for name in report["captures"]:
         if not isinstance(name, str) or Path(name).name != name or not name.endswith(".ppm"):

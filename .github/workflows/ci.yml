@@ -128,10 +128,12 @@ jobs:
         run: make ci-vault
 
       - name: Retain screen simulator screenshots and results
-        if: always() && steps.scope.outputs.full-build != 'false'
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: screen-simulator-${{ github.sha }}
           path: .scratch/screen-simulator/runs/
-          if-no-files-found: error
+          include-hidden-files: true
+          # Vault-only runs or an earlier failed check can have no native captures.
+          if-no-files-found: ignore
           retention-days: 14

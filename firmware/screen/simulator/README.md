@@ -41,7 +41,7 @@ invalidate its result. To isolate builds, pass `--build-dir <path>`.
    Repair software failures on the PC before asking the operator to touch hardware.
 2. Use the normal PlatformIO upload from `firmware/screen` (`pio run -t upload`,
    or `pio run -e jc3248w535 -t upload` for the legacy WebSocket build).
-   Both environments inherit `tools/simulator_gate.py`, a pre-upload action that
+   Both environments inherit `tools/simulator_gate.py`, a pre-upload/program action that
    rebuilds/runs this same simulator afresh and binds its result to the upload BIN.
    A missing compiler, failed test, missing/invalid capture or source/binary change
    **aborts before the uploader runs**. There is no skip flag or cached-pass switch.

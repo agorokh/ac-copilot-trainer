@@ -57,6 +57,7 @@ def test_successful_run_needs_fresh_artifacts_and_unchanged_source(tmp_path, mon
     monkeypatch.setattr(simulator, "find_cmake", lambda: tool)
     digest = ["before"]
     monkeypatch.setattr(simulator, "source_digest", lambda _: digest[0])
+    monkeypatch.setattr(simulator, "firmware_lvgl_version", lambda _: "8.3.11")
     build_dir = tmp_path / "build"
     artifact_directory = []
 
@@ -65,7 +66,9 @@ def test_successful_run_needs_fresh_artifacts_and_unchanged_source(tmp_path, mon
         artifact_directory[:] = [log.parent]
         if log.name == "test.log":
             (log.parent / "results.json").write_text(
-                json.dumps({"passed": True, "assertions": 1, "captures": ["screen.ppm"]})
+                json.dumps(
+                    {"passed": True, "assertions": 1, "lvgl": "8.3.11", "captures": ["screen.ppm"]}
+                )
             )
             (log.parent / "screen.ppm").write_bytes(
                 b"P6\n320 480\n255\n" + bytes(range(256)) * 1800
@@ -92,6 +95,48 @@ def test_successful_run_needs_fresh_artifacts_and_unchanged_source(tmp_path, mon
     with pytest.raises(RuntimeError, match="source changed"):
         simulator.run(tmp_path, build_dir)
     assert artifact_directory[0] != first
+
+
+@pytest.mark.parametrize("pin", ["~8.3.11", "^8.3.11", "", "8.3.11\nlvgl/lvgl @ 8.4.0"])
+def test_firmware_needs_unambiguous_exact_lvgl_pin(tmp_path, pin):
+    project = tmp_path / "firmware/screen"
+    project.mkdir(parents=True)
+    (project / "platformio.ini").write_text(f"[env:screen]\nlib_deps=\n lvgl/lvgl @ {pin}\n")
+    with pytest.raises(RuntimeError, match="pin exactly one"):
+        simulator.firmware_lvgl_version(tmp_path)
+
+
+@pytest.mark.parametrize("fault", ["version", "binary", "missing_capture", "capture_escape"])
+def test_current_run_cannot_admit_incomplete_or_mismatched_evidence(tmp_path, monkeypatch, fault):
+    tool = tmp_path / ("cmake.exe" if simulator.os.name == "nt" else "cmake")
+    tool.touch()
+    tool.with_name("ctest.exe" if simulator.os.name == "nt" else "ctest").touch()
+    binary = tmp_path / "firmware.bin"
+    binary.write_bytes(b"original binary")
+    monkeypatch.setattr(simulator, "find_cmake", lambda: tool)
+    monkeypatch.setattr(simulator, "source_digest", lambda _: "stable source")
+    monkeypatch.setattr(simulator, "firmware_lvgl_version", lambda _: "8.3.11")
+
+    def fake_native(command, log):
+        log.write_text("ran", encoding="utf-8")
+        if log.name != "test.log":
+            return
+        report = {"passed": True, "assertions": 1, "lvgl": "8.3.11", "captures": ["screen.ppm"]}
+        if fault == "version":
+            report["lvgl"] = "9.0.0"
+        if fault == "capture_escape":
+            report["captures"] = ["../screen.ppm"]
+        (log.parent / "results.json").write_text(json.dumps(report))
+        if fault != "missing_capture":
+            (log.parent / "screen.ppm").write_bytes(
+                b"P6\n320 480\n255\n" + bytes(range(256)) * 1800
+            )
+        if fault == "binary":
+            binary.write_bytes(b"a different binary")
+
+    monkeypatch.setattr(simulator, "run_command", fake_native)
+    with pytest.raises((RuntimeError, FileNotFoundError)):
+        simulator.run(tmp_path, tmp_path / "build", binary)
 
 
 def test_upload_action_runs_gate_every_time_and_blocks_on_failure(tmp_path, monkeypatch):
@@ -126,9 +171,9 @@ def test_upload_action_runs_gate_every_time_and_blocks_on_failure(tmp_path, monk
         calls.append(command)
 
     monkeypatch.setattr(module["subprocess"], "run", succeed)
-    for _ in range(2):
-        registered["upload"]([], [], env)
-    assert len(calls) == 2
+    for target in ("upload", "program", "upload"):
+        registered[target]([], [], env)
+    assert len(calls) == 3
 
     def fail(*args, **kwargs):
         raise subprocess.CalledProcessError(1, args[0])

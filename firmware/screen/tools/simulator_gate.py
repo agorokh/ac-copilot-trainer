@@ -18,4 +18,5 @@ def verify_before_upload(source, target, env):
 
 
 Import("env")  # noqa: F821 -- supplied by PlatformIO/SCons
-env.AddPreAction("upload", verify_before_upload)  # noqa: F821
+for flash_target in ("upload", "program"):
+    env.AddPreAction(flash_target, verify_before_upload)  # noqa: F821
