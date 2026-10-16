@@ -25,7 +25,9 @@ def result(**changes):
 
 
 def test_internal_request_is_never_a_client_command():
-    assert "server-to-trainer" in validate_inbound({"v": 1, "type": TYPE_SETUP_EXCHANGE_CSP_REQUEST})
+    assert "server-to-trainer" in validate_inbound(
+        {"v": 1, "type": TYPE_SETUP_EXCHANGE_CSP_REQUEST}
+    )
 
 
 @pytest.mark.parametrize(
@@ -64,4 +66,6 @@ def test_invalid_result_shape_rejected(changes):
 
 
 def test_result_size_is_bounded():
-    assert "limit" in validate_inbound(result(response={"data": "x" * MAX_SETUP_EXCHANGE_CSP_BYTES}))
+    assert "limit" in validate_inbound(
+        result(response={"data": "x" * MAX_SETUP_EXCHANGE_CSP_BYTES})
+    )

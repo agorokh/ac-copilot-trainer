@@ -42,6 +42,9 @@ local lifecyclePublisher = require("lifecycle_publisher")
 local telemetryPublisher = require("telemetry_publisher")
 local chassisRead = require("chassis_read")
 local setupLibrary = require("setup_library")
+-- Reuse script.update's existing wsBridge capture to avoid adding more upvalues.
+wsBridge.setupExchange = require("setup_exchange")
+wsBridge.registerAsyncRequestHandler("se.csp.request", "se.csp.result", wsBridge.setupExchange.handle)
 
 --- Pixel sizes per window title; must match ``manifest.ini`` WINDOW_* ``SIZE=``.
 local MANIFEST_WINDOW_SIZES = {
@@ -2312,6 +2315,7 @@ local function carLapInvalidatedFlag(carObj)
 end
 
 function script.update(dt)
+  wsBridge.setupExchange.tick(dt)
   sim = ac.getSim()
   if wsBridge.performanceCapture.active then
     local perfUI = ac.getUI()

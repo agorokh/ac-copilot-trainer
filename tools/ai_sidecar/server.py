@@ -35,6 +35,13 @@ from tools.ai_sidecar import observability
 from tools.ai_sidecar.car_class import CarClassResolution, resolve_installed_car
 from tools.ai_sidecar.coaching.generation import LatestGenerationQueue
 from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled, inference_status
+from tools.ai_sidecar.csp_setup_exchange import (
+    SetupExchangeBroker,
+    fit_screen_response,
+    install_response,
+    request_fields,
+    search_response,
+)
 from tools.ai_sidecar.external_protocol import (
     AUTH_HEADER,
     CLIENT_CLASS_BROWSER,
@@ -76,6 +83,8 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_SETUP_COMPARE_RESULT,
     TYPE_SETUP_DIFF,
     TYPE_SETUP_DIFF_RESULT,
+    TYPE_SETUP_EXCHANGE_CSP_REQUEST,
+    TYPE_SETUP_EXCHANGE_CSP_RESULT,
     TYPE_SETUP_EXCHANGE_DOWNLOAD,
     TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
     TYPE_SETUP_EXCHANGE_SEARCH,
@@ -180,6 +189,8 @@ _setup_experiment_store_path: Path | None = None
 _setup_experiment_store_seeded = False
 _setup_exchange_endpoint: str | None = None
 _setup_exchange_user_setups_root: Path | None = None
+_setup_exchange_broker = SetupExchangeBroker()
+_setup_exchange_tasks: dict[Any, asyncio.Task[Any]] = {}
 _external_peer_classes: dict[Any, str] = {}
 _sidecar_state_cache: dict[str, dict[str, Any]] = {}
 # #531 Part B: which peer produced each cached IDENTITY_REPLAY_TOPICS snapshot — the cache
@@ -551,6 +562,10 @@ def _reset_external_state() -> None:
     _map_latest_archive = None
     _map_latest_lap_n = None
     _clear_completed_map_state()
+    for task in list(_setup_exchange_tasks.values()):
+        task.cancel()
+    _setup_exchange_tasks.clear()
+    _setup_exchange_broker.reset()
     _external_peers.clear()
     _session_start_authorized_peers.clear()
     _lua_authorized_peers.clear()
@@ -1673,6 +1688,7 @@ def _drop_external_peer(peer: Any) -> None:
     ``_handler`` teardown). The serial transport (issue #463) has no such loop, so it
     calls this when the USB link drops.
     """
+    _drop_setup_exchange_peer(peer)
     _external_peers.discard(peer)
     _session_start_authorized_peers.discard(peer)
     _lua_authorized_peers.discard(peer)
@@ -1693,10 +1709,7 @@ async def _broadcast_targets(frame: dict[str, Any], *, targets: list[Any]) -> No
             logger.info(
                 "broadcast send failed peer=%s err=%s", getattr(p, "remote_address", None), err
             )
-            _external_peers.discard(p)
-            _session_start_authorized_peers.discard(p)
-            _lua_authorized_peers.discard(p)
-            _external_peer_classes.pop(p, None)
+            _drop_external_peer(p)
 
 
 def _has_loopback_target(*, exclude: Any) -> bool:
@@ -2557,6 +2570,116 @@ async def _handle_session_review_frame(websocket: Any, data: dict[str, Any]) -> 
     await _broadcast_external(make_coaching_cue(cue_payload), exclude=websocket)
 
 
+def _drop_setup_exchange_peer(peer: Any) -> None:
+    task = _setup_exchange_tasks.pop(peer, None)
+    if task is not None:
+        task.cancel()
+    _setup_exchange_broker.drop(peer)
+
+
+def _uses_native_setup_exchange() -> bool:
+    endpoint = _setup_exchange_endpoint or os.environ.get(ENV_SETUP_EXCHANGE_ENDPOINT)
+    endpoint = (endpoint or "").strip().rstrip("/")
+    return not endpoint or endpoint == DEFAULT_SETUP_EXCHANGE_ENDPOINT
+
+
+async def _handle_native_setup_exchange(websocket: Any, data: dict[str, Any]) -> None:
+    operation = "search" if data[TYPE_KEY] == TYPE_SETUP_EXCHANGE_SEARCH else "download"
+    response_type = (
+        TYPE_SETUP_EXCHANGE_SEARCH_RESULT
+        if operation == "search"
+        else TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK
+    )
+    request_id: str | None = None
+    try:
+        fields = request_fields(data, operation)
+        producers = [
+            peer
+            for peer in _external_peers
+            if peer in _lua_authorized_peers and _peer_class(peer) == CLIENT_CLASS_LUA
+        ]
+        if len(producers) != 1:
+            raise SetupExchangeError(
+                "Open AC practice with the trainer app connected for Setup Exchange"
+                if not producers
+                else "Multiple trainer connections; reopen practice before using Setup Exchange"
+            )
+        producer = producers[0]
+        request_id = _setup_exchange_broker.begin(websocket, producer, operation)
+        payload = json.dumps(
+            {
+                "v": 1,
+                "type": TYPE_SETUP_EXCHANGE_CSP_REQUEST,
+                "request_id": request_id,
+                "operation": operation,
+                **fields,
+            },
+            separators=(",", ":"),
+        )
+        try:
+            error = await asyncio.wait_for(_safe_send_raw(producer, payload), timeout=5.0)
+        except TimeoutError as exc:
+            raise SetupExchangeError(
+                "Setup Exchange trainer send timed out; reopen practice"
+            ) from exc
+        if error is not None:
+            raise SetupExchangeError("Setup Exchange trainer disconnected; reopen practice")
+        result = await _setup_exchange_broker.wait(request_id)
+        if websocket not in _external_peers:
+            return
+        if not result["ok"]:
+            # Never relay arbitrary service error bodies (or authentication details).
+            raise SetupExchangeError("Setup Exchange request failed in CSP; retry in practice")
+        if operation == "search":
+            out = search_response(fields, result)
+        else:
+            # The bounded exclusive-create write runs without an await after checking the
+            # requester's membership: a disconnect cannot leave a detached installer writing.
+            out = install_response(data, result, _setup_exchange_user_setups_root)
+        frame = fit_screen_response({"v": 1, "type": response_type, **out})
+    except (SetupExchangeError, OSError) as exc:
+        frame = {"v": 1, "type": response_type, "ok": False, "error": str(exc)[:240]}
+        if operation == "download":
+            frame.update({key: data.get(key) for key in ("setup_id", "car_id", "track_id")})
+    finally:
+        if request_id is not None:
+            pending = _setup_exchange_broker.pending.pop(request_id, None)
+            if pending is not None and not pending.future.done():
+                pending.future.cancel()
+    if websocket in _external_peers:
+        await _safe_send(websocket, frame)
+
+
+async def _schedule_native_setup_exchange(websocket: Any, data: dict[str, Any]) -> None:
+    if websocket in _setup_exchange_tasks or len(_setup_exchange_tasks) >= 16:
+        await _safe_send(
+            websocket,
+            {
+                "v": 1,
+                "type": (
+                    TYPE_SETUP_EXCHANGE_SEARCH_RESULT
+                    if data[TYPE_KEY] == TYPE_SETUP_EXCHANGE_SEARCH
+                    else TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK
+                ),
+                "ok": False,
+                "error": "Setup Exchange request already pending; try again shortly",
+            },
+        )
+        return
+    task = asyncio.create_task(_handle_native_setup_exchange(websocket, data))
+    _setup_exchange_tasks[websocket] = task
+    _background_tasks.add(task)
+
+    def done(completed: asyncio.Task[Any]) -> None:
+        _background_tasks.discard(completed)
+        if _setup_exchange_tasks.get(websocket) is completed:
+            _setup_exchange_tasks.pop(websocket, None)
+        if not completed.cancelled() and completed.exception() is not None:
+            logger.error("Setup Exchange native request failed: %s", completed.exception())
+
+    task.add_done_callback(done)
+
+
 async def _handle_setup_exchange_frame(websocket: Any, data: dict[str, Any]) -> None:
     """Handle Setup Exchange search/download frames in the sidecar (#363)."""
 
@@ -2791,8 +2914,25 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
         ]
         await _broadcast_targets(data, targets=targets)
         return
+    if t == TYPE_SETUP_EXCHANGE_CSP_RESULT:
+        if websocket not in _lua_authorized_peers or _peer_class(websocket) != CLIENT_CLASS_LUA:
+            await _safe_send(
+                websocket,
+                make_error("Setup Exchange result requires authenticated trainer Lua", ref_type=t),
+            )
+        elif not _setup_exchange_broker.accept(websocket, data):
+            await _safe_send(websocket, make_error("unknown Setup Exchange request", ref_type=t))
+        return
+    if t in (TYPE_SETUP_EXCHANGE_SEARCH_RESULT, TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK):
+        await _safe_send(
+            websocket, make_error("Setup Exchange replies are produced only by sidecar", ref_type=t)
+        )
+        return
     if t in (TYPE_SETUP_EXCHANGE_SEARCH, TYPE_SETUP_EXCHANGE_DOWNLOAD):
-        await _handle_setup_exchange_frame(websocket, data)
+        if _uses_native_setup_exchange():
+            await _schedule_native_setup_exchange(websocket, data)
+        else:
+            await _handle_setup_exchange_frame(websocket, data)
         return
     if t == TYPE_SESSION_REVIEW_GENERATE:
         await _handle_session_review_frame(websocket, data)
@@ -3250,6 +3390,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     pending_followups.add(brain_task)
                     brain_task.add_done_callback(_followup_done)
     finally:
+        _drop_setup_exchange_peer(websocket)
         _external_peers.discard(websocket)
         was_mic_subscriber = websocket in _voice_mic_subscribers
         _voice_mic_subscribers.discard(websocket)

@@ -875,7 +875,9 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         if err is not None:
             return err
         try:
-            encoded_size = len(json.dumps(frame, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+            encoded_size = len(
+                json.dumps(frame, ensure_ascii=False, allow_nan=False).encode("utf-8")
+            )
         except (TypeError, ValueError):
             return "se.csp.result must contain finite JSON values"
         if encoded_size > MAX_SETUP_EXCHANGE_CSP_BYTES:

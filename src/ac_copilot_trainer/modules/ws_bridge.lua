@@ -990,27 +990,47 @@ function M.pollInbound(maxPerTick)
           -- so the bridge stays stateless about app-level features.
           local entry = requestHandlers[t]
           if entry then
-            local okCall, resp, errExtra = pcall(entry.fn, data.payload or data)
-            if not okCall then
-              M.sendJson({
-                v = PROTOCOL_VERSION,
-                type = entry.ackType,
-                ok = false,
-                error = "handler error: " .. tostring(resp),
-              })
-            else
-              local ackBody = type(resp) == "table" and resp or {}
-              ackBody.v = PROTOCOL_VERSION
-              ackBody.type = entry.ackType
-              -- Only propagate the secondary `errExtra` return when the
-              -- handler did NOT report success. If a successful handler
-              -- returns a warning string in the second slot, surfacing it
-              -- as `error` would trigger the screen's red-toast path
-              -- (CodeRabbit on PR #91). Drop it silently.
-              if errExtra and ackBody.error == nil and ackBody.ok ~= true then
-                ackBody.error = tostring(errExtra)
+            if entry.async then
+              -- Async CSP HTTP/signing callbacks can outlive this connection. Complete
+              -- once and never deliver an old result on a replaced/reopened socket.
+              local requestSocket, requestEpoch, completed = sock, socketOpenEpoch, false
+              local function complete(resp, errExtra)
+                if completed then return end
+                completed = true
+                if sock ~= requestSocket or socketOpenEpoch ~= requestEpoch then return end
+                local body = type(resp) == "table" and resp or {}
+                body.v, body.type = PROTOCOL_VERSION, entry.ackType
+                if errExtra and body.error == nil and body.ok ~= true then body.error = tostring(errExtra) end
+                M.sendJson(body)
               end
-              M.sendJson(ackBody)
+              local okCall = pcall(entry.fn, data.payload or data, complete)
+              if not okCall then
+                complete({request_id = data.request_id, operation = data.operation,
+                  ok = false, error = "Async request handler failed"})
+              end
+            else
+              local okCall, resp, errExtra = pcall(entry.fn, data.payload or data)
+              if not okCall then
+                M.sendJson({
+                  v = PROTOCOL_VERSION,
+                  type = entry.ackType,
+                  ok = false,
+                  error = "handler error: " .. tostring(resp),
+                })
+              else
+                local ackBody = type(resp) == "table" and resp or {}
+                ackBody.v = PROTOCOL_VERSION
+                ackBody.type = entry.ackType
+                -- Only propagate the secondary `errExtra` return when the
+                -- handler did NOT report success. If a successful handler
+                -- returns a warning string in the second slot, surfacing it
+                -- as `error` would trigger the screen's red-toast path
+                -- (CodeRabbit on PR #91). Drop it silently.
+                if errExtra and ackBody.error == nil and ackBody.ok ~= true then
+                  ackBody.error = tostring(errExtra)
+                end
+                M.sendJson(ackBody)
+              end
             end
           else
             -- Unknown request type: do NOT silently drop. Emit a single
@@ -1383,6 +1403,15 @@ function M.registerRequestHandler(requestType, ackType, fn)
   if type(ackType) ~= "string" or ackType == "" then return end
   if type(fn) ~= "function" then return end
   requestHandlers[requestType] = { ackType = ackType, fn = fn }
+end
+
+--- Async variant: handler(payload, complete) must eventually complete once.
+--- Feature modules own their bounded pending queues and frame-driven timeouts.
+function M.registerAsyncRequestHandler(requestType, ackType, fn)
+  M.registerRequestHandler(requestType, ackType, fn)
+  if requestHandlers[requestType] and requestHandlers[requestType].fn == fn then
+    requestHandlers[requestType].async = true
+  end
 end
 
 --- Round 10: send a corner_query event to the sidecar asking for a short
