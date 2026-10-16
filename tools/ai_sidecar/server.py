@@ -139,6 +139,7 @@ from tools.ai_sidecar.realtime_observer import (
 from tools.ai_sidecar.registers import audio_routing_for_register
 from tools.ai_sidecar.se_proxy import (
     DEFAULT_SETUP_EXCHANGE_ENDPOINT,
+    NATIVE_SETUP_EXCHANGE_ENDPOINTS,
     ENV_SETUP_EXCHANGE_ENDPOINT,
     ENV_USER_SETUPS_DIR,
     SetupExchangeClient,
@@ -2580,7 +2581,7 @@ def _drop_setup_exchange_peer(peer: Any) -> None:
 def _uses_native_setup_exchange() -> bool:
     endpoint = _setup_exchange_endpoint or os.environ.get(ENV_SETUP_EXCHANGE_ENDPOINT)
     endpoint = (endpoint or "").strip().rstrip("/")
-    return not endpoint or endpoint == DEFAULT_SETUP_EXCHANGE_ENDPOINT
+    return not endpoint or endpoint in NATIVE_SETUP_EXCHANGE_ENDPOINTS
 
 
 async def _handle_native_setup_exchange(websocket: Any, data: dict[str, Any]) -> None:

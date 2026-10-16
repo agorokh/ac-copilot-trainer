@@ -114,9 +114,10 @@ def test_normalize_setup_rows_preserves_zero_downloads_and_rating() -> None:
     ]
 
 
-def test_default_public_endpoint_requires_authenticated_proxy() -> None:
+@pytest.mark.parametrize("endpoint", [None, "https://se.acstuff.club"])
+def test_default_public_endpoint_requires_authenticated_proxy(endpoint) -> None:
     with pytest.raises(SetupExchangeError, match="requires CSP session auth"):
-        SetupExchangeClient()
+        SetupExchangeClient(endpoint)
 
 
 def test_search_rejects_oversized_json_response() -> None:

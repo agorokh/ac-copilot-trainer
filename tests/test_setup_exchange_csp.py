@@ -400,7 +400,9 @@ def test_official_rows_are_bounded_to_serial_screen_envelope():
     assert "\n" not in frame["setups"][0]["author"]
 
 
-@pytest.mark.parametrize("endpoint", [None, "", "  ", "http://se.acstuff.club/ "])
+@pytest.mark.parametrize(
+    "endpoint", [None, "", "  ", "http://se.acstuff.club/ ", "https://se.acstuff.club/"]
+)
 def test_native_default_selection(endpoint, monkeypatch):
     monkeypatch.setattr(srv, "_setup_exchange_endpoint", endpoint)
     assert srv._uses_native_setup_exchange()
