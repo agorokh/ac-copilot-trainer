@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-08-10T13:52:00Z
+last_updated: 2026-10-16T07:45:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-529-g1-mclaren-magione-2026-10-16.md
   - AcCopilotTrainer/10_Rig/external-racing-controls.md
   - AcCopilotTrainer/03_Investigations/issue-746-749-repeatability-and-thermal-gate-2026-08-10.md
   - AcCopilotTrainer/03_Investigations/issue-738-cm-csp-dialog-skip-2026-08-09.md
@@ -135,6 +136,30 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-10-16) — #529 fresh G1 cold-start datapoint on an UNSEEN GT3 car (autonomous rig session)
+
+Operator removed `not-this-cycle` from #529 and asked for a fresh live-rig G1 cold-start on an
+unseen known-archetype combo, honest verdict either way. Ran **ks_mclaren_650_gt3 @ magione**
+(mid-engine GT3, genuinely unseen — harness logged `identification REQUIRED — no plant artifact`)
+on `AG_PC`, merged main `70ed2fe`, provenance match every stage. One command via the #697
+console-session transport (`auto_alien --laps 3 --iterations 4 --max-scale 1.2`).
+
+**Verdict: G1 mechanics generalize; G1 pace NOT met.** Best AC-valid lap **97.378 s (1:37.378,
+HUD-corroborated)** vs TT top-10 **P10 74.784 s / P1 72.035 s** = **+30.2% / +35.2%** — far outside
+the 5% gate. Cold plant-ID → min-curvature line + QSS → AC-valid laps, **zero recoveries** at scale
+1.0; self-play adopted 1 lateral bin (retained). Envelope rung **1.15 falsified** (recovery cap
+exceeded at 2906 m) — honesty gate held, plant refit retained, no false promotion. Observer flagged
+the stint **nonstationary** (thermal Δ 9.92 °C, pressure Δ 1.59 psi), so the pace is not even at the
+gate's stationary-env condition. **9 autonomous laps total** (best in 5), within the ≤20 budget.
+Plant/line artifacts for this combo now persist on the rig. Node:
+[[issue-529-g1-mclaren-magione-2026-10-16]]. Recorded on
+[#529](https://github.com/agorokh/ac-copilot-trainer/issues/529).
+
+**#529 disposition:** keep OPEN. G1 pace remains architecturally blocked (lever = cross-session
+plant compounding / a less-conservative measured prior, root-caused Aug 2026); **G3 stays
+operator-gated** (human multi-session). This datapoint re-confirms the standing finding; it does not
+close the epic. Whether to restore `not-this-cycle` is the operator's call.
 
 ## Delivered (2026-08-10) — #749 observability: a stalled refit now NAMES its failing term (PR #753 MERGED `7026286`)
 
