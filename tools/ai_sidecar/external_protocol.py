@@ -102,6 +102,12 @@ TYPE_SETUP_DIFF = "setup.diff"
 TYPE_SETUP_CLOSED_LOOP = "setup.closed_loop"
 TYPE_SETUP_EXCHANGE_SEARCH = "se.search"
 TYPE_SETUP_EXCHANGE_DOWNLOAD = "se.download"
+# Internal RPC: CSP keeps the official service session/signing material in Lua.
+# This request is never accepted from a client; results require a pinned,
+# authenticated Lua producer in server.py, in addition to this shape check.
+TYPE_SETUP_EXCHANGE_CSP_REQUEST = "se.csp.request"
+TYPE_SETUP_EXCHANGE_CSP_RESULT = "se.csp.result"
+MAX_SETUP_EXCHANGE_CSP_BYTES = 2 * 1024 * 1024
 TYPE_SESSION_REVIEW_GENERATE = "session.review.generate"
 # Issue #726: resilient-launch harness → trainer Lua request that presses CSP's supported
 # in-sim Start control while AC is rendering at the pre-drive menu but Car0 does not exist yet.
@@ -837,6 +843,43 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
             err = _validate_optional_string(frame, key)
             if err is not None:
                 return err
+        return None
+    if t == TYPE_SETUP_EXCHANGE_CSP_REQUEST:
+        return "se.csp.request is a server-to-trainer request only"
+    if t == TYPE_SETUP_EXCHANGE_CSP_RESULT:
+        request_id = frame.get("request_id")
+        if not isinstance(request_id, str) or not re.fullmatch(r"[0-9a-f]{32}", request_id):
+            return "se.csp.result requires a 32-character hexadecimal request_id"
+        operation = frame.get("operation")
+        if operation not in ("search", "download"):
+            return "se.csp.result requires operation search or download"
+        if not isinstance(frame.get("ok"), bool):
+            return "se.csp.result requires boolean ok"
+        allowed = {"v", "type", "request_id", "operation", "ok", "response", "total_count", "error"}
+        if frame.keys() - allowed:
+            return "se.csp.result contains unsupported fields"
+        if frame["ok"]:
+            response_types = (dict, list) if operation == "search" else (dict,)
+            if not isinstance(frame.get("response"), response_types):
+                return "se.csp.result requires a structured service response"
+        else:
+            error = frame.get("error")
+            if (
+                not isinstance(error, str)
+                or not error.strip()
+                or len(error) > 240
+                or any(ord(char) < 32 for char in error)
+            ):
+                return "se.csp.result requires a bounded single-line error"
+        err = _validate_optional_int(frame, "total_count", min_value=0)
+        if err is not None:
+            return err
+        try:
+            encoded_size = len(json.dumps(frame, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+        except (TypeError, ValueError):
+            return "se.csp.result must contain finite JSON values"
+        if encoded_size > MAX_SETUP_EXCHANGE_CSP_BYTES:
+            return "se.csp.result exceeds the service response limit"
         return None
     if t == TYPE_SESSION_REVIEW_GENERATE:
         lap_dir = frame.get("lap_dir")
