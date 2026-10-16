@@ -139,9 +139,9 @@ from tools.ai_sidecar.realtime_observer import (
 from tools.ai_sidecar.registers import audio_routing_for_register
 from tools.ai_sidecar.se_proxy import (
     DEFAULT_SETUP_EXCHANGE_ENDPOINT,
-    NATIVE_SETUP_EXCHANGE_ENDPOINTS,
     ENV_SETUP_EXCHANGE_ENDPOINT,
     ENV_USER_SETUPS_DIR,
+    NATIVE_SETUP_EXCHANGE_ENDPOINTS,
     SetupExchangeClient,
     SetupExchangeError,
     download_and_install_setup,
