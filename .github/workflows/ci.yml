@@ -129,6 +129,14 @@ jobs:
         if: steps.scope.outputs.full-build != 'false'
         run: make ci-fast
 
+      # CMake verifies the cached archive hash. Scenarios/evidence always run afresh.
+      - name: Cache pinned LVGL archive
+        if: steps.scope.outputs.full-build != 'false'
+        uses: actions/cache@v5
+        with:
+          path: .scratch/screen-simulator/build/lvgl-download
+          key: screen-lvgl-${{ runner.os }}-${{ hashFiles('firmware/screen/simulator/CMakeLists.txt') }}
+
       - name: Native screen simulator
         if: steps.scope.outputs.full-build != 'false'
         run: make ci-screen

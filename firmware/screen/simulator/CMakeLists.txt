@@ -11,7 +11,8 @@ include(FetchContent)
 FetchContent_Declare(lvgl_source
     URL https://codeload.github.com/lvgl/lvgl/tar.gz/refs/tags/v8.3.11
     URL_HASH SHA256=83b7325a4b78cbb19a39f3ac75346c8086926d7faeab5ff2d825c20da0bbdb46
-    TIMEOUT 60
+    DOWNLOAD_DIR "${CMAKE_BINARY_DIR}/lvgl-download"
+    TIMEOUT 180
 )
 FetchContent_GetProperties(lvgl_source)
 if(NOT lvgl_source_POPULATED)

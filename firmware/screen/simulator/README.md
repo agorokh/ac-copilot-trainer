@@ -11,8 +11,10 @@ make ci-screen
 Requires Python 3.11+, CMake 3.20+ and a native C/C++17 compiler. On Windows,
 install Visual Studio Build Tools with Desktop development with C++; the runner
 finds its bundled CMake through `vswhere` if CMake is absent from PATH. Linux CI
-uses its existing CMake/GCC. The first run downloads the SHA256-pinned LVGL 8.3.11
-archive; subsequent builds reuse it. Firmware and simulator pin the same release.
+installs CMake/G++. The first run downloads the SHA256-pinned LVGL 8.3.11 archive
+with a 180-second timeout; subsequent builds reuse it. CI caches only the pinned
+dependency archive (CMake rechecks its SHA256), never test results. Firmware and
+simulator pin the same release.
 
 The build compiles the **production** `src/ui/*.cpp`, generated fonts and
 `include/lv_conf.h`, at 320x480 portrait resolution with the real RGB565 renderer.
