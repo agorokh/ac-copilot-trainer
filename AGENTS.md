@@ -88,6 +88,17 @@ Skill: `~/.agents/skills/vault-memory/SKILL.md` (mirrored under `.cursor/skills/
 
 ## Local development
 
+- **ESP32 pre-flash verification (#86):** Before every screen firmware flash,
+  run `python -m tools.screen_simulator` and inspect its generated PNGs yourself.
+  Fix UI/software failures in the simulator before involving the operator.
+  CI's required build runs the native suite alongside `make ci-fast`; PlatformIO
+  uploads automatically rerun it and fail closed. Never use a direct uploader to
+  bypass this prerequisite.
+  Ask the operator only for checks that require physical hardware; perform routine
+  UI and available backend checks with tools. See
+  [the simulator runbook](firmware/screen/simulator/README.md) for coverage and the
+  hardware-only acceptance boundary. A PC pass does not waive #86 device acceptance.
+
 - **Install:** see `README.md` and `WARP.md`.
 - **Checks:** `make ci-fast` (format, lint, tests, policy scripts).
 - **Vault-only PRs:** CI runs `make ci-vault` instead of `make ci-fast` when every changed path is under `docs/01_Vault/` (governance-hub#701). A test that starts reading live vault notes joins `VAULT_TESTS` in the `Makefile`. The scope rule is the vendored `.fleet-governance-vendor/scripts/classify_pr_scope.py`; it is pinned in `tests/test_vendored_classifier_pin.py` and in `.github/workflows/ci.yml`, so re-vendor it and update both pins together.

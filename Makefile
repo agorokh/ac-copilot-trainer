@@ -102,3 +102,7 @@ ci-csp-api:
 
 ci-csp-ui-safety:
 	$(PYTHON) scripts/check_csp_ui_safety.py
+
+.PHONY: ci-screen
+ci-screen:
+	$(PYTHON) -m tools.screen_simulator

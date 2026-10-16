@@ -119,10 +119,39 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,mining,knowledge,analytics]"
 
+      - name: Install native screen build tools
+        if: steps.scope.outputs.full-build != 'false'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends cmake g++
+
       - name: make ci-fast
         if: steps.scope.outputs.full-build != 'false'
         run: make ci-fast
 
+      # CMake verifies the cached archive hash. Scenarios/evidence always run afresh.
+      - name: Cache pinned LVGL archive
+        if: steps.scope.outputs.full-build != 'false'
+        uses: actions/cache@v5
+        with:
+          path: .scratch/screen-simulator/build/lvgl-download
+          key: screen-lvgl-${{ runner.os }}-${{ hashFiles('firmware/screen/simulator/CMakeLists.txt') }}
+
+      - name: Native screen simulator
+        if: steps.scope.outputs.full-build != 'false'
+        run: make ci-screen
+
       - name: make ci-vault
         if: steps.scope.outputs.full-build == 'false'
         run: make ci-vault
+
+      - name: Retain screen simulator screenshots and results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: screen-simulator-${{ github.sha }}
+          path: .scratch/screen-simulator/runs/
+          include-hidden-files: true
+          # Vault-only runs or an earlier failed check can have no native captures.
+          if-no-files-found: ignore
+          retention-days: 14

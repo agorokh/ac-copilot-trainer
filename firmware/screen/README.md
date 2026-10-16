@@ -34,6 +34,15 @@ Confirm `pio` and `esptool.py` resolve on PATH; you may need to add
 
 ## Build, flash, monitor
 
+**Before every flash:** run `python -m tools.screen_simulator` from the repo root
+and have the agent inspect its generated PNGs. The permanent
+[native simulator](simulator/README.md) tests the production LVGL screens/fonts;
+CI runs the same suite. PlatformIO's pre-upload hook reruns it afresh and refuses
+upload on failure. Both serial and legacy WebSocket environments inherit the gate.
+Operator checks are reserved for physical hardware behavior; routine UI tests and
+image inspection belong to the agent. Direct external flash commands must follow
+the same prerequisite, never bypass the PlatformIO gate.
+
 ```powershell
 cd firmware\screen
 
