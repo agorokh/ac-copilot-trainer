@@ -162,7 +162,7 @@ ordinary human gaming with model coaching on, HA-voice contention, and 0x133.
 archive-off guard; rotation evicted personal lap `lap_20261012-185218_…`. Restored byte-exact,
 assisted lap quarantined, combo/`video.ini` restored; every later drive used the guard —
 pitfall [[assisted-drive-archive-rotation]]. Also found `Rig - GPU Health Logging`
-**Disabled** (stopped 03:23 UTC, not by this session) — owner workstation-ops#4004.
+**Disabled** (stopped 03:23 UTC, not by this session); no open owner (workstation-ops#4004 closed) — operator decision.
 Node: [[issue-854-remote-inference-2026-10-17]].
 
 ## Delivered (2026-10-17) — #854 Part A: coaching inference defaults reconciled after RTX3050 removal (PR #865 MERGED `8cd5c30`)

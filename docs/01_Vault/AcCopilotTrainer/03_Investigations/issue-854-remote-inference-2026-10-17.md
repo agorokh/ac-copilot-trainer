@@ -71,6 +71,6 @@ corner dropped at 2.04 s, debrief rules; unknown host → rules in 1 ms.
 - Assisted GGV drives, not human driving; foreground inferred from PresentMode only.
 - Shared model with HA voice: contention not load-tested; 0x133 not addressed.
 - `Rig - GPU Health Logging` task found **Disabled** (last row 03:23 UTC, before these
-  runs; not changed here) — owner workstation-ops#4004.
+  runs; not changed here). No open owner: workstation-ops#4004 is closed; possibly disabled by the concurrent workstation-ops clean-host sweep — operator decision.
 - Incident: an earlier unguarded drive evicted one personal lap; restored exactly — see
   [[assisted-drive-archive-rotation]].
