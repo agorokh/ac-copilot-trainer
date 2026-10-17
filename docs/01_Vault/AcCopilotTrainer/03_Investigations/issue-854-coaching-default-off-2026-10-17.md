@@ -3,7 +3,7 @@ type: investigation
 status: active
 memory_tier: canonical
 created: 2026-10-17
-updated: 2026-10-17
+updated: 2026-10-17T05:10:00Z
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/854
 relates_to:
   - AcCopilotTrainer/00_System/invariants/_index.md
@@ -43,12 +43,9 @@ retired `11435` base/health URLs and the 3050 GPU UUID:
 - **A1 defaults** — satisfied. ENABLE=0 at merged HEAD; default-off makes no model HTTP
   call (feature short-circuits → no unnecessary localhost retry); operator config + CPU
   brain preserved. Inference can never silently fall back onto the main RTX3060.
-- **A2 regression** — satisfied at the distributed Python consumer. 5 tests green at
-  merged HEAD (`test_default_off_makes_no_model_http_call_but_keeps_rules` asserts a
-  raising `urlopen` is never called; Game Point launcher env defaults off and drops the
-  retired endpoint). **Coverage limit:** the live Windows-rig launcher → CSP → on-glass
-  panel glance is an operator rig action (standing "merge ≠ rig deploy" invariant), not
-  reachable from the macOS delivery session.
+- **A2 regression** — satisfied at the distributed Python consumer (5 tests green at
+  merged HEAD) **and live-verified on the rig** (operator authorized runtime + rig access
+  2026-10-17): see "Live on-rig verification" below.
 - **A3 keep-open** — honored. #854 remains OPEN; `Refs #854` (no closing keyword).
 - **A4 preserve** — honored. Diff touches only defaults/docs/tests; archives, rig lock,
   GPU health logging untouched; NVIDIA 0x133 remains unproven.
@@ -60,6 +57,41 @@ head `190b027`: Antigravity (google) + Grok (xai) `reviewed_clean`, zero body fi
 cursor lens quota-exhausted, kimi not-reviewed; floor 1 met. Required CI green
 (build/docs/conformance), 0 unresolved threads. Squash-merged `--match-head-commit` →
 `8cd5c30`.
+
+## Live on-rig verification (2026-10-17, operator-authorized)
+
+The operator lifted #854's "no hardware/network/runtime" constraint and granted rig
+access. Verified on **AG_PC** over SSH, driving the harness through
+`tools.ac_harness.remote_launcher` (the Windows session-0 trap forbids a direct SSH drive).
+
+- **Deploy:** pulled merged `main` into the rig's primary checkout
+  `C:\Users\arsen\Projects\ac-copilot-trainer` (now `63209a6`); harness preflight reported
+  `installed app provenance: match` — the CSP Lua junction serves exactly this deployed tree.
+- **Inference OFF at the real consumer:** the auto-started sidecar (`build_commit 63209a6`)
+  `/health` reported `inference.enabled=false`, `queue` empty, `provider=ollama`/`model=llama3.2`
+  (the generic defaults — **not** the retired `openai`/`llama3.2:3b` rig profile), confirming
+  the retired endpoint is no longer seeded. `netstat` showed **no connection to 11435** across
+  both drives; 11435 is not even listening (RTX3050 service gone).
+- **Launcher → sidecar → panel path live:** two bounded `auto_drive` runs.
+  - bmw_m3_gt2@magione: AC launched+hijacked, drove 1102 m, HUD **RENDERING**, COACHING panel
+    rendered live (hud.png shows the COACHING tile); the `--wait-lap` gate failed only on
+    `present:lap` (no completed lap — known intermittent magione/ggv pit-start flake, coaching
+    still went live). 3002 `coaching.snapshot` + 14 `coaching.cue` frames.
+  - ks_porsche_911_gt3_r_2016@magione (reference-matched to the operator's loaded archive):
+    **PASS** — completed **1 lap** (2728 m, 199.1 km/h, top gear 6, recoveries=0), `lap=1`,
+    942 `coaching.snapshot` + 15 `coaching.cue` frames, HUD RENDERING. Inference still
+    `enabled=false`, no 11435.
+- **Capture limit:** the completed-lap on-glass *coaching-text* screenshot was contaminated —
+  the operator's desktop (Codex app + other active sessions) was frontmost during that HUD
+  capture (known "captures grab whatever is frontmost" rig-lore). The frame-count data proves
+  the panel rendered coaching in-sim with inference off; a clean on-glass coaching-text shot
+  during a completed lap was not captured because the desktop was in active use.
+- **State restored:** closed the AC + sidecar the verification launched; `main` deploy left in
+  place (that is the intended deploy); no rig config changed (operator env already had
+  `INFERENCE_ENABLE=0`/`OLLAMA_ENABLE=0`).
+
+Evidence bundles on the rig under
+`.scratch/harness-evidence/verify854-drive{,2}-…/` (`report.json`, `hud.png`).
 
 ## Ownership boundaries (unchanged)
 
