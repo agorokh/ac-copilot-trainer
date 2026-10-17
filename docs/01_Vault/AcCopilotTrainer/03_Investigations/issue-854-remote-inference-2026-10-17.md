@@ -6,6 +6,7 @@ created: 2026-10-17
 updated: 2026-10-17
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/854
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-854-agent-observed-acceptance-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-854-coaching-default-off-2026-10-17.md
   - AcCopilotTrainer/pitfalls/assisted-drive-archive-rotation.md
 ---

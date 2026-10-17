@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-10-17T08:00:00Z
+last_updated: 2026-10-17T18:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-854-agent-observed-acceptance-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-854-remote-inference-2026-10-17.md
   - AcCopilotTrainer/pitfalls/assisted-drive-archive-rotation.md
   - AcCopilotTrainer/03_Investigations/issue-854-coaching-default-off-2026-10-17.md
@@ -139,6 +140,21 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-10-17, evening) — #854 agent-observed acceptance + coaching efficacy fixes
+
+Operator direction: acceptance is observed and judged by agents, no human driver. Built
+`auto_drive --hud-every N` (PR #871) for timestamped screen frames during runs, and a scratch
+observation kit on the rig (tapped sidecar, scorer, COACHING-tile contact sheet). The first
+observed drive with the remote model exposed: in-race model hints only echoed the rules band
+(82/84) with 41% deadline misses; narration starved (1/3) and once ungrounded ("under-steer");
+a `Sidecar v1: ack lap N` stub replaced the trainer's rules lines for ~25 s after every lap.
+Operator approved four fixes → PR #872 (stub removed, in-race model hints opt-in and off the
+queue, narration > between-lap > corner priorities, grounding check) and PR #873 (HUD-sized
+narration, capped fragments dropped, positional claims grounded). Re-verified twice: narration
+3/3 laps, grounded, complete, 1.2–2.6 s; zero in-race model calls; no stub; fps unchanged.
+GPU health logging re-enabled at operator request. **#854 open pending operator closure.**
+Node: [[issue-854-agent-observed-acceptance-2026-10-17]].
 
 ## Delivered (2026-10-17, later) — #854 clause 3: remote model backend approved, built, deployed and accepted
 
