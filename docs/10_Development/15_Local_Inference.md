@@ -5,7 +5,7 @@ narration. The application does not start a model server and does not claim that
 CUDA mask on its HTTP client isolates GPUs.
 
 **Default is model-disabled (rules-only).** The RTX3050 inference rig was removed on
-2026-10-16 (issue #854) and has no qualified replacement, so Game Point and
+2026-10-16 (issue #854). Source defaults name no backend, so Game Point and
 `start_sidecar.bat` default `AC_COPILOT_INFERENCE_ENABLE=0`: coaching runs on the
 deterministic CPU brain and makes no model HTTP call. The launcher no longer seeds the
 retired `localhost:11435`/3050 endpoint, so default-off performs no localhost retry and
@@ -14,8 +14,9 @@ inference can never silently fall back onto the main RTX3060.
 Re-enabling model coaching is an explicit operator decision (`AC_COPILOT_INFERENCE_ENABLE=1`
 or the legacy `AC_COPILOT_OLLAMA_ENABLE=1` alias) that must also supply a separately
 approved backend contract — provider, loopback base/health URL, model identity, and GPU
-attestation. The supervised Windows admission service (workstation-ops#4004) owns CUDA
-placement; it is retired alongside the card and must be re-provisioned before re-enable.
+attestation. The supervised Windows admission service (workstation-ops#4004) that owned
+CUDA placement is retired with the card; the operator-approved replacement is the remote
+backend described below, enabled through operator configuration.
 The reference rig profile is `llama3.2:3b`, 4096 context, seed 42, temperature 0, two
 backend CPU threads, at most 64 narration tokens or 20 corner tokens. Only a host
 service may select Ollama or a qualified LM Studio runtime, and the same model artifact
@@ -29,7 +30,35 @@ first.
 | `AC_COPILOT_INFERENCE_BASE_URL` | unset (retired `11435` endpoint no longer seeded) | operator-supplied loopback URL of an approved backend |
 | `AC_COPILOT_INFERENCE_MODEL` | unset → generic `llama3.2` fallback | approved model identity, e.g. `llama3.2:3b` |
 | `AC_COPILOT_INFERENCE_HEALTH_URL` | unset | operator-supplied loopback health endpoint |
-| `AC_COPILOT_INFERENCE_GPU_UUID` | unset (no GPU placement claim) | the approved backend GPU's UUID |
+| `AC_COPILOT_INFERENCE_GPU_UUID` | unset (no GPU placement claim) | the approved backend GPU's UUID (loopback services only) |
+| `AC_COPILOT_INFERENCE_REMOTE_ORIGINS` | unset (loopback only) | exact approved HTTPS origin(s), e.g. `https://<host>:<port>` |
+| `AC_COPILOT_INFERENCE_REASONING_EFFORT` | unset | `none` for a thinking model (OpenAI protocol `reasoning_effort`) |
+| `AC_COPILOT_INFERENCE_API_KEY` | unset | optional bearer token, sent only to an approved URL |
+
+## Approved remote backend (#854)
+
+The client accepts a non-loopback service only when its base URL is HTTPS, carries
+no credentials, query or fragment, and its exact origin (scheme, host, port) is listed
+in `AC_COPILOT_INFERENCE_REMOTE_ORIGINS`. Anything else is rejected before any network
+I/O. Remote services make no GPU placement claim; do not set the GPU UUID for them.
+Hosts come from operator configuration, never from source.
+
+On the OpenAI protocol the served `model` must equal the configured model id, or the
+reply is discarded as `model_mismatch`. A thinking model that spends its whole token cap
+on reasoning returns empty content, which is rejected as `invalid_response`; set
+`AC_COPILOT_INFERENCE_REASONING_EFFORT=none` to switch reasoning off. A reply cut by
+the token cap is trimmed back to its last complete sentence (decimals do not end one).
+Deadlines, the single active generation, deterministic acceptance of corner and
+between-lap text, and rules fallback are unchanged. App `/health` reports
+`inference.remote`.
+
+The operator-approved backend (2026-10-17) is the fleet LM Studio on the canonical Mac
+Studio, reached over its existing Tailscale HTTPS face, serving `qwen/qwen3.5-4b`. That
+model is shared with the Home Assistant voice plane. Measured from the rig with the AC
+prompts and `reasoning_effort=none`: 30/30 corner replies correct and inside the
+approved phrase set at 0.29–1.25 s, lap narration 1.30–1.43 s. Without the reasoning
+switch every reply was empty. Concrete host values and acceptance evidence live in the
+vault node `03_Investigations/issue-854-remote-inference-2026-10-17.md`.
 
 When the operator configures a GPU UUID, the service health must attest `ready:true`, the exact model and GPU UUID, and a
 finite `utc_epoch` no more than five seconds old (two seconds future skew allowed).

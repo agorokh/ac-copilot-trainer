@@ -1,8 +1,9 @@
-"""Local Ollama HTTP debrief + rules fallback (issue #46).
+"""Model HTTP debrief + rules fallback (issue #46, #854).
 
 Opt-in via ``AC_COPILOT_OLLAMA_ENABLE=1``. Default is off: no ``debrief`` field on
 ``coaching_response``. When enabled, the sidecar always attaches a ``debrief`` string
-(rules-only if Ollama is unreachable).
+(rules-only if the model service is unreachable). The service is loopback, or an
+exact HTTPS origin the operator approved in ``AC_COPILOT_INFERENCE_REMOTE_ORIGINS``.
 """
 
 from __future__ import annotations
@@ -29,6 +30,13 @@ _ENV_TEMP = "AC_COPILOT_OLLAMA_TEMPERATURE"
 _ENV_TOKENS = "AC_COPILOT_OLLAMA_NUM_PREDICT"
 _ENV_TIMEOUT = "AC_COPILOT_OLLAMA_TIMEOUT_SEC"
 _ENV_DEBRIEF_TIMEOUT = "AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC"
+# Remote service contract (#854): exact operator-approved HTTPS origins, an optional
+# OpenAI-protocol reasoning switch (thinking models spend the token cap otherwise) and
+# an optional bearer token. The token is only ever sent to an approved URL.
+_ENV_REMOTE_ORIGINS = "AC_COPILOT_INFERENCE_REMOTE_ORIGINS"
+_ENV_REASONING_EFFORT = "AC_COPILOT_INFERENCE_REASONING_EFFORT"
+_ENV_API_KEY = "AC_COPILOT_INFERENCE_API_KEY"
+_REASONING_EFFORTS = frozenset({"none", "low", "medium", "high"})
 
 # Documented in WARP.md — tested against Ollama 0.5.x API; pin locally for support.
 _DEFAULT_MODEL = "llama3.2"
@@ -237,7 +245,10 @@ def inference_status() -> dict[str, Any]:
     with _status_lock:
         status = dict(_generation_status)
     status.update(
-        enabled=debrief_feature_enabled(), model=ollama_model(), provider=inference_provider()
+        enabled=debrief_feature_enabled(),
+        model=ollama_model(),
+        provider=inference_provider(),
+        remote=_remote_origin(ollama_base_url()) is not None,
     )
     checked = status.get("checked_at")
     if not isinstance(checked, (float, int)) or time.time() - checked > 5:
@@ -259,6 +270,45 @@ def _local_url(url: str) -> bool:
         and not parsed.query
         and not parsed.fragment
     )
+
+
+def _remote_origin(url: str) -> str | None:
+    """Return the URL's origin when it is an exact operator-approved HTTPS origin."""
+    parsed = urlparse(url)
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    origin = f"https://{parsed.hostname.lower()}" + (f":{port}" if port else "")
+    raw = os.environ.get(_ENV_REMOTE_ORIGINS, "")
+    approved = {item.strip().rstrip("/").lower() for item in raw.split(",") if item.strip()}
+    return origin if origin in approved else None
+
+
+def _approved_url(url: str) -> bool:
+    return _local_url(url) or _remote_origin(url) is not None
+
+
+_SENTENCE_END = re.compile(r"[.!?](?=\s|$)")
+
+
+def _trim_truncated(text: str) -> str:
+    """Drop a trailing fragment cut by the token cap; keep text without a full sentence.
+
+    Only a terminator followed by whitespace ends a sentence, so decimals such as
+    lap times are not mistaken for one.
+    """
+    ends = [match.end() for match in _SENTENCE_END.finditer(text)]
+    return text[: ends[-1]] if ends else text
 
 
 def _placement_ready(model: str, deadline: float) -> bool:
@@ -315,9 +365,11 @@ def call_ollama_generate(
         _set_generation_status(ready=False, fallback_reason="busy", checked_at=time.time())
         return None
     try:
+        effort = os.environ.get(_ENV_REASONING_EFFORT, "").strip().lower()
         if (
             provider not in ("ollama", "openai")
-            or not _local_url(base_url)
+            or not _approved_url(base_url)
+            or (effort and effort not in _REASONING_EFFORTS)
             or not model.strip()
             or len(model) > 256
             or not all(math.isfinite(x) for x in (temperature, timeout_sec, deadline))
@@ -325,7 +377,7 @@ def call_ollama_generate(
             or not 1 <= num_predict <= 128
             or not 0 < timeout_sec <= 12
         ):
-            raise ValueError("invalid inference provider, loopback URL or bounded profile")
+            raise ValueError("invalid inference provider, approved URL or bounded profile")
         if deadline <= time.monotonic():
             _set_generation_status(ready=False, fallback_reason="expired", checked_at=time.time())
             return None
@@ -344,6 +396,8 @@ def call_ollama_generate(
                 "max_tokens": num_predict,
                 "seed": 42,
             }
+            if effort:
+                body["reasoning_effort"] = effort
         else:
             url = base_url.rstrip("/") + "/api/generate"
             body = {
@@ -362,10 +416,14 @@ def call_ollama_generate(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return None
+        headers = {"Content-Type": "application/json"}
+        api_key = os.environ.get(_ENV_API_KEY, "").strip()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         req = urllib.request.Request(
             url,
             data=json.dumps(body, allow_nan=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=remaining) as resp:  # nosec B310
@@ -375,13 +433,23 @@ def call_ollama_generate(
             return None
         data = json.loads(raw)
         text = None
+        truncated = False
         if isinstance(data, dict):
             if provider == "ollama":
                 text = data.get("response")
+                truncated = data.get("done_reason") == "length"
             else:
+                served = data.get("model")
+                if served is not None and served != model:
+                    # The response must prove the configured model identity answered.
+                    _set_generation_status(
+                        ready=False, fallback_reason="model_mismatch", checked_at=time.time()
+                    )
+                    return None
                 choices = data.get("choices")
                 if isinstance(choices, list) and choices and isinstance(choices[0], dict):
                     message = choices[0].get("message")
+                    truncated = choices[0].get("finish_reason") == "length"
                     if isinstance(message, dict):
                         text = message.get("content")
         if not isinstance(text, str) or not text.strip():
@@ -390,7 +458,8 @@ def call_ollama_generate(
             )
             return None
         _set_generation_status(ready=True, fallback_reason=None, checked_at=time.time())
-        return _sanitize_debrief(text)[:2000]
+        text = _sanitize_debrief(text)
+        return (_trim_truncated(text) if truncated else text)[:2000]
     except (
         ValueError,
         urllib.error.URLError,
