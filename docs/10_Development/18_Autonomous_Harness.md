@@ -71,6 +71,7 @@ Default bundle: `.scratch/harness-evidence/<utc>_<car>_<track>/` (override `--ev
 | `report.json` | Final `AutoDriveReport` plus full `attempts` history (a recovered sim death remains measurable), combo/setup ack, drive stats incl. `recoveries`/`spawn_teleport` and bounded `control_trace`, WS frame counts, preset/sidecar provenance, HUD verdict, and lap-archive paths. A fatal preflight also writes this artifact with `stage=preflight`, `launched=false`, no drive/attempt, and `preflight.classification=non_drive_preflight_failure`, explicitly excluded from drive and sim-death denominators. |
 | `generated.cmpreset` | The exact preset launched (when generated) |
 | `hud.png` | Post-run HUD capture (`--hud-region full|left|coaching`) with liveness verdict |
+| `hud-frames/` | Opt-in (`--hud-every N`, N ≥ 1 s): a timestamped frame every N seconds for the whole run plus `index.jsonl` (`epoch`, `done_epoch`, liveness or `error`), summarised as `hud_frames` in `report.json`. Captured by a child process in the run's console session so the per-pixel conversion never stalls the driver; capped at 600 frames; a failed grab is recorded, never fatal. Lets an observing agent check what the screen showed, and when. |
 | `lap_archives` (in report.json) | Paths of `journal/laps/lap_*.json` written during the run — full telemetry traces for session review / setup comparison |
 
 Bundles live under `.scratch/` — **session ephemera**. A consuming task promotes what it must
