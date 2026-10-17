@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-10-17T08:00:00Z
+last_updated: 2026-10-17T18:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-854-agent-observed-acceptance-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-854-remote-inference-2026-10-17.md
   - AcCopilotTrainer/pitfalls/assisted-drive-archive-rotation.md
   - AcCopilotTrainer/03_Investigations/issue-854-coaching-default-off-2026-10-17.md
