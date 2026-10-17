@@ -56,6 +56,20 @@ def debrief_feature_enabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+_ENV_CORNER_HINTS = "AC_COPILOT_INFERENCE_CORNER_HINTS"
+
+
+def corner_hints_enabled() -> bool:
+    """In-race model corner hints are opt-in (#854).
+
+    The accepted hint can only restate the command the rules engine already chose for the speed
+    delta. Observed on the rig, it did so 82/84 times, ~41% of calls missed the 2 s deadline, and
+    the stream starved post-lap narration. The model is kept for narration and between-lap focus.
+    """
+    v = os.environ.get(_ENV_CORNER_HINTS, "").strip().lower()
+    return debrief_feature_enabled() and v in ("1", "true", "yes", "on")
+
+
 def _float_env(name: str, default: float) -> float:
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
@@ -202,30 +216,91 @@ def _sanitize_debrief(text: str) -> str:
     return t.strip()
 
 
-def build_llm_prompt(inbound: dict[str, Any], improvement_ranking: list[dict[str, Any]]) -> str:
-    """Structured prompt for Ollama (no chain-of-thought; concise instructions)."""
-    lap = inbound.get("lap")
-    lap_s = _lap_time_s(inbound.get("lapTimeMs"))
-    hints = _hints_lines(inbound)
+def _narration_facts(
+    inbound: dict[str, Any], improvement_ranking: list[dict[str, Any]]
+) -> dict[str, Any]:
     rank_lines = [
         str(item.get("suggestion") or "").strip()[:400]
         for item in improvement_ranking[:6]
         if str(item.get("suggestion") or "").strip()
     ]
-    payload = {
-        "lap": lap,
-        "lap_time_s": lap_s,
-        "coaching_hints": hints,
+    return {
+        "lap": inbound.get("lap"),
+        "lap_time_s": _lap_time_s(inbound.get("lapTimeMs")),
+        "coaching_hints": _hints_lines(inbound),
         "improvement_suggestions": rank_lines,
     }
+
+
+def build_llm_prompt(inbound: dict[str, Any], improvement_ranking: list[dict[str, Any]]) -> str:
+    """Structured prompt for Ollama (no chain-of-thought; concise instructions)."""
+    payload = _narration_facts(inbound, improvement_ranking)
     rules = rules_fallback_debrief(inbound, improvement_ranking)
     return (
         "You are a concise sim-racing coach for Assetto Corsa practice laps.\n"
         "Use ONLY the JSON facts below. Write one or two short paragraphs "
-        "(no bullet lists, no markdown headings). Be constructive and specific.\n\n"
+        "(no bullet lists, no markdown headings). Be constructive and specific.\n"
+        "Do not diagnose causes the facts do not state (such as understeer, oversteer, setup "
+        "or tyres) and do not add numbers or corners that are not in the facts.\n\n"
         f"FACTS_JSON:\n{json.dumps(payload, indent=2)}\n\n"
         f"If facts are thin, you may restate this fallback summary in smoother prose:\n{rules}\n"
     )
+
+
+# Diagnosis vocabulary the narration may only use when its own facts already do (#854: a
+# delivered debrief claimed "consistent under-steer" from minimum-speed deltas alone).
+_CLAIM_TERMS = re.compile(
+    r"\b(under\s*steer\w*|over\s*steer\w*|wheel\s*spin\w*|lock\s*ups?|locking|traction|snap\w*"
+    r"|slid(?:e|es|ing)|spin(?:s|ning)?|balance|downforce|setup|tyres?|tires?|pressures?"
+    r"|temperatures?|camber|differential|brake\s*bias|fuel|rain|wet)\b",
+    re.IGNORECASE,
+)
+_CORNER_REF = re.compile(r"\b(?:t|turn|corner)\s*(\d+)\b", re.IGNORECASE)
+_NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?")
+
+
+def _claims(text: str) -> set[str]:
+    return {
+        re.sub(r"\s+", "", m.group(1).lower())
+        for m in _CLAIM_TERMS.finditer(text.replace("-", " "))
+    }
+
+
+def narration_ungrounded_reason(
+    text: str, inbound: dict[str, Any], improvement_ranking: list[dict[str, Any]]
+) -> str | None:
+    """Why model narration is not supported by its facts, or ``None`` when it is.
+
+    Deterministic: every diagnosis term and corner must appear in the facts, and every number
+    must equal a fact number at the narration's own precision (rounding is allowed).
+    """
+    facts = json.dumps(_narration_facts(inbound, improvement_ranking))
+    facts += "\n" + rules_fallback_debrief(inbound, improvement_ranking)
+    unsupported = _claims(text) - _claims(facts)
+    if unsupported:
+        return "claims:" + ",".join(sorted(unsupported))
+    text_corners = set(_CORNER_REF.findall(text))
+    if not text_corners <= set(_CORNER_REF.findall(facts)):
+        return "corners:" + ",".join(sorted(text_corners - set(_CORNER_REF.findall(facts))))
+    fact_numbers = [float(n) for n in _NUMBER.findall(_CORNER_REF.sub(" ", facts))]
+    for token in _NUMBER.findall(_CORNER_REF.sub(" ", text)):
+        places = len(token.split(".")[1]) if "." in token else 0
+        if not any(abs(round(f, places) - float(token)) < 1e-9 for f in fact_numbers):
+            return f"number:{token}"
+    return None
+
+
+def _grounded_or_none(
+    text: str | None, inbound: dict[str, Any], improvement_ranking: list[dict[str, Any]]
+) -> str | None:
+    if not text:
+        return None
+    reason = narration_ungrounded_reason(text, inbound, improvement_ranking)
+    if reason is None:
+        return text
+    logger.info("model narration rejected as ungrounded (%s)", reason)
+    _set_generation_status(fallback_reason=f"ungrounded:{reason}"[:80], checked_at=time.time())
+    return None
 
 
 # The legacy name remains a compatibility entrypoint. All providers pass this
@@ -505,9 +580,10 @@ def compose_debrief(
         timeout_sec=debrief_timeout,
         deadline=inbound.get("_inference_deadline"),
     )
+    llm = _grounded_or_none(llm, inbound, improvement_ranking)
     if llm:
         return llm
-    logger.info("ollama unreachable or empty; using rules debrief")
+    logger.info("model narration unavailable, empty or ungrounded; using rules debrief")
     return rules
 
 
@@ -531,9 +607,9 @@ def compose_corner_hint(
 
     Returns the hint text (short string, already sanitized) or None if
     Ollama failed. The Lua side falls back to the existing rules-engine
-    secondary line when None.
+    secondary line when None. Off unless :func:`corner_hints_enabled`.
     """
-    if not debrief_feature_enabled():
+    if not corner_hints_enabled():
         return None
     base = ollama_base_url()
     model = ollama_model()
@@ -643,7 +719,7 @@ def compose_llm_debrief_only(
         )
         return None
     prompt = build_llm_prompt(inbound, improvement_ranking)
-    return call_ollama_generate(
+    text = call_ollama_generate(
         prompt,
         base_url=base,
         model=model,
@@ -652,3 +728,4 @@ def compose_llm_debrief_only(
         timeout_sec=debrief_timeout,
         deadline=inbound.get("_inference_deadline"),
     )
+    return _grounded_or_none(text, inbound, improvement_ranking)

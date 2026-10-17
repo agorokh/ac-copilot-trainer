@@ -290,9 +290,72 @@ def test_invalid_env_falls_back_without_hiding_programming_error(monkeypatch):
 )
 def test_corner_output_cannot_contradict_facts(monkeypatch, current, target, text, accepted):
     monkeypatch.setenv("AC_COPILOT_OLLAMA_ENABLE", "1")
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_CORNER_HINTS", "1")
     monkeypatch.setattr(llm, "call_ollama_generate", lambda *args, **kw: text)
     result = llm.compose_corner_hint("T3", current, target, 80)
     assert result == (text if accepted else None)
+
+
+def test_in_race_model_hints_are_opt_in(monkeypatch):
+    """#854: inference on still means rules-only in race unless corner hints are opted in."""
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_ENABLE", "1")
+    monkeypatch.delenv("AC_COPILOT_INFERENCE_CORNER_HINTS", raising=False)
+    calls = []
+    monkeypatch.setattr(llm, "call_ollama_generate", lambda *a, **k: calls.append(1) or "ON PACE")
+    assert llm.corner_hints_enabled() is False
+    assert llm.compose_corner_hint("T3", 140, 139, 80) is None
+    assert calls == []
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_CORNER_HINTS", "1")
+    assert llm.compose_corner_hint("T3", 140, 139, 80) == "ON PACE"
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_ENABLE", "0")  # opt-in never overrides feature-off
+    assert llm.corner_hints_enabled() is False
+
+
+LAP3 = {
+    "lap": 3,
+    "lapTimeMs": 103825,
+    "coachingHints": ["T1: brake 15 m later", "T3: min 55 vs 66"],
+}
+
+
+@pytest.mark.parametrize(
+    "text,reason",
+    [
+        # The delivered #854 debrief: a cause the facts never state.
+        (
+            "On lap 3, your 103.825s time shows consistent under-steer across the first corners.",
+            "claims:understeer",
+        ),
+        ("Lap 3 at 103.825 s: carry 9 km/h more through T3.", "number:9"),
+        ("Lap 3 at 103.825 s: brake later into T7.", "corners:7"),
+        (
+            "Lap 3 (103.8 s): at Turn 1 brake 15 m later, and lift less at T3 where 55 beat 66.",
+            None,
+        ),
+        ("Solid lap 3. Keep building consistency.", None),
+    ],
+)
+def test_narration_grounding_check(text, reason):
+    assert llm.narration_ungrounded_reason(text, LAP3, []) == reason
+
+
+def test_grounding_allows_terms_the_facts_already_use():
+    facts = {**LAP3, "coachingHints": ["T3: understeer on entry"]}
+    assert (
+        llm.narration_ungrounded_reason("Lap 3: the understeer at T3 cost time.", facts, []) is None
+    )
+
+
+def test_ungrounded_narration_falls_back_to_rules(monkeypatch):
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_ENABLE", "1")
+    bad = "On lap 3 your 103.825 s lap shows consistent oversteer."
+    monkeypatch.setattr(llm, "call_ollama_generate", lambda *a, **k: bad)
+    assert llm.compose_llm_debrief_only(LAP3, []) is None
+    assert llm.inference_status()["fallback_reason"].startswith("ungrounded:claims:oversteer")
+    assert llm.compose_debrief(LAP3, []) == llm.rules_fallback_debrief(LAP3, [])
+    good = "Lap 3 took 103.825 s; brake 15 m later into T1."
+    monkeypatch.setattr(llm, "call_ollama_generate", lambda *a, **k: good)
+    assert llm.compose_llm_debrief_only(LAP3, []) == good
 
 
 def test_cancelled_submitter_keeps_exclusive_worker_and_only_latest_pending():
