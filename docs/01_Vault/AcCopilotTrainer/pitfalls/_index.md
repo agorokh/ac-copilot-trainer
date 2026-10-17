@@ -2,12 +2,13 @@
 type: index
 status: active
 created: 2026-04-10
-updated: 2026-07-24
+updated: 2026-10-17
 relates_to:
   - AcCopilotTrainer/00_System/invariants/_index.md
   - AcCopilotTrainer/01_Decisions/shift-left-issue-creation.md
   - AcCopilotTrainer/pitfalls/epic-body-delivery-drift.md
   - AcCopilotTrainer/pitfalls/cross-issue-pointer-rot.md
+  - AcCopilotTrainer/pitfalls/assisted-drive-archive-rotation.md
 ---
 
 # Pitfalls (index)
@@ -38,3 +39,4 @@ with `scope_paths`; process pitfalls below deliberately omit them.
 |------|----------|--------|
 | [epic-body-delivery-drift.md](epic-body-delivery-drift.md) | maintainability | `/backlog-steward` sweep 2026-06-22 (canonical: #154); investigation-brief variant added 2026-07-24 (canonical: #627) |
 | [cross-issue-pointer-rot.md](cross-issue-pointer-rot.md) | maintainability | `/backlog-steward` sweep 2026-07-24 (canonical: #534→#59/#119 phantom gates) |
+| [assisted-drive-archive-rotation.md](assisted-drive-archive-rotation.md) | data-loss | #854 rig acceptance 2026-10-17: unguarded assisted lap evicted a personal lap via size rotation (restored) |
