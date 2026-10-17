@@ -207,14 +207,23 @@ _FRAME_LINE = re.compile(r"hud-capture: (RENDERING|BLACK/FROZEN) .*mean=([\d.]+)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def grab_frame_subprocess(path: Path, region: str, stride: int, *, timeout_s: float = 20.0) -> dict:
+def grab_frame_subprocess(
+    path: Path,
+    region: str,
+    stride: int,
+    *,
+    timeout_s: float = 20.0,
+    register: Callable[[subprocess.Popen | None], None] | None = None,
+) -> dict:
     """Capture one frame in a child process and return its liveness verdict.
 
     The BGRA→RGB conversion is a per-pixel Python loop; running it in the caller would hold the
     GIL for about a second per frame and jitter a concurrent drive controller. The child inherits
-    the caller's (console) session, so it captures the same desktop.
+    the caller's (console) session, so it captures the same desktop. ``register`` receives the
+    live child (then ``None``) so an owner can terminate it on teardown; a child that overruns
+    ``timeout_s`` is killed.
     """
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         [
             sys.executable,
             "-m",
@@ -226,14 +235,25 @@ def grab_frame_subprocess(path: Path, region: str, stride: int, *, timeout_s: fl
             "--stride",
             str(stride),
         ],
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=timeout_s,
         cwd=_REPO_ROOT,
     )
-    match = _FRAME_LINE.search(proc.stdout or "")
+    if register is not None:
+        register(proc)
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        raise RuntimeError(f"hud_capture timed out after {timeout_s:g}s") from None
+    finally:
+        if register is not None:
+            register(None)
+    match = _FRAME_LINE.search(stdout or "")
     if match is None:
-        detail = (proc.stderr or proc.stdout or "").strip()[-200:]
+        detail = (stderr or stdout or "").strip()[-200:]
         raise RuntimeError(f"hud_capture exit {proc.returncode}: {detail}")
     return {
         "rendering": match.group(1) == "RENDERING",
@@ -257,7 +277,7 @@ class PeriodicHudCapture:
         region: str = "full",
         stride: int = 2,
         max_frames: int = 600,
-        grab: Callable[[Path, str, int], dict] = grab_frame_subprocess,
+        grab: Callable[[Path, str, int], dict] | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         if isinstance(interval_s, bool) or not isinstance(interval_s, (int, float)):
@@ -270,11 +290,20 @@ class PeriodicHudCapture:
             raise ValueError("stride and max_frames must be >= 1")
         self.out_dir, self.interval_s, self.region = Path(out_dir), float(interval_s), region
         self.stride, self.max_frames = stride, max_frames
-        self._grab, self._clock = grab, clock
+        self._grab, self._clock = grab or self._grab_child, clock
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._child: subprocess.Popen | None = None
+        self._child_lock = threading.Lock()
         self.frames = 0
         self.errors = 0
+
+    def _grab_child(self, path: Path, region: str, stride: int) -> dict:
+        return grab_frame_subprocess(path, region, stride, register=self._set_child)
+
+    def _set_child(self, proc: subprocess.Popen | None) -> None:
+        with self._child_lock:
+            self._child = proc
 
     def start(self) -> None:
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -303,6 +332,11 @@ class PeriodicHudCapture:
 
     def stop(self, timeout_s: float = 30.0) -> dict:
         self._stop.set()
+        # Teardown must not wait out (or leave behind) an in-flight capture child.
+        with self._child_lock:
+            child = self._child
+        if child is not None and child.poll() is None:
+            child.terminate()
         if self._thread is not None:
             self._thread.join(timeout_s)
         return {
