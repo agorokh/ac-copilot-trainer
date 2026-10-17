@@ -374,6 +374,16 @@ def test_corner_query_returns_advice_when_hint(monkeypatch: pytest.MonkeyPatch) 
     assert out is not None
     assert out["event"] == EVENT_CORNER_ADVICE
     assert out["text"] == "BRAKE EARLIER"
+    assert out["adviceSource"] == "model"  # in-race advice exists only as accepted model text
+
+
+def test_corner_query_sends_nothing_without_model_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tools.ai_sidecar.protocol as proto
+
+    monkeypatch.setattr(proto, "compose_corner_hint", lambda **_: None)
+    inbound = {"protocol": PROTOCOL_VERSION, "event": "corner_query", "corner": "T1"}
+    inbound.update(cur=80, ref=70, dist=12)
+    assert prepare_outbound_message(inbound, reply_coaching=True) is None
 
 
 def test_sidecar_websocket_lap_complete_roundtrip() -> None:
