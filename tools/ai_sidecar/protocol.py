@@ -301,6 +301,8 @@ def prepare_outbound_message(
             "corner": corner,
             "lap": inbound.get("lap"),
             "text": hint,
+            # Only accepted model text reaches here; say so, as the between-lap slot does (#854).
+            "adviceSource": "model",
         }
 
     if event != EVENT_LAP_COMPLETE:
