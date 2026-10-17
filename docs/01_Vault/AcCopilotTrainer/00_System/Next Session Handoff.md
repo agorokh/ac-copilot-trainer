@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-10-16T07:45:00Z
+last_updated: 2026-10-17T03:55:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-854-coaching-default-off-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-529-g1-mclaren-magione-2026-10-16.md
   - AcCopilotTrainer/10_Rig/external-racing-controls.md
   - AcCopilotTrainer/03_Investigations/issue-746-749-repeatability-and-thermal-gate-2026-08-10.md
@@ -136,6 +137,34 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-10-17) — #854 Part A: coaching inference defaults reconciled after RTX3050 removal (PR #865 MERGED `8cd5c30`)
+
+The RTX3050 inference rig was removed 2026-10-16 (#854), no qualified replacement. Part B
+(lap-save) already shipped (#863/#864). Part A was the retained follow-up: the normal
+startup consumers still defaulted model coaching **on** and baked the **abandoned**
+`localhost:11435`/RTX3050 endpoint in.
+
+PR #865 sets `AC_COPILOT_INFERENCE_ENABLE=0` (rules-only / CPU brain) in both normal
+consumers — `generation.py` `RIG_DEFAULTS` (Game Point via `apply_rig_inference_defaults`)
+and `start_sidecar.bat` (CSP/Lua spawn) — and stops seeding the retired `11435` base/health
+URLs + 3050 GPU UUID. Operator opt-in (incl. legacy `AC_COPILOT_OLLAMA_ENABLE`), the bounded
+generation profile, and the #855 admission mechanism are preserved, so re-enabling model
+coaching stays supported but now requires a separately approved backend contract. Docs
+updated (`15_Local_Inference.md`).
+
+**Verified (observed):** 5 Part A regression tests green at merged HEAD —
+`test_default_off_makes_no_model_http_call_but_keeps_rules` proves zero model HTTP in
+default-off (raising `urlopen` never called) and rules advice intact; Game Point launcher
+env defaults off and drops the retired endpoint. Self-hosted review verdict **satisfied**
+on exact head `190b027` (Antigravity + Grok clean, zero findings); CI green; squash-merged
+`--match-head-commit`. **#854 stays OPEN** (`Refs`, not closing — enabled-model acceptance
+A3 kept open).
+
+**Coverage limit (A2):** the live Windows-rig launcher → CSP → on-glass panel glance is an
+operator rig action (standing "merge ≠ rig deploy"), not reachable from the macOS session.
+The rig junction serves the primary checkout; operator pulls merged `main` to deploy.
+Node: [[issue-854-coaching-default-off-2026-10-17]].
 
 ## Delivered (2026-10-16) — #529 fresh G1 cold-start datapoint on an UNSEEN GT3 car (autonomous rig session)
 
