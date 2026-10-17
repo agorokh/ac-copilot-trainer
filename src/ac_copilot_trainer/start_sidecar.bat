@@ -31,21 +31,19 @@ echo [start_sidecar] Set AC_COPILOT_REPO_ROOT to your repo root, or deploy the f
 exit /b 2
 
 :have_root
-REM Supervised inference admission (workstation-ops#4004). The host service owns
-REM CUDA placement; this HTTP client must never start an unrestricted model server.
-REM Defaults match Game Point's apply_rig_inference_defaults; explicit feature-off wins.
+REM Inference defaults match Game Point's apply_rig_inference_defaults.
+REM The RTX3050 inference rig was removed 2026-10-16 (#854); with no qualified
+REM replacement the default is rules-only / deterministic CPU brain. Re-enabling is
+REM an explicit operator decision that must also supply an approved backend endpoint;
+REM we do not seed the retired localhost:11435/3050 service, so default-off makes no
+REM localhost retry and inference never falls back onto the main RTX3060.
 if not defined AC_COPILOT_INFERENCE_ENABLE (
   if defined AC_COPILOT_OLLAMA_ENABLE (
     set "AC_COPILOT_INFERENCE_ENABLE=!AC_COPILOT_OLLAMA_ENABLE!"
   ) else (
-    set "AC_COPILOT_INFERENCE_ENABLE=1"
+    set "AC_COPILOT_INFERENCE_ENABLE=0"
   )
 )
-if not defined AC_COPILOT_INFERENCE_PROVIDER set "AC_COPILOT_INFERENCE_PROVIDER=openai"
-if not defined AC_COPILOT_INFERENCE_BASE_URL set "AC_COPILOT_INFERENCE_BASE_URL=http://127.0.0.1:11435/v1"
-if not defined AC_COPILOT_INFERENCE_MODEL set "AC_COPILOT_INFERENCE_MODEL=llama3.2:3b"
-if not defined AC_COPILOT_INFERENCE_HEALTH_URL set "AC_COPILOT_INFERENCE_HEALTH_URL=http://127.0.0.1:11435/health"
-if not defined AC_COPILOT_INFERENCE_GPU_UUID set "AC_COPILOT_INFERENCE_GPU_UUID=GPU-1b2968de-307e-8a39-093d-24ebdc1366dc"
 if not defined AC_COPILOT_OLLAMA_TEMPERATURE set "AC_COPILOT_OLLAMA_TEMPERATURE=0"
 if not defined AC_COPILOT_OLLAMA_NUM_PREDICT set "AC_COPILOT_OLLAMA_NUM_PREDICT=64"
 if not defined AC_COPILOT_OLLAMA_TIMEOUT_SEC set "AC_COPILOT_OLLAMA_TIMEOUT_SEC=8"
