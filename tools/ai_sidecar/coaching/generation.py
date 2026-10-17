@@ -13,14 +13,19 @@ from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
 from typing import Any
 
+# Retained as the attestation fixture a health endpoint must match when the operator
+# configures AC_COPILOT_INFERENCE_GPU_UUID; it is no longer seeded as a default (the
+# matching RTX3050 inference rig was removed 2026-10-16, issue #854).
 RIG_GPU_UUID = "GPU-1b2968de-307e-8a39-093d-24ebdc1366dc"
 RIG_DEFAULTS = {
-    "AC_COPILOT_INFERENCE_ENABLE": "1",
-    "AC_COPILOT_INFERENCE_PROVIDER": "openai",
-    "AC_COPILOT_INFERENCE_BASE_URL": "http://127.0.0.1:11435/v1",
-    "AC_COPILOT_INFERENCE_MODEL": "llama3.2:3b",
-    "AC_COPILOT_INFERENCE_HEALTH_URL": "http://127.0.0.1:11435/health",
-    "AC_COPILOT_INFERENCE_GPU_UUID": RIG_GPU_UUID,
+    # RTX3050 inference rig removed 2026-10-16 (#854); no qualified replacement exists.
+    # Default is rules-only / deterministic CPU brain. Re-enabling model coaching is an
+    # explicit operator decision that must also supply a separately approved backend
+    # contract (provider, loopback base/health URL, model, and GPU attestation); we do
+    # not bake the retired localhost:11435/3050 service back in, and inference must
+    # never silently fall back onto the main RTX3060.
+    "AC_COPILOT_INFERENCE_ENABLE": "0",
+    # Bounded generation profile a future qualified backend must honour (finite caps).
     "AC_COPILOT_OLLAMA_TEMPERATURE": "0",
     "AC_COPILOT_OLLAMA_NUM_PREDICT": "64",
     "AC_COPILOT_OLLAMA_TIMEOUT_SEC": "8",
@@ -29,7 +34,13 @@ RIG_DEFAULTS = {
 
 
 def apply_rig_inference_defaults(env: MutableMapping[str, str]) -> None:
-    """Set child-only defaults; keep an explicit operator feature-off authoritative."""
+    """Seed child-only defaults (rules-only unless the operator opts in).
+
+    An explicit operator ``AC_COPILOT_INFERENCE_ENABLE`` — or the legacy
+    ``AC_COPILOT_OLLAMA_ENABLE`` alias — stays authoritative, as does any explicit
+    backend endpoint/model the operator provides. We no longer seed the retired
+    localhost:11435/RTX3050 endpoint, so a bare re-enable makes no retry against it.
+    """
     if "AC_COPILOT_INFERENCE_ENABLE" not in env and "AC_COPILOT_OLLAMA_ENABLE" in env:
         env["AC_COPILOT_INFERENCE_ENABLE"] = env["AC_COPILOT_OLLAMA_ENABLE"]
     for key, value in RIG_DEFAULTS.items():

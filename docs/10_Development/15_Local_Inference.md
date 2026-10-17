@@ -1,25 +1,37 @@
 # Local coaching inference
 
 AC Copilot keeps immediate rules, ranking and CPU attribution independent of model
-narration. Game Point and `start_sidecar.bat` select the supervised Windows inference
-admission service managed by workstation-ops#4004. The application does not start a
-model server and does not claim that a CUDA mask on its HTTP client isolates GPUs.
+narration. The application does not start a model server and does not claim that a
+CUDA mask on its HTTP client isolates GPUs.
 
-The rig profile is `llama3.2:3b`, 4096 context, seed 42, temperature 0, two backend CPU
-threads, at most 64 narration tokens or 20 corner tokens. Only the host service may
-select Ollama or a qualified LM Studio runtime. The same model artifact and effective
-profile must pass placement, latency, correctness and real game acceptance first.
+**Default is model-disabled (rules-only).** The RTX3050 inference rig was removed on
+2026-10-16 (issue #854) and has no qualified replacement, so Game Point and
+`start_sidecar.bat` default `AC_COPILOT_INFERENCE_ENABLE=0`: coaching runs on the
+deterministic CPU brain and makes no model HTTP call. The launcher no longer seeds the
+retired `localhost:11435`/3050 endpoint, so default-off performs no localhost retry and
+inference can never silently fall back onto the main RTX3060.
 
-| Environment | Rig default |
-|---|---|
-| `AC_COPILOT_INFERENCE_ENABLE` | `1`; explicit legacy `AC_COPILOT_OLLAMA_ENABLE=0` also parks narration |
-| `AC_COPILOT_INFERENCE_PROVIDER` | `openai` (common chat-completions wire protocol) |
-| `AC_COPILOT_INFERENCE_BASE_URL` | `http://127.0.0.1:11435/v1` |
-| `AC_COPILOT_INFERENCE_MODEL` | `llama3.2:3b` |
-| `AC_COPILOT_INFERENCE_HEALTH_URL` | `http://127.0.0.1:11435/health` |
-| `AC_COPILOT_INFERENCE_GPU_UUID` | `GPU-1b2968de-307e-8a39-093d-24ebdc1366dc` (3050) |
+Re-enabling model coaching is an explicit operator decision (`AC_COPILOT_INFERENCE_ENABLE=1`
+or the legacy `AC_COPILOT_OLLAMA_ENABLE=1` alias) that must also supply a separately
+approved backend contract — provider, loopback base/health URL, model identity, and GPU
+attestation. The supervised Windows admission service (workstation-ops#4004) owns CUDA
+placement; it is retired alongside the card and must be re-provisioned before re-enable.
+The reference rig profile is `llama3.2:3b`, 4096 context, seed 42, temperature 0, two
+backend CPU threads, at most 64 narration tokens or 20 corner tokens. Only a host
+service may select Ollama or a qualified LM Studio runtime, and the same model artifact
+and effective profile must pass placement, latency, correctness and real game acceptance
+first.
 
-The service health must attest `ready:true`, the exact model and GPU UUID, and a
+| Environment | Default | On operator re-enable |
+|---|---|---|
+| `AC_COPILOT_INFERENCE_ENABLE` | `0` (rules-only); legacy `AC_COPILOT_OLLAMA_ENABLE` alias honoured | set `1` to opt in |
+| `AC_COPILOT_INFERENCE_PROVIDER` | unset → generic helper default (`ollama`) | `openai` for the common chat-completions wire protocol |
+| `AC_COPILOT_INFERENCE_BASE_URL` | unset (retired `11435` endpoint no longer seeded) | operator-supplied loopback URL of an approved backend |
+| `AC_COPILOT_INFERENCE_MODEL` | unset → generic `llama3.2` fallback | approved model identity, e.g. `llama3.2:3b` |
+| `AC_COPILOT_INFERENCE_HEALTH_URL` | unset | operator-supplied loopback health endpoint |
+| `AC_COPILOT_INFERENCE_GPU_UUID` | unset (no GPU placement claim) | the approved backend GPU's UUID |
+
+When the operator configures a GPU UUID, the service health must attest `ready:true`, the exact model and GPU UUID, and a
 finite `utc_epoch` no more than five seconds old (two seconds future skew allowed).
 Missing, stale or mismatching placement means rules-only. Its fresh checks before
 and after upstream generation remain authoritative. The main 3060 must never be a

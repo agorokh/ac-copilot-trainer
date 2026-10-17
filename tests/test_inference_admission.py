@@ -10,7 +10,11 @@ import time
 import pytest
 
 from tools.ai_sidecar.coaching import llm_coach as llm
-from tools.ai_sidecar.coaching.generation import RIG_GPU_UUID, LatestGenerationQueue
+from tools.ai_sidecar.coaching.generation import (
+    RIG_GPU_UUID,
+    LatestGenerationQueue,
+    apply_rig_inference_defaults,
+)
 
 
 class Response:
@@ -114,6 +118,53 @@ def test_invalid_config_does_no_network_io(monkeypatch, overrides):
     monkeypatch.setattr(llm.urllib.request, "urlopen", lambda *args, **kw: calls.append(args))
     assert generate(**overrides) is None
     assert calls == []
+
+
+def test_rig_defaults_disable_model_and_drop_retired_3050_endpoint():
+    """#854: RTX3050 removed — default is rules-only and no retired endpoint is seeded."""
+    env: dict[str, str] = {}
+    apply_rig_inference_defaults(env)
+    assert env["AC_COPILOT_INFERENCE_ENABLE"] == "0"
+    for retired in (
+        "AC_COPILOT_INFERENCE_BASE_URL",
+        "AC_COPILOT_INFERENCE_HEALTH_URL",
+        "AC_COPILOT_INFERENCE_GPU_UUID",
+    ):
+        assert retired not in env
+    # Bounded generation profile stays seeded (finite caps).
+    assert env["AC_COPILOT_OLLAMA_TIMEOUT_SEC"] == "8"
+    assert env["AC_COPILOT_OLLAMA_NUM_PREDICT"] == "64"
+
+
+def test_operator_reenable_alias_and_explicit_endpoint_preserved():
+    """Explicit operator opt-in and an approved endpoint survive the defaults pass."""
+    env = {
+        "AC_COPILOT_OLLAMA_ENABLE": "1",
+        "AC_COPILOT_INFERENCE_BASE_URL": "http://127.0.0.1:11500/v1",
+    }
+    apply_rig_inference_defaults(env)
+    assert env["AC_COPILOT_INFERENCE_ENABLE"] == "1"
+    assert env["AC_COPILOT_INFERENCE_BASE_URL"] == "http://127.0.0.1:11500/v1"
+
+
+def test_default_off_makes_no_model_http_call_but_keeps_rules(monkeypatch):
+    """Default-off startup performs zero model HTTP I/O; deterministic rules remain."""
+    env: dict[str, str] = {}
+    apply_rig_inference_defaults(env)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("no model HTTP call allowed when inference is default-off")
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", _boom)
+    inbound = {"lap": 3, "lapTimeMs": 95000, "coachingHints": ["brake later into T1"]}
+    assert llm.compose_debrief(inbound, []) is None
+    assert llm.compose_llm_debrief_only(inbound, []) is None
+    assert llm.compose_corner_hint("T3", 180, 130, 80) is None
+    assert llm.inference_status()["enabled"] is False
+    # Deterministic CPU-brain rules advice is independent of the model path.
+    assert llm.rules_fallback_debrief(inbound, []).startswith("Post-lap debrief")
 
 
 def test_invalid_env_falls_back_without_hiding_programming_error(monkeypatch):

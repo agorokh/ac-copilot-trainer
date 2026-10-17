@@ -178,8 +178,10 @@ def test_sidecar_command_uses_env_for_token_and_voice(tmp_path: Path) -> None:
     assert env["AC_COPILOT_REFERENCE_ARCHIVE"] == str((tmp_path / "ref.json").resolve())
     assert env["AC_COPILOT_ALIEN_LINE"] == str((tmp_path / "alien.json").resolve())
     assert env["AC_COPILOT_COACH_V2"] == "1"
-    assert env["AC_COPILOT_INFERENCE_BASE_URL"] == "http://127.0.0.1:11435/v1"
-    assert env["AC_COPILOT_INFERENCE_GPU_UUID"] == "GPU-1b2968de-307e-8a39-093d-24ebdc1366dc"
+    # #854: RTX3050 removed — rules-only default, retired 11435/3050 endpoint not seeded.
+    assert env["AC_COPILOT_INFERENCE_ENABLE"] == "0"
+    assert "AC_COPILOT_INFERENCE_BASE_URL" not in env
+    assert "AC_COPILOT_INFERENCE_GPU_UUID" not in env
     assert "CUDA_VISIBLE_DEVICES" not in env  # HTTP client placement is not server isolation.
     assert env["AC_COPILOT_VOICE_BANK"] == str((tmp_path / "voice-bank").resolve())
     assert env["AC_COPILOT_VOICE_TTS"] == "1"
@@ -202,6 +204,27 @@ def test_inference_feature_off_and_explicit_profile_reach_sidecar(tmp_path):
     assert env["AC_COPILOT_INFERENCE_ENABLE"] == "0"
     assert env["AC_COPILOT_INFERENCE_MODEL"] == "qualified-alias"
     assert "AC_COPILOT_INFERENCE_GPU_UUID" not in parent
+
+
+def test_sidecar_environment_defaults_model_off_after_rtx3050_removal(tmp_path):
+    """#854 Part A: the normal Game Point launcher seeds rules-only and drops the
+    retired RTX3050 endpoint, so default startup makes no model HTTP call."""
+    env = GamePointSupervisor(
+        GamePointConfig(paths=LauncherPaths(tmp_path)), environ={}
+    ).sidecar_environment()
+    assert env["AC_COPILOT_INFERENCE_ENABLE"] == "0"
+    for retired in (
+        "AC_COPILOT_INFERENCE_BASE_URL",
+        "AC_COPILOT_INFERENCE_HEALTH_URL",
+        "AC_COPILOT_INFERENCE_GPU_UUID",
+    ):
+        assert retired not in env
+    # An explicit legacy opt-in still re-enables model coaching.
+    reenabled = GamePointSupervisor(
+        GamePointConfig(paths=LauncherPaths(tmp_path)),
+        environ={"AC_COPILOT_OLLAMA_ENABLE": "1"},
+    ).sidecar_environment()
+    assert reenabled["AC_COPILOT_INFERENCE_ENABLE"] == "1"
 
 
 def test_sidecar_command_includes_serial_port_when_configured(tmp_path: Path) -> None:
