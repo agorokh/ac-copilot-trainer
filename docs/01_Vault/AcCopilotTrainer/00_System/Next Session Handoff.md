@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-10-17T03:55:00Z
+last_updated: 2026-10-17T05:10:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-854-coaching-default-off-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-529-g1-mclaren-magione-2026-10-16.md
@@ -161,9 +161,16 @@ on exact head `190b027` (Antigravity + Grok clean, zero findings); CI green; squ
 `--match-head-commit`. **#854 stays OPEN** (`Refs`, not closing — enabled-model acceptance
 A3 kept open).
 
-**Coverage limit (A2):** the live Windows-rig launcher → CSP → on-glass panel glance is an
-operator rig action (standing "merge ≠ rig deploy"), not reachable from the macOS session.
-The rig junction serves the primary checkout; operator pulls merged `main` to deploy.
+**Live on-rig verification (2026-10-17, operator-authorized):** deployed merged `main` to the
+rig primary checkout (`63209a6`, `app provenance: match`). Auto-started sidecar `/health`
+reported `inference.enabled=false`, `provider=ollama`/`model=llama3.2` (generic, not the retired
+`openai`/`llama3.2:3b`/`11435` profile), queue empty; **no 11435 connection** across two drives.
+Two `auto_drive` runs exercised launcher→sidecar→panel: porsche_911_gt3_r@magione **PASS, 1 lap**
+(942 coaching.snapshot + 15 cue frames, HUD RENDERING, recoveries=0); bmw_m3_gt2@magione drove
+with the COACHING panel rendering (hud.png) but did not complete a lap (known magione/ggv
+pit-start flake). Capture limit: the completed-lap on-glass coaching-text screenshot was
+contaminated by the operator's frontmost desktop; frame counts prove the panel rendered coaching
+in-sim with inference off. Launched AC + sidecar closed; deploy preserved; rig config untouched.
 Node: [[issue-854-coaching-default-off-2026-10-17]].
 
 ## Delivered (2026-10-16) — #529 fresh G1 cold-start datapoint on an UNSEEN GT3 car (autonomous rig session)
