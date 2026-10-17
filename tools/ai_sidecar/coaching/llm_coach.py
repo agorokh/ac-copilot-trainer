@@ -238,8 +238,8 @@ def build_llm_prompt(inbound: dict[str, Any], improvement_ranking: list[dict[str
     rules = rules_fallback_debrief(inbound, improvement_ranking)
     return (
         "You are a concise sim-racing coach for Assetto Corsa practice laps.\n"
-        "Use ONLY the JSON facts below. Write one or two short paragraphs "
-        "(no bullet lists, no markdown headings). Be constructive and specific.\n"
+        "Use ONLY the JSON facts below. Write at most two short sentences, under 40 words "
+        "in total (no lists, no headings); it is shown on a small HUD tile. Be specific.\n"
         "Do not diagnose causes the facts do not state (such as understeer, oversteer, setup "
         "or tyres) and do not add numbers or corners that are not in the facts.\n\n"
         f"FACTS_JSON:\n{json.dumps(payload, indent=2)}\n\n"
@@ -256,6 +256,11 @@ _CLAIM_TERMS = re.compile(
     re.IGNORECASE,
 )
 _CORNER_REF = re.compile(r"\b(?:t|turn|corner)\s*(\d+)\b", re.IGNORECASE)
+# Positional claims about which corners (#854: "the first three corners" for T1/T5/T6).
+_POSITIONAL = re.compile(
+    r"\b(?:first|opening|last|final)\s+(?:two|three|four|five|\d+)\s+(?:corners?|turns?)\b",
+    re.IGNORECASE,
+)
 _NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?")
 
 
@@ -279,6 +284,9 @@ def narration_ungrounded_reason(
     unsupported = _claims(text) - _claims(facts)
     if unsupported:
         return "claims:" + ",".join(sorted(unsupported))
+    positional = {m.group(0).lower() for m in _POSITIONAL.finditer(text)}
+    if positional - {m.group(0).lower() for m in _POSITIONAL.finditer(facts)}:
+        return "position:" + ",".join(sorted(positional))
     text_corners = set(_CORNER_REF.findall(text))
     if not text_corners <= set(_CORNER_REF.findall(facts)):
         return "corners:" + ",".join(sorted(text_corners - set(_CORNER_REF.findall(facts))))
@@ -377,13 +385,14 @@ _SENTENCE_END = re.compile(r"[.!?](?=\s|$)")
 
 
 def _trim_truncated(text: str) -> str:
-    """Drop a trailing fragment cut by the token cap; keep text without a full sentence.
+    """Drop a trailing fragment cut by the token cap; ``""`` when no sentence is complete.
 
     Only a terminator followed by whitespace ends a sentence, so decimals such as
-    lap times are not mistaken for one.
+    lap times are not mistaken for one. A capped reply without a complete sentence
+    would render mid-sentence on the HUD (#854), so callers keep the rules text.
     """
     ends = [match.end() for match in _SENTENCE_END.finditer(text)]
-    return text[: ends[-1]] if ends else text
+    return text[: ends[-1]] if ends else ""
 
 
 def _placement_ready(model: str, deadline: float) -> bool:
@@ -534,7 +543,15 @@ def call_ollama_generate(
             return None
         _set_generation_status(ready=True, fallback_reason=None, checked_at=time.time())
         text = _sanitize_debrief(text)
-        return (_trim_truncated(text) if truncated else text)[:2000]
+        # Both providers set ``truncated`` above (Ollama done_reason, chat finish_reason).
+        if truncated:
+            text = _trim_truncated(text)
+            if not text:
+                _set_generation_status(
+                    ready=True, fallback_reason="truncated", checked_at=time.time()
+                )
+                return None
+        return text[:2000]
     except (
         ValueError,
         urllib.error.URLError,

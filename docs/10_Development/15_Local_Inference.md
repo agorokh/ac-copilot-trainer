@@ -87,8 +87,10 @@ The model paths share one active blocking job and one pending latest request, or
 narration (3) > between-lap focus (2) > opt-in corner hint (1): a pending higher priority
 survives a lower submit, and between-lap focus falls back to its deterministic phrase at once.
 Model narration must be grounded in its own facts: a diagnosis term (e.g. understeer,
-oversteer, traction, setup, tyres), corner or number that the facts do not contain rejects it
-(`fallback_reason` `ungrounded:…`) and the rules debrief stays; numbers may be rounded. The
+oversteer, traction, setup, tyres), a positional claim ("the first three corners"), corner or
+number that the facts do not contain rejects it (`fallback_reason` `ungrounded:…`) and the rules
+debrief stays; numbers may be rounded. Narration is HUD-sized (at most two short sentences);
+a reply cut by the token cap without one complete sentence is dropped (`truncated`). The
 immediate lap `coaching_response` carries no placeholder hint: a non-empty `hints` list replaces
 the trainer's own rules-engine lines, so the old "Sidecar v1: ack lap N" stub was what drivers saw
 after each lap. Deadlines begin at WS
