@@ -75,8 +75,23 @@ endpoint and generation environment names remain compatibility aliases. Numeric
 settings must be finite; timeout and output are bounded. Invalid configuration or
 transport/response failures preserve deterministic advice.
 
-All three model paths share one active blocking job and one pending latest request.
-Corner queries take priority over pending lap narration. Deadlines begin at WS
+**The model is for post-lap narration and between-lap focus (#854).** In-race corner hints
+come from the trainer's rules engine; model corner hints are opt-in with
+`AC_COPILOT_INFERENCE_CORNER_HINTS=1` (and still require the feature enabled). An agent-observed
+rig drive showed why: an accepted model hint can only restate the command the rules engine
+already chose for the speed delta (82 of 84 were "ACCELERATE, BUILD SPEED"), 41% of calls missed
+the 2 s deadline under live load, and the corner stream starved narration (1 of 3 laps). When
+off, a `corner_query` gets no reply and never touches the generation queue.
+
+The model paths share one active blocking job and one pending latest request, ordered
+narration (3) > between-lap focus (2) > opt-in corner hint (1): a pending higher priority
+survives a lower submit, and between-lap focus falls back to its deterministic phrase at once.
+Model narration must be grounded in its own facts: a diagnosis term (e.g. understeer,
+oversteer, traction, setup, tyres), corner or number that the facts do not contain rejects it
+(`fallback_reason` `ungrounded:…`) and the rules debrief stays; numbers may be rounded. The
+immediate lap `coaching_response` carries no placeholder hint: a non-empty `hints` list replaces
+the trainer's own rules-engine lines, so the old "Sidecar v1: ack lap N" stub was what drivers saw
+after each lap. Deadlines begin at WS
 receipt: two seconds for corners, eight seconds for lap narration. Superseded or
 expired work never sends a late model reply. Cancellation of a socket/async waiter
 does not release the blocking worker; an HTTP timeout is not proof the backend has
