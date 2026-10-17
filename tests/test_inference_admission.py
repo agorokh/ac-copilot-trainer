@@ -120,6 +120,109 @@ def test_invalid_config_does_no_network_io(monkeypatch, overrides):
     assert calls == []
 
 
+REMOTE = "https://m4.example.ts.net:8090"
+
+
+def _chat_reply(calls, content="HOLD STEADY", finish="stop", **extra):
+    def request(req, **kwargs):
+        calls.append((req, kwargs))
+        choice = {"message": {"content": content}, "finish_reason": finish}
+        return Response({"choices": [choice], **extra})
+
+    return request
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        f"{REMOTE}/v1",  # not approved: no allowlist configured
+        "http://m4.example.ts.net:8090/v1",  # remote plaintext
+        "https://m4.example.ts.net:9999/v1",  # wrong port
+        "https://user:pw@m4.example.ts.net:8090/v1",  # pragma: allowlist secret
+        "https://m4.example.ts.net:8090/v1?x=1",  # query
+    ],
+)
+def test_remote_endpoint_requires_exact_approved_https_origin(monkeypatch, base_url):
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_PROVIDER", "openai")
+    if base_url != f"{REMOTE}/v1":
+        monkeypatch.setenv("AC_COPILOT_INFERENCE_REMOTE_ORIGINS", REMOTE)
+    calls = []
+    monkeypatch.setattr(llm.urllib.request, "urlopen", _chat_reply(calls))
+    assert generate(base_url=base_url) is None
+    assert calls == []
+
+
+def test_approved_remote_origin_generates_with_reasoning_off_and_token(monkeypatch):
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_PROVIDER", "openai")
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_REMOTE_ORIGINS", f" {REMOTE.upper()}/ ,other")
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_REASONING_EFFORT", "none")
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_API_KEY", "sekret")
+    calls = []
+    monkeypatch.setattr(llm.urllib.request, "urlopen", _chat_reply(calls, model="qwen/qwen3.5-4b"))
+    assert generate(base_url=f"{REMOTE}/v1", model="qwen/qwen3.5-4b") == "HOLD STEADY"
+    req = calls[0][0]
+    assert req.full_url == f"{REMOTE}/v1/chat/completions"
+    assert json.loads(req.data)["reasoning_effort"] == "none"
+    assert req.get_header("Authorization") == "Bearer sekret"
+    assert llm.inference_status()["provider"] == "openai"
+
+
+def test_reasoning_and_token_absent_unless_configured(monkeypatch):
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_PROVIDER", "openai")
+    calls = []
+    monkeypatch.setattr(llm.urllib.request, "urlopen", _chat_reply(calls))
+    assert generate() == "HOLD STEADY"
+    assert "reasoning_effort" not in json.loads(calls[0][0].data)
+    assert calls[0][0].get_header("Authorization") is None
+
+
+def test_invalid_reasoning_effort_does_no_network_io(monkeypatch):
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_PROVIDER", "openai")
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_REASONING_EFFORT", "maximum")
+    calls = []
+    monkeypatch.setattr(llm.urllib.request, "urlopen", _chat_reply(calls))
+    assert generate() is None
+    assert calls == []
+
+
+def test_served_model_must_match_configured_identity(monkeypatch):
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_PROVIDER", "openai")
+    calls = []
+    monkeypatch.setattr(llm.urllib.request, "urlopen", _chat_reply(calls, model="other-model"))
+    assert generate() is None
+    assert llm.inference_status()["fallback_reason"] == "model_mismatch"
+
+
+def test_thinking_only_reply_falls_back(monkeypatch):
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_PROVIDER", "openai")
+    calls = []
+    monkeypatch.setattr(
+        llm.urllib.request, "urlopen", _chat_reply(calls, content="", finish="length")
+    )
+    assert generate() is None
+    assert llm.inference_status()["fallback_reason"] == "invalid_response"
+
+
+def test_truncated_reply_keeps_complete_sentences(monkeypatch):
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_PROVIDER", "openai")
+    text = "Your 116.699 s lap is solid. Brake 15 m later at T1. Carry more speed thr"
+    calls = []
+    monkeypatch.setattr(
+        llm.urllib.request, "urlopen", _chat_reply(calls, content=text, finish="length")
+    )
+    assert generate() == "Your 116.699 s lap is solid. Brake 15 m later at T1."
+    calls.clear()
+    monkeypatch.setattr(llm.urllib.request, "urlopen", _chat_reply(calls, content=text))
+    assert generate() == text  # a natural stop is never trimmed
+
+
+def test_status_reports_approved_remote_endpoint(monkeypatch):
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_BASE_URL", f"{REMOTE}/v1")
+    assert llm.inference_status()["remote"] is False
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_REMOTE_ORIGINS", REMOTE)
+    assert llm.inference_status()["remote"] is True
+
+
 def test_rig_defaults_disable_model_and_drop_retired_3050_endpoint():
     """#854: RTX3050 removed — default is rules-only and no retired endpoint is seeded."""
     env: dict[str, str] = {}
