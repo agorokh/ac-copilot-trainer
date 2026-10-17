@@ -418,3 +418,31 @@ def test_expired_pending_does_not_execute_and_running_reply_is_discarded():
         assert calls == [] and queue.discarded == 2
 
     asyncio.run(run())
+
+
+def test_capped_reply_without_a_complete_sentence_is_dropped(monkeypatch):
+    """#854 lap 1: '...against reference speeds of 67,' rendered mid-sentence on the HUD."""
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_PROVIDER", "openai")
+    cut = (
+        "Your first lap clocked in at 116.762 seconds with deficits against reference speeds of 67,"
+    )
+    calls = []
+    monkeypatch.setattr(
+        llm.urllib.request, "urlopen", _chat_reply(calls, content=cut, finish="length")
+    )
+    assert generate() is None
+    assert llm.inference_status()["fallback_reason"] == "truncated"
+
+
+def test_positional_corner_claims_must_be_in_the_facts():
+    lap2 = (
+        "On Lap 3, your time of 103.825 seconds shows underperformance across the first three "
+        "corners, specifically T1 and T3."
+    )
+    assert llm.narration_ungrounded_reason(lap2, LAP3, []) == "position:first three corners"
+    assert llm.narration_ungrounded_reason("Lap 3 lost time at T1 and T3.", LAP3, []) is None
+
+
+def test_narration_prompt_is_hud_sized():
+    prompt = llm.build_llm_prompt(LAP3, [])
+    assert "at most two short sentences" in prompt and "understeer" in prompt
