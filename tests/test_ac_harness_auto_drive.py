@@ -2728,6 +2728,16 @@ def test_probe_and_rebake_cli_flags_map_to_config():
     assert cfg.setup_rebake_interval == 0.3
 
 
+def test_hud_every_flag_is_off_by_default_and_validated():
+    base = ["--car", "ks_porsche_911_gt3_r_2016", "--track", "spa"]
+    assert _build_arg_parser().parse_args(base).hud_every == 0.0
+    assert _build_arg_parser().parse_args(base + ["--hud-every", "0"]).hud_every == 0.0
+    assert _build_arg_parser().parse_args(base + ["--hud-every", "4"]).hud_every == 4.0
+    for bad in ("0.5", "-1", "inf", "nan", "soon"):
+        with pytest.raises(SystemExit):
+            _build_arg_parser().parse_args(base + ["--hud-every", bad])
+
+
 def test_positive_float_flags_reject_bad_values():
     # A non-positive OR non-finite value must fail at parse time (clean usage error), not deep in
     # race_ini_setup_bake_loop, and not as a never-expiring hijack deadline (#482 review). `inf`

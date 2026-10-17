@@ -124,3 +124,82 @@ def test_main_exit_code_from_liveness(monkeypatch, tmp_path: Path, bgra: bytes, 
     out = tmp_path / "hud.png"
     assert _main(["--out", str(out), "--region", "full"]) == code
     assert out.read_bytes().startswith(PNG_SIGNATURE)
+
+
+def test_periodic_capture_indexes_frames_and_records_errors(tmp_path):
+    import json
+
+    calls = []
+
+    def grab(path, region, stride):
+        calls.append((path.name, region, stride))
+        if len(calls) == 2:
+            raise RuntimeError("desktop locked")
+        return {"rendering": True, "mean": 55.0, "distinct": 250}
+
+    clock = iter(float(x) for x in range(100, 200))
+    cap = hud_capture.PeriodicHudCapture(
+        tmp_path / "frames",
+        1,
+        region="coaching",
+        max_frames=2,
+        grab=grab,
+        clock=lambda: next(clock),
+    )
+    cap.start()
+    cap._thread.join(5)
+    summary = cap.stop()
+    rows = [json.loads(x) for x in (tmp_path / "frames" / "index.jsonl").read_text().splitlines()]
+    assert calls == [("f0001.png", "coaching", 2), ("f0002.png", "coaching", 2)]
+    assert rows[0]["rendering"] is True and rows[0]["epoch"] < rows[0]["done_epoch"]
+    assert rows[1]["error"] == "RuntimeError: desktop locked"  # recorded, never raised
+    assert summary["frames"] == 2 and summary["errors"] == 1
+
+
+def test_periodic_capture_stop_is_prompt_and_bounded(tmp_path):
+    cap = hud_capture.PeriodicHudCapture(
+        tmp_path, 30, grab=lambda *_: {"rendering": True, "mean": 1.0, "distinct": 9}
+    )
+    cap.start()
+    assert cap.stop(timeout_s=5)["frames"] == 1  # stop interrupts the 30 s wait
+    assert not cap._thread.is_alive()
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"interval_s": 0.5},
+        {"interval_s": float("inf")},
+        {"interval_s": True},
+        {"interval_s": 2, "region": "nope"},
+        {"interval_s": 2, "stride": 0},
+        {"interval_s": 2, "max_frames": 0},
+    ],
+)
+def test_periodic_capture_rejects_bad_settings(tmp_path, kwargs):
+    with pytest.raises(ValueError):
+        hud_capture.PeriodicHudCapture(tmp_path, **kwargs)
+
+
+def test_grab_frame_subprocess_parses_child_verdict(monkeypatch, tmp_path):
+    import subprocess
+
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen.update(cmd=cmd, cwd=kw.get("cwd"))
+        out = "hud-capture: BLACK/FROZEN region=full 10x10 -> x.png (5x5) mean=0.4 distinct=1\n"
+        return subprocess.CompletedProcess(cmd, 1, stdout=out, stderr="")
+
+    monkeypatch.setattr(hud_capture.subprocess, "run", fake_run)
+    verdict = hud_capture.grab_frame_subprocess(tmp_path / "f.png", "full", 2)
+    assert verdict == {"rendering": False, "mean": 0.4, "distinct": 1}
+    assert seen["cmd"][1:3] == ["-m", "tools.ac_harness.hud_capture"]
+    assert seen["cwd"] == hud_capture._REPO_ROOT
+
+    def broken(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 2, stdout="", stderr="RuntimeError: no desktop")
+
+    monkeypatch.setattr(hud_capture.subprocess, "run", broken)
+    with pytest.raises(RuntimeError, match="no desktop"):
+        hud_capture.grab_frame_subprocess(tmp_path / "f.png", "full", 2)

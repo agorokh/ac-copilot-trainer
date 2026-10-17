@@ -4018,6 +4018,19 @@ def ensure_sidecar(  # pragma: no cover - rig-only
     return False, f"sidecar did not open {host}:{port} within {startup_timeout:.0f}s", None
 
 
+def _hud_every_seconds(raw: str) -> float:
+    """argparse type for ``--hud-every``: 0 disables, otherwise a finite interval >= 1 s."""
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"--hud-every must be a number, got {raw!r}") from exc
+    if value == 0:
+        return 0.0
+    if not math.isfinite(value) or value < 1.0:
+        raise argparse.ArgumentTypeError("--hud-every must be 0 (off) or a finite value >= 1")
+    return value
+
+
 def _capture_hud_evidence(evidence_dir: Path, region: str) -> dict:  # pragma: no cover - rig-only
     """Best-effort HUD capture into the evidence bundle; returns the liveness verdict."""
     try:
@@ -4231,6 +4244,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         choices=("full", "left", "coaching"),
         default="full",
         help="HUD capture region saved into the evidence bundle",
+    )
+    p.add_argument(
+        "--hud-every",
+        type=_hud_every_seconds,
+        default=0.0,
+        help="also keep a timestamped HUD frame every N seconds (>= 1) for the whole run under "
+        "<evidence>/hud-frames/ so an observer can check what the screen showed; 0 = off (#854)",
     )
     p.add_argument(
         "--max-recoveries",
@@ -4897,6 +4917,8 @@ def _main_impl(
             return 2
 
     sidecar_proc = None
+    periodic_hud = None
+    hud_frames = None
     try:
         sidecar_ok, sidecar_detail, sidecar_proc = ensure_sidecar(
             config.sidecar_url, autostart=not args.no_sidecar_autostart
@@ -4905,6 +4927,14 @@ def _main_impl(
         if not sidecar_ok:
             return 2
 
+        if args.hud_every:
+            from tools.ac_harness.hud_capture import PeriodicHudCapture
+
+            periodic_hud = PeriodicHudCapture(
+                evidence_dir / "hud-frames", args.hud_every, region=args.hud_region
+            )
+            periodic_hud.start()
+            print(f"auto-drive: HUD frame every {args.hud_every:g}s -> {periodic_hud.out_dir}")
         run_started_epoch = time.time()
         rig_telemetry_cleanup_holds: list[Controller] = []
         try:
@@ -4932,6 +4962,8 @@ def _main_impl(
         for retained_controller in rig_telemetry_cleanup_holds:
             report.retain_cleanup_controller(retained_controller)
     finally:
+        if periodic_hud is not None:
+            hud_frames = periodic_hud.stop()
         if sidecar_proc is not None and not args.keep_sidecar:
             sidecar_proc.terminate()
 
@@ -5047,6 +5079,7 @@ def _main_impl(
             "app_install": app_provenance.to_dict(),
         },
         "hud": hud,
+        "hud_frames": hud_frames,
         "lap_archives": lap_archives,
         "lap_archives_all": lap_archives_all,
         "journal_dir": str(journal_dir) if journal_dir else None,

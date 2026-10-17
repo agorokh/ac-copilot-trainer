@@ -11,15 +11,26 @@ pure and unit-tested. The agent-vision / OCR assertion of specific HUD strings i
 (read the saved PNG), not part of this primitive.
 
 CLI: ``python -m tools.ac_harness.hud_capture --out hud.png --region coaching``
+
+:class:`PeriodicHudCapture` (``auto_drive --hud-every``) keeps timestamped frames for a whole run
+so an observing agent can check what the screen actually showed, and when (#854).
 """
 
 from __future__ import annotations
 
 import argparse
+import json
+import math
+import re
 import struct
+import subprocess
 import sys
+import threading
+import time
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 # GDI / DIB constants.
 _SRCCOPY = 0x00CC0020
@@ -190,6 +201,119 @@ def save_png(path: str, w: int, h: int, bgra: bytes, *, stride: int = 1) -> tupl
     with open(path, "wb") as fh:
         fh.write(encode_png(out_w, out_h, rgb))
     return out_w, out_h
+
+
+_FRAME_LINE = re.compile(r"hud-capture: (RENDERING|BLACK/FROZEN) .*mean=([\d.]+) distinct=(\d+)")
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def grab_frame_subprocess(path: Path, region: str, stride: int, *, timeout_s: float = 20.0) -> dict:
+    """Capture one frame in a child process and return its liveness verdict.
+
+    The BGRA→RGB conversion is a per-pixel Python loop; running it in the caller would hold the
+    GIL for about a second per frame and jitter a concurrent drive controller. The child inherits
+    the caller's (console) session, so it captures the same desktop.
+    """
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tools.ac_harness.hud_capture",
+            "--out",
+            str(path),
+            "--region",
+            region,
+            "--stride",
+            str(stride),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=timeout_s,
+        cwd=_REPO_ROOT,
+    )
+    match = _FRAME_LINE.search(proc.stdout or "")
+    if match is None:
+        detail = (proc.stderr or proc.stdout or "").strip()[-200:]
+        raise RuntimeError(f"hud_capture exit {proc.returncode}: {detail}")
+    return {
+        "rendering": match.group(1) == "RENDERING",
+        "mean": float(match.group(2)),
+        "distinct": int(match.group(3)),
+    }
+
+
+class PeriodicHudCapture:
+    """Timestamped frames every ``interval_s`` until stopped, indexed in ``index.jsonl``.
+
+    Observation evidence must never fail a run: a capture error is recorded, not raised. Frames are
+    bounded by ``max_frames`` so a hung run cannot fill the disk.
+    """
+
+    def __init__(
+        self,
+        out_dir: Path,
+        interval_s: float,
+        *,
+        region: str = "full",
+        stride: int = 2,
+        max_frames: int = 600,
+        grab: Callable[[Path, str, int], dict] = grab_frame_subprocess,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        if isinstance(interval_s, bool) or not isinstance(interval_s, (int, float)):
+            raise ValueError("interval_s must be a number")
+        if not math.isfinite(interval_s) or interval_s < 1.0:
+            raise ValueError("interval_s must be finite and >= 1 second")
+        if region not in _REGIONS:
+            raise ValueError(f"unknown region {region!r} (expected one of {sorted(_REGIONS)})")
+        if stride < 1 or max_frames < 1:
+            raise ValueError("stride and max_frames must be >= 1")
+        self.out_dir, self.interval_s, self.region = Path(out_dir), float(interval_s), region
+        self.stride, self.max_frames = stride, max_frames
+        self._grab, self._clock = grab, clock
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.frames = 0
+        self.errors = 0
+
+    def start(self) -> None:
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self._thread = threading.Thread(target=self._run, name="periodic-hud-capture", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        index = self.out_dir / "index.jsonl"
+        for n in range(1, self.max_frames + 1):
+            if self._stop.is_set():
+                break
+            path = self.out_dir / f"f{n:04d}.png"
+            started = self._clock()
+            try:
+                record = {"n": n, "epoch": started, "file": path.name}
+                record.update(self._grab(path, self.region, self.stride))
+            except Exception as exc:  # noqa: BLE001 - observation evidence never fails the run
+                record = {"n": n, "epoch": started, "error": f"{type(exc).__name__}: {exc}"[:300]}
+                self.errors += 1
+            record["done_epoch"] = self._clock()
+            self.frames = n
+            with index.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record) + "\n")
+            if self._stop.wait(self.interval_s):
+                break
+
+    def stop(self, timeout_s: float = 30.0) -> dict:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout_s)
+        return {
+            "dir": str(self.out_dir),
+            "index": "index.jsonl",
+            "interval_s": self.interval_s,
+            "region": self.region,
+            "stride": self.stride,
+            "frames": self.frames,
+            "errors": self.errors,
+        }
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
