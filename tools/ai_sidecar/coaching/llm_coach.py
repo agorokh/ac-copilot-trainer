@@ -35,7 +35,7 @@ _ENV_DEBRIEF_TIMEOUT = "AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC"
 # an optional bearer token. The token is only ever sent to an approved URL.
 _ENV_REMOTE_ORIGINS = "AC_COPILOT_INFERENCE_REMOTE_ORIGINS"
 _ENV_REASONING_EFFORT = "AC_COPILOT_INFERENCE_REASONING_EFFORT"
-_ENV_API_KEY = "AC_COPILOT_INFERENCE_API_KEY"
+_ENV_API_KEY = "AC_COPILOT_INFERENCE_API_KEY"  # pragma: allowlist secret (env var name)
 _REASONING_EFFORTS = frozenset({"none", "low", "medium", "high"})
 
 # Documented in WARP.md — tested against Ollama 0.5.x API; pin locally for support.

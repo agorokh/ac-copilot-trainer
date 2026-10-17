@@ -138,7 +138,7 @@ def _chat_reply(calls, content="HOLD STEADY", finish="stop", **extra):
         f"{REMOTE}/v1",  # not approved: no allowlist configured
         "http://m4.example.ts.net:8090/v1",  # remote plaintext
         "https://m4.example.ts.net:9999/v1",  # wrong port
-        "https://user:pw@m4.example.ts.net:8090/v1",  # credentials in URL
+        "https://user:pw@m4.example.ts.net:8090/v1",  # pragma: allowlist secret
         "https://m4.example.ts.net:8090/v1?x=1",  # query
     ],
 )
