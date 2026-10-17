@@ -2,12 +2,7 @@
   "protocol": 1,
   "event": "coaching_response",
   "lap": 2,
-  "hints": [
-    {
-      "kind": "general",
-      "text": "Sidecar v1: ack lap 2"
-    }
-  ],
+  "hints": [],
   "improvementRanking": [
     {
       "corner": 1,

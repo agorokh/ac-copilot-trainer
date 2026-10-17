@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 import threading
+import time
 
 import pytest
 
@@ -117,6 +118,7 @@ def test_live_ws_drops_superseded_corner_without_overlapping_blocking_workers(mo
 
     monkeypatch.setattr(proto, "compose_corner_hint", hint)
     monkeypatch.setattr(srv, "debrief_feature_enabled", lambda: False)
+    monkeypatch.setattr(srv, "corner_hints_enabled", lambda: True)  # opt-in path (#854)
 
     async def run():
         async with websockets.serve(lambda ws: srv._handler(ws, True), "127.0.0.1", 0) as server:
@@ -223,8 +225,9 @@ def test_prepare_coaching_response_fixture() -> None:
     assert out is not None
     assert out["event"] == EVENT_COACHING_RESPONSE
     assert out["lap"] == 4
-    assert isinstance(out["hints"], list)
-    assert out["hints"][0]["text"]
+    # #854: no "Sidecar vN: ack lap" placeholder — a non-empty list replaces the trainer's own
+    # rules-engine lines in the HUD.
+    assert out["hints"] == []
 
 
 def test_prepare_no_reply_mode() -> None:
@@ -416,7 +419,82 @@ def test_sidecar_websocket_lap_complete_roundtrip() -> None:
                 assert out["protocol"] == PROTOCOL_VERSION
                 assert out["event"] == EVENT_COACHING_RESPONSE
                 assert out["lap"] == 7
-                assert len(out["hints"]) >= 1
+                # No placeholder: hints replace the trainer's rules lines (#854).
+                assert out["hints"] == []
+
+    asyncio.run(_go())
+
+
+def test_sidecar_corner_query_is_not_sent_to_the_model_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#854: with inference on but in-race hints not opted in, a corner_query gets no reply
+    and never reaches the model or the generation queue."""
+    websockets = pytest.importorskip("websockets", minversion="12")
+    import tools.ai_sidecar.protocol as proto
+    from tools.ai_sidecar import server
+
+    monkeypatch.setenv("AC_COPILOT_INFERENCE_ENABLE", "1")
+    monkeypatch.delenv("AC_COPILOT_INFERENCE_CORNER_HINTS", raising=False)
+    calls: list[dict] = []
+    monkeypatch.setattr(proto, "compose_corner_hint", lambda **kw: calls.append(kw) or "ON PACE")
+    submits: list[int] = []
+    real_submit = server.LatestGenerationQueue.submit
+
+    async def counting_submit(self, call, *, deadline, priority=0):
+        submits.append(priority)
+        return await real_submit(self, call, deadline=deadline, priority=priority)
+
+    monkeypatch.setattr(server.LatestGenerationQueue, "submit", counting_submit)
+
+    async def _go() -> None:
+        async with websockets.serve(
+            lambda w: server._handler(w, reply_coaching=True), "127.0.0.1", 0
+        ) as srv:
+            port = srv.sockets[0].getsockname()[1]
+            async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+                query = {"protocol": PROTOCOL_VERSION, "event": "corner_query", "corner": "T1"}
+                query.update(cur=80, ref=70, dist=40, lap=0)
+                await ws.send(json.dumps(query))
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(ws.recv(), timeout=0.5)
+
+    asyncio.run(_go())
+    assert calls == [] and submits == []
+
+
+def test_post_lap_generation_outranks_in_race_hints() -> None:
+    from tools.ai_sidecar import server
+
+    assert server._NARRATION_PRIORITY > server._BETWEEN_LAP_PRIORITY > server._CORNER_HINT_PRIORITY
+
+    async def _go() -> None:
+        import threading
+
+        queue = server.LatestGenerationQueue()
+        entered, release = threading.Event(), threading.Event()
+
+        def busy():
+            entered.set()
+            release.wait(2)
+
+        active = asyncio.create_task(queue.submit(busy, deadline=time.monotonic() + 5))
+        await asyncio.to_thread(entered.wait, 2)
+        narration = asyncio.create_task(
+            queue.submit(
+                lambda: "narration",
+                deadline=time.monotonic() + 5,
+                priority=server._NARRATION_PRIORITY,
+            )
+        )
+        await asyncio.sleep(0)
+        corner = await queue.submit(
+            lambda: "corner", deadline=time.monotonic() + 5, priority=server._CORNER_HINT_PRIORITY
+        )
+        release.set()
+        assert corner is None  # a corner hint cannot displace pending narration
+        assert await narration == "narration"
+        await active
 
     asyncio.run(_go())
 

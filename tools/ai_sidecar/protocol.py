@@ -316,16 +316,14 @@ def prepare_outbound_message(
         return None
 
     lap = inbound.get("lap")
+    # No placeholder hint (#854): any non-empty ``hints`` replaces the trainer's own rules-engine
+    # coaching lines, so the old "Sidecar v1: ack lap N" stub was what drivers saw after each lap.
+    # An empty list keeps the rules lines; the debrief and ranking still ride this response.
     out: dict[str, Any] = {
         "protocol": PROTOCOL_VERSION,
         "event": EVENT_COACHING_RESPONSE,
         "lap": lap,
-        "hints": [
-            {
-                "kind": "general",
-                "text": f"Sidecar v{PROTOCOL_VERSION}: ack lap {lap!s}",
-            },
-        ],
+        "hints": [],
     }
     imp: list[dict[str, Any]] = []
     if lap_state is not None:

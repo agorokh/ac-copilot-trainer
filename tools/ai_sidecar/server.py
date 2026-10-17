@@ -34,7 +34,11 @@ from typing import Any
 from tools.ai_sidecar import observability
 from tools.ai_sidecar.car_class import CarClassResolution, resolve_installed_car
 from tools.ai_sidecar.coaching.generation import LatestGenerationQueue
-from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled, inference_status
+from tools.ai_sidecar.coaching.llm_coach import (
+    corner_hints_enabled,
+    debrief_feature_enabled,
+    inference_status,
+)
 from tools.ai_sidecar.csp_setup_exchange import (
     SetupExchangeBroker,
     fit_screen_response,
@@ -592,6 +596,15 @@ def _reset_external_state() -> None:
     _observer_feed_warned = False
 
 
+#: Queue priorities (#854). Post-lap narration and between-lap focus are what the model is for;
+#: an opt-in in-race corner hint must never displace them (a pending higher priority survives a
+#: lower-priority submit — see LatestGenerationQueue.submit). Narration outranks between-lap
+#: focus: the focus model may only echo the deterministic phrase and falls back to it at once.
+_CORNER_HINT_PRIORITY = 1
+_BETWEEN_LAP_PRIORITY = 2
+_NARRATION_PRIORITY = 3
+
+
 def _get_generation_queue() -> LatestGenerationQueue:
     global _generation_queue, _generation_loop
     loop = asyncio.get_running_loop()
@@ -850,6 +863,7 @@ async def _send_ollama_followup(
         followup = await _get_generation_queue().submit(
             lambda: build_ollama_followup(inbound, improvement_ranking) if is_current() else None,
             deadline=deadline,
+            priority=_NARRATION_PRIORITY,
         )
     except asyncio.CancelledError:
         raise
@@ -982,6 +996,7 @@ async def _coach_v2_between_lap(
                 else None
             ),
             deadline=deadline,
+            priority=_BETWEEN_LAP_PRIORITY,
         )
         if advice is None and binding_is_current():
             advice = select_between_lap_advice(
@@ -3304,6 +3319,10 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
             # corner_query does not read LapComparisonState — keep it out of
             # prepare_lock so lap_complete is not blocked behind Ollama (Copilot).
             if reply_coaching and data.get("event") == EVENT_CORNER_QUERY:
+                if not corner_hints_enabled():
+                    # #854: in-race hints come from the trainer's rules engine. No reply is the
+                    # protocol's "no model hint"; skipping the queue keeps narration unblocked.
+                    continue
 
                 async def _corner_job(d: dict[str, Any], gen: int) -> None:
                     try:
@@ -3318,7 +3337,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                                 else None
                             ),
                             deadline=d["_inference_deadline"],
-                            priority=1,
+                            priority=_CORNER_HINT_PRIORITY,
                         )
                         if gen != corner_job_gen[0]:
                             return
