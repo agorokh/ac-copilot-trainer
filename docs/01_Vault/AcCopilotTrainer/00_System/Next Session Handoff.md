@@ -2,8 +2,10 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-10-17T05:10:00Z
+last_updated: 2026-10-17T08:00:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-854-remote-inference-2026-10-17.md
+  - AcCopilotTrainer/pitfalls/assisted-drive-archive-rotation.md
   - AcCopilotTrainer/03_Investigations/issue-854-coaching-default-off-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-529-g1-mclaren-magione-2026-10-16.md
   - AcCopilotTrainer/10_Rig/external-racing-controls.md
@@ -137,6 +139,31 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-10-17, later) — #854 clause 3: remote model backend approved, built, deployed and accepted
+
+Operator directed a comparison of (1) llama back on the rig RTX 3060 vs (2) network inference
+from the Mac Studio's existing LM Studio, approved option 2 (shared `qwen/qwen3.5-4b`) and an
+install–measure–uninstall of option 1. Matched A–B–A–C PresentMon drives on AG_PC
+(Porsche/Magione GGV, 360 s, 3440x1440): fps 69.86 / 69.45 (llama on 3060) / 69.50 / 69.69
+(remote); displayed p99 15.38 / 15.55 / 15.43 / 15.34 ms; none over 33 ms.
+**Option 1:** game unaffected but model starved — median 2.6 s per generation under game
+load vs a 2 s corner deadline, 154 expired, zero model advice rendered; Ollama uninstalled,
+31.5 GB model store and user PATH restored. **Option 2:** 140 accepted model corner
+advisories delivered to the HUD in one drive, no rig cost, fail-safe to rules verified live.
+
+Shipped PR #868 (`5bc4e66`, approved-origin remote client + `reasoning_effort` + identity
+check + truncation trim) and PR #869 (`31d158a`, in-race advice labelled `adviceSource=model`); both deployed to the rig. Rig user
+env now selects the backend (rollback: `.scratch/inference854/env-rollback.json`); deployed
+`start_sidecar.bat` reports `enabled/remote=true`. **#854 stays open** for operator review of
+ordinary human gaming with model coaching on, HA-voice contention, and 0x133.
+
+**Incident (mine, restored):** the earlier porsche acceptance drive below ran without the
+archive-off guard; rotation evicted personal lap `lap_20261012-185218_…`. Restored byte-exact,
+assisted lap quarantined, combo/`video.ini` restored; every later drive used the guard —
+pitfall [[assisted-drive-archive-rotation]]. Also found `Rig - GPU Health Logging`
+**Disabled** (stopped 03:23 UTC, not by this session) — owner workstation-ops#4004.
+Node: [[issue-854-remote-inference-2026-10-17]].
 
 ## Delivered (2026-10-17) — #854 Part A: coaching inference defaults reconciled after RTX3050 removal (PR #865 MERGED `8cd5c30`)
 
