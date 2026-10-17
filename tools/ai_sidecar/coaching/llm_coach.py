@@ -543,6 +543,7 @@ def call_ollama_generate(
             return None
         _set_generation_status(ready=True, fallback_reason=None, checked_at=time.time())
         text = _sanitize_debrief(text)
+        # Both providers set ``truncated`` above (Ollama done_reason, chat finish_reason).
         if truncated:
             text = _trim_truncated(text)
             if not text:
