@@ -1785,6 +1785,20 @@ def build_pyinstaller_args(
         # from sys._MEIPASS/fonts. Present only on packaging branches — guarded so
         # a checkout without the TTFs still builds.
         args.extend(["--add-data", f"{fonts_dir}{os.pathsep}fonts"])
+    icon = project_root / "tools" / "rig_launcher" / "assets" / "game_point.ico"
+    if icon.is_file():
+        # Racing Atelier app icon (#881): --icon brands the EXE resource (Explorer, the
+        # Desktop shortcut's IconLocation and the taskbar all read it from there); the
+        # --add-data copy is what tools.rig_launcher.chrome hands Tk for the window icon,
+        # landing beside the frozen module at _MEIPASS/tools/rig_launcher/assets.
+        args.extend(
+            [
+                "--icon",
+                str(icon),
+                "--add-data",
+                f"{icon}{os.pathsep}tools/rig_launcher/assets",
+            ]
+        )
     _append_optional_pyinstaller_module(args, "rtmixer")
     _append_optional_pyinstaller_module(args, "pa_ringbuffer")
     _append_optional_pyinstaller_module(args, "hid")

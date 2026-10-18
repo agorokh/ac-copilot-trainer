@@ -38,6 +38,26 @@ be enlarged; live status updates can raise the minimum to fit longer messages
 without shrinking a larger window chosen by the operator. Its visual preview
 uses the same sizing path.
 
+### App icon and window chrome (#881)
+
+The EXE, taskbar button, window icon and Desktop shortcut use the Racing
+Atelier mark: brass corner brackets around the brass seg-mark + `GP` monogram
+on carbon. It is generated from code by `tools/rig_launcher/icon.py` (stdlib
+only, pixel-snapped per size, 16–256 px) into the committed
+`tools/rig_launcher/assets/game_point.ico`; after changing the mark, run
+`python -m tools.rig_launcher.icon --write` (a test fails on drift).
+`--build-exe` passes it as `--icon` and bundles it for Tk. The shortcut points
+`IconLocation` at the exe, so it follows the rebuilt EXE; if Explorer keeps
+showing the old icon from its cache, run `ie4uinit.exe -show`.
+
+The window keeps the **native** Windows frame and recolours it through DWM:
+immersive dark mode plus a carbon caption with chalk text (Windows 11; Windows
+10 gets the plain dark caption). A custom Tk-drawn title bar
+(`overrideredirect`) was rejected because it drops the taskbar button, Alt+Tab,
+Aero snap, native resize borders and the system menu.
+`python -m tools.rig_launcher.preview --frame --out launcher.png` captures the
+window including its title bar.
+
 ### Audio backend (rtmixer is opt-in)
 
 `pip install -e ".[launcher]"` is **always installable on a clean Windows rig**:
