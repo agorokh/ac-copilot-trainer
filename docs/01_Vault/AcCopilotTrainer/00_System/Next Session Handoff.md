@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-10-17T23:20:00Z
+last_updated: 2026-10-18T20:50:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-627-stable-ac-chain-2026-10-18.md
   - AcCopilotTrainer/03_Investigations/issue-86-native-se-live-readback-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-854-agent-observed-acceptance-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-854-remote-inference-2026-10-17.md
@@ -141,6 +142,29 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-10-18) — Stable AC fixed, then retired to a service tool (#627)
+
+Stable AC had never produced a stable session. #876 targeted the wrong branch (disproven live, 12/12
+still failed). #877 added a 20 s floor to `classify`'s post-go-live stall rule (the ~10 s render pause
+after Start was being killed as a wedge); the first ever `stable` came on attempt 1. #879 removed the
+CSP Car0 handshake from Stable AC: CSP keeps sourcing car 0's inputs from `CarControls0` after the
+launcher closes it, so the driver's wheel was dead (measured: leftover section + gas=1 → 9044 rpm).
+It now asks the trainer `isInMainMenu` via `session.start` + `probe_only`; the operator confirmed the
+controls work. #884 (operator decision): Stable AC is off the main Game Point screen, CLI only
+(`--resilient-launch` / `--resilient-release`). **Play = Content Manager + ▶ START.** The Game Point
+EXE on the rig is built from `465905b` (also contains the #882 icon + dark title bar from a parallel
+session); older builds are kept as `dist/*.exe.bak`. Detail:
+[[issue-627-stable-ac-chain-2026-10-18]].
+
+**Next, in order:** (1) A/B launch with the trainer app disabled to learn whether our session-start
+work causes the few-second post-Start render freeze the operator feels on every launch; if yes, move
+that work before the driver can drive. (2) #86 rig screen: Pocket Technician setup names wrap into
+the BB/ABS/TC line (`make_row` name label is LONG_DOT with auto height — needs a fixed one-line
+height), reproduce with the operator's real names (`Copilot_Scientist_<hash>_<hash>`) in the native
+simulator before flashing; and Setup Exchange must say clearly when the service has no setups for
+the car at the current track (Magione/911 GT3 R has 0). (3) Never run `_probe_car0_drivable` in a
+session a person will drive.
 
 ## Delivered (2026-10-17, night) — #86 native Setup Exchange verified live against the real service
 
