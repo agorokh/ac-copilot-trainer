@@ -2,13 +2,14 @@
 type: index
 status: active
 created: 2026-04-10
-updated: 2026-10-17
+updated: 2026-10-18
 relates_to:
   - AcCopilotTrainer/00_System/invariants/_index.md
   - AcCopilotTrainer/01_Decisions/shift-left-issue-creation.md
   - AcCopilotTrainer/pitfalls/epic-body-delivery-drift.md
   - AcCopilotTrainer/pitfalls/cross-issue-pointer-rot.md
   - AcCopilotTrainer/pitfalls/assisted-drive-archive-rotation.md
+  - AcCopilotTrainer/pitfalls/linkage-autoclose-against-intent.md
 ---
 
 # Pitfalls (index)
@@ -37,6 +38,7 @@ with `scope_paths`; process pitfalls below deliberately omit them.
 
 | Node | Severity | Source |
 |------|----------|--------|
-| [epic-body-delivery-drift.md](epic-body-delivery-drift.md) | maintainability | `/backlog-steward` sweep 2026-06-22 (canonical: #154); investigation-brief variant added 2026-07-24 (canonical: #627) |
+| [epic-body-delivery-drift.md](epic-body-delivery-drift.md) | maintainability | `/backlog-steward` sweep 2026-06-22 (canonical: #154); investigation-brief variant added 2026-07-24 (canonical: #627); label-statement + fix-claim variant added 2026-10-18 (#86/#529 headers vs live labels; #627 comment vs PR #877) |
 | [cross-issue-pointer-rot.md](cross-issue-pointer-rot.md) | maintainability | `/backlog-steward` sweep 2026-07-24 (canonical: #534→#59/#119 phantom gates) |
 | [assisted-drive-archive-rotation.md](assisted-drive-archive-rotation.md) | data-loss | #854 rig acceptance 2026-10-17: unguarded assisted lap evicted a personal lap via size rotation (restored) |
+| [linkage-autoclose-against-intent.md](linkage-autoclose-against-intent.md) | maintainability | `/backlog-steward` sweep 2026-10-18 (canonical: #813 closed by PR #848's closing-reference linkage two seconds after merge, against the PR body's own "does not close #813") |

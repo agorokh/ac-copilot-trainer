@@ -2,7 +2,7 @@
 type: pitfall
 status: active
 created: 2026-06-22
-updated: 2026-06-22
+updated: 2026-10-18
 severity: maintainability
 origin: human-curated
 domains: [process, backlog]
@@ -77,6 +77,24 @@ asserts a refuted mechanism plus an obsolete standing mitigation). **Rule:** any
 comment that refutes a numbered body section must, in the same session, edit the body in place
 or pin a "v2 state" comment linked from the top. See
 [backlog-reconcile-2026-07-24](../03_Investigations/backlog-reconcile-2026-07-24.md).
+
+## Variant: label-statement and fix-claim drift (steward sweep 2026-10-18)
+
+Two smaller rakes of the same family, caught in the 2026-10-18 sweep (ledger snapshot
+`2026-10-18-175107Z-…-bdd6d5`):
+
+- **Label statements baked into the body.** #86 and #529 both open with "keep OPEN,
+  `not-this-cycle`" (#86 also `status:blocked-on-rig`); the operator removed those labels on
+  2026-10-16 and `Roadmap.md` still instructs "preserve not-this-cycle on #529/#86". A reader
+  trusting the body skips work the operator just unparked. **Rule:** bodies describe *acceptance*,
+  not label state; if a label disposition must be quoted, date it and name the deciding comment.
+- **Fix-claim comment superseded by the next PR.** #627's 2026-10-18 comment attributes the
+  Stable AC relaunch loop to a Car0-probe branch fixed in PR #876; open PR #877 measured that
+  branch was never reached (12/12 still `froze` on the #876 build) and moves the cause to
+  `classify`'s post-go-live stall rule. Until a correction lands, the newest comment on the
+  canonical brief is wrong about the fix. **Rule:** a root-cause claim on a "start here" issue is
+  posted only after the real user path (here, the Stable AC button) is re-exercised on the fixed
+  build; otherwise label it a hypothesis.
 
 ## Upstream candidate
 
