@@ -120,7 +120,7 @@ The repository's established investigation location is `03_Investigations/`.
     "body-level: header item 1 cites resilient-launch-report/v4 as current; v5 shipped (#876), v6 pending (#877)."
    ],
    "recommended_action": "keep; after #877 merges, one correction comment superseding the #876 root-cause claim and a narrow header refresh (schema v6; v3/v4/v5 superseded; Stable AC v4/v5 froze counts invalid as denominators). No split; C2 contract unchanged.",
-   "main_sha": "8fade2cfa83c7d7e48cdded7c304b1d4a32945e1"
+   "main_sha": "8fade2c"
   }
  },
  "agorokh/ac-copilot-trainer#86": {
@@ -209,7 +209,7 @@ The repository's established investigation location is `03_Investigations/`.
     "body-level: 'Reconciliation status \u2014 2026-10-13' asserts status:blocked-on-rig and not-this-cycle (both removed 2026-10-16) and lists SE as proxy-based; no rows for #858/#862/#875."
    ],
    "recommended_action": "rewrite (github-issue-creator, body refresh only): add #858/#862 rows, correct the label statement, record the native-SE scope evolution and the operator-only setup.load positive branch; then schedule the operator smoke/photo session (the #534 SimHub plugin check can ride along). No closure proposed.",
-   "main_sha": "8fade2cfa83c7d7e48cdded7c304b1d4a32945e1"
+   "main_sha": "8fade2c"
   }
  },
  "agorokh/ac-copilot-trainer#815": {
@@ -308,7 +308,7 @@ The repository's established investigation location is `03_Investigations/`.
     "Instrument reuse: #531's PR #846 microphone capture (microphone.py, voice/web/mic_worklet.js) is the available fix for the measured mic-sync failure."
    ],
    "recommended_action": "keep; no body change required beyond an optional pointer to the #846 microphone path; re-run acoustic acceptance after #877.",
-   "main_sha": "8fade2cfa83c7d7e48cdded7c304b1d4a32945e1"
+   "main_sha": "8fade2c"
   }
  },
  "agorokh/ac-copilot-trainer#529": {
@@ -411,7 +411,7 @@ The repository's established investigation location is `03_Investigations/`.
     "body-level: header asserts not-this-cycle (removed 2026-10-16) and predates the mclaren datapoint."
    ],
    "recommended_action": "keep; narrow header correction (unparked 2026-10-16; mclaren datapoint; the G1 lever decision is the operator's). Flag the #854 Coach-v2 0-corner residue as a candidate fold into G3 \u2014 operator call, not filed here.",
-   "main_sha": "8fade2cfa83c7d7e48cdded7c304b1d4a32945e1"
+   "main_sha": "8fade2c"
   }
  },
  "agorokh/ac-copilot-trainer#534": {
@@ -472,7 +472,7 @@ The repository's established investigation location is `03_Investigations/`.
     "Operator SimHub plugin install/enable + property-picker/NCalc verification on the rig (can ride along with the #86 rig session)."
    ],
    "recommended_action": "keep; no body change.",
-   "main_sha": "8fade2cfa83c7d7e48cdded7c304b1d4a32945e1"
+   "main_sha": "8fade2c"
   }
  },
  "agorokh/ac-copilot-trainer#401": {
@@ -528,7 +528,7 @@ The repository's established investigation location is `03_Investigations/`.
     "Paired #401 body + Roadmap.md refresh reflecting closures (#813/#804/#531/#854), new software (#858/#862/#865/#868/#876), and the operator unparking of #86/#529; preserve parked dispositions on #534/#117/#401."
    ],
    "recommended_action": "rewrite (github-issue-creator, paired body + Roadmap.md, metadata-only); preserve parked programme disposition.",
-   "main_sha": "8fade2cfa83c7d7e48cdded7c304b1d4a32945e1"
+   "main_sha": "8fade2c"
   }
  },
  "agorokh/ac-copilot-trainer#117": {
@@ -595,7 +595,7 @@ The repository's established investigation location is `03_Investigations/`.
     "All four checkboxes; revival gated on #627 per operator decision 2C (comment 5077070595)."
    ],
    "recommended_action": "keep; no change.",
-   "main_sha": "8fade2cfa83c7d7e48cdded7c304b1d4a32945e1"
+   "main_sha": "8fade2c"
   }
  },
  "agorokh/ac-copilot-trainer#813": {
@@ -641,7 +641,7 @@ The repository's established investigation location is `03_Investigations/`.
     "Explicit disposition by the owner: accept the #531/#849 autonomous evidence as satisfying #813's retained P7 clauses (and waive the operator-driven lap), or reopen and finish. Either is a tracker mutation \u2014 proposal only."
    ],
    "recommended_action": "escalate to operator: record a closing-disposition comment on #813 (preferred) or reopen; never leave an auto-closed issue with undispositioned acceptance.",
-   "main_sha": "8fade2cfa83c7d7e48cdded7c304b1d4a32945e1"
+   "main_sha": "8fade2c"
   }
  },
  "agorokh/ac-copilot-trainer#531": {
@@ -678,7 +678,7 @@ The repository's established investigation location is `03_Investigations/`.
    "counterevidence": [],
    "remaining_acceptance": [],
    "recommended_action": "clean done; no action. (Residue noted on #854 is an operator call, not filed.)",
-   "main_sha": "8fade2cfa83c7d7e48cdded7c304b1d4a32945e1"
+   "main_sha": "8fade2c"
   }
  },
  "agorokh/ac-copilot-trainer#804": {
@@ -715,7 +715,7 @@ The repository's established investigation location is `03_Investigations/`.
    "counterevidence": [],
    "remaining_acceptance": [],
    "recommended_action": "clean done; no action. (Residue noted on #854 is an operator call, not filed.)",
-   "main_sha": "8fade2cfa83c7d7e48cdded7c304b1d4a32945e1"
+   "main_sha": "8fade2c"
   }
  },
  "agorokh/ac-copilot-trainer#854": {
@@ -752,7 +752,7 @@ The repository's established investigation location is `03_Investigations/`.
    "counterevidence": [],
    "remaining_acceptance": [],
    "recommended_action": "clean done; no action. (Residue noted on #854 is an operator call, not filed.)",
-   "main_sha": "8fade2cfa83c7d7e48cdded7c304b1d4a32945e1"
+   "main_sha": "8fade2c"
   }
  }
 }
