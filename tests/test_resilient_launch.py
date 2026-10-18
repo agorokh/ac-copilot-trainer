@@ -22,6 +22,7 @@ from tools.ac_harness import resilient_launch as resilient_launch_module
 from tools.ac_harness.resilient_launch import (
     DEFAULT_HOLD_WEDGE_SECONDS,
     DEFAULT_POST_START_CAR0_PROBES,
+    DEFAULT_STALL_SECONDS,
     FREEZE_VERDICTS,
     REPORT_SCHEMA,
     SUPERSEDED_REPORT_SCHEMAS,
@@ -127,7 +128,8 @@ def test_delayed_init_freeze_is_caught_not_reported_stable():
     """
     samples = steady(0.0, 20.0, first_packet=100)
     frozen_at = samples[-1].gfx_packet
-    samples += trace([(float(t), frozen_at, True) for t in range(21, 40)])
+    # Pinned for 25 s: past both the sample threshold and the DEFAULT_STALL_SECONDS floor.
+    samples += trace([(float(t), frozen_at, True) for t in range(21, 46)])
     assert classify(samples, go_live_timeout=30.0, stability_window=60.0) is LaunchVerdict.FROZE
 
 
@@ -234,7 +236,7 @@ def test_sustained_not_ready_with_a_pinned_stream_is_still_a_freeze():
     pinned = samples[-1].gfx_packet
     samples += [
         Sample(t=11.0 + index, gfx_packet=pinned, acs_alive=True, entry_ready=False)
-        for index in range(4)
+        for index in range(22)
     ]
 
     assert (
@@ -541,10 +543,11 @@ def test_car0_failure_action_rejects_invalid_counts(kwargs: dict[str, object]):
         next_car0_failure_action(**kwargs)  # type: ignore[arg-type]
 
 
-def test_v4_reports_are_superseded_because_their_froze_rows_include_the_start_pause():
-    assert REPORT_SCHEMA == "resilient-launch-report/v5"
-    assert "resilient-launch-report/v4" in SUPERSEDED_REPORT_SCHEMAS
-    assert "resilient-launch-report/v3" in SUPERSEDED_REPORT_SCHEMAS
+def test_v4_and_v5_reports_are_superseded_because_their_froze_rows_include_the_start_pause():
+    """v5 was meant to fix this but a v5 build still failed 12/12 live; only v6 does (#627)."""
+    assert REPORT_SCHEMA == "resilient-launch-report/v6"
+    for schema in ("v3", "v4", "v5"):
+        assert f"resilient-launch-report/{schema}" in SUPERSEDED_REPORT_SCHEMAS
 
 
 def test_one_hitch_on_the_threshold_sample_does_not_flip_a_menu_to_froze():
@@ -585,7 +588,7 @@ def test_a_menu_that_pins_after_one_advance_still_reaches_froze():
     samples.append(Sample(t=11.0, gfx_packet=advancing, acs_alive=True, entry_ready=False))
     samples += [
         Sample(t=12.0 + index, gfx_packet=advancing, acs_alive=True, entry_ready=False)
-        for index in range(5)
+        for index in range(22)
     ]
 
     assert (
@@ -651,7 +654,7 @@ def test_render_wedge_with_physics_still_advancing_is_froze():
     # The #627 §2 signature: graphics packet pinned while physics keeps advancing.
     samples += [
         Sample(t=11.0 + i, gfx_packet=held, acs_alive=True, phys_packet=phys + 40 * (i + 1))
-        for i in range(5)
+        for i in range(22)
     ]
 
     assert (
@@ -682,6 +685,62 @@ def test_pause_suspends_the_stability_clock():
     )
 
 
+def _post_start_pause_trace(pause_s: int) -> list[Sample]:
+    """The AG_PC 2026-10-18 shape: drivable session, graphics pinned ``pause_s`` s, physics on."""
+    samples = steady_phys(0.0, 10.0, first_packet=100, first_phys=5000)
+    held = samples[-1].gfx_packet
+    phys = samples[-1].phys_packet
+    samples += [
+        Sample(t=11.0 + i, gfx_packet=held, acs_alive=True, phys_packet=phys + 333 * (i + 1))
+        for i in range(pause_s)
+    ]
+    samples += steady_phys(
+        11.0 + pause_s, 200.0, first_packet=held + 140, first_phys=phys + 333 * (pause_s + 1)
+    )
+    return samples
+
+
+def test_post_start_render_pause_in_a_drivable_session_is_not_a_wedge():
+    """The real Stable AC loop (#627): Car0 succeeded, then a ~10 s render pause followed Start.
+
+    Measured: graphics pinned ~10 s while physics ticked at 333 Hz, then rendering resumed. Four
+    one-second samples scored that FROZE and killed the session on 12 of 12 attempts. The pin
+    must be allowed to resume, and the session must then reach STABLE.
+    """
+    samples = _post_start_pause_trace(10)
+
+    assert classify(samples, go_live_timeout=30.0, stability_window=140.0) is LaunchVerdict.STABLE
+    # The pre-fix rule (sample count only) is exactly what killed these sessions.
+    assert (
+        classify(samples, go_live_timeout=30.0, stability_window=140.0, stall_seconds=0.0)
+        is LaunchVerdict.FROZE
+    )
+
+
+def test_render_pin_becomes_froze_exactly_at_the_stall_seconds_floor():
+    """Below the floor a pin is a pause; at the floor (pinned since the last move) it is a wedge."""
+    samples = steady_phys(0.0, 10.0, first_packet=100, first_phys=5000)
+    held = samples[-1].gfx_packet
+    phys = samples[-1].phys_packet
+    pinned = [
+        Sample(t=11.0 + i, gfx_packet=held, acs_alive=True, phys_packet=phys + 40 * (i + 1))
+        for i in range(int(DEFAULT_STALL_SECONDS))
+    ]
+    # The packet last moved at t=10, so the pin reaches the floor at t=10+DEFAULT_STALL_SECONDS.
+    just_short = samples + pinned[:-1]
+    at_floor = samples + pinned
+
+    assert classify(just_short, go_live_timeout=30.0, stability_window=140.0) is (
+        LaunchVerdict.PENDING
+    )
+    assert classify(at_floor, go_live_timeout=30.0, stability_window=140.0) is LaunchVerdict.FROZE
+
+
+def test_stall_seconds_must_not_be_negative():
+    with pytest.raises(ValueError, match="stall_seconds"):
+        classify(steady(0.0, 5.0, first_packet=100), stall_seconds=-1.0)
+
+
 def test_pause_beyond_budget_falls_back_to_stall_detection():
     """The pause hold is bounded (#637 daemon MEDIUM).
 
@@ -690,10 +749,11 @@ def test_pause_beyond_budget_falls_back_to_stall_detection():
     stall/not-ready paths must still FROZE the attempt.
     """
     samples = steady_phys(0.0, 10.0, first_packet=100, first_phys=5000)
-    # 30 s of dual stagnation against a 10 s pause budget: the hold must expire mid-trace.
+    # 40 s of dual stagnation against a 10 s pause budget: the hold must expire mid-trace, and
+    # the post-hold pin must still outlast the DEFAULT_STALL_SECONDS floor.
     samples += [
         Sample(t=11.0 + i, gfx_packet=760, acs_alive=True, entry_ready=False, phys_packet=5480)
-        for i in range(30)
+        for i in range(40)
     ]
 
     assert (
@@ -1387,7 +1447,7 @@ class TestRetryLoop:
             lambda i: LaunchVerdict.STABLE, max_attempts=1, uptime_hours=lambda: None
         )
         payload = json_module.loads(json_module.dumps(report.as_dict()))
-        assert payload["schema"] == "resilient-launch-report/v5"
+        assert payload["schema"] == "resilient-launch-report/v6"
         assert payload["verdict"] == "stable"
         assert payload["counts"] == {
             "stable": 1,
@@ -1556,8 +1616,13 @@ def test_stall_threshold_is_honored(stall_samples: int):
     samples = steady(0.0, 10.0, first_packet=100)
     held = samples[-1].gfx_packet
     samples += trace([(11.0 + i, held, True) for i in range(stall_samples)])
+    # This test's subject is the SAMPLE count; the time floor has its own tests below.
     verdict = classify(
-        samples, go_live_timeout=30.0, stability_window=120.0, stall_samples=stall_samples
+        samples,
+        go_live_timeout=30.0,
+        stability_window=120.0,
+        stall_samples=stall_samples,
+        stall_seconds=0.0,
     )
     assert verdict is LaunchVerdict.FROZE
 
