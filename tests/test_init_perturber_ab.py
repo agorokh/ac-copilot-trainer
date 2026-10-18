@@ -528,6 +528,32 @@ def test_v3_reports_are_refused_because_their_froze_rows_are_contaminated(tmp_pa
         load_observations(plan, tmp_path, require_complete=False)
 
 
+def test_v4_reports_are_refused_because_their_froze_rows_include_the_start_pause(
+    tmp_path: Path,
+) -> None:
+    """v4 scored the finite post-Start render pause as a wedge after one probe (#627).
+
+    Measured 12/12 on AG_PC 2026-10-18; every field is identical to v5, so only the schema tells a
+    contaminated `froze` row apart. The analyzer must refuse it rather than score it.
+    """
+    plan = _two_boot_plan()
+    report_path = tmp_path / plan["boots"][0]["report"]
+    _write_boot_report(
+        report_path,
+        condition=plan["boots"][0]["condition"],
+        verdicts=["stable"] * 19 + ["froze"],
+        start_minute=0,
+        uptime_start=0.5,
+    )
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload["schema"] = "resilient-launch-report/v4"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not scoreable") as excinfo:
+        load_observations(plan, tmp_path, require_complete=False)
+    assert "Start press" in str(excinfo.value)
+
+
 def test_off_arm_receipt_is_verified_by_not_drivable_attempts() -> None:
     """A menu-park boot must still be able to VERIFY an overlays_off arm (Codex P1 on #726).
 

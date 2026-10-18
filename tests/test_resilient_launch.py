@@ -20,9 +20,14 @@ import pytest
 
 from tools.ac_harness import resilient_launch as resilient_launch_module
 from tools.ac_harness.resilient_launch import (
+    DEFAULT_HOLD_WEDGE_SECONDS,
+    DEFAULT_POST_START_CAR0_PROBES,
     FREEZE_VERDICTS,
+    REPORT_SCHEMA,
+    SUPERSEDED_REPORT_SCHEMAS,
     AttemptOutcome,
     AttemptReadiness,
+    Car0FailureAction,
     LaunchVerdict,
     Sample,
     SectionOwnershipGate,
@@ -48,9 +53,11 @@ from tools.ac_harness.resilient_launch import (
     _wait_process_exit,
     _watch_live,
     _watched_delivery,
+    await_render_resume,
     car0_handshake_failure_outcome,
     classify,
     cycle_delivered,
+    next_car0_failure_action,
     request_session_start,
     run_retry_loop,
 )
@@ -285,7 +292,7 @@ def test_unacknowledged_session_start_still_reprobes_car0() -> None:
     """Ack loss cannot tear down a Start side effect that actually made Car0 available."""
     source = inspect.getsource(resilient_launch_module.main)
     start = source.index("acknowledged = request_session_start()")
-    end = source.index("outcome = menu_outcome", start)
+    end = source.index("continue", start) + len("continue")
     recovery = source[start:end]
 
     assert "else:" in recovery
@@ -361,6 +368,183 @@ def test_car0_handshake_failure_stays_froze_without_fresh_render_advance(
     assert outcome.verdict is LaunchVerdict.FROZE
     assert str(outcome.verdict) in FREEZE_VERDICTS
     assert outcome.cycle_delivered is True
+
+
+class _FakeClock:
+    """Monotonic clock whose ``sleep`` advances time, so render-resume waits run instantly."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        self.t += seconds
+
+
+def test_render_pause_after_start_resumes_inside_the_wedge_budget():
+    """The measured #627 shape: Start pins graphics ~10 s, then the stream resumes.
+
+    AG_PC 2026-10-18: ``packetId`` held 40985 for ~10 s after ``session.start`` while physics
+    ticked at 333 Hz, then advanced to 41009 and Car0 landed on the first probe. The v4 launcher
+    scored that pause FROZE after one five-second probe and killed the session 12/12.
+    """
+    clock = _FakeClock()
+
+    def read_packet() -> int:
+        return 40985 if clock() < 10.0 else 41009
+
+    resumed = await_render_resume(
+        read_packet,
+        baseline=40985,
+        acs_alive=lambda: True,
+        clock=clock,
+        sleep=clock.sleep,
+    )
+
+    assert resumed == 41009
+    assert 10.0 <= clock() < DEFAULT_HOLD_WEDGE_SECONDS
+
+
+def test_render_pinned_past_the_wedge_budget_stays_frozen():
+    """A real wedge still fails: the pause carve-out is bounded by the held-session budget."""
+    clock = _FakeClock()
+
+    resumed = await_render_resume(
+        lambda: 40985,
+        baseline=40985,
+        acs_alive=lambda: True,
+        clock=clock,
+        sleep=clock.sleep,
+    )
+
+    assert resumed is None
+    assert clock() >= DEFAULT_HOLD_WEDGE_SECONDS
+
+
+def test_render_resume_fails_when_acs_exits():
+    clock = _FakeClock()
+
+    resumed = await_render_resume(
+        lambda: 40985,
+        baseline=40985,
+        acs_alive=lambda: clock() < 2.0,
+        clock=clock,
+        sleep=clock.sleep,
+    )
+
+    assert resumed is None
+    assert clock() < DEFAULT_HOLD_WEDGE_SECONDS
+
+
+def test_render_regression_is_not_a_resume():
+    """A packet reset is a replaced session; it must not inherit this one's progress (#628)."""
+    clock = _FakeClock()
+
+    resumed = await_render_resume(
+        lambda: 35 if clock() >= 1.0 else 40985,
+        baseline=40985,
+        acs_alive=lambda: True,
+        clock=clock,
+        sleep=clock.sleep,
+    )
+
+    assert resumed is None
+
+
+def test_unreadable_samples_neither_resume_nor_fail():
+    clock = _FakeClock()
+
+    def read_packet() -> int | None:
+        if clock() < 3.0:
+            return None
+        return 40986
+
+    resumed = await_render_resume(
+        read_packet,
+        baseline=40985,
+        acs_alive=lambda: True,
+        clock=clock,
+        sleep=clock.sleep,
+    )
+
+    assert resumed == 40986
+
+
+def test_render_resume_without_a_baseline_stays_frozen():
+    def read_packet() -> int:
+        raise AssertionError("no baseline means nothing to compare; the stream must not be read")
+
+    assert await_render_resume(read_packet, baseline=None, acs_alive=lambda: True) is None
+
+
+def test_render_resume_honors_operator_release():
+    clock = _FakeClock()
+
+    with pytest.raises(_OperatorRelease):
+        await_render_resume(
+            lambda: 40985,
+            baseline=40985,
+            acs_alive=lambda: True,
+            release_requested=lambda: clock() >= 1.0,
+            clock=clock,
+            sleep=clock.sleep,
+        )
+
+
+@pytest.mark.parametrize("kwargs", [{"budget": 0.0}, {"poll": 0.0}])
+def test_render_resume_rejects_nonpositive_bounds(kwargs: dict[str, float]):
+    with pytest.raises(ValueError):
+        await_render_resume(lambda: 1, baseline=0, acs_alive=lambda: True, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("started", "failures", "expected"),
+    [
+        (False, 0, Car0FailureAction.START_SESSION),
+        (True, 1, Car0FailureAction.REPROBE),
+        (True, 2, Car0FailureAction.REPROBE),
+        (True, 3, Car0FailureAction.FAIL),
+    ],
+)
+def test_car0_miss_presses_start_once_then_reprobes_up_to_the_budget(
+    started: bool, failures: int, expected: Car0FailureAction
+):
+    """v4 scored the first post-Start miss; Car0 now gets the full post-Start budget."""
+    assert (
+        next_car0_failure_action(
+            session_start_attempted=started,
+            post_start_failures=failures,
+            max_post_start_probes=3,
+        )
+        is expected
+    )
+
+
+def test_post_start_probe_budget_matches_auto_drive_hijack_attempts():
+    """Stable AC and auto_drive face the same post-Start transition; keep their budgets equal."""
+    from tools.ac_harness.auto_drive import AutoDriveConfig
+
+    assert DEFAULT_POST_START_CAR0_PROBES == AutoDriveConfig.hijack_attempts
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"session_start_attempted": True, "post_start_failures": 1, "max_post_start_probes": 0},
+        {"session_start_attempted": True, "post_start_failures": -1},
+    ],
+)
+def test_car0_failure_action_rejects_invalid_counts(kwargs: dict[str, object]):
+    with pytest.raises(ValueError):
+        next_car0_failure_action(**kwargs)  # type: ignore[arg-type]
+
+
+def test_v4_reports_are_superseded_because_their_froze_rows_include_the_start_pause():
+    assert REPORT_SCHEMA == "resilient-launch-report/v5"
+    assert "resilient-launch-report/v4" in SUPERSEDED_REPORT_SCHEMAS
+    assert "resilient-launch-report/v3" in SUPERSEDED_REPORT_SCHEMAS
 
 
 def test_one_hitch_on_the_threshold_sample_does_not_flip_a_menu_to_froze():
@@ -1203,7 +1387,7 @@ class TestRetryLoop:
             lambda i: LaunchVerdict.STABLE, max_attempts=1, uptime_hours=lambda: None
         )
         payload = json_module.loads(json_module.dumps(report.as_dict()))
-        assert payload["schema"] == "resilient-launch-report/v4"
+        assert payload["schema"] == "resilient-launch-report/v5"
         assert payload["verdict"] == "stable"
         assert payload["counts"] == {
             "stable": 1,

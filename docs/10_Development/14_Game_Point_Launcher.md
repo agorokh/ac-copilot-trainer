@@ -207,6 +207,15 @@ with the exact remediation path instead of exhausting the launch budget at the
 pre-drive screen. `ac_user_dir` is optional when the standard Documents or
 OneDrive Documents path can be discovered.
 
+After Stable AC presses Start, AC loads the car onto the track. During that
+load the render counter stops for several seconds while physics keeps running
+(about 10 s measured on the rig). The launcher logs `render paused across the
+Car0 probe` and waits up to 20 s for rendering to resume before it calls the
+attempt a freeze. It then retries the Car0 handshake up to three times after
+Start, the same budget `auto_drive` uses. Launcher reports before
+`resilient-launch-report/v5` scored that pause as `froze` and killed a
+drivable session, so their freeze counts are not comparable (#627).
+
 Stable AC currently requires the default `sidecar_port` of `8765`. Game Point
 can pass another port to its Python children, but it cannot safely rewrite the
 CSP app's persisted `wsSidecarUrl` before AC starts. It therefore reports
