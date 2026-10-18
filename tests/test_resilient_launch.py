@@ -46,6 +46,7 @@ from tools.ac_harness.resilient_launch import (
     _positive_float,
     _positive_int,
     _probe_car0_drivable,
+    _probe_session_drivable,
     _publish_stable_phase,
     _ResettableProcessLivenessProbe,
     _retry_telemetry_cleanup_holds,
@@ -60,6 +61,7 @@ from tools.ac_harness.resilient_launch import (
     cycle_delivered,
     next_car0_failure_action,
     request_session_start,
+    request_session_state,
     run_retry_loop,
 )
 from tools.ac_harness.shared_memory import SharedMemoryUnavailable
@@ -298,9 +300,84 @@ def test_unacknowledged_session_start_still_reprobes_car0() -> None:
     recovery = source[start:end]
 
     assert "else:" in recovery
-    assert "re-probing Car0 in case the side effect landed" in recovery
+    assert "re-checking drivability in case the side effect landed" in recovery
     assert "readiness = AttemptReadiness(" in recovery
     assert recovery.rstrip().endswith("continue")
+
+
+def test_stable_ac_never_handshakes_car0() -> None:
+    """#627: the Car0 handshake leaves CSP driving car 0, so Stable AC must not use it.
+
+    Measured 2026-10-18: after the handshake closed, CarControls0 still existed and gas written to
+    it revved the engine to 9044 rpm; the operator's wheel and pedals were dead for the session,
+    and a session with no handshake drove normally. The attempt loop must use the passive check.
+    """
+    source = inspect.getsource(resilient_launch_module.main)
+
+    assert "_probe_car0_drivable" not in source
+    assert "CustomAIController" not in source
+    assert source.count("_probe_session_drivable(") >= 2
+
+
+def test_passive_drivability_returns_as_soon_as_the_session_leaves_the_menu():
+    clock = _FakeClock()
+    answers = iter([False, False, True])
+    calls: list[float] = []
+
+    def request_state(*, timeout: float) -> bool | None:
+        calls.append(timeout)
+        return next(answers)
+
+    assert (
+        _probe_session_drivable(request_state=request_state, clock=clock, sleep=clock.sleep) is True
+    )
+    assert len(calls) == 3
+    assert clock() < 5.0
+
+
+@pytest.mark.parametrize("answer", [False, None])
+def test_passive_drivability_consumes_the_whole_window_on_a_miss(answer: bool | None):
+    """Unknown is not drivable, and a miss keeps the handshake's bounded timing for main()."""
+    clock = _FakeClock()
+
+    result = _probe_session_drivable(
+        timeout=5.0,
+        request_state=lambda **_kw: answer,
+        clock=clock,
+        sleep=clock.sleep,
+    )
+
+    assert result is False
+    assert clock() >= 5.0
+
+
+def test_passive_drivability_honors_operator_release():
+    with pytest.raises(_OperatorRelease):
+        _probe_session_drivable(request_state=lambda **_kw: False, release_requested=lambda: True)
+
+
+@pytest.mark.parametrize("kwargs", [{"timeout": 0.0}, {"poll": 0.0}])
+def test_passive_drivability_rejects_nonpositive_bounds(kwargs: dict[str, float]):
+    with pytest.raises(ValueError):
+        _probe_session_drivable(request_state=lambda **_kw: True, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("ack", "expected"),
+    [
+        ({"ok": True, "started": True, "already_started": True}, True),
+        ({"ok": True, "started": False, "already_started": False, "probe_only": True}, False),
+        ({"ok": False, "probe_only": True, "error": "isInMainMenu unavailable"}, None),
+        ({"type": "error", "ref_type": "session.start"}, None),
+        (None, None),
+    ],
+)
+def test_session_state_maps_the_lua_ack(
+    monkeypatch: pytest.MonkeyPatch, ack: dict[str, object] | None, expected: bool | None
+) -> None:
+    monkeypatch.setattr(resilient_launch_module, "_run_session_relay", lambda *_a, **_k: ack)
+
+    assert request_session_state(timeout=0.1) is expected
 
 
 def test_session_start_sender_rejects_invalid_port(monkeypatch: pytest.MonkeyPatch) -> None:

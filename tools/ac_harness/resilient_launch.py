@@ -37,10 +37,11 @@ import os
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 DEFAULT_STABILITY_WINDOW = 140.0
 DEFAULT_GO_LIVE_TIMEOUT = 80.0
@@ -1972,11 +1973,16 @@ def _probe_car0_drivable(  # pragma: no cover - Windows/rig-only
     release_requested: Callable[[], bool] | None = None,
     retain_telemetry_controller: Callable[[object], None] | None = None,
 ) -> bool:
-    """Briefly handshake CSP Car0, the established oracle for a drivable session (#466).
+    """Briefly handshake CSP Car0, an oracle for a drivable session (#466).
 
     Creating ``CarControls0`` asks CSP to expose ``Car0``. The known pre-drive overlay never does,
-    despite LIVE/not-in-pit and advancing packets. Close immediately after the probe so control is
-    returned to the human driver before the stability window continues.
+    despite LIVE/not-in-pit and advancing packets.
+
+    WARNING (#627): closing does NOT hand the car back. CSP opens the section itself and keeps
+    sourcing car 0's inputs from it after this handle closes (measured 2026-10-18: the section
+    outlived the probe and gas written to it revved the engine to 9044 rpm), so a human's wheel
+    and pedals are dead for the rest of the session. Never call this in a session a person will
+    drive; Stable AC uses :func:`_probe_session_drivable` instead.
     """
     from tools.ac_harness.custom_ai import (
         ControllerCloseRetryError,
@@ -2253,13 +2259,16 @@ def next_car0_failure_action(
     return Car0FailureAction.FAIL
 
 
-def request_session_start(*, timeout: float = 5.0) -> bool:
-    """Press AC's in-sim Start control through the sidecar/Lua bridge (#726).
+def _run_session_relay(
+    request: Callable[[Any], Awaitable[dict[str, Any] | None]],
+    *,
+    timeout: float,
+) -> dict[str, Any] | None:
+    """Run one request over the authenticated resilient-launch relay and return the Lua ack.
 
-    The request is attempted only after section ownership and a fresh post-Car0 render advance
-    prove the current process is alive. A true result requires the Lua handler's positive ack;
-    connection errors and negative/time-out acks fail closed so the caller retains the original
-    not-drivable/freeze classification.
+    Shared by the Start press and the read-only drivability query so the two cannot drift in how
+    they reach the trainer app. Every failure (missing WebSocket extra, invalid port, refused or
+    dropped connection, missing ack) returns ``None``; callers fail closed.
     """
 
     try:
@@ -2269,29 +2278,28 @@ def request_session_start(*, timeout: float = 5.0) -> bool:
         from tools.ai_sidecar.harness_client import HarnessClient
     except ImportError as exc:
         _log(f"session.start unavailable: install the coaching WebSocket extra ({exc})")
-        return False
+        return None
 
     raw_port = os.environ.get("AC_COPILOT_SIDECAR_PORT", "8765")
     try:
         port = int(raw_port)
     except ValueError:
         _log(f"session.start skipped: invalid AC_COPILOT_SIDECAR_PORT={raw_port!r}")
-        return False
+        return None
     if not (1 <= port <= 65535):
         _log(f"session.start skipped: invalid AC_COPILOT_SIDECAR_PORT={raw_port!r}")
-        return False
+        return None
     url = f"ws://127.0.0.1:{port}"
     token = os.environ.get("AC_COPILOT_SIDECAR_TOKEN") or None
 
-    async def _request() -> bool:
+    async def _request() -> dict[str, Any] | None:
         client = HarnessClient(url, token=token, client_id=SESSION_START_CLIENT_ID)
         try:
             await client.connect(retries=2, retry_delay=0.25)
             hello_ack = await client.hello(timeout=timeout)
             if hello_ack is None:
-                return False
-            ack = await client.request_session_start(timeout=timeout)
-            return bool(ack and ack.get("ok") is True and ack.get("started") is True)
+                return None
+            return await request(client)
         finally:
             await client.close()
 
@@ -2299,7 +2307,73 @@ def request_session_start(*, timeout: float = 5.0) -> bool:
         return asyncio.run(_request())
     except (OSError, RuntimeError, TimeoutError, ValueError, WebSocketException) as exc:
         _log(f"session.start request failed: {exc}")
-        return False
+        return None
+
+
+def request_session_start(*, timeout: float = 5.0) -> bool:
+    """Press AC's in-sim Start control through the sidecar/Lua bridge (#726).
+
+    The request is attempted only after section ownership and a fresh render advance prove the
+    current process is alive. A true result requires the Lua handler's positive ack; connection
+    errors and negative/time-out acks fail closed so the caller retains the original
+    not-drivable/freeze classification.
+    """
+    ack = _run_session_relay(
+        lambda client: client.request_session_start(timeout=timeout), timeout=timeout
+    )
+    return bool(ack and ack.get("ok") is True and ack.get("started") is True)
+
+
+def request_session_state(*, timeout: float = 5.0) -> bool | None:
+    """Has AC left its pre-drive menu? Read-only: never presses Start (#627).
+
+    ``True`` = past the menu (drivable), ``False`` = still in it, ``None`` = unknown (relay or
+    trainer unavailable, or the CSP build cannot report it). Callers must treat ``None`` as not
+    drivable.
+    """
+    ack = _run_session_relay(
+        lambda client: client.request_session_state(timeout=timeout), timeout=timeout
+    )
+    if not ack or ack.get("ok") is not True:
+        return None
+    return ack.get("already_started") is True
+
+
+def _probe_session_drivable(
+    *,
+    timeout: float = 5.0,
+    poll: float = 1.0,
+    release_requested: Callable[[], bool] | None = None,
+    request_state: Callable[..., bool | None] = request_session_state,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Stable AC's drivability check: has the session left the pre-drive menu? (#627)
+
+    This replaces the CSP Car0 handshake for Stable AC. Creating ``CarControls0`` makes CSP open
+    that section itself and source car 0's inputs from it; the launcher closing its handle does
+    not hand the car back. Measured on AG_PC 2026-10-18: after the handshake closed, the section
+    still existed and writing gas=1 to it took the car from 900 to 9044 rpm, and the operator's
+    MOZA wheel and pedals were dead for the rest of the session. A clean session with no
+    handshake drove normally. Asking the trainer app for ``isInMainMenu`` touches no controls.
+
+    Like the handshake it replaces, a negative result consumes the whole bounded window, so the
+    render comparison around the probe in ``main`` keeps the same timing.
+    """
+    if timeout <= 0:
+        raise ValueError("timeout must be > 0")
+    if poll <= 0:
+        raise ValueError("poll must be > 0")
+    deadline = clock() + timeout
+    while True:
+        if release_requested is not None and release_requested():
+            raise _OperatorRelease
+        remaining = deadline - clock()
+        if request_state(timeout=max(0.5, min(remaining, 2.0))) is True:
+            return True
+        if clock() >= deadline:
+            return False
+        sleep(min(poll, max(0.0, deadline - clock())))
 
 
 def _positive_float(value: str) -> float:
@@ -2611,11 +2685,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 _log(f"attempt {attempt}: Content Manager launch failed: {exc}")
                 # The URL never reached CM, so no acs.exe could have started (#710).
                 return AttemptOutcome(LaunchVerdict.NEVER_LIVE, cycle_delivered=False)
+            # Never the Car0 handshake here: it leaves CSP driving car 0 from CarControls0 for the
+            # rest of the session, which is a dead wheel for the driver Stable AC hands off to.
             readiness = AttemptReadiness(
-                lambda: _probe_car0_drivable(
-                    release_requested=release_requested,
-                    retain_telemetry_controller=telemetry_cleanup_holds.append,
-                )
+                lambda: _probe_session_drivable(release_requested=release_requested)
             )
             perturbers = PerturberWatch()
             # Pin the process identity for this attempt so successive polls cannot union
@@ -2766,8 +2839,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                             else packet_before_car0_probe[0]
                         )
                         _log(
-                            f"attempt {attempt}: render paused across the Car0 probe; waiting up "
-                            f"to {DEFAULT_HOLD_WEDGE_SECONDS:.0f} s for it to resume"
+                            f"attempt {attempt}: render paused across the drivability check; "
+                            f"waiting up to {DEFAULT_HOLD_WEDGE_SECONDS:.0f} s for it to resume"
                         )
                         paused_at = time.monotonic()
                         resumed_packet = await_render_resume(
@@ -2781,7 +2854,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                             break
                         _log(
                             f"attempt {attempt}: render resumed after "
-                            f"{time.monotonic() - paused_at:.1f} s; Car0 is retried"
+                            f"{time.monotonic() - paused_at:.1f} s; "
+                            "the drivability check is retried"
                         )
                         menu_outcome = car0_handshake_failure_outcome(baseline, resumed_packet)
                     if session_start_attempted:
@@ -2795,7 +2869,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                         break
                     if action is Car0FailureAction.REPROBE:
                         _log(
-                            f"attempt {attempt}: Car0 not drivable yet after Start "
+                            f"attempt {attempt}: session not drivable yet after Start "
                             f"(probe {post_start_failures}/{DEFAULT_POST_START_CAR0_PROBES}); "
                             "re-probing"
                         )
@@ -2805,22 +2879,19 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                         if acknowledged:
                             _log(
                                 f"attempt {attempt}: session.start acknowledged; "
-                                "retrying Car0 readiness"
+                                "retrying the drivability check"
                             )
                         else:
                             _log(
                                 f"attempt {attempt}: session.start unacknowledged; "
-                                "re-probing Car0 in case the side effect landed"
+                                "re-checking drivability in case the side effect landed"
                             )
                     # The Start side effect can succeed even if the WebSocket drops before Python
                     # receives the ack, so the authoritative Car0 handshake is re-run either way.
                     # A fresh gate re-earns section ownership from a NEW render advance, so a
                     # still-paused render is never probed again until it moves.
                     readiness = AttemptReadiness(
-                        lambda: _probe_car0_drivable(
-                            release_requested=release_requested,
-                            retain_telemetry_controller=telemetry_cleanup_holds.append,
-                        )
+                        lambda: _probe_session_drivable(release_requested=release_requested)
                     )
                     continue
             # One last look before the process is torn down: the perturbers inject late, so the

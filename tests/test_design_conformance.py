@@ -191,6 +191,28 @@ class TestSessionControl:
         assert "pcall(menuValue)" in handler
         assert "simState.isSessionStarted" not in handler
 
+    def test_probe_only_session_start_never_presses_start(self) -> None:
+        """SC-05 (#627): a drivability probe answers from isInMainMenu and returns before Start.
+
+        Stable AC asks this instead of handshaking CSP Car0, which left CSP driving car 0 from
+        CarControls0 and killed the operator's wheel. If the probe could fall through to
+        ac.tryToStart it would force a driver who is in the menu into a session.
+        """
+        src = _entry_text()
+        start = src.index('wsBridge.registerRequestHandler("session.start"')
+        end = src.index('wsBridge.registerRequestHandler("setup.spinner.list"', start)
+        handler = src[start:end]
+
+        assert "payload.probe_only == true" in handler
+        probe_branch = handler.index("if probeOnly then")
+        # The first mention of tryToStart after the probe branch (its availability check) must
+        # come after both probe returns, so a probe can never reach the press.
+        press = handler.index("tryToStart", probe_branch)
+        assert press > probe_branch
+        branch = handler[probe_branch:press]
+        assert branch.count("return {") == 2
+        assert handler.index("pcall(ac.tryToStart") > press
+
     def test_main_menu_polls_session_start_bridge_without_review_queue(self) -> None:
         """SC-02: the pre-drive menu can receive session.start on a fresh launch."""
         src = _entry_text()

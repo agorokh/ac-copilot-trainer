@@ -914,6 +914,12 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         instant = frame.get("instant")
         if instant is not None and not isinstance(instant, bool):
             return "session.start optional 'instant' must be a boolean"
+        # #627: a read-only drivability query. The trainer app answers from isInMainMenu and
+        # never presses Start, so Stable AC no longer needs the CSP Car0 handshake (which left
+        # CSP sourcing car 0's inputs from CarControls0 and overrode the driver's wheel).
+        probe_only = frame.get("probe_only")
+        if probe_only is not None and not isinstance(probe_only, bool):
+            return "session.start optional 'probe_only' must be a boolean"
         return None
     if t in (
         TYPE_SETUP_LIST_RESULT,

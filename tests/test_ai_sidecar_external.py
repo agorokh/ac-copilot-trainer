@@ -692,6 +692,15 @@ def test_remote_hello_hides_loopback_only_capabilities() -> None:
     assert ep.TYPE_SESSION_START not in ack["capabilities"]
 
 
+def test_session_start_probe_only_must_be_a_boolean() -> None:
+    """#627: the read-only drivability query rides on session.start's existing authorization."""
+    frame = {"v": 1, "type": ep.TYPE_SESSION_START, "probe_only": True}
+    assert ep.validate_inbound(frame) is None
+    assert ep.validate_inbound({**frame, "probe_only": "yes"}) == (
+        "session.start optional 'probe_only' must be a boolean"
+    )
+
+
 def test_remote_session_start_is_rejected() -> None:
     class _RemoteWebsocket:
         remote_address = ("192.168.1.50", 49152)

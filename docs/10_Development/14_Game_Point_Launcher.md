@@ -173,8 +173,15 @@ of `AC_COPILOT_VOICE_BANK` as proof that audio initialized.
 The **Stable AC** button is the operator-facing entrypoint for the resilient
 Content Manager launch loop from issue #624. It retries the stochastic CSP
 session-init livelock, proves continuous render progress for the configured
-stability window plus the CSP Car0 drivability handshake, and then leaves the
-successful session live for the driver.
+stability window, confirms with the trainer app that the session has left the
+pre-drive menu, and then leaves the successful session live for the driver.
+
+Stable AC never uses the CSP Car0 handshake (`CarControls0`) that the
+autonomous harness drives with. CSP keeps sourcing car 0's inputs from that
+section after the launcher closes it, so the driver's wheel and pedals stop
+working for the rest of the session (#627, measured on the rig). The
+drivability check is a read-only question to the trainer app
+(`session.start` with `probe_only`), which never presses Start.
 The `AC Session` row reports `unconfigured`, `idle`, `running`, or the child
 exit code; progress is appended to `logs/resilient-launch.log`. A failed child
 makes the aggregate status non-green and the summary says **Press Stable AC**,
@@ -212,8 +219,8 @@ render counter stops for several seconds while physics keeps running (about
 10 s measured on the rig). The screen may look frozen during that time. Stable
 AC treats a stopped render as a freeze only after it has stayed stopped for
 20 s, the same limit Game Point uses while it holds a running session, and
-waits out shorter pauses. It also retries the Car0 handshake up to three times
-after Start, the same budget `auto_drive` uses. Launcher reports before
+waits out shorter pauses. It also retries the drivability check up to three
+times after Start, the same budget `auto_drive` uses. Launcher reports before
 `resilient-launch-report/v6` scored that pause as `froze` and killed a
 drivable session, so their freeze counts are not comparable (#627).
 
