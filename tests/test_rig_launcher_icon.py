@@ -273,3 +273,58 @@ def test_frozen_exe_keeps_its_own_taskbar_identity(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     assert not chrome.set_app_user_model_id()
+
+
+# -- startup ordering + preview capture (PR #882 review) ------------------------
+
+
+def test_failed_view_build_never_leaves_launcher_hidden(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tkinter as tk
+    from unittest.mock import Mock
+
+    from tools.rig_launcher import app, view
+
+    root = Mock()
+    monkeypatch.setattr(tk, "Tk", Mock(return_value=root))
+    monkeypatch.setattr(chrome, "set_app_user_model_id", Mock(return_value=False))
+    monkeypatch.setattr(chrome, "apply_dark_title_bar", Mock(return_value=True))
+    monkeypatch.setattr(view, "build_launcher_view", Mock(side_effect=RuntimeError("boom")))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        app.run_gui(Mock())
+
+    root.withdraw.assert_called_once()
+    root.deiconify.assert_called_once()
+    root.mainloop.assert_not_called()
+
+
+def test_caption_is_recoloured_while_hidden_then_shown(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tkinter as tk
+    from unittest.mock import Mock
+
+    from tools.rig_launcher import app, view
+
+    events: list[str] = []
+    root = Mock()
+    root.withdraw.side_effect = lambda: events.append("withdraw")
+    root.deiconify.side_effect = lambda: events.append("deiconify")
+    root.mainloop.side_effect = lambda: events.append("mainloop")
+    monkeypatch.setattr(tk, "Tk", Mock(return_value=root))
+    monkeypatch.setattr(chrome, "set_app_user_model_id", Mock(return_value=False))
+    monkeypatch.setattr(
+        chrome, "apply_dark_title_bar", Mock(side_effect=lambda _w: events.append("dark"))
+    )
+    monkeypatch.setattr(view, "build_launcher_view", Mock(return_value=Mock()))
+    monkeypatch.setattr(app.threading, "Thread", Mock())
+    supervisor = Mock()
+    supervisor.config.start_simhub = False
+
+    assert app.run_gui(supervisor) == 0
+    assert events == ["withdraw", "dark", "deiconify", "mainloop"]
+
+
+def test_preview_frame_bounds_fall_back_off_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tools.rig_launcher import preview
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert preview._frame_bounds(object()) is None

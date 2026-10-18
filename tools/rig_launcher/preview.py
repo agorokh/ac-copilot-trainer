@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import sys
 import time
 
 from tools.rig_launcher.chrome import (
@@ -72,18 +73,26 @@ def _capture_region(x: int, y: int, width: int, height: int, out_path: str) -> N
 
 
 def _frame_bounds(window: object) -> tuple[int, int, int, int] | None:
-    """Visible window bounds incl. the native caption (DWMWA_EXTENDED_FRAME_BOUNDS)."""
-    import ctypes
-    from ctypes import wintypes
+    """Visible window bounds incl. the native caption (DWMWA_EXTENDED_FRAME_BOUNDS).
 
+    None (the caller keeps the client-rect crop) off-Windows or when DWM is unavailable.
+    """
+    if sys.platform != "win32":
+        return None
     hwnd = window_handle(window)
     if not hwnd:
         return None
-    rect = wintypes.RECT()
-    extended_frame_bounds = 9
-    result = ctypes.windll.dwmapi.DwmGetWindowAttribute(  # type: ignore[attr-defined]
-        ctypes.c_void_p(hwnd), extended_frame_bounds, ctypes.byref(rect), ctypes.sizeof(rect)
-    )
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        rect = wintypes.RECT()
+        extended_frame_bounds = 9
+        result = ctypes.windll.dwmapi.DwmGetWindowAttribute(  # type: ignore[attr-defined]
+            ctypes.c_void_p(hwnd), extended_frame_bounds, ctypes.byref(rect), ctypes.sizeof(rect)
+        )
+    except Exception:  # noqa: BLE001 - no DWM: fall back to the client crop
+        return None
     if result != 0:
         return None
     return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
