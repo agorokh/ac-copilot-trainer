@@ -64,6 +64,10 @@ DEFAULT_GRACEFUL_EXIT_GRACE = 20.0
 #: Part D) — a one-shot latch would hold a session that LOSES drivability after go-live as
 #: STABLE for the rest of the window. Long enough that a 140 s window costs ~3 extra probes.
 DEFAULT_CAR0_REPROBE_SECONDS = 45.0
+#: Car0 handshakes allowed after the ``session.start`` press before the attempt is scored (#627).
+#: Matches ``auto_drive``'s ``hijack_attempts``: the press is followed by a session-load transition
+#: and Car0 may need more than one bounded probe to land. One probe was too few for Stable AC.
+DEFAULT_POST_START_CAR0_PROBES = 3
 
 
 class LaunchVerdict(StrEnum):
@@ -141,8 +145,14 @@ class AttemptOutcome:
 #: but the MEANING of ``froze`` changed: every v3 producer scored the rendering-but-not-drivable
 #: pre-drive menu (#466) as a freeze. So v3 is listed as SUPERSEDED and the #625/#719 experiment
 #: analyzer REFUSES it — its freeze rows cannot be reclassified from the recorded evidence.
-REPORT_SCHEMA = "resilient-launch-report/v4"
-SUPERSEDED_REPORT_SCHEMAS = ("resilient-launch-report/v3",)
+#:
+#: v5 (2026-10-18, #627) changes ``froze`` again without changing any field: a render that pauses
+#: across a Car0 probe and resumes within ``DEFAULT_HOLD_WEDGE_SECONDS`` is no longer a freeze
+#: (see :func:`await_render_resume`). Every v4 producer scored the finite render pause that follows
+#: the Start press as ``froze`` and killed a drivable session — measured 12/12 on AG_PC — so v4 is
+#: SUPERSEDED for the same reason v3 is.
+REPORT_SCHEMA = "resilient-launch-report/v5"
+SUPERSEDED_REPORT_SCHEMAS = ("resilient-launch-report/v3", "resilient-launch-report/v4")
 WITHDRAWN_REPORT_SCHEMAS = ("resilient-launch-report/v1", "resilient-launch-report/v2")
 
 
@@ -2128,6 +2138,86 @@ def car0_handshake_failure_outcome(
     return AttemptOutcome(verdict, cycle_delivered=True)
 
 
+def await_render_resume(
+    read_packet: Callable[[], int | None],
+    *,
+    baseline: int | None,
+    acs_alive: Callable[[], bool],
+    budget: float = DEFAULT_HOLD_WEDGE_SECONDS,
+    release_requested: Callable[[], bool] | None = None,
+    poll: float = 0.25,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> int | None:
+    """Wait for a render that pinned across a Car0 probe to advance again (#627).
+
+    :func:`car0_handshake_failure_outcome` sees only the two packets around one five-second probe,
+    so a FINITE render pause reads exactly like a wedge. Measured on AG_PC 2026-10-18: the Start
+    press pins ``acpmf_graphics.packetId`` for ~10 s while physics keeps ticking at 333 Hz, then
+    the stream resumes and Car0 lands on the first probe. Scoring that pause ``FROZE`` killed a
+    drivable session on 12 of 12 attempts. This gives the render the same budget the held-session
+    watch uses (:data:`DEFAULT_HOLD_WEDGE_SECONDS`) before a pin counts as a wedge.
+
+    Returns the advanced packet, or ``None`` when the attempt must stay ``FROZE``: no readable
+    baseline to compare against, ``acs.exe`` gone, a packet REGRESSION (a replaced session must
+    not inherit this one's progress, #628), or the budget exhausted with the render still pinned.
+    An unreadable sample neither resumes nor fails. Raises ``_OperatorRelease`` on release.
+    """
+    if budget <= 0:
+        raise ValueError("budget must be > 0")
+    if poll <= 0:
+        raise ValueError("poll must be > 0")
+    if baseline is None:
+        return None
+    deadline = clock() + budget
+    while True:
+        if release_requested is not None and release_requested():
+            raise _OperatorRelease
+        if not acs_alive():
+            return None
+        packet = read_packet()
+        if packet is not None:
+            if packet > baseline:
+                return packet
+            if packet < baseline:
+                return None
+        if clock() >= deadline:
+            return None
+        sleep(poll)
+
+
+class Car0FailureAction(StrEnum):
+    """What a failed Car0 handshake leads to once the render is known to be alive (#627)."""
+
+    START_SESSION = "start_session"
+    REPROBE = "reprobe"
+    FAIL = "fail"
+
+
+def next_car0_failure_action(
+    *,
+    session_start_attempted: bool,
+    post_start_failures: int,
+    max_post_start_probes: int = DEFAULT_POST_START_CAR0_PROBES,
+) -> Car0FailureAction:
+    """Decide the next step after a Car0 miss on a rendering session. Pure.
+
+    ``post_start_failures`` counts the misses since the Start press, INCLUDING the current one.
+    Before the press the only move is to press Start once. After it, Car0 gets
+    ``max_post_start_probes`` handshakes in total — the press is followed by a session-load
+    transition, and a single probe (the previous behavior) could only ever land inside it.
+    """
+    if max_post_start_probes <= 0:
+        raise ValueError("max_post_start_probes must be > 0")
+    if post_start_failures < 0:
+        raise ValueError("post_start_failures must be >= 0")
+    if not session_start_attempted:
+        return Car0FailureAction.START_SESSION
+    if post_start_failures < max_post_start_probes:
+        return Car0FailureAction.REPROBE
+    return Car0FailureAction.FAIL
+
+
 def request_session_start(*, timeout: float = 5.0) -> bool:
     """Press AC's in-sim Start control through the sidecar/Lua bridge (#726).
 
@@ -2610,6 +2700,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 return packet, ready, drivable, phys_packet
 
             session_start_attempted = False
+            post_start_failures = 0
             while True:
                 try:
                     outcome = _watch_live(
@@ -2623,17 +2714,57 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 except _Car0NotDrivable:
                     # The handshake can block for five seconds after the advance that triggered
                     # it. Re-sample raw graphics: only another advance proves the renderer stayed
-                    # alive long enough to accept session.start. A pinned/regressed/unreadable
-                    # packet remains FROZE (Codex P1 on #726).
+                    # alive long enough to accept session.start. A regressed/unreadable packet, or
+                    # a pin that outlasts the wedge budget, remains FROZE (Codex P1 on #726).
                     post_probe_packet, _post_probe_ready, _post_probe_phys = read_state()
                     menu_outcome = car0_handshake_failure_outcome(
                         packet_before_car0_probe[0],
                         post_probe_packet,
                     )
-                    if (
-                        menu_outcome.verdict is LaunchVerdict.NOT_DRIVABLE
-                        and not session_start_attempted
-                    ):
+                    if menu_outcome.verdict is LaunchVerdict.FROZE:
+                        # A pin across one probe is not yet a wedge: the Start press is followed
+                        # by a finite render pause (#627, measured ~10 s). Score it only if the
+                        # render stays pinned for the held-session wedge budget.
+                        baseline = (
+                            post_probe_packet
+                            if post_probe_packet is not None
+                            else packet_before_car0_probe[0]
+                        )
+                        _log(
+                            f"attempt {attempt}: render paused across the Car0 probe; waiting up "
+                            f"to {DEFAULT_HOLD_WEDGE_SECONDS:.0f} s for it to resume"
+                        )
+                        paused_at = time.monotonic()
+                        resumed_packet = await_render_resume(
+                            lambda: read_state()[0],
+                            baseline=baseline,
+                            acs_alive=acs_alive,
+                            release_requested=release_requested,
+                        )
+                        if resumed_packet is None:
+                            outcome = menu_outcome
+                            break
+                        _log(
+                            f"attempt {attempt}: render resumed after "
+                            f"{time.monotonic() - paused_at:.1f} s; Car0 is retried"
+                        )
+                        menu_outcome = car0_handshake_failure_outcome(baseline, resumed_packet)
+                    if session_start_attempted:
+                        post_start_failures += 1
+                    action = next_car0_failure_action(
+                        session_start_attempted=session_start_attempted,
+                        post_start_failures=post_start_failures,
+                    )
+                    if action is Car0FailureAction.FAIL:
+                        outcome = menu_outcome
+                        break
+                    if action is Car0FailureAction.REPROBE:
+                        _log(
+                            f"attempt {attempt}: Car0 not drivable yet after Start "
+                            f"(probe {post_start_failures}/{DEFAULT_POST_START_CAR0_PROBES}); "
+                            "re-probing"
+                        )
+                    else:
                         session_start_attempted = True
                         acknowledged = request_session_start()
                         if acknowledged:
@@ -2646,19 +2777,17 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                                 f"attempt {attempt}: session.start unacknowledged; "
                                 "re-probing Car0 in case the side effect landed"
                             )
-                        # The Start side effect can succeed even if the WebSocket drops before
-                        # Python receives the ack. Always re-probe the authoritative Car0
-                        # handshake; on another miss the outer catch re-samples graphics after
-                        # this bounded interval before retaining NOT_DRIVABLE.
-                        readiness = AttemptReadiness(
-                            lambda: _probe_car0_drivable(
-                                release_requested=release_requested,
-                                retain_telemetry_controller=telemetry_cleanup_holds.append,
-                            )
+                    # The Start side effect can succeed even if the WebSocket drops before Python
+                    # receives the ack, so the authoritative Car0 handshake is re-run either way.
+                    # A fresh gate re-earns section ownership from a NEW render advance, so a
+                    # still-paused render is never probed again until it moves.
+                    readiness = AttemptReadiness(
+                        lambda: _probe_car0_drivable(
+                            release_requested=release_requested,
+                            retain_telemetry_controller=telemetry_cleanup_holds.append,
                         )
-                        continue
-                    outcome = menu_outcome
-                    break
+                    )
+                    continue
             # One last look before the process is torn down: the perturbers inject late, so the
             # final sample is the most informative one in the attempt (#719). soft_fail: a
             # transient Toolhelp error must not erase a successful post-race miss already on

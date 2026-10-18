@@ -1067,12 +1067,15 @@ def _parse_report(
     # log carries NO packet evidence from which they could be reclassified. So the bump is NOT
     # merely additive for this consumer: an unscoreable boot must fail loudly rather than be
     # silently scored wrong (Codex P1 on #726). Re-run the boot on the current launcher.
+    # v4 is refused for the same reason: its `froze` rows include the finite render pause that
+    # follows the Start press, which the v4 launcher scored as a wedge after a single probe (#627).
     if report.get("schema") in SUPERSEDED_REPORT_SCHEMAS:
         raise ValueError(
             f"report {path} uses {report.get('schema')!r}, whose `froze` rows conflate the #627 "
-            "render wedge with the #466 pre-drive menu (fixed in resilient-launch-report/v4). "
-            "Its freeze counts cannot be reclassified from the recorded evidence, so it is not "
-            "scoreable — re-run the boot on the current launcher"
+            "render wedge with a non-wedge (v3: the #466 pre-drive menu; v4: the finite render "
+            f"pause after the Start press). Fixed in {REPORT_SCHEMA}. Its freeze counts cannot "
+            "be reclassified from the recorded evidence, so it is not scoreable — re-run the "
+            "boot on the current launcher"
         )
     if report.get("schema") != REPORT_SCHEMA:
         raise ValueError(f"report {path} schema must be {REPORT_SCHEMA!r}")
