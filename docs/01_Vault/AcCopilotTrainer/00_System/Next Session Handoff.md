@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-10-17T18:40:00Z
+last_updated: 2026-10-17T23:20:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-86-native-se-live-readback-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-854-agent-observed-acceptance-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-854-remote-inference-2026-10-17.md
   - AcCopilotTrainer/pitfalls/assisted-drive-archive-rotation.md
@@ -140,6 +141,45 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-10-17, night) — #86 native Setup Exchange verified live against the real service
+
+PR [#862](https://github.com/agorokh/ac-copilot-trainer/pull/862) merged as `076361a`; the retained
+row *"Actual service and in-game application — pending reviewed merge/distribution"* is now settled
+on the rig. Distribution has two halves. Trainer Lua: verified through the junction (primary
+checkout at `8907ddf`, `setup_exchange.lua` blob `9ff6bd5` identical to `origin/main`, harness
+`installed app provenance: match`). Sidecar: the packaged Game Point EXE was **stale**
+(`/health build_commit 70ed2fe`, pre-#862) and was first wrongly counted as distributed; rebuilt via
+`python -m tools.rig_launcher --build-exe` from `origin/main`, `--self-test` exit 0, installed with
+the old EXE kept as `dist/AC-Copilot-Game-Point.70ed2fe.exe.bak`; relaunched Game Point reports
+`build_commit 8907ddf` and accepted the panel's hello. No firmware flash: #862 touched no device
+firmware. The live results below used a source sidecar.
+
+Incident the same night: after this session stopped its own sidecar the operator found the panel
+black — COM6 open but **0 bytes in 8 s**. Recovered with a read-only esptool `chip_id --after
+hard_reset` (then 12 hellos/12 s). Also added the missing `[NEW_UI] REPLACE_MAIN_MENU=0` to the
+operator's CSP `gui.ini` (launcher preflight `menu_config_required` → `idle`). Before stopping a
+sidecar that holds COM6, listen for the panel afterwards.
+
+Live, in a real Porsche 911 GT3 R 2016 / Magione practice session with the ESP32 attached as
+`serial:COM6 class=screen`: `se.search` returned **`total=149`** real community setups with real
+authors (`si3vgerf`, `NevaFleaks`, `sWoRDfiSh`, `GianniLePLoW / TTV`) and download counts
+(24759/9757/9654/7753); the Magione filter correctly returned a valid empty result (the service has
+none for this car). `se.download` installed a real 1747-byte / 61-section setup into the AC user
+setups root, and a repeat download produced `Extrapiramidal-2.ini` with the original bytes intact —
+non-overwrite proven; pre-existing user setups untouched. `setup.list` returned the live session's
+car/track with real `abs`/`wing`/`brake_bias` rows (the PT listing leg). `auto_drive --setup` gave
+`applied=True` in-sim.
+
+**Still retained on #86 (operator, physical):** the runtime screen-tap *apply* cannot be
+agent-verified by construction — `ac.loadSetup` is gated fail-closed on `ac.isCarResetAllowed()`,
+which is never true for an autonomously launched car ([#466](https://github.com/agorokh/ac-copilot-trainer/issues/466):
+0 OK / 152 samples on START **and** PIT; independently reproduced here three times, including a
+confirmed `phase=in_pit` session). That needs a human-launched resettable session — i.e. the
+four-leg touch flow plus the on-glass photo vs `esp32_rig.png` that #86 already retains. The
+operator took the rig and is running Game Point on the new build. One real community download, `Extrapiramidal.ini`, was
+retained in the user library; delete it if unwanted. Detail:
+[[issue-86-native-se-live-readback-2026-10-17]].
 
 ## Delivered (2026-10-17, evening) — #854 agent-observed acceptance + coaching efficacy fixes
 
