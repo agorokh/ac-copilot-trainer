@@ -14,6 +14,32 @@ pip install -e ".[launcher]"
 python -m tools.rig_launcher --build-exe
 ```
 
+**Build interpreter.** The canonical build interpreter is the repo `.venv`
+(`.venv\Scripts\python.exe -m tools.rig_launcher --build-exe`), with the
+`launcher` extra installed. Any Python 3.13 with that extra installed and a
+writable site-packages produces the same bundle (issue #893). Before PyInstaller
+runs, the build checks two things:
+
+- Every runtime module the frozen launcher and sidecar import must be present:
+  `numpy`, `sounddevice`, `pyttsx3`, `serial`, `websockets`, and on Windows
+  `comtypes` and `pythoncom`. If one is missing, the build stops with
+  `Game Point build aborted: missing …`. PyInstaller alone would only print a
+  warning and ship an EXE that fails on the rig.
+- pyttsx3's SAPI5 voice imports `comtypes.gen.SpeechLib`, a wrapper that
+  comtypes generates the first time SAPI runs. The build generates it in that
+  interpreter's `comtypes\gen` and bundles it. Without this step the EXE would
+  generate it into `%TEMP%\comtypes_cache` on first launch, and whether it was
+  bundled would depend on whether that Python had ever run SAPI before. If
+  comtypes cannot write into its own package directory, the build stops rather
+  than silently leaving the wrapper out.
+
+Modules nothing we ship uses but PyInstaller would pick up from whatever is
+installed (`PIL`, `defusedxml`, `jinja2`, `markupsafe`, `threadpoolctl`) are
+excluded. Earlier rig builds from the system Python carried Pillow this way.
+To check that two builds match, compare
+`pyi-archive_viewer -l -r dist\AC-Copilot-Game-Point.exe` listings. Only the
+`*.dist-info` versions should differ.
+
 The build extra includes the runtime voice floor (`numpy`, `sounddevice`,
 `pyttsx3`, and PyInstaller collection for sounddevice's PortAudio binaries).
 `rtmixer` remains opt-in via `pip install -e ".[voice-rtmixer]"`; when it is
