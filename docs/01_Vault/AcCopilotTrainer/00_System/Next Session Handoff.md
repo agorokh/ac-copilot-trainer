@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-10-17T23:20:00Z
 relates_to:
+  - AcCopilotTrainer/00_System/handoffs/2026-10-18-204100Z-post-merge-pr880-a0d3e7.md
   - AcCopilotTrainer/03_Investigations/issue-86-native-se-live-readback-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-854-agent-observed-acceptance-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-854-remote-inference-2026-10-17.md
