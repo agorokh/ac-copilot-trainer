@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-10-18T20:50:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-86-pt-long-names-2026-10-18.md
   - AcCopilotTrainer/03_Investigations/issue-627-stable-ac-chain-2026-10-18.md
   - AcCopilotTrainer/03_Investigations/issue-86-native-se-live-readback-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-854-agent-observed-acceptance-2026-10-17.md
@@ -143,6 +144,22 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-10-18, evening) — #86 rig screen readable with real setup names
+
+PR #891 (`54801e6`) flashed to COM6 and **operator-confirmed on the glass**: Pocket Technician names
+such as `Copilot_Scientist_42b69c28227df065_802860d58233d33f` now take at most two lines with BB/ABS/TC
+below (they used to wrap over it), full names reach `setup.load` (they were cut to 47 chars), and Setup
+Exchange says "No community setups for this car at Magione yet." Simulator: 127 assertions on the
+operator's real rows. Game Point on the rig is now `16068f3` (parallel session: icon, dark title bar,
+OFFLINE REPORT label; it includes #884). **Build the rig EXE with the system Python 3.13**
+(`C:\Users\arsen\AppData\Local\Programs\Python\Python313`), not the project `.venv`: a `.venv` build lacks
+Pillow and the pre-generated `comtypes.gen.SpeechLib` that pyttsx3's SAPI path needs. Detail:
+[[issue-86-pt-long-names-2026-10-18]].
+
+**#86 still retains:** Setup Exchange download → install → Pocket Technician load on the glass at a
+track with community setups (Spa has them; Magione has none) in a human-launched session, and the
+on-glass photo vs `esp32_rig.png`.
+
 ## Delivered (2026-10-18) — Stable AC fixed, then retired to a service tool (#627)
 
 Stable AC had never produced a stable session. #876 targeted the wrong branch (disproven live, 12/12
@@ -159,11 +176,8 @@ session); older builds are kept as `dist/*.exe.bak`. Detail:
 
 **Next, in order:** (1) A/B launch with the trainer app disabled to learn whether our session-start
 work causes the few-second post-Start render freeze the operator feels on every launch; if yes, move
-that work before the driver can drive. (2) #86 rig screen: Pocket Technician setup names wrap into
-the BB/ABS/TC line (`make_row` name label is LONG_DOT with auto height — needs a fixed one-line
-height), reproduce with the operator's real names (`Copilot_Scientist_<hash>_<hash>`) in the native
-simulator before flashing; and Setup Exchange must say clearly when the service has no setups for
-the car at the current track (Magione/911 GT3 R has 0). (3) Never run `_probe_car0_drivable` in a
+that work before the driver can drive. (2) ~~#86 Pocket Technician names / Setup Exchange empty
+state~~ — done the same evening, see the entry above. (3) Never run `_probe_car0_drivable` in a
 session a person will drive.
 
 ## Delivered (2026-10-17, night) — #86 native Setup Exchange verified live against the real service
