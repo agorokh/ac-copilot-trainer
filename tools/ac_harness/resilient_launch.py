@@ -47,6 +47,13 @@ DEFAULT_GO_LIVE_TIMEOUT = 80.0
 DEFAULT_MAX_ATTEMPTS = 12
 #: consecutive unchanged-packet samples (while acs is alive) that count as a wedge
 DEFAULT_STALL_SAMPLES = 4
+#: seconds a post-go-live render pin must ALSO last before it is a wedge (#627). Measured on AG_PC
+#: 2026-10-18: right after the Start press the graphics packet pins for ~10 s while physics keeps
+#: ticking at 333 Hz in a session whose Car0 handshake has already succeeded, then rendering
+#: resumes. Four one-second samples called that drivable session a wedge and killed it on every
+#: Stable AC attempt. A wedge is terminal once it lands (#627 §3.2), so waiting 20 s costs real
+#: wedges only detection latency; it is the same budget the held-session watch uses.
+DEFAULT_STALL_SECONDS = 20.0
 #: seconds a physics-stagnant pause hold (#630 Part B) is honored before sustained dual-stream
 #: stagnation must be treated as the hang it may be — a hard hang that pins BOTH streams while
 #: acs.exe stays enumerated is indistinguishable from an alt-tab at any single instant, so the
@@ -151,8 +158,18 @@ class AttemptOutcome:
 #: (see :func:`await_render_resume`). Every v4 producer scored the finite render pause that follows
 #: the Start press as ``froze`` and killed a drivable session — measured 12/12 on AG_PC — so v4 is
 #: SUPERSEDED for the same reason v3 is.
-REPORT_SCHEMA = "resilient-launch-report/v5"
-SUPERSEDED_REPORT_SCHEMAS = ("resilient-launch-report/v3", "resilient-launch-report/v4")
+#:
+#: v6 (2026-10-18, #627): the v5 change above was not where those sessions died. On the rig the
+#: Car0 handshake SUCCEEDS right after Start, so the attempt goes live and ``classify``'s post-go-
+#: live stall rule (four samples) then scored the ~10 s pause ``froze``; a v5 build still failed
+#: 12/12. ``classify`` now also requires ``DEFAULT_STALL_SECONDS`` of pinned render, which changes
+#: ``froze`` again, so v5 is SUPERSEDED too.
+REPORT_SCHEMA = "resilient-launch-report/v6"
+SUPERSEDED_REPORT_SCHEMAS = (
+    "resilient-launch-report/v3",
+    "resilient-launch-report/v4",
+    "resilient-launch-report/v5",
+)
 WITHDRAWN_REPORT_SCHEMAS = ("resilient-launch-report/v1", "resilient-launch-report/v2")
 
 
@@ -268,6 +285,7 @@ def classify(
     go_live_timeout: float = DEFAULT_GO_LIVE_TIMEOUT,
     stability_window: float = DEFAULT_STABILITY_WINDOW,
     stall_samples: int = DEFAULT_STALL_SAMPLES,
+    stall_seconds: float = DEFAULT_STALL_SECONDS,
     started_at: float | None = None,
     pause_budget: float = DEFAULT_PAUSE_BUDGET,
     pause_sink: list[float] | None = None,
@@ -285,7 +303,10 @@ def classify(
       wedge — putting it in the wedge bucket would pollute the #627 rate from the other side)
       (#630 Part C).
     * after go-live, ``stall_samples`` consecutive samples with an unchanged ``gfx_packet`` while
-      ``acs_alive`` → ``FROZE`` (this is the delayed init livelock the other launchers miss).
+      ``acs_alive``, spanning at least ``stall_seconds`` since the packet last moved → ``FROZE``
+      (this is the delayed init livelock the other launchers miss). The time floor keeps the
+      finite render pause that follows the Start press (#627, ~10 s measured) from being scored
+      as a wedge; a sample count alone made that pause indistinguishable from one.
     * surviving ``stability_window`` seconds past go-live without stalling → ``STABLE``.
     * a **pause** (physics packet stagnant post-go-live, #630 Part B) is never credited toward
       the stability window, and its freeze counters stay cleared for up to ``pause_budget``
@@ -310,6 +331,8 @@ def classify(
         raise ValueError("stall_samples must be > 0")
     if pause_budget <= 0:
         raise ValueError("pause_budget must be > 0")
+    if stall_seconds < 0:
+        raise ValueError("stall_seconds must be >= 0")
 
     # ``_watch_live`` supplies its pre-probe start so a blocking readiness handshake consumes the
     # go-live budget. Pure/unit callers may omit it and retain the trace-relative behavior.
@@ -319,6 +342,9 @@ def classify(
     prev_phys: int | None = None
     prev_t: float | None = None
     stall_run = 0
+    # Time the pinned packet was first observed — the sample BEFORE the first repeat, as
+    # ``StableSessionWatch`` anchors it — so the floor measures how long the render stood still.
+    stall_since: float | None = None
     not_ready_run = 0
     unreadable_run = 0
     paused_total = 0.0
@@ -423,6 +449,7 @@ def classify(
                 # fails (#637 daemon MEDIUM).
                 not_ready_run = 0
                 stall_run = 0
+                stall_since = None
             else:
                 if not_ready:
                     not_ready_run += 1
@@ -447,13 +474,21 @@ def classify(
                     not_ready_run = 0
                 if advanced:
                     stall_run = 0
+                    stall_since = None
                 elif sample.gfx_packet is not None and sample.gfx_packet == prev_packet:
+                    if stall_run == 0:
+                        stall_since = prev_t if prev_t is not None else sample.t
                     stall_run += 1
-                    if stall_run >= stall_samples:
+                    if (
+                        stall_run >= stall_samples
+                        and stall_since is not None
+                        and sample.t - stall_since >= stall_seconds
+                    ):
                         return LaunchVerdict.FROZE
                 else:
                     # Missing shared memory is unknown, not another observation of the same packet.
                     stall_run = 0
+                    stall_since = None
                 # STABLE additionally requires physics ADVANCING when a physics reading exists:
                 # an animating graphics stream with pinned physics past the pause budget is a
                 # session that never resumed, not a proven-live one (#637 daemon HIGH).
@@ -654,7 +689,7 @@ class AttemptReadiness:
 #: seconds a held session's render packet may stay pinned — while physics keeps advancing —
 #: before the hold reports a post-handoff wedge. Well past any frame-time hitch, and #627 §3.2
 #: records a wedge as terminal once it lands, so a conservative window rules out false alarms.
-DEFAULT_HOLD_WEDGE_SECONDS = 20.0
+DEFAULT_HOLD_WEDGE_SECONDS = DEFAULT_STALL_SECONDS
 
 
 class StableSessionWatch:

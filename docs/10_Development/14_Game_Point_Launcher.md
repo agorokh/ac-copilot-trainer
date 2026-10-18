@@ -207,13 +207,14 @@ with the exact remediation path instead of exhausting the launch budget at the
 pre-drive screen. `ac_user_dir` is optional when the standard Documents or
 OneDrive Documents path can be discovered.
 
-After Stable AC presses Start, AC loads the car onto the track. During that
-load the render counter stops for several seconds while physics keeps running
-(about 10 s measured on the rig). The launcher logs `render paused across the
-Car0 probe` and waits up to 20 s for rendering to resume before it calls the
-attempt a freeze. It then retries the Car0 handshake up to three times after
-Start, the same budget `auto_drive` uses. Launcher reports before
-`resilient-launch-report/v5` scored that pause as `froze` and killed a
+After Stable AC presses Start, the session is already drivable, but AC's
+render counter stops for several seconds while physics keeps running (about
+10 s measured on the rig). The screen may look frozen during that time. Stable
+AC treats a stopped render as a freeze only after it has stayed stopped for
+20 s, the same limit Game Point uses while it holds a running session, and
+waits out shorter pauses. It also retries the Car0 handshake up to three times
+after Start, the same budget `auto_drive` uses. Launcher reports before
+`resilient-launch-report/v6` scored that pause as `froze` and killed a
 drivable session, so their freeze counts are not comparable (#627).
 
 Stable AC currently requires the default `sidecar_port` of `8765`. Game Point
