@@ -296,6 +296,51 @@ def test_session_start_request_retries_negative_lua_ack() -> None:
     ]
 
 
+def test_session_state_request_is_probe_only_and_single_shot() -> None:
+    """#627: the drivability query must never ask the trainer to press Start, and never retry."""
+
+    async def _run() -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+        hc = HarnessClient("ws://127.0.0.1:1/")
+        sent: list[dict[str, Any]] = []
+
+        async def _send(frame: dict[str, Any]) -> None:
+            sent.append(frame)
+
+        hc.send = _send  # type: ignore[method-assign]
+        await hc._queue.put(
+            {
+                "v": 1,
+                "type": "session.start.ack",
+                "ok": True,
+                "started": False,
+                "already_started": False,
+                "probe_only": True,
+            }
+        )
+        return await hc.request_session_state(timeout=1.0), sent
+
+    response, sent = asyncio.run(_run())
+    assert response is not None and response["already_started"] is False
+    assert sent == [{"v": 1, "type": "session.start", "probe_only": True}]
+
+
+def test_session_state_request_returns_correlated_error() -> None:
+    async def _run() -> dict[str, Any] | None:
+        hc = HarnessClient("ws://127.0.0.1:1/")
+
+        async def _send(_frame: dict[str, Any]) -> None:
+            return None
+
+        hc.send = _send  # type: ignore[method-assign]
+        await hc._queue.put(
+            {"v": 1, "type": "error", "ref_type": "session.start", "message": "no Lua peer"}
+        )
+        return await hc.request_session_state(timeout=1.0)
+
+    response = asyncio.run(_run())
+    assert response is not None and response["type"] == "error"
+
+
 def test_connect_retries_then_raises_on_dead_port() -> None:
     async def _run() -> None:
         hc = HarnessClient("ws://127.0.0.1:1/")

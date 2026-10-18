@@ -850,6 +850,10 @@ if wsBridge.registerRequestHandler then
     -- driving now, and the transition only delays the first usable telemetry.
     local instant = true
     if type(payload) == "table" and payload.instant == false then instant = false end
+    -- #627: `probe_only` asks whether the session has left the pre-drive menu WITHOUT pressing
+    -- Start. Stable AC uses it as its drivability check instead of the CSP Car0 handshake,
+    -- which made CSP source car 0's inputs from CarControls0 for the rest of the session.
+    local probeOnly = type(payload) == "table" and payload.probe_only == true
 
     -- Idempotent: leaving the pre-drive menu is the proof that the session already started.
     -- `isSessionStarted` is unusable here: measured CSP 0.2.11 reports it TRUE while the legacy
@@ -875,6 +879,19 @@ if wsBridge.registerRequestHandler then
     end
     if inMainMenu == false then
       return { ok = true, started = true, already_started = true }
+    end
+    if probeOnly then
+      -- Never fall through to the Start press below: a probe must not force a driver into a session.
+      if inMainMenu == true then
+        return { ok = true, started = false, already_started = false, probe_only = true }
+      end
+      return {
+        ok = false,
+        started = false,
+        already_started = false,
+        probe_only = true,
+        error = "isInMainMenu unavailable on this CSP build",
+      }
     end
 
     -- Fail closed and NAME the reason: an older CSP build without the API must not read as a

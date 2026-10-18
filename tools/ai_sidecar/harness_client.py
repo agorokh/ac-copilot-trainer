@@ -242,6 +242,25 @@ class HarnessClient:
                 await asyncio.sleep(max(0.0, retry_delay))
         return response
 
+    async def request_session_state(self, *, timeout: float = 5.0) -> dict[str, Any] | None:
+        """Ask whether AC has left its pre-drive menu, WITHOUT pressing Start (#627).
+
+        Sends ``session.start`` with ``probe_only``: the trainer app answers from
+        ``isInMainMenu`` and never calls ``ac.tryToStart``. ``already_started: true`` means the
+        session is past the menu. Stable AC uses this instead of the CSP Car0 handshake, which
+        left CSP sourcing car 0's inputs from ``CarControls0`` and overrode the driver's wheel.
+        """
+        await self.send(
+            {ENVELOPE_KEY: ENVELOPE_VERSION, TYPE_KEY: TYPE_SESSION_START, "probe_only": True}
+        )
+        return await self.wait_for(
+            lambda f: (
+                f.get(TYPE_KEY) == TYPE_SESSION_START_ACK
+                or (f.get(TYPE_KEY) == TYPE_ERROR and f.get("ref_type") == TYPE_SESSION_START)
+            ),
+            timeout=timeout,
+        )
+
     async def wait_for(
         self, predicate: Callable[[dict[str, Any]], bool], *, timeout: float = 5.0
     ) -> dict[str, Any] | None:
