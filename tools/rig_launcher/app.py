@@ -391,6 +391,10 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
 
     root.title("AC Copilot Game Point")
     apply_window_icon(root)  # also the default for every Toplevel the launcher opens
+    # Recolour the native caption while the window is still hidden, so the first frame the
+    # operator sees is already dark — no white title bar flashing up and then turning (#881).
+    root.withdraw()
+    apply_dark_title_bar(root)
 
     last_status: dict[str, GamePointStatus | None] = {"status": None}
     _poll_busy: dict[str, bool] = {"v": False}
@@ -547,7 +551,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
 
     view.mark_pending()  # neutral state until the first async poll lands (#568 review)
     view.fit_window()
-    apply_dark_title_bar(root)  # native frame, carbon caption (#881)
+    root.deiconify()
     # Honor the configured SimHub auto-start ONCE at launch (the periodic ticks are read-only,
     # so without this the documented AC_COPILOT_START_SIMHUB / checkbox would be a no-op until
     # the operator pressed START — #568 review).
