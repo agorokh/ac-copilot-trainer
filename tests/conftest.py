@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 
@@ -10,6 +12,19 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "llm_live: exercises a live Ollama endpoint (nondeterministic); deselected by default.",
     )
+
+
+@pytest.fixture(autouse=True)
+def _clear_operator_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run every test against a clean ``AC_COPILOT_*`` environment (issue #895).
+
+    A configured rig exports the operator's real settings (inference endpoint, Ollama,
+    voice, sidecar port/token, reference archive, ...) as user env vars, which otherwise
+    leak into tests that assume defaults. Tests that need a value set it explicitly.
+    """
+    for name in list(os.environ):
+        if name.upper().startswith("AC_COPILOT_"):
+            monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture
