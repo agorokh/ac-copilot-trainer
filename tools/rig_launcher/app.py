@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.ai_sidecar.setup_advisor import diff_setup_files
+from tools.rig_launcher.build import run_build
 from tools.rig_launcher.install import default_exe_path, install_desktop_shortcut
 from tools.rig_launcher.settings import ensure_settings_file
 from tools.rig_launcher.supervisor import (
@@ -19,7 +20,6 @@ from tools.rig_launcher.supervisor import (
     GamePointStatus,
     GamePointSupervisor,
     ProbeResult,
-    build_pyinstaller_args,
     default_paths,
     render_status_lines,
 )
@@ -282,8 +282,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     project_root = Path(__file__).resolve().parents[2]
     if args.build_exe:
-        cmd = [sys.executable, "-m", "PyInstaller", *build_pyinstaller_args(project_root)]
-        rc = subprocess.call(cmd)
+        rc = run_build(project_root)
         if rc != 0 or not args.install_shortcut:
             return rc
     if args.install_shortcut:
