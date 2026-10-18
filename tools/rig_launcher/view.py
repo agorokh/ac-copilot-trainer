@@ -42,6 +42,9 @@ _ROWS: tuple[tuple[str, str], ...] = (
     ("Offline report", "moza_review"),
 )
 
+#: Point size of the status-row labels (the left column).
+_ROW_LABEL_SIZE = 12
+
 #: (label, action key, is-primary) for each footer button. Labels are uppercase
 #: per the design Button treatment; Setup Diff is an operator function the
 #: static design mock omits. Stable AC / Release AC are deliberately absent:
@@ -117,6 +120,7 @@ class LauncherView:
 
         body = tk.Frame(panel, bg=theme.GRAPHITE)
         body.pack(fill="both", expand=True, padx=16, pady=(2, 8))
+        self._label_chars = self._row_label_chars(root)
         for index, (label, key) in enumerate(_ROWS):
             self._rows[key] = self._build_row(body, label, last=index == len(_ROWS) - 1)
 
@@ -190,6 +194,18 @@ class LauncherView:
         self._summary_field = field
         self._summary_caption = caption
 
+    def _row_label_chars(self, root: tk.Misc) -> int:
+        """Label-column width (Tk text units) that fits the widest row label (#885).
+
+        A Tk Label ``width`` counts average-glyph ("0") widths, and Saira caps run wider than
+        that, so a character count alone clipped OFFLINE REPORT to OFFLINE REF. Measure the
+        real caps instead, plus one unit of air before the state column.
+        """
+        face = tkfont.Font(root=root, family=self._f_disp, size=_ROW_LABEL_SIZE)
+        unit = max(1, face.measure("0"))
+        widest = max(face.measure(label.upper()) for label, _ in _ROWS)
+        return -(-widest // unit) + 1
+
     def _build_row(self, body: tk.Frame, label: str, *, last: bool = False) -> dict[str, object]:
         row = tk.Frame(body, bg=theme.GRAPHITE)
         row.pack(fill="x", pady=(8, 8))
@@ -198,8 +214,8 @@ class LauncherView:
             text=label.upper(),
             bg=theme.GRAPHITE,
             fg=theme.MUTE,
-            font=(self._f_disp, 12),
-            width=10,
+            font=(self._f_disp, _ROW_LABEL_SIZE),
+            width=self._label_chars,
             anchor="w",
         ).pack(side="left")
         state = tk.Label(

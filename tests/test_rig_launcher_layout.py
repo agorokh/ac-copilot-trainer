@@ -90,3 +90,31 @@ def tk_root():
     root.withdraw()
     yield root
     root.destroy()
+
+
+@pytest.mark.parametrize("scaling", [1.0, 2.0])
+def test_every_status_row_label_fits_its_caps(scaling, tk_root):
+    # #885: a Label width counted in "0" glyphs clipped OFFLINE REPORT to OFFLINE REF.
+    from tkinter import font as tkfont
+
+    from tools.rig_launcher.preview import _NOOP_ACTIONS
+    from tools.rig_launcher.view import _ROWS, build_launcher_view
+
+    root = tk.Toplevel(tk_root)
+    try:
+        root.withdraw()
+        root.tk.call("tk", "scaling", scaling)
+        build_launcher_view(root, actions=_NOOP_ACTIONS, status_path="status.json")
+        root.update_idletasks()
+        captions = {label.upper() for label, _ in _ROWS}
+        labels = [
+            w for w in _descendants(root) if isinstance(w, tk.Label) and w.cget("text") in captions
+        ]
+        assert {w.cget("text") for w in labels} == captions
+        for widget in labels:
+            needed = tkfont.Font(root=root, font=widget.cget("font")).measure(widget.cget("text"))
+            assert widget.winfo_reqwidth() >= needed, widget.cget("text")
+        # One shared column: every row's state starts at the same x.
+        assert len({w.winfo_reqwidth() for w in labels}) == 1
+    finally:
+        root.destroy()
