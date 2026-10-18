@@ -20,13 +20,25 @@ PR [#862](https://github.com/agorokh/ac-copilot-trainer/pull/862) merged as `076
 service and in-game application — Unverified pending reviewed merge/distribution"* was
 therefore actionable; this is its live settlement on the rig.
 
-## Distribution (verified)
+## Distribution (two halves; the sidecar half was initially missed)
 
-The installed trainer app is a junction to the **primary checkout**, which sat at
-`origin/main` `8907ddf` with 0 commits behind. `src/ac_copilot_trainer/modules/setup_exchange.lua`
-hashed `9ff6bd57e9abb26ca332a29b4d20a6ebdb6cf733`, byte-identical to `origin/main`. The harness
-independently reported `installed app provenance: match`. No firmware flash was needed or done:
+The native path needs **both** the trainer Lua and the sidecar. No firmware flash was needed:
 #862 touched no device firmware, only the sidecar, trainer Lua and the host simulator.
+
+- **Trainer Lua** — the installed app is a junction to the **primary checkout**, at `origin/main`
+  `8907ddf`, 0 behind. `setup_exchange.lua` blob `9ff6bd57e9abb26ca332a29b4d20a6ebdb6cf733` is
+  byte-identical to `origin/main`; the harness reported `installed app provenance: match`.
+- **Sidecar** — this half was **stale** and was first wrongly counted as distributed. The operator's
+  packaged `dist/AC-Copilot-Game-Point.exe` bundles the sidecar and reported `/health
+  build_commit 70ed2fe` (built 2026-10-15); `git merge-base --is-ancestor 076361a 70ed2fe` is false,
+  so the normal Game Point flow still ran the pre-#862 proxy-only Setup Exchange. The live results
+  below used a source sidecar (`auto_drive` from the worktree), not the packaged one.
+  Repaired the same night through the documented path: `python -m tools.rig_launcher --build-exe`
+  from detached `origin/main`, `--self-test` exit 0 (both tablet routes serving), old EXE kept as
+  `dist/AC-Copilot-Game-Point.70ed2fe.exe.bak` (SHA-256 `cb9a1bf5…`), new EXE SHA-256 `e76fe971…`.
+  The relaunched Game Point reported `/health build_commit 8907ddf`, opened COM6 and accepted the
+  panel's `hello` alongside a tablet dash (`peers=2`). Native SE through the *packaged* sidecar with
+  a live trainer remains for the operator's own session.
 
 ## Live results (real service, real session)
 
@@ -59,12 +71,28 @@ Side note for the next session: `entry_launcher` only succeeds on *driving*, so 
 it relaunch and kill AC. `--max-launches 1 --attempt-timeout 200` leaves AC parked in the pit box,
 which is the way to hold a pit session open. `auto_drive --setup` still generates `StartType=START`.
 
-## Rig state left behind
+## Rig state and the black-screen incident
 
-Baseline restored: no `acs.exe`, nothing listening on 8765 — matching the pre-session state. The
-duplicate `Extrapiramidal-2.ini` test residue was removed; the one real community download
+After the readback the session stopped the AC and source sidecar it had started. The operator then
+took the rig and found the **panel black**. Evidence: a Game Point sidecar had COM6 open
+(`DTR high, RTS low`) yet `/health screen_peers 0`, and a read-only listen on COM6 returned **0 bytes
+in 8 s** — the firmware was silent, not merely disconnected. Most likely the open/close churn on the
+native-USB CDC port around the stop left the S3 held in reset or ROM download mode (cause inferred,
+not proven). Recovery: stopped the orphaned sidecar child (identity checked by PID + command line),
+ran Espressif's esptool `--before default_reset --after hard_reset chip_id` (read-only, no flash
+write; chip answered as ESP32-S3, USB-Serial/JTAG), and the same listen then showed **12 `hello`
+frames (`client_class: screen`) in 12 s**.
+
+The operator's launcher also refused AC sessions with `ac_session: menu_config_required` — CSP 0.2.11
+needs `[NEW_UI] REPLACE_MAIN_MENU=0` in `Documents/Assetto Corsa/cfg/extension/gui.ini`, which was
+absent. Added it with operator approval (backup kept); the launcher's own preflight then read
+`ac_session: idle — press STABLE AC to start a driver session`.
+
+The duplicate `Extrapiramidal-2.ini` test residue was removed; the one real community download
 `Extrapiramidal.ini` was retained in the user library and reported to the operator. No firmware
-write, no user-setup overwrite, no peer process stopped.
+write, no user-setup overwrite. Lesson: do not stop a sidecar that holds the panel's COM port
+without a liveness listen afterwards, and check the packaged EXE's `/health build_commit`, not only
+the Lua junction, before calling a sidecar change distributed.
 
 Evidence (gitignored): `.scratch/issue86-live/` — `readback-load_refused.json`, `load-probe.json`,
 `drive/report.json`, `drive/hud.png`, `drive2/report.json`, `auto_drive*.log`, `pit_launch2.log`.
