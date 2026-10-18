@@ -61,7 +61,7 @@ lv_obj_t* g_plus_buttons[PT_MAX_SPINNERS] = {};
 constexpr int  PT_MAX_REQUESTS  = 5;
 
 struct setup_row_t {
-    char    name[48];
+    char    name[PT_SETUP_NAME_MAX];
     char    mtime_iso[32];
     int32_t best_ms;       // -1 = unknown
     char    path[PT_SETUP_PATH_MAX];  // empty if trainer didn't ship a path
@@ -96,7 +96,7 @@ char g_car_name[64]  = {0};   // human-readable; empty falls back to g_car_id
 char g_car_brand[32] = {0};   // empty hides brand line
 char g_track_id[32]  = {0};
 char g_track_name[48] = {0};  // human-readable; empty falls back to g_track_id
-char g_active_name[48] = {0}; // currently loaded setup name (from setup.active)
+char g_active_name[PT_SETUP_NAME_MAX] = {0}; // currently loaded setup name (from setup.active)
 char g_active_path[PT_SETUP_PATH_MAX] = {0}; // currently loaded setup INI path, if known
 
 // Out-queue (FIFO).
@@ -110,7 +110,7 @@ int          g_req_tail = 0;
 // last.
 constexpr int PT_MAX_PENDING_LOADS = PT_MAX_REQUESTS - 1;
 struct pending_load_t {
-    char      name[64];
+    char      name[PT_SETUP_NAME_MAX];
     char      path[PT_SETUP_PATH_MAX];
     lv_obj_t* row;
 };
@@ -279,7 +279,7 @@ struct pt_ctx_t {
     lv_obj_t* active_row_obj;  // row being loaded (for gold pulse)
     lv_timer_t* pulse_timer;
     int       pulse_steps_left;
-    char      pending_name[48];   // setup the user just tapped
+    char      pending_name[PT_SETUP_NAME_MAX];   // setup the user just tapped
     char      pending_path[PT_SETUP_PATH_MAX];  // matching path; "" if not known
 };
 
@@ -296,6 +296,14 @@ constexpr int OUTER_PAD  = 12;
 constexpr int SPINNER_ROW_H = 44;
 constexpr int ROW_H      = 68;  // name+best on row 1, params+date on row 2
 constexpr int ROW_GAP    = 8;
+constexpr int ROW_PAD    = 8;
+// #86: saved-setup names can be long unbroken strings (the trainer's scientist writes
+// "Copilot_Scientist_<candidate>_<base>"). The name may take up to two lines beside the
+// best-lap readout; the BB/ABS/TC line always sits below it and the row grows to fit.
+constexpr int NAME_MAX_LINES       = 2;
+constexpr int NAME_RIGHT_RESERVE   = 72;  // best-lap readout + chevron
+constexpr int CHIPS_MIN_Y          = 26;  // where the chip line sat for a one-line name
+constexpr int NAME_TO_CHIPS_GAP    = 8;
 
 // --- Helpers ---------------------------------------------------------------
 
@@ -543,7 +551,8 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
     lv_label_set_text(name_lbl, s.label);
     lv_obj_set_style_text_font(name_lbl, UI_FONT_LABEL_SM, LV_PART_MAIN);
     lv_obj_set_style_text_color(name_lbl, UI_TX_PRIMARY, LV_PART_MAIN);
-    lv_obj_set_width(name_lbl, 128);
+    // One fixed line: LONG_DOT only truncates when the height is bounded (#86).
+    lv_obj_set_size(name_lbl, 128, lv_font_get_line_height(UI_FONT_LABEL_SM));
     lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_DOT);
     lv_obj_align(name_lbl, LV_ALIGN_LEFT_MID, 0, 0);
 
@@ -594,27 +603,43 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
 }
 
 lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
+    // Measure the name first so the row can grow for a two-line name instead of letting the
+    // label overflow onto the chip line (operator report, #86).
+    const lv_font_t* name_font = UI_FONT_LABEL_SM;
+    const lv_font_t* chip_font = UI_FONT_MONO_XS;
+    const lv_coord_t row_content_w = (SCREEN_W - 2 * OUTER_PAD) - 2 * ROW_PAD - 2;  // 1px border
+    const lv_coord_t name_w = row_content_w - NAME_RIGHT_RESERVE;
+    const lv_coord_t name_line_h = lv_font_get_line_height(name_font);
+    lv_point_t name_size;
+    lv_txt_get_size(&name_size, s.name, name_font, 0, 0, name_w, LV_TEXT_FLAG_NONE);
+    const lv_coord_t name_h =
+        LV_MAX(name_line_h, LV_MIN(name_size.y, NAME_MAX_LINES * name_line_h));
+    const lv_coord_t chips_y = LV_MAX(CHIPS_MIN_Y, name_h + NAME_TO_CHIPS_GAP);
+    const lv_coord_t row_h =
+        LV_MAX(ROW_H, 2 * ROW_PAD + 2 + chips_y + lv_font_get_line_height(chip_font));
+
     lv_obj_t* row = lv_obj_create(parent);
-    lv_obj_set_size(row, lv_pct(100), ROW_H);
+    lv_obj_set_size(row, lv_pct(100), row_h);
     lv_obj_set_style_bg_color(row, UI_BG_PANEL, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(row, UI_BG_PANEL_OPA, LV_PART_MAIN);
     lv_obj_set_style_border_color(row, UI_BORDER_SOFT, LV_PART_MAIN);
     lv_obj_set_style_border_opa(row, UI_BORDER_SOFT_OPA, LV_PART_MAIN);
     lv_obj_set_style_border_width(row, 1, LV_PART_MAIN);
     lv_obj_set_style_radius(row, UI_RADIUS_TILE, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(row, 8, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(row, ROW_PAD, LV_PART_MAIN);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_color(row, UI_BG_HEADER, LV_PART_MAIN | LV_STATE_PRESSED);
     lv_obj_add_event_cb(row, on_row_clicked, LV_EVENT_CLICKED,
                         reinterpret_cast<void*>(static_cast<intptr_t>(idx)));
 
-    // Row 1: name (left) + BEST lap (right)
+    // Row 1: name (left, up to two lines) + BEST lap (right). A fixed height is what makes
+    // LONG_DOT truncate: with an automatic height the label just wraps downward.
     lv_obj_t* name_lbl = lv_label_create(row);
     lv_label_set_text(name_lbl, s.name);
-    lv_obj_set_style_text_font(name_lbl, UI_FONT_LABEL_SM, LV_PART_MAIN);
+    lv_obj_set_style_text_font(name_lbl, name_font, LV_PART_MAIN);
     lv_obj_set_style_text_color(name_lbl, UI_TX_PRIMARY, LV_PART_MAIN);
-    lv_obj_set_width(name_lbl, lv_pct(60));
+    lv_obj_set_size(name_lbl, name_w, name_h);
     lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_DOT);
     lv_obj_align(name_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
 
@@ -631,10 +656,10 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
     format_setup_chips(s, chip_buf, sizeof(chip_buf));
     lv_obj_t* chips = lv_label_create(row);
     lv_label_set_text(chips, chip_buf);
-    lv_obj_set_style_text_font(chips, UI_FONT_MONO_XS, LV_PART_MAIN);
+    lv_obj_set_style_text_font(chips, chip_font, LV_PART_MAIN);
     lv_obj_set_style_text_color(chips, UI_TX_MUTED, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(chips, 1, LV_PART_MAIN);
-    lv_obj_align(chips, LV_ALIGN_TOP_LEFT, 0, 26);
+    lv_obj_align(chips, LV_ALIGN_TOP_LEFT, 0, chips_y);
     if (idx >= 0 && idx < PT_MAX_SETUPS) {
         g_row_chip_labels[idx] = chips;
     }
@@ -904,7 +929,8 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     lv_obj_set_style_text_font(ctx->meta_track, UI_FONT_LABEL_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(ctx->meta_track, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(ctx->meta_track, 1, LV_PART_MAIN);
-    lv_obj_set_width(ctx->meta_track, SCREEN_W - 2 * OUTER_PAD);
+    lv_obj_set_size(ctx->meta_track, SCREEN_W - 2 * OUTER_PAD,
+                    lv_font_get_line_height(UI_FONT_LABEL_XS));
     lv_label_set_long_mode(ctx->meta_track, LV_LABEL_LONG_DOT);
     lv_obj_align(ctx->meta_track, LV_ALIGN_TOP_LEFT, 0, 0);
 
@@ -930,7 +956,9 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     lv_obj_set_style_text_font(ctx->meta_active, UI_FONT_LABEL_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(ctx->meta_active, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(ctx->meta_active, 1, LV_PART_MAIN);
-    lv_obj_set_width(ctx->meta_active, SCREEN_W - 2 * OUTER_PAD);
+    // One fixed line (#86): a long setup name must truncate here, not wrap into LIVE CAR.
+    lv_obj_set_size(ctx->meta_active, SCREEN_W - 2 * OUTER_PAD,
+                    lv_font_get_line_height(UI_FONT_LABEL_XS));
     lv_label_set_long_mode(ctx->meta_active, LV_LABEL_LONG_DOT);
     lv_obj_align(ctx->meta_active, LV_ALIGN_TOP_LEFT, 0, 60);
     lv_label_set_text(ctx->meta_active, "");
@@ -939,7 +967,8 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     ctx->meta_live = lv_label_create(meta);
     lv_obj_set_style_text_font(ctx->meta_live, UI_FONT_MONO_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(ctx->meta_live, UI_ACCENT_GOLD, LV_PART_MAIN);
-    lv_obj_set_width(ctx->meta_live, SCREEN_W - 2 * OUTER_PAD);
+    lv_obj_set_size(ctx->meta_live, SCREEN_W - 2 * OUTER_PAD,
+                    lv_font_get_line_height(UI_FONT_MONO_XS));
     lv_label_set_long_mode(ctx->meta_live, LV_LABEL_LONG_DOT);
     lv_obj_align(ctx->meta_live, LV_ALIGN_TOP_LEFT, 0, 82);
     ctx->meta_lock = lv_label_create(meta);

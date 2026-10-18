@@ -307,10 +307,23 @@ void rebuild_list(se_ctx_t* ctx) {
     ctx->placeholder = nullptr;
     if (g_result_count == 0) {
         ctx->placeholder = lv_label_create(ctx->list_col);
-        lv_label_set_text(ctx->placeholder, g_loading ? "Loading..." : "No setups found");
+        // #86: an empty search is a real answer (Magione + 911 GT3 R has none), so say what
+        // was searched instead of a bare "No setups found". Wrap it as a sentence.
+        char empty_msg[128];
+        const char* track = g_track_name[0] ? g_track_name : g_track_id;
+        if (g_loading) {
+            snprintf(empty_msg, sizeof(empty_msg), "Loading...");
+        } else if (track[0]) {
+            snprintf(empty_msg, sizeof(empty_msg), "No community setups for this car at %s yet.",
+                     track);
+        } else {
+            snprintf(empty_msg, sizeof(empty_msg), "No community setups for this car yet.");
+        }
+        lv_label_set_text(ctx->placeholder, empty_msg);
+        lv_obj_set_style_text_font(ctx->placeholder, UI_FONT_LABEL_MD, LV_PART_MAIN);
         lv_obj_set_style_text_color(ctx->placeholder, UI_TX_MUTED, LV_PART_MAIN);
         lv_obj_set_width(ctx->placeholder, SCREEN_W - 2 * OUTER_PAD);
-        lv_label_set_long_mode(ctx->placeholder, LV_LABEL_LONG_DOT);
+        lv_label_set_long_mode(ctx->placeholder, LV_LABEL_LONG_WRAP);
         return;
     }
     for (int i = 0; i < g_result_count; ++i) {
