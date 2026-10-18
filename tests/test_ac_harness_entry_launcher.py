@@ -408,7 +408,25 @@ def test_running_process_ids_preserves_partial_native_snapshot_for_best_effort_c
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Toolhelp32 is Windows-only")
 def test_running_process_ids_native_snapshot_finds_current_python():
-    assert os.getpid() in running_process_ids(Path(sys.executable).name)
+    # A Windows venv's Scripts\python[3].exe is a redirector that runs the base interpreter as a
+    # child, so ``sys.executable`` does not name this process's image (#895). Ask the OS instead.
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.QueryFullProcessImageNameW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    buf = ctypes.create_unicode_buffer(32768)
+    size = wintypes.DWORD(len(buf))
+    assert kernel32.QueryFullProcessImageNameW(
+        kernel32.GetCurrentProcess(), 0, buf, ctypes.byref(size)
+    ), ctypes.get_last_error()
+    assert os.getpid() in running_process_ids(Path(buf.value).name)
 
 
 def test_terminate_process_tree_requires_consecutive_absence(monkeypatch):
