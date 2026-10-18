@@ -15,8 +15,15 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import sys
 import time
 
+from tools.rig_launcher.chrome import (
+    apply_dark_title_bar,
+    apply_window_icon,
+    set_app_user_model_id,
+    window_handle,
+)
 from tools.rig_launcher.fonts import load_private_fonts
 from tools.rig_launcher.supervisor import GamePointStatus, ProbeResult
 from tools.rig_launcher.view import build_launcher_view
@@ -65,18 +72,53 @@ def _capture_region(x: int, y: int, width: int, height: int, out_path: str) -> N
     )
 
 
-def render(out_path: str, *, status: GamePointStatus | None = None) -> int:
-    """Show the themed launcher and save its client rectangle to ``out_path``."""
+def _frame_bounds(window: object) -> tuple[int, int, int, int] | None:
+    """Visible window bounds incl. the native caption (DWMWA_EXTENDED_FRAME_BOUNDS).
+
+    None (the caller keeps the client-rect crop) off-Windows or when DWM is unavailable.
+    """
+    if sys.platform != "win32":
+        return None
+    hwnd = window_handle(window)
+    if not hwnd:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        rect = wintypes.RECT()
+        extended_frame_bounds = 9
+        result = ctypes.windll.dwmapi.DwmGetWindowAttribute(  # type: ignore[attr-defined]
+            ctypes.c_void_p(hwnd), extended_frame_bounds, ctypes.byref(rect), ctypes.sizeof(rect)
+        )
+    except Exception:  # noqa: BLE001 - no DWM: fall back to the client crop
+        return None
+    if result != 0:
+        return None
+    return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
+
+
+def render(
+    out_path: str, *, status: GamePointStatus | None = None, with_frame: bool = False
+) -> int:
+    """Show the themed launcher and save it to ``out_path``.
+
+    By default only the client rectangle is captured (the design-gate crop);
+    ``with_frame`` captures the whole window including the native dark caption.
+    """
     import tkinter as tk
 
     load_private_fonts()  # register design faces so the capture matches the rig
+    set_app_user_model_id()
     root = tk.Tk()
     root.title("AC Copilot Game Point")
+    apply_window_icon(root)
     view = build_launcher_view(
         root, actions=_NOOP_ACTIONS, status_path=demo_status().status_path, port=8765
     )
     view.update(status or demo_status())
     view.fit_window()
+    apply_dark_title_bar(root)
     root.update_idletasks()
     root.deiconify()
     root.lift()
@@ -86,6 +128,10 @@ def render(out_path: str, *, status: GamePointStatus | None = None) -> int:
         time.sleep(0.08)
     x, y = root.winfo_rootx(), root.winfo_rooty()
     width, height = root.winfo_width(), root.winfo_height()
+    if with_frame:
+        bounds = _frame_bounds(root)
+        if bounds is not None:
+            x, y, width, height = bounds
     time.sleep(0.2)
     root.update()
     try:
@@ -99,8 +145,11 @@ def render(out_path: str, *, status: GamePointStatus | None = None) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Render the Racing Atelier launcher to PNG.")
     parser.add_argument("--out", required=True, help="Output PNG path.")
+    parser.add_argument(
+        "--frame", action="store_true", help="Include the native title bar in the capture."
+    )
     args = parser.parse_args(argv)
-    return render(args.out)
+    return render(args.out, with_frame=args.frame)
 
 
 if __name__ == "__main__":

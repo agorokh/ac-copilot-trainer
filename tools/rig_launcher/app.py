@@ -193,8 +193,11 @@ def _open_setup_diff_window(diff: dict[str, Any], *, parent: Any | None = None) 
     import tkinter as tk
     from tkinter import ttk
 
+    from tools.rig_launcher.chrome import apply_window_icon
+
     root = tk.Toplevel(parent) if parent is not None else tk.Tk()
     root.title("Setup Diff")
+    apply_window_icon(root)  # light ttk body: keep the native light caption
     root.geometry("760x460")
     root.minsize(560, 320)
 
@@ -366,6 +369,14 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_gui(supervisor: GamePointSupervisor) -> int:
+    from tools.rig_launcher.chrome import (
+        apply_dark_title_bar,
+        apply_window_icon,
+        set_app_user_model_id,
+    )
+
+    # Before the first window exists, or the taskbar groups a source launch under python.exe.
+    set_app_user_model_id()
     try:
         import tkinter as tk
 
@@ -379,6 +390,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
     from tools.rig_launcher.view import build_launcher_view
 
     root.title("AC Copilot Game Point")
+    apply_window_icon(root)  # also the default for every Toplevel the launcher opens
 
     last_status: dict[str, GamePointStatus | None] = {"status": None}
     _poll_busy: dict[str, bool] = {"v": False}
@@ -502,24 +514,6 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
             return
         offline_view = _open_moza_report_window(supervisor, parent=root)
 
-    view = build_launcher_view(
-        root,
-        actions={
-            "start": start,
-            "resilient_launch": start_resilient,
-            "resilient_release": release_resilient,
-            "refresh": refresh,
-            "logs": open_logs,
-            "settings": open_settings,
-            "setup_diff": open_setup_diff,
-            "moza_offline_report": open_offline_report,
-        },
-        status_path=str(supervisor.paths.status_path),
-        port=supervisor.config.port,
-        simhub_autostart=supervisor.config.start_simhub,
-        on_toggle_simhub=toggle_simhub,
-    )
-
     def poll_tick() -> None:
         # Continuous re-poll so the tablet tunnel keeper (and every other probe) self-heals
         # while the launcher is open — an unplug / tablet sleep / `adb kill-server` after launch
@@ -533,8 +527,33 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
         except tk.TclError:
             return
 
-    view.mark_pending()  # neutral state until the first async poll lands (#568 review)
-    view.fit_window()
+    # Recolour the native caption while the window is still hidden, so the first frame the
+    # operator sees is already dark — no white title bar flashing up and then turning (#881).
+    root.withdraw()
+    apply_dark_title_bar(root)
+    try:
+        view = build_launcher_view(
+            root,
+            actions={
+                "start": start,
+                "resilient_launch": start_resilient,
+                "resilient_release": release_resilient,
+                "refresh": refresh,
+                "logs": open_logs,
+                "settings": open_settings,
+                "setup_diff": open_setup_diff,
+                "moza_offline_report": open_offline_report,
+            },
+            status_path=str(supervisor.paths.status_path),
+            port=supervisor.config.port,
+            simhub_autostart=supervisor.config.start_simhub,
+            on_toggle_simhub=toggle_simhub,
+        )
+        view.mark_pending()  # neutral state until the first async poll lands (#568 review)
+        view.fit_window()
+    finally:
+        # Never leave the launcher hidden: a failed view build must still surface the window.
+        root.deiconify()
     # Honor the configured SimHub auto-start ONCE at launch (the periodic ticks are read-only,
     # so without this the documented AC_COPILOT_START_SIMHUB / checkbox would be a no-op until
     # the operator pressed START — #568 review).

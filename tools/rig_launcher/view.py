@@ -22,6 +22,7 @@ from tkinter import font as tkfont
 from typing import Any
 
 from tools.rig_launcher import theme
+from tools.rig_launcher.chrome import apply_dark_title_bar
 from tools.rig_launcher.fonts import load_private_fonts
 from tools.rig_launcher.supervisor import (
     GamePointConfig,
@@ -391,6 +392,7 @@ class MozaReviewView:
         self.window.title("Game Point · Offline report")
         self.window.configure(bg=theme.GRAPHITE)
         self.window.minsize(660, 520)
+        apply_dark_title_bar(self.window)
         frame = tk.Frame(self.window, bg=theme.GRAPHITE, padx=18, pady=18)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(1, weight=1)
