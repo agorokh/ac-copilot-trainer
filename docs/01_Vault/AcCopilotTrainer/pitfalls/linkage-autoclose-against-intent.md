@@ -11,6 +11,7 @@ relates_to:
   - AcCopilotTrainer/pitfalls/epic-body-delivery-drift.md
   - AcCopilotTrainer/pitfalls/state-consistency.md
   - AcCopilotTrainer/03_Investigations/2026-10-18-175107Z-backlog-steward-ledger-snapshot-bdd6d5.md
+  - AcCopilotTrainer/00_System/handoffs/2026-10-18-201940Z-resolve-pr878-8e0ce8.md
 ---
 
 # Linkage auto-close against stated intent
@@ -48,9 +49,20 @@ moving numbered MAP, intentional-exit stale transition) was never dispositioned.
 3. When it has happened: record an explicit closing-disposition comment (accepting other
    evidence, or waiving the remainder) or reopen. Never leave an auto-closed issue with
    undispositioned acceptance.
+4. Never *quote* a closing phrase either — "does not close #N", "will not fix #N" — in a PR body
+   or commit message. GitHub's parser has no negation; the quotation re-links #N. Describe the
+   intent instead ("disclaims #N as a closing target", "#N stays open").
 
 ## Steward detection rule
 
 Phase 0 ledger diff: for each issue the previous ledger carried as open that is now closed,
 require a closing comment or a merged PR whose body claims closure. Absent both, verdict
 `partially-delivered` (CLOSED) and escalate — the merge is a hypothesis; the verdict owns the state.
+
+## Seen again (2026-10-18, PR #878)
+
+The steward SAVE that recorded this pitfall quoted #848's disclaimer verbatim and so carried
+`closingIssuesReferences = [813]` itself. The hub `vault-automerge` close-intent snapshot
+(gov-hub#621, pin `5e00dad1`) refused the merge on the exact head; rewording the body emptied the
+list without moving the head, and the PR merged as `8dc8478`. Rule 4 above is that lesson.
+Handoff: `00_System/handoffs/2026-10-18-201940Z-resolve-pr878-8e0ce8.md`.
