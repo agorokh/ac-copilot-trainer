@@ -18,7 +18,7 @@ def _descendants(parent):
 def test_fresh_launcher_and_minimum_size_show_all_controls(scaling, tk_root):
     from tools.rig_launcher.preview import _NOOP_ACTIONS, demo_status
     from tools.rig_launcher.supervisor import ProbeResult
-    from tools.rig_launcher.view import build_launcher_view
+    from tools.rig_launcher.view import _BUTTONS, build_launcher_view
 
     root = tk.Toplevel(tk_root)
     try:
@@ -38,12 +38,14 @@ def test_fresh_launcher_and_minimum_size_show_all_controls(scaling, tk_root):
         status = replace(
             demo_status(),
             tablet=ProbeResult("tablet", True, "dash-connected", "browser_peers=1"),
-            resilient=ProbeResult(
-                "ac_session",
+            # The longest realistic status line, on a row that is still on the main screen (the
+            # AC Session row left with Stable AC on 2026-10-18).
+            voice=ProbeResult(
+                "voice",
                 False,
-                "menu_config_required",
-                "Set [NEW_UI] REPLACE_MAIN_MENU=0 in "
-                r"C:\Users\driver\OneDrive\Documents\Assetto Corsa\cfg\extension\gui.ini",
+                "bank_missing",
+                "Set AC_COPILOT_VOICE_BANK to an existing bank in "
+                r"C:\Users\driver\OneDrive\Documents\Assetto Corsa\cfg\extension\voice\bank",
             ),
         )
         view.update(status)
@@ -55,9 +57,9 @@ def test_fresh_launcher_and_minimum_size_show_all_controls(scaling, tk_root):
             width, height = root.winfo_width(), root.winfo_height()
             controls = [w for w in _descendants(root) if isinstance(w, tk.Button)]
             labels = [w for w in _descendants(root) if isinstance(w, tk.Label)]
-            assert len(controls) == 7
+            assert len(controls) == len(_BUTTONS)
             assert any(w.cget("text") == "DASH-CONNECTED" for w in labels)
-            assert any(w.cget("text") == "MENU_CONFIG_REQUIRED" for w in labels)
+            assert any(w.cget("text") == "BANK_MISSING" for w in labels)
             for widget in controls + labels:
                 assert widget.winfo_ismapped(), widget.cget("text")
                 assert widget.winfo_width() >= widget.winfo_reqwidth(), (

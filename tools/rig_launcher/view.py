@@ -38,17 +38,16 @@ _ROWS: tuple[tuple[str, str], ...] = (
     ("SimHub", "simhub"),
     ("Tablet", "tablet"),
     ("Keypad", "keypad"),
-    ("AC Session", "resilient"),
     ("Offline report", "moza_review"),
 )
 
 #: (label, action key, is-primary) for each footer button. Labels are uppercase
-#: per the design Button treatment; Release AC and Setup Diff are operator
-#: functions the static design mock omits.
+#: per the design Button treatment; Setup Diff is an operator function the
+#: static design mock omits. Stable AC / Release AC are deliberately absent:
+#: the operator plays via Content Manager + START, and the resilient launcher is
+#: a service tool reached through ``--resilient-launch`` / ``--resilient-release``.
 _BUTTONS: tuple[tuple[str, str, bool], ...] = (
     ("▶ START", "start", True),
-    ("STABLE AC", "resilient_launch", False),
-    ("RELEASE AC", "resilient_release", False),
     ("REFRESH", "refresh", False),
     ("LOGS", "logs", False),
     ("SETTINGS", "settings", False),
@@ -57,7 +56,7 @@ _BUTTONS: tuple[tuple[str, str, bool], ...] = (
 
 #: grid column weights: Start is 1.5x each secondary action (design
 #: grid-template-columns 1.5fr 1fr 1fr 1fr, extended with operator actions).
-_BUTTON_WEIGHTS: tuple[int, ...] = (3, 2, 2, 2, 2, 2, 2)
+_BUTTON_WEIGHTS: tuple[int, ...] = (3, 2, 2, 2, 2)
 
 _ARM = 15  # px arm length of the brass corner brackets
 

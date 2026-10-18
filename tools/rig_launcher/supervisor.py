@@ -363,6 +363,21 @@ class GamePointConfig:
         )
 
 
+#: Stable AC states that mean the service tool is not in use (2026-10-18 operator decision: play is
+#: Content Manager + START; the resilient launcher is a CLI service tool). In these states the
+#: AC Session probe is informational only — it must not hold the driver-readiness aggregate red or
+#: steer the summary toward a button that is no longer on the main screen. Busy/unknown rig
+#: ownership and an in-progress or wedged service session still count.
+STABLE_AC_SERVICE_IDLE_STATES = frozenset(
+    {"idle", "unconfigured", "menu_config_required", "sidecar_port_unsupported", "exited"}
+)
+
+
+def stable_ac_in_use(resilient: ProbeResult) -> bool:
+    """Whether the Stable AC probe describes an active rig concern rather than an idle tool."""
+    return (resilient.state or "").strip().lower() not in STABLE_AC_SERVICE_IDLE_STATES
+
+
 @dataclass(frozen=True)
 class GamePointStatus:
     """Snapshot rendered by the GUI and persisted to status.json."""
@@ -388,6 +403,11 @@ class GamePointStatus:
     )
 
     @property
+    def stable_ac_in_use(self) -> bool:
+        """Whether the AC Session probe is an active concern, not an idle service tool."""
+        return stable_ac_in_use(self.resilient)
+
+    @property
     def ok(self) -> bool:
         rows = (
             self.sidecar,
@@ -395,7 +415,7 @@ class GamePointStatus:
             self.voice,
             self.simhub,
             self.tablet,
-            self.resilient,
+            *((self.resilient,) if self.stable_ac_in_use else ()),
             self.keypad,
             *self.checks,
         )
@@ -1037,7 +1057,7 @@ class GamePointSupervisor:
                 "ac_session",
                 True,
                 "idle",
-                "press STABLE AC to start a driver session",
+                "service tool (--resilient-launch); drive via Content Manager + START",
             )
         return ProbeResult(
             "ac_session",
@@ -1147,8 +1167,8 @@ class GamePointSupervisor:
                 "ac_session",
                 False,
                 "wedged",
-                "resilient session WEDGED after handoff (render frozen); press RELEASE AC, "
-                "wait for the rig to report idle, then STABLE AC"
+                "resilient session WEDGED after handoff (render frozen); release it with "
+                "--resilient-release, wait for the rig to report idle, then relaunch"
                 + (f": {detail}" if detail else ""),
             )
         if phase != "stable":

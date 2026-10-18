@@ -174,7 +174,9 @@ def summary_for(status: GamePointStatus, port: int = 8765) -> tuple[str, str, st
     )
     if blocker is not None:
         return ("PRESS START", "brake", blocker.detail or blocker.state)
-    if not status.resilient.ok:
+    # Stable AC is a service tool (2026-10-18): only an in-use session or a rig-ownership concern
+    # may claim the summary; an idle or unconfigured tool says nothing to the driver.
+    if not status.resilient.ok and status.stable_ac_in_use:
         resilient_state = (status.resilient.state or "").strip().lower()
         if resilient_state == "unknown":
             return (
@@ -196,7 +198,7 @@ def summary_for(status: GamePointStatus, port: int = 8765) -> tuple[str, str, st
                 "AC WEDGED",
                 "brake",
                 status.resilient.detail
-                or "session froze after handoff; RELEASE AC, wait for idle, then STABLE AC",
+                or "session froze after handoff; release it, wait for idle, then relaunch",
             )
         if resilient_state in {"starting", "stabilizing"}:
             return (
@@ -205,7 +207,7 @@ def summary_for(status: GamePointStatus, port: int = 8765) -> tuple[str, str, st
                 status.resilient.detail or "proving a stable Assetto Corsa session",
             )
         return (
-            "PRESS STABLE AC",
+            "AC SESSION",
             "brake",
             status.resilient.detail or status.resilient.state or "AC session needs attention",
         )
