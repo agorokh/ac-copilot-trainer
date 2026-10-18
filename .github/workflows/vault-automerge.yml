@@ -43,14 +43,24 @@ jobs:
           private-key: ${{ secrets.FLEET_BOT_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: governance-hub
+      # Canonical bound-checkout shape (#889). The hub vault-pr-sweep (gov-hub#343) re-runs this
+      # same action for a vault PR whose event-driven run was refused (e.g. `lease_in_flight`
+      # while the reviewer daemon still held the head). Its discover step admits a LOCAL hub
+      # action only when the IMMEDIATELY preceding step is this checkout: `path:` is
+      # `.scratch/governance-hub-<sha>` with the same <sha> as `ref:` and as the `uses:` below,
+      # `persist-credentials: false`, and a `token:`/`ssh-key:` (hub
+      # scripts/vault_sweep_discover.py::_bound_local_action). Any other shape is skipped as
+      # `caller-unreadable` every cycle, and the PR waits for a manual `vault-only` label toggle.
+      # Keep the three SHA occurrences identical when rolling the pin.
       - name: Check out the pinned governance-hub vault-automerge action
         uses: actions/checkout@v7
         with:
           repository: agorokh/governance-hub
-          ref: 5e00dad1e620c61125929af1fe5905dada36e6b2  # pragma: allowlist secret (git SHA, not a secret)
+          ref: a8f5877724d8091777f881ad2d89449300e82f69  # pragma: allowlist secret (git SHA, not a secret)
           token: ${{ steps.app-token.outputs.token }}
-          path: .governance-hub
-      - uses: ./.governance-hub/.github/actions/vault-automerge
+          path: .scratch/governance-hub-a8f5877724d8091777f881ad2d89449300e82f69
+          persist-credentials: false
+      - uses: ./.scratch/governance-hub-a8f5877724d8091777f881ad2d89449300e82f69/.github/actions/vault-automerge
         with:
           github-token: ${{ github.token }}
           pr-number: ${{ github.event.pull_request.number }}
