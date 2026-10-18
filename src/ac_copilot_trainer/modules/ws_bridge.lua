@@ -1009,7 +1009,16 @@ function M.pollInbound(maxPerTick)
                   ok = false, error = "Async request handler failed"})
               end
             else
+              -- Handlers run on AC's main thread: name any that holds a frame.
+              local t0 = os.preciseClock and os.preciseClock()
               local okCall, resp, errExtra = pcall(entry.fn, data.payload or data)
+              if t0 and ac and type(ac.log) == "function" then
+                local ms = (os.preciseClock() - t0) * 1000
+                if ms >= 100 then
+                  ac.log(string.format("[COPILOT][WS-SLOW] %s handler held the frame %.0fms",
+                    tostring(t), ms))
+                end
+              end
               if not okCall then
                 M.sendJson({
                   v = PROTOCOL_VERSION,

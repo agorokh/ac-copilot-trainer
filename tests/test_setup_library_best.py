@@ -48,6 +48,7 @@ def runtime(tmp_path, request):
               max_read_bytes = math.max(max_read_bytes, size)
               return file:read(size)
             end,
+            write = function(_, ...) return file:write(...) end,
             close = function()
               close_count = close_count + 1
               return file:close()
@@ -108,9 +109,103 @@ def test_batch_scans_each_archive_once_and_never_decodes_samples(runtime):
     assert lua.globals().close_count == 2
     assert lua.globals().max_read_bytes == 32768
     assert max(decoded_sizes) < 1000
+    # Archives are immutable: a repeat request reads none of them again.
+    lua.execute("return require('setup_library').bestForSetups(setups)")
+    assert lua.globals().read_count == 2
     # No stale cache: a newer archived lap is visible on the next request.
     (directory / "lap_2.json").write_text(json.dumps(record(paths[0], 88000)))
     assert lua.execute("return require('setup_library').bestForSetups(setups)")[1] == 88000
+    assert lua.globals().read_count == 3
+    # A deleted archive drops out instead of lingering in the index.
+    (directory / "lap_2.json").unlink()
+    assert lua.execute("return require('setup_library').bestForSetups(setups)")[1] == 90000
+
+
+def _lua_to_py(value):
+    if hasattr(value, "items") and not isinstance(value, dict):
+        items = dict(value.items())
+        if items and all(isinstance(k, int) for k in items):
+            return [_lua_to_py(items[k]) for k in sorted(items)]
+        return {str(k): _lua_to_py(v) for k, v in items.items()}
+    return value
+
+
+def _enable_disk_index(lua):
+    """Give the persistence stub the JSON helpers the on-disk index needs."""
+    lua.globals().encode_json = lambda t: json.dumps(_lua_to_py(t))
+    lua.execute(
+        """
+        package.loaded.persistence = nil
+        package.preload.persistence = function()
+          return {
+            dataDir = function() return data_root end,
+            encodeJsonCompact = function(t) return encode_json(t) end,
+            decodeJson = function(s)
+              if s == nil or s == '' then return nil end
+              return decode_metadata(s)
+            end,
+          }
+        end
+        """
+    )
+
+
+def _new_ac_launch(lua):
+    lua.execute("package.loaded.setup_library = nil; package.loaded.lap_metadata = nil")
+    lua.globals().read_count = 0
+
+
+def test_disk_index_survives_a_new_ac_launch_without_rereading_archives(runtime):
+    lua, directory, _ = runtime
+    _enable_disk_index(lua)
+    path = "C:/setups/car/track/gp/race.ini"
+    (directory / "lap_0.json").write_text(json.dumps(record(path, 91000)))
+    (directory / "lap_1.json").write_text(json.dumps(record(path, 90500)))
+    best = "return require('setup_library').bestForSetup('race', setup_path)"
+    lua.globals().setup_path = path
+    assert lua.execute(best) == 90500
+    index = json.loads((directory.parent / "lap-metadata-index.json").read_text())
+    assert index["version"] == 1
+    assert sorted(index["entries"]) == ["lap_0.json", "lap_1.json"]
+    assert "telemetry" not in index["entries"]["lap_0.json"]["rec"]
+
+    _new_ac_launch(lua)
+    assert lua.execute(best) == 90500
+    assert lua.globals().read_count == 1  # the index only; no archive is opened
+
+    (directory / "lap_2.json").write_text(json.dumps(record(path, 89000)))
+    _new_ac_launch(lua)
+    assert lua.execute(best) == 89000
+    assert lua.globals().read_count == 3  # index, the one new archive, the index rewrite
+
+
+def test_unreadable_archive_is_retried_and_not_indexed(runtime):
+    lua, directory, _ = runtime
+    _enable_disk_index(lua)
+    path = "C:/setups/car/track/gp/race.ini"
+    (directory / "lap_0.json").write_text(json.dumps(record(path)))
+    (directory / "lap_1.json").write_text(json.dumps(record(path, 70000))[:-1])
+    lua.globals().setup_path = path
+    best = "return require('setup_library').bestForSetup('race', setup_path)"
+    assert lua.execute(best) == 90000
+    index = json.loads((directory.parent / "lap-metadata-index.json").read_text())
+    assert sorted(index["entries"]) == ["lap_0.json"]
+    lua.globals().read_count = 0
+    assert lua.execute(best) == 90000
+    # The broken archive is read again (it may be repaired), but the index is not rewritten.
+    assert lua.globals().read_count == 1
+
+
+def test_corrupt_index_file_is_rebuilt(runtime):
+    lua, directory, _ = runtime
+    _enable_disk_index(lua)
+    (directory.parent / "lap-metadata-index.json").write_text('{"version": 1, "entr')
+    path = "C:/setups/car/track/gp/race.ini"
+    (directory / "lap_0.json").write_text(json.dumps(record(path, 88800)))
+    lua.globals().setup_path = path
+    assert lua.execute("return require('setup_library').bestForSetup('race', setup_path)") == 88800
+    index = json.loads((directory.parent / "lap-metadata-index.json").read_text())
+    assert sorted(index["entries"]) == ["lap_0.json"]
 
 
 @pytest.mark.parametrize(

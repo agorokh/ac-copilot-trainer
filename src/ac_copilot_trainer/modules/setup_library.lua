@@ -188,20 +188,116 @@ function M.list()
   return out
 end
 
--- Read the journal once per list request. Never cache across requests: a new
--- completed lap must appear on the next refresh without waiting for a restart.
+-- Archive metadata index. An archive is never rewritten once its uniquely named
+-- file exists, so each archive's BEST metadata is projected once and kept here
+-- (in memory, and on disk across AC launches). Streaming every archive per
+-- `setup.list` held AC's main thread ~9.5 s at session start on a ~500 MB journal.
+-- The directory is still scanned on every request, so a new lap appears on the
+-- next refresh and deleted archives drop out.
+local INDEX_VERSION = 1
+local INDEX_CHUNK_BYTES, INDEX_MAX_BYTES = 32768, 8 * 1024 * 1024
+local _metaIndex = nil ---@type {path:string, entries:table}|nil
+
+local function metadataIndexPath()
+  return persistence.dataDir() .. "/journal/lap-metadata-index.json"
+end
+
+local function archiveSize(path)
+  if io and type(io.fileSize) == "function" then
+    local ok, size = pcall(io.fileSize, path)
+    if ok and type(size) == "number" and size >= 0 then return size end
+  end
+  return nil
+end
+
+local function readIndexFile(path)
+  local f = io.open(path, "rb")
+  if not f then return nil end
+  local parts, total = {}, 0
+  local ok = pcall(function()
+    while true do
+      local chunk = f:read(INDEX_CHUNK_BYTES)
+      if type(chunk) ~= "string" or chunk == "" then break end
+      total = total + #chunk
+      if total > INDEX_MAX_BYTES then error("index too large") end
+      parts[#parts + 1] = chunk
+    end
+  end)
+  f:close()
+  if not ok then return nil end
+  return table.concat(parts)
+end
+
+local function loadMetadataIndex(path)
+  if _metaIndex and _metaIndex.path == path then return _metaIndex end
+  local entries = {}
+  if type(persistence.decodeJson) == "function" then
+    local data = persistence.decodeJson(readIndexFile(path))
+    if type(data) == "table" and data.version == INDEX_VERSION and type(data.entries) == "table" then
+      for name, entry in pairs(data.entries) do
+        if type(name) == "string" and type(entry) == "table" and type(entry.rec) == "table" then
+          entries[name] = { size = tonumber(entry.size), rec = entry.rec }
+        end
+      end
+    end
+  end
+  _metaIndex = { path = path, entries = entries }
+  return _metaIndex
+end
+
+-- Best effort: a failed write only costs a re-projection on the next launch.
+local function saveMetadataIndex(index)
+  if type(persistence.encodeJsonCompact) ~= "function" then return end
+  local text = persistence.encodeJsonCompact({ version = INDEX_VERSION, entries = index.entries })
+  if type(text) ~= "string" then return end
+  local tmp = index.path .. ".ac-copilot-tmp"
+  local f = io.open(tmp, "wb")
+  if not f then return end
+  local ok, wrote = pcall(function() return f:write(text) end)
+  local closed = f:close()
+  if not ok or wrote == nil or not closed then
+    os.remove(tmp)
+    return
+  end
+  os.remove(index.path)
+  if not os.rename(tmp, index.path) then os.remove(tmp) end
+end
+
 local function lapRecords()
   local out = {}
   if not (io and type(io.scanDir) == "function") then return out end
   local dir = persistence.dataDir() .. "/journal/laps"
   local ok, files = pcall(io.scanDir, dir, "lap_*.json")
   if not ok or type(files) ~= "table" then return out end
+  local index = loadMetadataIndex(metadataIndexPath())
+  local present, changed = {}, false
   for i = 1, #files do
-    if type(files[i]) == "string" then
-      local rec = lapMetadata.read(dir .. "/" .. files[i])
-      if rec then out[#out + 1] = rec end
+    local name = files[i]
+    if type(name) == "string" then
+      local path = dir .. "/" .. name
+      local size = archiveSize(path)
+      local entry = index.entries[name]
+      if entry == nil or entry.size ~= size then
+        -- Unreadable or malformed archives stay unindexed and are retried next time.
+        local rec = lapMetadata.read(path)
+        local stale = entry ~= nil
+        entry = rec and { size = size, rec = rec } or nil
+        index.entries[name] = entry
+        changed = changed or stale or entry ~= nil
+      end
+      if entry then
+        present[name] = entry
+        out[#out + 1] = entry.rec
+      end
     end
   end
+  for name in pairs(index.entries) do
+    if present[name] == nil then
+      index.entries[name] = nil
+      changed = true
+    end
+  end
+  if changed then saveMetadataIndex(index) end
   return out
 end
 
