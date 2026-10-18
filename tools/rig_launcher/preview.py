@@ -32,8 +32,6 @@ _NOOP_ACTIONS = {
     key: (lambda: None)
     for key in (
         "start",
-        "resilient_launch",
-        "resilient_release",
         "refresh",
         "logs",
         "settings",

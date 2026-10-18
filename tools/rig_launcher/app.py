@@ -71,7 +71,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--resilient-launch",
         action="store_true",
-        help="Start the configured stable AC driver session and exit.",
+        help=(
+            "Service tool: start the configured Stable AC session and exit. Not on the main "
+            "screen; drive via Content Manager + START."
+        ),
+    )
+    parser.add_argument(
+        "--resilient-release",
+        action="store_true",
+        help="Service tool: release a running Stable AC session (leaves AC live) and exit.",
     )
     parser.add_argument("--resilient-car", default=None, help="AC car id for the stable session.")
     parser.add_argument(
@@ -314,6 +322,11 @@ def main(argv: list[str] | None = None) -> int:
             detail = f" - {result.detail}" if result.detail else ""
             print(f"{result.name}: {result.state}{detail}")
             return 0 if _resilient_start_accepted(result) else 1
+        if args.resilient_release:
+            result = supervisor.release_resilient_session()
+            detail = f" - {result.detail}" if result.detail else ""
+            print(f"{result.name}: {result.state}{detail}")
+            return 0 if result.ok else 1
         if args.self_test:
             # The self-test owns the sidecar it starts: stop it as soon as the checks finish so
             # a release-gate run never leaves an orphaned sidecar for the next launch to adopt

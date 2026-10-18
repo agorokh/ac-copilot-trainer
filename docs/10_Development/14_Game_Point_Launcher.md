@@ -188,9 +188,24 @@ or failed audio backend reports `voice: DISABLED - <reason>` and makes the
 overall status `needs_attention`; the launcher does not treat the mere presence
 of `AC_COPILOT_VOICE_BANK` as proof that audio initialized.
 
-## Stable AC driver session
+## Playing
 
-The **Stable AC** button is the operator-facing entrypoint for the resilient
+Press **▶ START** in Game Point, then launch your car and track from Content
+Manager. The sidecar, rig screen, tablet and coaching attach to any AC launch.
+
+## Stable AC (service tool)
+
+Stable AC is not on the main Game Point screen (operator decision,
+2026-10-18). It launches a fixed car and track from `settings.json` and needs a
+2.5-minute proving window, so it is a service and measurement tool rather than
+a way to play. Run it from the command line:
+
+```powershell
+dist\AC-Copilot-Game-Point.exe --resilient-launch
+dist\AC-Copilot-Game-Point.exe --resilient-release
+```
+
+`--resilient-launch` is the entrypoint for the resilient
 Content Manager launch loop from issue #624. It retries the stochastic CSP
 session-init livelock, proves continuous render progress for the configured
 stability window, confirms with the trainer app that the session has left the
@@ -202,15 +217,15 @@ section after the launcher closes it, so the driver's wheel and pedals stop
 working for the rest of the session (#627, measured on the rig). The
 drivability check is a read-only question to the trainer app
 (`session.start` with `probe_only`), which never presses Start.
-The `AC Session` row reports `unconfigured`, `idle`, `running`, or the child
-exit code; progress is appended to `logs/resilient-launch.log`. A failed child
-makes the aggregate status non-green and the summary says **Press Stable AC**,
-so the recovery action is unambiguous without conflating it with sidecar START.
-Because the packaged child has no console, **Release AC** writes the shared
+Progress is appended to `logs/resilient-launch.log`, and the AC session state
+is still written to `status.json`. While the tool is idle, unconfigured,
+missing its CSP prerequisite, or has exited, it does not affect Game Point's
+"ready to drive" status. A running, stabilizing or wedged session, busy rig
+ownership, or an unprobeable rig lock still shows in the summary. Because the
+packaged child has no console, `--resilient-release` writes the shared
 ownership-release signal; the child then drops the rig lock while deliberately
 leaving AC live. The signal also works after Game Point is closed and reopened.
-If the ownership file cannot be read or probed, the AC Session row reports
-`unknown`, aggregate status stays non-green, and Stable AC refuses to spawn
+If the ownership file cannot be read or probed, Stable AC refuses to spawn
 until ownership can be determined.
 
 Configure the non-secret car and circuit identifiers in the per-user

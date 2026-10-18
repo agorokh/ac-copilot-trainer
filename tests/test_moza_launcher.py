@@ -659,7 +659,7 @@ def test_offline_button_dispatches_only_its_supplied_action(monkeypatch):
     actions = {key: Mock() for _, key, _ in view._BUTTONS}
     actions["moza_offline_report"] = Mock()
     panel._build_buttons(Mock(), actions)
-    assert buttons.call_count == 8
+    assert buttons.call_count == len(view._BUTTONS) + 1
     offline = buttons.call_args.kwargs
     assert offline["text"] == "OFFLINE REPORT"
     offline["command"]()
