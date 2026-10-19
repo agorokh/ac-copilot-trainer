@@ -199,9 +199,10 @@ _setup_exchange_user_setups_root: Path | None = None
 _setup_exchange_broker = SetupExchangeBroker()
 _setup_exchange_tasks: dict[Any, asyncio.Task[Any]] = {}
 _external_peer_classes: dict[Any, str] = {}
-# #86: the rig-screen framebuffer capture in flight, capture_id -> (requester, started monotonic).
+# #86: the rig-screen framebuffer capture in flight, capture_id -> (requester, last activity).
 # The screen streams one capture at a time and ignores requests while busy, so the sidecar admits
-# one and rejects the rest; a capture that never finishes expires so it cannot block forever.
+# one and rejects the rest. Every chunk refreshes the activity time, so a slow stream under a
+# live session stays admitted; only a capture with no chunk for SCREEN_CAPTURE_STALE_S expires.
 _screen_capture_requesters: dict[str, tuple[Any, float]] = {}
 SCREEN_CAPTURE_STALE_S = 60.0
 _sidecar_state_cache: dict[str, dict[str, Any]] = {}
@@ -1665,8 +1666,8 @@ async def _route_screen_capture(websocket: Any, data: dict[str, Any]) -> None:
             await _safe_send(websocket, make_error("no rig screen connected", ref_type=t))
             return
         now = time.monotonic()
-        for active_id, (_, started) in list(_screen_capture_requesters.items()):
-            if now - started > SCREEN_CAPTURE_STALE_S:
+        for active_id, (_, last_activity) in list(_screen_capture_requesters.items()):
+            if now - last_activity > SCREEN_CAPTURE_STALE_S:
                 _screen_capture_requesters.pop(active_id, None)
         if _screen_capture_requesters:
             await _safe_send(
@@ -1684,6 +1685,8 @@ async def _route_screen_capture(websocket: Any, data: dict[str, Any]) -> None:
     active = _screen_capture_requesters.get(capture_id)
     if data.get("done"):
         _screen_capture_requesters.pop(capture_id, None)
+    elif active is not None:
+        _screen_capture_requesters[capture_id] = (active[0], time.monotonic())
     if active is not None and active[0] in _external_peers:
         await _broadcast_targets(data, targets=[active[0]])
 

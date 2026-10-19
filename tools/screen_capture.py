@@ -23,6 +23,7 @@ from typing import Any
 from tools.ai_sidecar.external_protocol import (
     ENVELOPE_KEY,
     ENVELOPE_VERSION,
+    TYPE_ERROR,
     TYPE_KEY,
     TYPE_SCREEN_CAPTURE,
     TYPE_SCREEN_CAPTURE_CHUNK,
@@ -84,8 +85,12 @@ def rgb565_to_png(raw: bytes, width: int, height: int, *, big_endian: bool) -> b
     )
 
 
-def _is_chunk_for(capture_id: str):
+def _is_reply_for(capture_id: str):
+    """Match this capture's chunks, or a sidecar error about a screen.capture request."""
+
     def match(frame: dict[str, Any]) -> bool:
+        if frame.get(TYPE_KEY) == TYPE_ERROR:
+            return frame.get("ref_type") == TYPE_SCREEN_CAPTURE
         return (
             frame.get(TYPE_KEY) == TYPE_SCREEN_CAPTURE_CHUNK
             and frame.get("capture_id") == capture_id
@@ -104,12 +109,14 @@ async def capture(url: str, token: str | None, *, wait_s: float) -> tuple[bytes,
             raise CaptureError("sidecar did not acknowledge hello")
         await client.send(request)
         deadline = time.monotonic() + wait_s
-        match = _is_chunk_for(capture_id)
+        match = _is_reply_for(capture_id)
         while True:
             left = deadline - time.monotonic()
             frame = await client.wait_for(match, timeout=left) if left > 0 else None
             if frame is None:
                 raise CaptureError(f"timed out after {len(chunks)} chunks")
+            if frame.get(TYPE_KEY) == TYPE_ERROR:
+                raise CaptureError(f"sidecar: {frame.get('message')}")
             chunks.append(frame)
             if frame.get("done"):
                 break

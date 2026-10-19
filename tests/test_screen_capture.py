@@ -141,7 +141,19 @@ def test_sidecar_admits_one_capture_at_a_time_and_expires_a_stuck_one(monkeypatc
             assert second.sent[0]["type"] == ep.TYPE_ERROR
             assert "already in progress" in second.sent[0]["message"]
 
-            # A capture that never finishes stops blocking once it is stale.
+            # A slow stream stays admitted past the stale window as long as chunks keep coming.
+            for _ in range(3):
+                clock[0] += srv.SCREEN_CAPTURE_STALE_S - 1
+                await srv._handle_external_frame(
+                    screen,
+                    chunk(0, b"\x00" * 4, total=8, done=False, capture_id="cap-1"),
+                )
+            await srv._handle_external_frame(
+                second, {"v": 1, "type": "screen.capture", "capture_id": "cap-2"}
+            )
+            assert [f["capture_id"] for f in screen.sent] == ["cap-1"]
+
+            # A capture with no chunk for the stale window stops blocking.
             clock[0] += srv.SCREEN_CAPTURE_STALE_S + 1
             await srv._handle_external_frame(
                 second, {"v": 1, "type": "screen.capture", "capture_id": "cap-3"}
@@ -173,6 +185,34 @@ def test_sidecar_reports_when_no_screen_is_connected():
             srv._reset_external_state()
 
     asyncio.run(run())
+
+
+def test_cli_raises_the_sidecar_error_instead_of_timing_out(monkeypatch):
+    from tools import screen_capture
+
+    class _Client:
+        def __init__(self, *_args, **_kwargs):
+            self.replies = [ep.make_error("no rig screen connected", ref_type="screen.capture")]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return None
+
+        async def hello(self):
+            return {"type": "hello_ack"}
+
+        async def send(self, _frame):
+            return None
+
+        async def wait_for(self, predicate, **_kwargs):
+            matched = [f for f in self.replies if predicate(f)]
+            return matched[0] if matched else None
+
+    monkeypatch.setattr(screen_capture, "HarnessClient", _Client)
+    with pytest.raises(CaptureError, match="sidecar: no rig screen connected"):
+        asyncio.run(screen_capture.capture("ws://x", None, wait_s=1.0))
 
 
 def test_assemble_orders_chunks_and_checks_coverage():
