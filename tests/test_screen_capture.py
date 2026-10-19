@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 import struct
 import zlib
 
@@ -56,6 +58,79 @@ def test_capture_request_and_chunk_validate():
 )
 def test_malformed_capture_frames_are_rejected(frame):
     assert ep.validate_inbound(frame) is not None
+
+
+class _Peer:
+    remote_address = ("127.0.0.1", 49152)
+
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+
+    async def send(self, payload: str) -> None:
+        self.sent.append(json.loads(payload))
+
+
+def test_sidecar_routes_request_to_screens_and_chunks_back_to_requester_only():
+    from tools.ai_sidecar import server as srv
+
+    async def run():
+        srv._reset_external_state()
+        try:
+            screen, tool, lua = _Peer(), _Peer(), _Peer()
+            for peer, client, cls in (
+                (screen, "ac-copilot-screen-01", ep.CLIENT_CLASS_SCREEN),
+                (tool, "screen-capture", ep.CLIENT_CLASS_EXTERNAL),
+                (lua, "browser", ep.CLIENT_CLASS_BROWSER),
+            ):
+                await srv._handle_external_frame(
+                    peer, {"v": 1, "type": "hello", "client": client, "client_class": cls}
+                )
+                peer.sent.clear()
+            request = {"v": 1, "type": "screen.capture", "capture_id": "cap-1"}
+            await srv._handle_external_frame(tool, request)
+            assert screen.sent == [request]
+            assert tool.sent == [] and lua.sent == []
+
+            part = chunk(0, b"\x00" * 4, total=8, done=False)
+            last = chunk(4, b"\x00" * 4, total=8, done=True)
+            await srv._handle_external_frame(screen, part)
+            await srv._handle_external_frame(screen, last)
+            assert tool.sent == [part, last]
+            assert lua.sent == []
+            # The finished capture is forgotten; a stray late chunk goes nowhere.
+            await srv._handle_external_frame(screen, part)
+            assert tool.sent == [part, last]
+
+            # Only a rig screen may answer.
+            await srv._handle_external_frame(lua, part)
+            assert lua.sent[-1]["type"] == ep.TYPE_ERROR
+            assert tool.sent == [part, last]
+        finally:
+            srv._reset_external_state()
+
+    asyncio.run(run())
+
+
+def test_sidecar_reports_when_no_screen_is_connected():
+    from tools.ai_sidecar import server as srv
+
+    async def run():
+        srv._reset_external_state()
+        try:
+            tool = _Peer()
+            await srv._handle_external_frame(
+                tool, {"v": 1, "type": "hello", "client": "screen-capture"}
+            )
+            tool.sent.clear()
+            await srv._handle_external_frame(
+                tool, {"v": 1, "type": "screen.capture", "capture_id": "cap-1"}
+            )
+            assert tool.sent[0]["type"] == ep.TYPE_ERROR
+            assert "no rig screen" in tool.sent[0]["message"]
+        finally:
+            srv._reset_external_state()
+
+    asyncio.run(run())
 
 
 def test_assemble_orders_chunks_and_checks_coverage():

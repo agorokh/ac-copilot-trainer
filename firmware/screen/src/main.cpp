@@ -630,19 +630,22 @@ static void phase2_send_setup_load(const char* name, const char* path) {
 // -- On-device screen capture (issue #86 closure gate) ----------------------
 // `screen.capture` copies the canvas framebuffer once -- the exact pixels the
 // LVGL flush hands the panel -- then streams the copy as base64
-// `screen.capture.chunk` frames a few per loop, so LVGL and touch keep running.
+// `screen.capture.chunk` frames, at most one per loop, so LVGL and touch keep running.
 // One capture at a time; the PSRAM copy is freed after the last chunk.
-static constexpr size_t CAPTURE_CHUNK_BYTES     = 3072;  // 4096 base64 chars per frame
-static constexpr int    CAPTURE_CHUNKS_PER_TICK = 4;
-static uint8_t* capture_buf    = nullptr;
-static size_t   capture_total  = 0;
-static size_t   capture_offset = 0;
-static char     capture_id[65] = {0};
+static constexpr size_t CAPTURE_CHUNK_BYTES = 3072;  // 4096 base64 chars per frame
+static uint8_t* capture_buf        = nullptr;
+static size_t   capture_total      = 0;
+static size_t   capture_offset     = 0;
+static char     capture_id[65]     = {0};
+static String   capture_frame;               // next encoded chunk, waiting for TX room
+static bool     capture_frame_last = false;  // capture_frame ends the capture
 static unsigned char capture_b64[((CAPTURE_CHUNK_BYTES + 2) / 3) * 4 + 1];
 
-// Returns false when the chunk could not be encoded; the frame then carries the error and
-// ends the capture, so the requester never assembles an image with silent holes.
-static bool capture_send_chunk(size_t offset, size_t n, bool done, const char* error) {
+// Builds one chunk frame into `out`. Returns false when the chunk could not be encoded; the
+// frame then carries the error and ends the capture, so the requester never assembles an
+// image with silent holes.
+static bool capture_build_chunk(size_t offset, size_t n, bool done, const char* error,
+                                String& out) {
   size_t olen = 0;
   capture_b64[0] = 0;
   bool ok = true;
@@ -666,9 +669,8 @@ static bool capture_send_chunk(size_t offset, size_t n, bool done, const char* e
   doc["data"]       = reinterpret_cast<const char*>(capture_b64);
   doc["done"]       = done;
   if (error) doc["error"] = error;
-  String out;
+  out = "";
   serializeJson(doc, out);
-  transport_send(out);
   return ok;
 }
 
@@ -681,24 +683,38 @@ static void screen_capture_begin(const char* id) {
   uint16_t* fb = gfx_canvas ? gfx_canvas->getFramebuffer() : nullptr;
   if (fb) capture_buf = static_cast<uint8_t*>(heap_caps_malloc(capture_total, MALLOC_CAP_SPIRAM));
   if (!fb || !capture_buf) {
-    capture_send_chunk(0, 0, true, fb ? "psram alloc failed" : "no framebuffer");
+    String out;
+    capture_build_chunk(0, 0, true, fb ? "psram alloc failed" : "no framebuffer", out);
+    transport_send(out);
     return;
   }
   memcpy(capture_buf, fb, capture_total);
-  Serial.printf("[capture] %s: %u bytes\n", capture_id, static_cast<unsigned>(capture_total));
+  capture_frame      = "";
+  capture_frame_last = false;
 }
 
 static void screen_capture_tick() {
-  for (int i = 0; i < CAPTURE_CHUNKS_PER_TICK && capture_buf; ++i) {
+  if (!capture_buf) return;
+  if (capture_frame.length() == 0) {
     size_t n = capture_total - capture_offset;
     if (n > CAPTURE_CHUNK_BYTES) n = CAPTURE_CHUNK_BYTES;
     const size_t offset = capture_offset;
     capture_offset += n;
-    const bool done = capture_offset >= capture_total;
-    if (!capture_send_chunk(offset, n, done, nullptr) || done) {
-      heap_caps_free(capture_buf);
-      capture_buf = nullptr;
-    }
+    const bool done    = capture_offset >= capture_total;
+    capture_frame_last = !capture_build_chunk(offset, n, done, nullptr, capture_frame) || done;
+  }
+#if SCREEN_TRANSPORT_SERIAL
+  // Never let a chunk wait inside Serial.write: when the host does not read for 100 ms there,
+  // the core's HWCDC marks the link disconnected and silently drops all later output, which
+  // took the whole screen link down mid-capture during a live session. Send only when the
+  // TX ring can take the whole frame now.
+  if (Serial.availableForWrite() < static_cast<int>(capture_frame.length()) + 1) return;
+#endif
+  transport_send(capture_frame);
+  capture_frame = "";
+  if (capture_frame_last) {
+    heap_caps_free(capture_buf);
+    capture_buf = nullptr;
   }
 }
 
@@ -1159,6 +1175,7 @@ static bool     serial_link_up = false;
 // loop() drains it. The 256 B default therefore dropped the 326 B hello_ack. This
 // is a jitter-absorption size that here must cover a full frame (issue #463).
 static constexpr size_t SERIAL_RX_RING_BYTES = 8192;
+static constexpr size_t SERIAL_TX_RING_BYTES = 8192;
 // App-layer overflow guard on one accumulated NDJSON line (independent of the ring).
 static constexpr size_t SERIAL_MAX_LINE_BYTES = 8192;
 // If no frame arrives for this long while linked, treat the link as DOWN. The
@@ -1301,6 +1318,9 @@ void setup() {
   // screen_peers=1 while the device stays DISCONNECTED). Enlarge the RX ring so a
   // whole frame lands intact. Must be called before Serial.begin().
   Serial.setRxBufferSize(SERIAL_RX_RING_BYTES);
+  // The TX ring defaults to 256 bytes, smaller than one screen.capture chunk frame (~4.2 KB);
+  // the capture only sends when the whole frame fits, so it needs a ring larger than a frame.
+  Serial.setTxBufferSize(SERIAL_TX_RING_BYTES);
 #endif
   Serial.begin(115200);
   delay(250);
