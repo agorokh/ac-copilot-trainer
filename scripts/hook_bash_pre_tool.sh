@@ -28,6 +28,12 @@ if [ -f "$here/hook_protect_main.sh" ]; then
   printf '%s' "$input" | bash "$here/hook_protect_main.sh" || exit $?
 fi
 
+# Sensitive-file guard for Bash writes (governance-hub#862): the same hub hook as the
+# Edit|Write|MultiEdit|NotebookEdit wiring, through its shim, so one path set governs every
+# tool. Literal write targets (redirect, tee, cp/mv, dd of=, sed -i) are classified; targets
+# built at runtime and interpreter writes are the hub's named residuals.
+printf '%s' "$input" | "$PY" "$here/hook_sensitive_file_guard.py" || exit $?
+
 # 2) Memory gate (REQUIRED — invariant)
 printf '%s' "$input" | "$PY" "$here/hook_memory_gate.py" || exit $?
 

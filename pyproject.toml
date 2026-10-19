@@ -151,6 +151,7 @@ force-exclude = true
 extend-exclude = [
   "scripts/hook_session_start_memory_prefetch.py",
   "scripts/hook_memory_gate.py",
+  "scripts/hook_sensitive_file_guard.py",
   "scripts/hook_protect_main_impl.py",
   "scripts/hook_memory_query_stamp.py",
   # Hub-owned helpers (byte-identical to hub; spoke does not own their formatting).
