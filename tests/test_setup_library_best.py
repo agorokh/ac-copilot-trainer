@@ -177,6 +177,11 @@ def test_disk_index_survives_a_new_ac_launch_without_rereading_archives(runtime)
     _new_ac_launch(lua)
     assert lua.execute(best) == 89000
     assert lua.globals().read_count == 3  # index, the one new archive, the index rewrite
+    # The rewrite replaced the existing index in place and left no temp or backup behind.
+    index = json.loads((directory.parent / "lap-metadata-index.json").read_text())
+    assert sorted(index["entries"]) == ["lap_0.json", "lap_1.json", "lap_2.json"]
+    leftovers = sorted(p.name for p in directory.parent.glob("lap-metadata-index.json.*"))
+    assert leftovers == []
 
 
 def test_unreadable_archive_is_retried_and_not_indexed(runtime):

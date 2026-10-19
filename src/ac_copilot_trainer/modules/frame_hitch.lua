@@ -12,7 +12,8 @@ function M.new(opts)
   local self = {
     threshold = opts.threshold or 0.25,
     maxLogs = opts.maxLogs or 40,
-    clock = opts.clock,
+    -- Without a clock the watchdog must not break the callbacks it wraps: fall back to CPU time.
+    clock = opts.clock or os.clock,
     log = opts.log,
     sections = {},
     order = {},

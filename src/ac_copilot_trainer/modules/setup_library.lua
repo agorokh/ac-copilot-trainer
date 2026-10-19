@@ -259,8 +259,17 @@ local function saveMetadataIndex(index)
     os.remove(tmp)
     return
   end
-  os.remove(index.path)
-  if not os.rename(tmp, index.path) then os.remove(tmp) end
+  -- Windows rename does not replace: move the old index aside, and put it back if the
+  -- new one cannot take its place, so a failed swap never leaves no index at all.
+  local bak = index.path .. ".ac-copilot-bak"
+  os.remove(bak)
+  local hadOld = os.rename(index.path, bak)
+  if os.rename(tmp, index.path) then
+    if hadOld then os.remove(bak) end
+  else
+    os.remove(tmp)
+    if hadOld then os.rename(bak, index.path) end
+  end
 end
 
 local function lapRecords()

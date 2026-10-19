@@ -99,6 +99,18 @@ def test_log_count_is_bounded():
     assert len(lines) == 2
 
 
+def test_missing_clock_falls_back_instead_of_breaking_callbacks():
+    lupa = pytest.importorskip("lupa")
+    lua = lupa.LuaRuntime(unpack_returned_tuples=True)
+    module = lua.execute(SOURCE.read_text())
+    hitch = module.new(lua.table_from({"clock": None}))
+    calls = []
+    wrapped = hitch.wrap(hitch, "update", lambda _dt: calls.append(1))
+    hitch.frame(hitch, None)
+    wrapped(0.016)
+    assert calls == [1]
+
+
 def test_wrap_charges_the_callback_and_propagates_errors():
     lua, hitch, now, _ = watchdog()
 
