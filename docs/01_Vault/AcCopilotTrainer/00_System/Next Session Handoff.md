@@ -2,8 +2,11 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-10-17T23:20:00Z
+last_updated: 2026-10-19T01:45:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-897-setup-list-journal-scan-2026-10-18.md
+  - AcCopilotTrainer/03_Investigations/issue-86-pt-long-names-2026-10-18.md
+  - AcCopilotTrainer/03_Investigations/issue-627-stable-ac-chain-2026-10-18.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-18-204100Z-post-merge-pr880-a0d3e7.md
   - AcCopilotTrainer/03_Investigations/issue-86-native-se-live-readback-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-854-agent-observed-acceptance-2026-10-17.md
@@ -142,6 +145,61 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-10-18, late) — #897 session-start freeze fixed
+
+The few-second freeze right after go-live was the trainer's `setup.list` handler. On every request
+it re-streamed all 182 lap archives (about 500 MB) on AC's main thread, which measured 9.5 s.
+PR #898 (`cb9304d`) adds a lap-metadata index (`journal/lap-metadata-index.json`), so each archive is
+read once, ever.
+
+- Verified with three harness launches at Spa. The cold build took 3.8 s once. After that, every
+  `setup.list` took under 100 ms, with no `[COPILOT][HITCH]` lines on the PR head or on deployed `main`.
+- Deployed: the primary checkout is at `cb9304d` and the AC app junction is restored to it.
+- `[COPILOT][HITCH]` and `[COPILOT][WS-SLOW]` stay on as main-thread diagnostics.
+
+**Open:** in one operator drive, AC was killed mid-lap with no crash report, and the wheel kept its
+force feedback. The cause is unknown; capture the exit code on the next repro. Detail:
+[[issue-897-setup-list-journal-scan-2026-10-18]].
+
+## Delivered (2026-10-18, evening) — #86 rig screen readable with real setup names
+
+PR #891 (`54801e6`) flashed to COM6 and **operator-confirmed on the glass**: Pocket Technician names
+such as `Copilot_Scientist_42b69c28227df065_802860d58233d33f` now take at most two lines with BB/ABS/TC
+below (they used to wrap over it), full names reach `setup.load` (they were cut to 47 chars), and Setup
+Exchange says "No community setups for this car at Magione yet." Simulator: 127 assertions on the
+operator's real rows. Game Point on the rig is now `16068f3` (parallel session: icon, dark title bar,
+OFFLINE REPORT label; it includes #884). **Build the rig EXE with the system Python 3.13**
+(`C:\Users\arsen\AppData\Local\Programs\Python\Python313`), not the project `.venv`: a `.venv` build lacks
+Pillow and the pre-generated `comtypes.gen.SpeechLib` that pyttsx3's SAPI path needs. Detail:
+[[issue-86-pt-long-names-2026-10-18]].
+
+**#86 still retains:** the on-glass photo vs `esp32_rig.png`. The operator confirmed the Setup
+Exchange browse → apply leg at Spa in a human-launched session (recorded on #86, 2026-10-18).
+The note above about building with the system Python is superseded by #894: the project venv and
+the system Python now produce the same bundle.
+
+## Delivered (2026-10-18) — Stable AC fixed, then retired to a service tool (#627)
+
+Stable AC had never produced a stable session. #876 targeted the wrong branch (disproven live, 12/12
+still failed). #877 added a 20 s floor to `classify`'s post-go-live stall rule (the ~10 s render pause
+after Start was being killed as a wedge); the first ever `stable` came on attempt 1. #879 removed the
+CSP Car0 handshake from Stable AC: CSP keeps sourcing car 0's inputs from `CarControls0` after the
+launcher closes it, so the driver's wheel was dead (measured: leftover section + gas=1 → 9044 rpm).
+It now asks the trainer `isInMainMenu` via `session.start` + `probe_only`; the operator confirmed the
+controls work. #884 (operator decision): Stable AC is off the main Game Point screen, CLI only
+(`--resilient-launch` / `--resilient-release`). **Play = Content Manager + ▶ START.** Game Point was
+first redeployed from `465905b` and later that evening replaced by the `16068f3` build (see the
+section above). That is the live rig EXE: `/health` reports `build_commit=16068f3`,
+`build_time=2026-10-18T21:03:27Z` (read 2026-10-19). The trainer Lua is separate and runs the
+primary checkout at `cb9304d`. Older builds are kept as `dist/*.exe.bak`. Detail:
+[[issue-627-stable-ac-chain-2026-10-18]].
+
+**Next, in order:** (1) A/B launch with the trainer app disabled to learn whether our session-start
+work causes the few-second post-Start render freeze the operator feels on every launch; if yes, move
+that work before the driver can drive. (2) ~~#86 Pocket Technician names / Setup Exchange empty
+state~~ — done the same evening, see the entry above. (3) Never run `_probe_car0_drivable` in a
+session a person will drive.
 
 ## Delivered (2026-10-17, night) — #86 native Setup Exchange verified live against the real service
 
