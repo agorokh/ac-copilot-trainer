@@ -111,6 +111,48 @@ def test_sidecar_routes_request_to_screens_and_chunks_back_to_requester_only():
     asyncio.run(run())
 
 
+def test_sidecar_admits_one_capture_at_a_time_and_expires_a_stuck_one(monkeypatch):
+    from tools.ai_sidecar import server as srv
+
+    clock = [1000.0]
+    monkeypatch.setattr(srv.time, "monotonic", lambda: clock[0])
+
+    async def run():
+        srv._reset_external_state()
+        try:
+            screen, first, second = _Peer(), _Peer(), _Peer()
+            for peer, client, cls in (
+                (screen, "ac-copilot-screen-01", ep.CLIENT_CLASS_SCREEN),
+                (first, "screen-capture", ep.CLIENT_CLASS_EXTERNAL),
+                (second, "screen-capture", ep.CLIENT_CLASS_EXTERNAL),
+            ):
+                await srv._handle_external_frame(
+                    peer, {"v": 1, "type": "hello", "client": client, "client_class": cls}
+                )
+                peer.sent.clear()
+            await srv._handle_external_frame(
+                first, {"v": 1, "type": "screen.capture", "capture_id": "cap-1"}
+            )
+            await srv._handle_external_frame(
+                second, {"v": 1, "type": "screen.capture", "capture_id": "cap-2"}
+            )
+            # The screen ignores a request while busy, so the sidecar must say so itself.
+            assert [f["capture_id"] for f in screen.sent] == ["cap-1"]
+            assert second.sent[0]["type"] == ep.TYPE_ERROR
+            assert "already in progress" in second.sent[0]["message"]
+
+            # A capture that never finishes stops blocking once it is stale.
+            clock[0] += srv.SCREEN_CAPTURE_STALE_S + 1
+            await srv._handle_external_frame(
+                second, {"v": 1, "type": "screen.capture", "capture_id": "cap-3"}
+            )
+            assert [f["capture_id"] for f in screen.sent] == ["cap-1", "cap-3"]
+        finally:
+            srv._reset_external_state()
+
+    asyncio.run(run())
+
+
 def test_sidecar_reports_when_no_screen_is_connected():
     from tools.ai_sidecar import server as srv
 

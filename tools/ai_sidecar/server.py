@@ -199,10 +199,11 @@ _setup_exchange_user_setups_root: Path | None = None
 _setup_exchange_broker = SetupExchangeBroker()
 _setup_exchange_tasks: dict[Any, asyncio.Task[Any]] = {}
 _external_peer_classes: dict[Any, str] = {}
-# #86: rig-screen framebuffer captures in flight, capture_id -> requesting peer. Chunks go back
-# to the requester alone; bounded so abandoned captures cannot accumulate.
-_screen_capture_requesters: dict[str, Any] = {}
-MAX_SCREEN_CAPTURES_IN_FLIGHT = 4
+# #86: the rig-screen framebuffer capture in flight, capture_id -> (requester, started monotonic).
+# The screen streams one capture at a time and ignores requests while busy, so the sidecar admits
+# one and rejects the rest; a capture that never finishes expires so it cannot block forever.
+_screen_capture_requesters: dict[str, tuple[Any, float]] = {}
+SCREEN_CAPTURE_STALE_S = 60.0
 _sidecar_state_cache: dict[str, dict[str, Any]] = {}
 # #531 Part B: which peer produced each cached IDENTITY_REPLAY_TOPICS snapshot — the cache
 # entry is dropped when that peer disconnects (its identity dies with it).
@@ -1663,9 +1664,16 @@ async def _route_screen_capture(websocket: Any, data: dict[str, Any]) -> None:
         if not screens:
             await _safe_send(websocket, make_error("no rig screen connected", ref_type=t))
             return
-        while len(_screen_capture_requesters) >= MAX_SCREEN_CAPTURES_IN_FLIGHT:
-            _screen_capture_requesters.pop(next(iter(_screen_capture_requesters)))
-        _screen_capture_requesters[capture_id] = websocket
+        now = time.monotonic()
+        for active_id, (_, started) in list(_screen_capture_requesters.items()):
+            if now - started > SCREEN_CAPTURE_STALE_S:
+                _screen_capture_requesters.pop(active_id, None)
+        if _screen_capture_requesters:
+            await _safe_send(
+                websocket, make_error("a screen capture is already in progress", ref_type=t)
+            )
+            return
+        _screen_capture_requesters[capture_id] = (websocket, now)
         await _broadcast_targets(data, targets=screens)
         return
     if _peer_class(websocket) != CLIENT_CLASS_SCREEN:
@@ -1673,11 +1681,11 @@ async def _route_screen_capture(websocket: Any, data: dict[str, Any]) -> None:
             websocket, make_error(f"{t} is accepted only from rig screens", ref_type=t)
         )
         return
-    requester = _screen_capture_requesters.get(capture_id)
+    active = _screen_capture_requesters.get(capture_id)
     if data.get("done"):
         _screen_capture_requesters.pop(capture_id, None)
-    if requester is not None and requester in _external_peers:
-        await _broadcast_targets(data, targets=[requester])
+    if active is not None and active[0] in _external_peers:
+        await _broadcast_targets(data, targets=[active[0]])
 
 
 async def _broadcast_external(frame: dict[str, Any], *, exclude: Any) -> None:
