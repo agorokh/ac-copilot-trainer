@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-10-18T20:50:00Z
+last_updated: 2026-10-19T01:45:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-897-setup-list-journal-scan-2026-10-18.md
   - AcCopilotTrainer/03_Investigations/issue-86-pt-long-names-2026-10-18.md
   - AcCopilotTrainer/03_Investigations/issue-627-stable-ac-chain-2026-10-18.md
   - AcCopilotTrainer/03_Investigations/issue-86-native-se-live-readback-2026-10-17.md
@@ -144,6 +145,22 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-10-18, late) — #897 session-start freeze fixed
+
+The few-second freeze right after go-live was the trainer's `setup.list` handler. On every request
+it re-streamed all 182 lap archives (about 500 MB) on AC's main thread, which measured 9.5 s.
+PR #898 (`cb9304d`) adds a lap-metadata index (`journal/lap-metadata-index.json`), so each archive is
+read once, ever.
+
+- Verified with three harness launches at Spa. The cold build took 3.8 s once. After that, every
+  `setup.list` took under 100 ms, with no `[COPILOT][HITCH]` lines on the PR head or on deployed `main`.
+- Deployed: the primary checkout is at `cb9304d` and the AC app junction is restored to it.
+- `[COPILOT][HITCH]` and `[COPILOT][WS-SLOW]` stay on as main-thread diagnostics.
+
+**Open:** in one operator drive, AC was killed mid-lap with no crash report, and the wheel kept its
+force feedback. The cause is unknown; capture the exit code on the next repro. Detail:
+[[issue-897-setup-list-journal-scan-2026-10-18]].
+
 ## Delivered (2026-10-18, evening) — #86 rig screen readable with real setup names
 
 PR #891 (`54801e6`) flashed to COM6 and **operator-confirmed on the glass**: Pocket Technician names
@@ -156,9 +173,10 @@ OFFLINE REPORT label; it includes #884). **Build the rig EXE with the system Pyt
 Pillow and the pre-generated `comtypes.gen.SpeechLib` that pyttsx3's SAPI path needs. Detail:
 [[issue-86-pt-long-names-2026-10-18]].
 
-**#86 still retains:** Setup Exchange download → install → Pocket Technician load on the glass at a
-track with community setups (Spa has them; Magione has none) in a human-launched session, and the
-on-glass photo vs `esp32_rig.png`.
+**#86 still retains:** the on-glass photo vs `esp32_rig.png`. The operator confirmed the Setup
+Exchange browse → apply leg at Spa in a human-launched session (recorded on #86, 2026-10-18).
+The note above about building with the system Python is superseded by #894: the project venv and
+the system Python now produce the same bundle.
 
 ## Delivered (2026-10-18) — Stable AC fixed, then retired to a service tool (#627)
 
