@@ -1653,6 +1653,13 @@ def make_process_request(token: str | None):
     return _process_request
 
 
+def _drop_screen_captures_for(peer: Any) -> None:
+    """A capture whose requester left cannot be delivered; free the slot for the next one."""
+    for capture_id, (requester, _) in list(_screen_capture_requesters.items()):
+        if requester is peer:
+            _screen_capture_requesters.pop(capture_id, None)
+
+
 async def _route_screen_capture(websocket: Any, data: dict[str, Any]) -> None:
     """#86: requests go to rig-screen peers only; chunks return to the requester alone.
 
@@ -1756,6 +1763,7 @@ def _drop_external_peer(peer: Any) -> None:
     _session_start_authorized_peers.discard(peer)
     _lua_authorized_peers.discard(peer)
     _external_peer_classes.pop(peer, None)
+    _drop_screen_captures_for(peer)
     _voice_mic_subscribers.discard(peer)
     _voice_mic_streams.pop(peer, None)
     _release_observer_feed(peer)
@@ -3478,6 +3486,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
         _session_start_authorized_peers.discard(websocket)
         _lua_authorized_peers.discard(websocket)
         _external_peer_classes.pop(websocket, None)
+        _drop_screen_captures_for(websocket)
         # Identity snapshots cached for late-subscriber replay die with their producer:
         # replaying a disconnected trainer's setup/session to a fresh tablet would render
         # a dead session as current (Codex on PR #547).

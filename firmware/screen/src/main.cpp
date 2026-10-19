@@ -639,6 +639,8 @@ static size_t   capture_offset     = 0;
 static char     capture_id[65]     = {0};
 static String   capture_frame;               // next encoded chunk, waiting for TX room
 static bool     capture_frame_last = false;  // capture_frame ends the capture
+static uint32_t capture_progress_ms = 0;     // last chunk sent (or capture start)
+static constexpr uint32_t CAPTURE_STALL_ABORT_MS = 10000;
 static unsigned char capture_b64[((CAPTURE_CHUNK_BYTES + 2) / 3) * 4 + 1];
 
 // Builds one chunk frame into `out`. Returns false when the chunk could not be encoded; the
@@ -674,8 +676,34 @@ static bool capture_build_chunk(size_t offset, size_t n, bool done, const char* 
   return ok;
 }
 
+// A request that arrives while a capture streams gets an explicit refusal under its own id, so
+// the requester fails fast instead of timing out. Dropped if the TX ring cannot take it now.
+static void capture_send_busy(const char* id) {
+  JsonDocument doc;
+  doc["v"]          = 1;
+  doc["type"]       = "screen.capture.chunk";
+  doc["capture_id"] = id ? id : "";
+  doc["width"]      = SCREEN_W;
+  doc["height"]     = SCREEN_H;
+  doc["format"]     = "rgb565";
+  doc["offset"]     = 0;
+  doc["total"]      = static_cast<size_t>(SCREEN_W) * SCREEN_H * sizeof(uint16_t);
+  doc["data"]       = "";
+  doc["done"]       = true;
+  doc["error"]      = "screen is already streaming a capture";
+  String out;
+  serializeJson(doc, out);
+#if SCREEN_TRANSPORT_SERIAL
+  if (Serial.availableForWrite() < static_cast<int>(out.length()) + 1) return;
+#endif
+  transport_send(out);
+}
+
 static void screen_capture_begin(const char* id) {
-  if (capture_buf) return;  // one capture at a time; the active one keeps streaming
+  if (capture_buf) {
+    capture_send_busy(id);
+    return;
+  }
   strncpy(capture_id, id ? id : "", sizeof(capture_id) - 1);
   capture_id[sizeof(capture_id) - 1] = 0;
   capture_total  = static_cast<size_t>(SCREEN_W) * SCREEN_H * sizeof(uint16_t);
@@ -689,8 +717,15 @@ static void screen_capture_begin(const char* id) {
     return;
   }
   memcpy(capture_buf, fb, capture_total);
-  capture_frame      = "";
-  capture_frame_last = false;
+  capture_frame       = "";
+  capture_frame_last  = false;
+  capture_progress_ms = millis();
+}
+
+static void screen_capture_abort() {
+  heap_caps_free(capture_buf);
+  capture_buf   = nullptr;
+  capture_frame = "";
 }
 
 static void screen_capture_tick() {
@@ -708,14 +743,17 @@ static void screen_capture_tick() {
   // the core's HWCDC marks the link disconnected and silently drops all later output, which
   // took the whole screen link down mid-capture during a live session. Send only when the
   // TX ring can take the whole frame now.
-  if (Serial.availableForWrite() < static_cast<int>(capture_frame.length()) + 1) return;
+  if (Serial.availableForWrite() < static_cast<int>(capture_frame.length()) + 1) {
+    // No progress for CAPTURE_STALL_ABORT_MS: give the PSRAM copy back and accept new
+    // requests rather than holding the capture until a reboot.
+    if (millis() - capture_progress_ms > CAPTURE_STALL_ABORT_MS) screen_capture_abort();
+    return;
+  }
 #endif
   transport_send(capture_frame);
-  capture_frame = "";
-  if (capture_frame_last) {
-    heap_caps_free(capture_buf);
-    capture_buf = nullptr;
-  }
+  capture_frame       = "";
+  capture_progress_ms = millis();
+  if (capture_frame_last) screen_capture_abort();
 }
 
 // Issue #86 Parts C/D: dispatch per-message-type. `state.snapshot` carries

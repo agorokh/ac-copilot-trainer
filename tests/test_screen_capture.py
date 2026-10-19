@@ -165,6 +165,37 @@ def test_sidecar_admits_one_capture_at_a_time_and_expires_a_stuck_one(monkeypatc
     asyncio.run(run())
 
 
+def test_requester_disconnect_frees_the_capture_slot():
+    from tools.ai_sidecar import server as srv
+
+    async def run():
+        srv._reset_external_state()
+        try:
+            screen, gone, retry = _Peer(), _Peer(), _Peer()
+            for peer, client, cls in (
+                (screen, "ac-copilot-screen-01", ep.CLIENT_CLASS_SCREEN),
+                (gone, "screen-capture", ep.CLIENT_CLASS_EXTERNAL),
+                (retry, "screen-capture", ep.CLIENT_CLASS_EXTERNAL),
+            ):
+                await srv._handle_external_frame(
+                    peer, {"v": 1, "type": "hello", "client": client, "client_class": cls}
+                )
+                peer.sent.clear()
+            await srv._handle_external_frame(
+                gone, {"v": 1, "type": "screen.capture", "capture_id": "cap-1"}
+            )
+            srv._drop_external_peer(gone)  # the CLI timed out and closed its socket
+            await srv._handle_external_frame(
+                retry, {"v": 1, "type": "screen.capture", "capture_id": "cap-2"}
+            )
+            assert [f["capture_id"] for f in screen.sent] == ["cap-1", "cap-2"]
+            assert retry.sent == []
+        finally:
+            srv._reset_external_state()
+
+    asyncio.run(run())
+
+
 def test_sidecar_reports_when_no_screen_is_connected():
     from tools.ai_sidecar import server as srv
 

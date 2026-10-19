@@ -127,7 +127,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--url", default=DEFAULT_URL)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--timeout", type=float, default=30.0)
+    # Longer than the sidecar's 60 s stale window: a live-session capture takes ~15 s.
+    parser.add_argument("--timeout", type=float, default=90.0)
     parser.add_argument(
         "--byte-order",
         choices=("le", "be"),
