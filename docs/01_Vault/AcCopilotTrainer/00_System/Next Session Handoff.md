@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-10-19T01:45:00Z
+last_updated: 2026-10-19T06:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-627-c2-settled-2026-10-19.md
   - AcCopilotTrainer/03_Investigations/issue-897-setup-list-journal-scan-2026-10-18.md
   - AcCopilotTrainer/03_Investigations/issue-86-pt-long-names-2026-10-18.md
   - AcCopilotTrainer/03_Investigations/issue-627-stable-ac-chain-2026-10-18.md
@@ -145,6 +146,22 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-10-19) — #627 C2 settled and closed
+
+C2 asked which freeze symptom still reproduces. None does on the deployed build. The ~10 s and
+~3.7 s post-Start render pauses were our `setup.list` scan (#897), fixed by #898 (`cb9304d`). A
+post-deploy harness session ran 1068 s with 0 `[COPILOT][HITCH]` and ended in a clean exit. No
+sustained graphics-pinned wedge has been seen since 2026-07-22, across about 12 launches on this
+boot that were proven main-thread-alive. Two `froze` verdicts from Stable AC on 10-18 at 12:28 PDT
+(build `435c971`, before #898) have no trace and stay unattributed. The idea that the July wedge
+was our own session-load scan is a hypothesis. Council voted CLOSE, 3–0.
+
+No AC launch was made: a peer session (#86 screen capture, PR #904) held Game Point and the
+screen at the time. **Reopen #627** on any ≥ 20 s graphics pin with physics advancing on the v6
+instrument, or on a `freeze_forensics` capture. Upstream acc-extension-config#622 is still open,
+and correcting its stated direction is the operator's call. Detail:
+[[issue-627-c2-settled-2026-10-19]].
 
 ## Delivered (2026-10-18, late) — #897 session-start freeze fixed
 

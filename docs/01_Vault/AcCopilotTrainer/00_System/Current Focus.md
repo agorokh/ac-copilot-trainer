@@ -2,8 +2,9 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-10-15T15:55:25Z
+last_updated: 2026-10-19T06:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-627-c2-settled-2026-10-19.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-15-155525Z-issue804-acceptance-b0dc.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-14-010606Z-post-merge-pr836-b43776.md
   - AcCopilotTrainer/00_System/handoffs/2026-10-13-024744Z-issue813-recording-attempt-27327d.md
@@ -89,6 +90,12 @@ relates_to:
 ---
 
 # Current focus
+
+## Issue 627 (C2) — settled and closed, 2026-10-19
+
+No freeze symptom reproduces on the deployed build. The post-Start pause was ours and is fixed
+(#897/#898), and no sustained wedge has been seen since 2026-07-22. The reopen trigger and the two
+residuals are in [[issue-627-c2-settled-2026-10-19]]. C2 has no remaining delivery work.
 
 ## Issue 531 — full-journal debrief performance delivered
 
