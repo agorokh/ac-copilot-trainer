@@ -75,6 +75,8 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_HELLO,
     TYPE_HELLO_ACK,
     TYPE_KEY,
+    TYPE_SCREEN_CAPTURE,
+    TYPE_SCREEN_CAPTURE_CHUNK,
     TYPE_SESSION_REVIEW_GENERATE,
     TYPE_SESSION_REVIEW_RESULT,
     TYPE_SESSION_START,
@@ -197,6 +199,10 @@ _setup_exchange_user_setups_root: Path | None = None
 _setup_exchange_broker = SetupExchangeBroker()
 _setup_exchange_tasks: dict[Any, asyncio.Task[Any]] = {}
 _external_peer_classes: dict[Any, str] = {}
+# #86: rig-screen framebuffer captures in flight, capture_id -> requesting peer. Chunks go back
+# to the requester alone; bounded so abandoned captures cannot accumulate.
+_screen_capture_requesters: dict[str, Any] = {}
+MAX_SCREEN_CAPTURES_IN_FLIGHT = 4
 _sidecar_state_cache: dict[str, dict[str, Any]] = {}
 # #531 Part B: which peer produced each cached IDENTITY_REPLAY_TOPICS snapshot — the cache
 # entry is dropped when that peer disconnects (its identity dies with it).
@@ -575,6 +581,7 @@ def _reset_external_state() -> None:
     _session_start_authorized_peers.clear()
     _lua_authorized_peers.clear()
     _external_peer_classes.clear()
+    _screen_capture_requesters.clear()
     _sidecar_state_cache.clear()
     _identity_cache_producers.clear()
     _identity_cache_observed_monotonic.clear()
@@ -1642,6 +1649,35 @@ def make_process_request(token: str | None):
         return None
 
     return _process_request
+
+
+async def _route_screen_capture(websocket: Any, data: dict[str, Any]) -> None:
+    """#86: requests go to rig-screen peers only; chunks return to the requester alone.
+
+    A capture is ~300 KB, so it must not fan out to the trainer Lua or the tablet.
+    """
+    t = data[TYPE_KEY]
+    capture_id = data["capture_id"]
+    if t == TYPE_SCREEN_CAPTURE:
+        screens = _targets_for_classes(exclude=websocket, classes=frozenset({CLIENT_CLASS_SCREEN}))
+        if not screens:
+            await _safe_send(websocket, make_error("no rig screen connected", ref_type=t))
+            return
+        while len(_screen_capture_requesters) >= MAX_SCREEN_CAPTURES_IN_FLIGHT:
+            _screen_capture_requesters.pop(next(iter(_screen_capture_requesters)))
+        _screen_capture_requesters[capture_id] = websocket
+        await _broadcast_targets(data, targets=screens)
+        return
+    if _peer_class(websocket) != CLIENT_CLASS_SCREEN:
+        await _safe_send(
+            websocket, make_error(f"{t} is accepted only from rig screens", ref_type=t)
+        )
+        return
+    requester = _screen_capture_requesters.get(capture_id)
+    if data.get("done"):
+        _screen_capture_requesters.pop(capture_id, None)
+    if requester is not None and requester in _external_peers:
+        await _broadcast_targets(data, targets=[requester])
 
 
 async def _broadcast_external(frame: dict[str, Any], *, exclude: Any) -> None:
@@ -2990,6 +3026,9 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             rtt,
             _echo_interval(record, "t_receive_ms", "t_play_ms"),
         )
+        return
+    if t in (TYPE_SCREEN_CAPTURE, TYPE_SCREEN_CAPTURE_CHUNK):
+        await _route_screen_capture(websocket, data)
         return
     if t == TYPE_VOICE_DEMO:
         # Issue #511 Part D / #381: loopback-only synthetic advisory through the REAL voice

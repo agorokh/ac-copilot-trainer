@@ -52,6 +52,7 @@
 #if PHASE1_FALLBACK == 0
 #include <lvgl.h>
 #include <esp_heap_caps.h>   // heap_caps_malloc / MALLOC_CAP_SPIRAM
+#include <mbedtls/base64.h>  // screen.capture chunk encoding
 #include "board/JC3248W535_Touch.h"
 #include "ui/app_state.h"
 #include "ui/link_stats.h"
@@ -626,6 +627,81 @@ static void phase2_send_setup_load(const char* name, const char* path) {
   Serial.printf("[ws] -> %s\n", out.c_str());
 }
 
+// -- On-device screen capture (issue #86 closure gate) ----------------------
+// `screen.capture` copies the canvas framebuffer once -- the exact pixels the
+// LVGL flush hands the panel -- then streams the copy as base64
+// `screen.capture.chunk` frames a few per loop, so LVGL and touch keep running.
+// One capture at a time; the PSRAM copy is freed after the last chunk.
+static constexpr size_t CAPTURE_CHUNK_BYTES     = 3072;  // 4096 base64 chars per frame
+static constexpr int    CAPTURE_CHUNKS_PER_TICK = 4;
+static uint8_t* capture_buf    = nullptr;
+static size_t   capture_total  = 0;
+static size_t   capture_offset = 0;
+static char     capture_id[65] = {0};
+static unsigned char capture_b64[((CAPTURE_CHUNK_BYTES + 2) / 3) * 4 + 1];
+
+// Returns false when the chunk could not be encoded; the frame then carries the error and
+// ends the capture, so the requester never assembles an image with silent holes.
+static bool capture_send_chunk(size_t offset, size_t n, bool done, const char* error) {
+  size_t olen = 0;
+  capture_b64[0] = 0;
+  bool ok = true;
+  // mbedtls needs room for the NUL it writes after the base64 text, so pass the whole buffer.
+  if (n > 0 && mbedtls_base64_encode(capture_b64, sizeof(capture_b64), &olen,
+                                     capture_buf + offset, n) != 0) {
+    capture_b64[0] = 0;
+    error = "base64 encode failed";
+    done  = true;
+    ok    = false;
+  }
+  JsonDocument doc;
+  doc["v"]          = 1;
+  doc["type"]       = "screen.capture.chunk";
+  doc["capture_id"] = capture_id;
+  doc["width"]      = SCREEN_W;
+  doc["height"]     = SCREEN_H;
+  doc["format"]     = "rgb565";
+  doc["offset"]     = offset;
+  doc["total"]      = capture_total;
+  doc["data"]       = reinterpret_cast<const char*>(capture_b64);
+  doc["done"]       = done;
+  if (error) doc["error"] = error;
+  String out;
+  serializeJson(doc, out);
+  transport_send(out);
+  return ok;
+}
+
+static void screen_capture_begin(const char* id) {
+  if (capture_buf) return;  // one capture at a time; the active one keeps streaming
+  strncpy(capture_id, id ? id : "", sizeof(capture_id) - 1);
+  capture_id[sizeof(capture_id) - 1] = 0;
+  capture_total  = static_cast<size_t>(SCREEN_W) * SCREEN_H * sizeof(uint16_t);
+  capture_offset = 0;
+  uint16_t* fb = gfx_canvas ? gfx_canvas->getFramebuffer() : nullptr;
+  if (fb) capture_buf = static_cast<uint8_t*>(heap_caps_malloc(capture_total, MALLOC_CAP_SPIRAM));
+  if (!fb || !capture_buf) {
+    capture_send_chunk(0, 0, true, fb ? "psram alloc failed" : "no framebuffer");
+    return;
+  }
+  memcpy(capture_buf, fb, capture_total);
+  Serial.printf("[capture] %s: %u bytes\n", capture_id, static_cast<unsigned>(capture_total));
+}
+
+static void screen_capture_tick() {
+  for (int i = 0; i < CAPTURE_CHUNKS_PER_TICK && capture_buf; ++i) {
+    size_t n = capture_total - capture_offset;
+    if (n > CAPTURE_CHUNK_BYTES) n = CAPTURE_CHUNK_BYTES;
+    const size_t offset = capture_offset;
+    capture_offset += n;
+    const bool done = capture_offset >= capture_total;
+    if (!capture_send_chunk(offset, n, done, nullptr) || done) {
+      heap_caps_free(capture_buf);
+      capture_buf = nullptr;
+    }
+  }
+}
+
 // Issue #86 Parts C/D: dispatch per-message-type. `state.snapshot` carries
 // a `topic` field we route to the appropriate screen module; `setup.*`
 // frames go straight to the Pocket Technician screen module.
@@ -666,6 +742,10 @@ static void dispatch_phase2_message(const String& body) {
     return;
   }
 
+  if (strcmp(type, "screen.capture") == 0) {
+    screen_capture_begin(doc["capture_id"] | "");
+    return;
+  }
   if (strcmp(type, "state.snapshot") == 0) {
     const char* topic = doc["topic"] | "";
     JsonVariantConst payload = doc["payload"];
@@ -1410,6 +1490,7 @@ void loop() {
   pt_request_drain();
   se_request_drain();
   lvgl_tick();
+  screen_capture_tick();
 #endif
   delay(2);
 }
