@@ -90,6 +90,17 @@ def test_workflow_triggers_for_vault_pr_events(workflow_path: Path) -> None:
 
 
 @_each_variant
+def test_workflow_reevaluates_when_review_round_settles(workflow_path: Path) -> None:
+    """The push-time run refuses `lease_in_flight` while the reviewer daemon holds the head
+    (gov-hub#464). The daemon's submitted review is the event that ends the round; without it
+    nothing in the spoke re-runs the merge (#901, template-repo#592). Only `pull_request*` events:
+    an `issue_comment` payload has no head repo for the same-repo gate below."""
+    on = _on_block(_load(workflow_path))
+    assert set(on) == {"pull_request", "pull_request_review"}
+    assert on["pull_request_review"]["types"] == ["submitted"]
+
+
+@_each_variant
 def test_workflow_has_per_pr_concurrency_guard(workflow_path: Path) -> None:
     conc = _load(workflow_path).get("concurrency")
     assert conc, f"{workflow_path.name} must declare a concurrency block (issue #238)"

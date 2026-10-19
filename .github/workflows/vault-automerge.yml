@@ -10,6 +10,16 @@ name: Vault auto-merge
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
+  # Re-evaluate when the review round settles (#901, template-repo#592). The pull_request run fires
+  # seconds after a push, while the self-hosted reviewer daemon still holds that head's review
+  # lease, and the hub action refuses `lease_in_flight` (gov-hub#464, correct). No further
+  # pull_request event follows, so without this trigger the PR waits for the hub vault-pr-sweep
+  # or a manual rerun (#886). The daemon posts its review and flips the lease terminal 2-3 s later;
+  # this run reaches the review-round snapshot ~10 s after the event, so it sees the settled round.
+  # A miss (a slower release) refuses again and the sweep stays the backstop. The payload carries
+  # `pull_request`, so the job gate, concurrency group and `pr-number` below are unchanged.
+  pull_request_review:
+    types: [submitted]
 
 # A label-at-create PR (`gh pr create --label vault-only`) fires both `opened`
 # and `labeled`. Serialize per PR so duplicate runs do not race each other; do
