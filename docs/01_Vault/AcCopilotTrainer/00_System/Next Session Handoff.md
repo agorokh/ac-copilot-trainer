@@ -188,9 +188,11 @@ CSP Car0 handshake from Stable AC: CSP keeps sourcing car 0's inputs from `CarCo
 launcher closes it, so the driver's wheel was dead (measured: leftover section + gas=1 → 9044 rpm).
 It now asks the trainer `isInMainMenu` via `session.start` + `probe_only`; the operator confirmed the
 controls work. #884 (operator decision): Stable AC is off the main Game Point screen, CLI only
-(`--resilient-launch` / `--resilient-release`). **Play = Content Manager + ▶ START.** The Game Point
-EXE on the rig is built from `465905b` (also contains the #882 icon + dark title bar from a parallel
-session); older builds are kept as `dist/*.exe.bak`. Detail:
+(`--resilient-launch` / `--resilient-release`). **Play = Content Manager + ▶ START.** Game Point was
+first redeployed from `465905b` and later that evening replaced by the `16068f3` build (see the
+section above). That is the live rig EXE: `/health` reports `build_commit=16068f3`,
+`build_time=2026-10-18T21:03:27Z` (read 2026-10-19). The trainer Lua is separate and runs the
+primary checkout at `cb9304d`. Older builds are kept as `dist/*.exe.bak`. Detail:
 [[issue-627-stable-ac-chain-2026-10-18]].
 
 **Next, in order:** (1) A/B launch with the trainer app disabled to learn whether our session-start
