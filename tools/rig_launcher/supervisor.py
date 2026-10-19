@@ -1710,6 +1710,36 @@ def default_paths(env: Mapping[str, str] | None = None) -> LauncherPaths:
     return LauncherPaths(root)
 
 
+#: pyttsx3's SAPI5 driver imports this comtypes-generated wrapper (issue #893).
+SAPI_SPEECHLIB_MODULE = "comtypes.gen.SpeechLib"
+
+#: Third-party modules the frozen launcher/sidecar imports (the ``launcher`` extra). PyInstaller
+#: only *warns* on a missing ``--hidden-import``, so ``tools.rig_launcher.build`` checks these
+#: before Analysis and fails the build instead of shipping an EXE that breaks on the rig (#893).
+FROZEN_REQUIRED_MODULES: tuple[str, ...] = (
+    "numpy",
+    "sounddevice",
+    "pyttsx3",
+    "serial",
+    "websockets",
+)
+#: pyttsx3's Windows (SAPI5) backend; only importable on the Windows build host.
+FROZEN_REQUIRED_WINDOWS_MODULES: tuple[str, ...] = ("comtypes", "pythoncom")
+
+#: Modules nothing we ship uses but PyInstaller picks up whenever the build interpreter happens to
+#: have them: PIL (via pygments.formatters.img), defusedxml (via PIL), jinja2 + markupsafe (via
+#: pyparsing.diagram), threadpoolctl (via numpy's show_runtime). Excluding them keeps the bundle
+#: the same whichever interpreter runs ``--build-exe`` (#893). Every importer either guards the
+#: import with ``except ImportError`` or reaches it only from a call we never make.
+FROZEN_EXCLUDED_MODULES: tuple[str, ...] = (
+    "PIL",
+    "defusedxml",
+    "jinja2",
+    "markupsafe",
+    "threadpoolctl",
+)
+
+
 def build_pyinstaller_args(
     project_root: Path,
     *,
@@ -1771,6 +1801,12 @@ def build_pyinstaller_args(
         "pyttsx3.drivers",
         "--hidden-import",
         "pyttsx3.drivers.sapi5",
+        # Issue #893: the SAPI5 driver does `from comtypes.gen import SpeechLib`, a module
+        # comtypes generates on first use. Bundle it pre-generated (tools.rig_launcher.build
+        # generates it before Analysis) so the EXE never codegens into %TEMP% at first launch
+        # and the bundle no longer depends on whether this interpreter ever ran SAPI.
+        "--hidden-import",
+        SAPI_SPEECHLIB_MODULE,
         # Issue #463: the sidecar imports pyserial lazily (serial_transport.open_serial),
         # so PyInstaller's static analysis misses it — the frozen --serial-port sidecar
         # would ModuleNotFoundError without these. serial.tools.list_ports + the win32
@@ -1822,6 +1858,8 @@ def build_pyinstaller_args(
     _append_optional_pyinstaller_module(args, "rtmixer")
     _append_optional_pyinstaller_module(args, "pa_ringbuffer")
     _append_optional_pyinstaller_module(args, "hid")
+    for module in FROZEN_EXCLUDED_MODULES:
+        args.extend(["--exclude-module", module])
     if onefile:
         args.append("--onefile")
     if windowed:

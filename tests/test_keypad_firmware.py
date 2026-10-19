@@ -1,5 +1,6 @@
 """Native execution of the firmware protocol, without USB device access."""
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,11 +11,26 @@ ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE = ROOT / "firmware/keypad/Keypad.Firmware"
 
 
-def test_vendor_protocol_native(tmp_path):
+@pytest.fixture
+def native_cc():
+    """Path to the native C compiler the firmware harnesses build with (issue #895).
+
+    Fail-closed on CI, where the required check must never lose firmware coverage to a
+    missing toolchain; on a developer host without ``cc`` (e.g. the Windows rig) skip
+    with an explicit reason instead of erroring.
+    """
+    compiler = shutil.which("cc")
+    if compiler:
+        return compiler
+    message = "native C compiler (cc) is required for firmware verification"
+    if os.environ.get("CI", "").strip().lower() not in ("", "0", "false", "no"):
+        pytest.fail(f"{message}; CI must provide one")
+    pytest.skip(f"{message}; not found on PATH")
+
+
+def test_vendor_protocol_native(tmp_path, native_cc):
     source = FIRMWARE / "src/profile_protocol.c"
     assert source.is_file(), "firmware profile protocol is not implemented"
-    compiler = shutil.which("cc")
-    assert compiler, "native C compiler is required for firmware verification"
     harness = tmp_path / "harness.c"
     harness.write_text(r"""
 #include <assert.h>
@@ -68,7 +84,7 @@ int main(void) {
 """)
     result = subprocess.run(
         [
-            compiler,
+            native_cc,
             "-std=c99",
             "-Wall",
             "-Wextra",
@@ -88,7 +104,7 @@ int main(void) {
 
 
 @pytest.mark.parametrize("managed", [0, 1])
-def test_actual_hid_bindings_and_managed_suppression(tmp_path, managed):
+def test_actual_hid_bindings_and_managed_suppression(tmp_path, managed, native_cc):
     includes = tmp_path / "include"
     includes.mkdir()
     (includes / "ch5xx.h").write_text("#define __data\n#define __xdata\n")
@@ -151,7 +167,7 @@ int main(void) {
 """)
     result = subprocess.run(
         [
-            "cc",
+            native_cc,
             "-std=c99",
             "-Wall",
             "-Wextra",
@@ -189,7 +205,7 @@ def test_usb_vendor_descriptor_and_feature_are_implemented():
     assert sketch.index("led_update();") < sketch.index("USBInit();")
 
 
-def test_lease_keepalive_preserves_queue_and_sequence_wrap(tmp_path):
+def test_lease_keepalive_preserves_queue_and_sequence_wrap(tmp_path, native_cc):
     harness = tmp_path / "keepalive.c"
     harness.write_text(r"""
 #include <assert.h>
@@ -211,7 +227,7 @@ int main(void) {
 """)
     subprocess.run(
         [
-            "cc",
+            native_cc,
             "-std=c99",
             "-Wall",
             "-Wextra",
@@ -248,7 +264,7 @@ def test_hex_verifier_rejects_bad_checksum_and_bootloader_address(tmp_path):
         module.verify_hex(path)
 
 
-def test_managed_buttons_debounce_before_emitting_edges(tmp_path):
+def test_managed_buttons_debounce_before_emitting_edges(tmp_path, native_cc):
     (tmp_path / "Arduino.h").write_text(
         "#include <stdint.h>\n#include <stdbool.h>\n#define INPUT_PULLUP 2\n"
         "#define INPUT 0\nvoid pinMode(uint8_t p,uint8_t m);\n"
@@ -284,7 +300,7 @@ int main(void){
 """)
     subprocess.run(
         [
-            "cc",
+            native_cc,
             "-std=c99",
             "-I",
             str(tmp_path),
@@ -301,7 +317,7 @@ int main(void){
     subprocess.run([str(tmp_path / "buttons")], check=True)
 
 
-def test_queue_overflow_cannot_alias_sequence_and_hide_lost_keyup(tmp_path):
+def test_queue_overflow_cannot_alias_sequence_and_hide_lost_keyup(tmp_path, native_cc):
     harness = tmp_path / "overflow.c"
     harness.write_text(r"""
 #include <assert.h>
@@ -324,7 +340,7 @@ int main(void){
 """)
     subprocess.run(
         [
-            "cc",
+            native_cc,
             "-std=c99",
             "-Wall",
             "-Wextra",
@@ -341,7 +357,7 @@ int main(void){
     subprocess.run([str(tmp_path / "overflow")], check=True)
 
 
-def test_actual_usb_endpoint_functions_under_native_register_harness(tmp_path):
+def test_actual_usb_endpoint_functions_under_native_register_harness(tmp_path, native_cc):
     """Execute actual EP0/EP1 functions; emulate registers, not protocol logic."""
     usb = FIRMWARE / "src/userUsbHidKeyboardMouse"
     handler = (usb / "USBhandler.c").read_text()
@@ -447,7 +463,7 @@ int main(void){
     )
     subprocess.run(
         [
-            "cc",
+            native_cc,
             "-std=c99",
             "-I",
             str(FIRMWARE / "src"),
@@ -461,7 +477,7 @@ int main(void){
     subprocess.run([str(tmp_path / "endpoints")], check=True)
 
 
-def test_actual_managed_led_renderer_red_boot_green_lease_red_expiry(tmp_path):
+def test_actual_managed_led_renderer_red_boot_green_lease_red_expiry(tmp_path, native_cc):
     source = (FIRMWARE / "src/led.c").read_text()
     count = source[
         source.index("static uint8_t led_count(") : source.index("static uint8_t clamp_percent(")
@@ -512,7 +528,7 @@ int main(void){
     )
     subprocess.run(
         [
-            "cc",
+            native_cc,
             "-std=c99",
             "-Wall",
             "-Wextra",

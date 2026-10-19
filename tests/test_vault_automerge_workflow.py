@@ -22,7 +22,15 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github/workflows/vault-automerge.yml"
 PUBLIC_WORKFLOW = REPO_ROOT / ".github/workflows/vault-automerge-public.yml"
-HUB_ACTION_REF = "5e00dad1e620c61125929af1fe5905dada36e6b2"  # pragma: allowlist secret
+HUB_ACTION_REF = "a8f5877724d8091777f881ad2d89449300e82f69"  # pragma: allowlist secret
+# Canonical bound-checkout shape for the public variant (#889). The hub vault-pr-sweep
+# (governance-hub scripts/vault_sweep_discover.py::_bound_local_action) admits a LOCAL hub
+# action only when the IMMEDIATELY preceding checkout pins the same SHA into
+# `.scratch/governance-hub-<sha>` with `persist-credentials: false` and a token/ssh-key.
+# Any other shape is skipped as `caller-unreadable` every cycle, so a refused event-driven
+# run (e.g. `lease_in_flight`) is never retried and the vault PR waits for a manual label toggle.
+HUB_CHECKOUT_PATH = f".scratch/governance-hub-{HUB_ACTION_REF}"
+LOCAL_ACTION_USES = f"./{HUB_CHECKOUT_PATH}/.github/actions/vault-automerge"
 
 # Copier renders `.copier-answers.yml` into every child (children pin the template
 # via its `_src_path`; `copier.yml` `_exclude` keeps it out of the template tree).
@@ -150,13 +158,28 @@ def test_public_variant_pins_same_hub_action_ref() -> None:
     """The public-spoke variant fetches the action via `actions/checkout` and runs it
     from a local path (private cross-repo `uses:` cannot resolve — issue #329). Its
     checkout `ref:` MUST pin the SAME hub SHA as the private caller so both variants roll
-    together; bumping one and forgetting the other is exactly the gov-hub#192 drift."""
+    together; bumping one and forgetting the other is exactly the gov-hub#192 drift.
+
+    The checkout must also be the hub sweep's bound canonical shape (#889): the SHA is
+    repeated in `path:` and in the local `uses:` directly after it, credentials are not
+    persisted, and the hub token is supplied. The hub discover parser fails closed on any
+    other shape, so vault-only PRs would again depend on a manual label toggle."""
     steps = _public_doc()["jobs"]["guard-and-automerge"]["steps"]
-    checkout = next(s for s in steps if str(s.get("uses", "")).startswith("actions/checkout"))
+    index, checkout = next(
+        (i, s) for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("actions/checkout")
+    )
     assert checkout["with"]["ref"] == HUB_ACTION_REF
-    assert any(
-        s.get("uses") == "./.governance-hub/.github/actions/vault-automerge" for s in steps
-    ), "public variant must invoke the checked-out action via its local path"
+    assert checkout["with"]["repository"] == "agorokh/governance-hub"
+    assert checkout["with"]["path"] == HUB_CHECKOUT_PATH
+    assert checkout["with"]["persist-credentials"] is False
+    assert checkout["with"].get("token") or checkout["with"].get("ssh-key")
+    assert "continue-on-error" not in checkout
+    action = steps[index + 1]
+    assert action["uses"] == LOCAL_ACTION_USES, (
+        "public variant must invoke the checked-out action via its SHA-bound local path, "
+        "immediately after the checkout (#889)"
+    )
+    assert action.get("if") == checkout.get("if")
 
 
 @_skip_without_public_variant
@@ -166,9 +189,7 @@ def test_public_variant_releases_while_required_checks_are_pending() -> None:
     pins it for the private variant; this pins it for the checkout variant, which is the only
     one a public child has."""
     steps = _public_doc()["jobs"]["guard-and-automerge"]["steps"]
-    action = next(
-        s for s in steps if s.get("uses") == "./.governance-hub/.github/actions/vault-automerge"
-    )
+    action = next(s for s in steps if s.get("uses") == LOCAL_ACTION_USES)
     assert action["with"]["release-when-pending"] == "true"
 
 
@@ -208,8 +229,11 @@ jobs:
       - uses: actions/create-github-app-token@v3
       - uses: actions/checkout@v7
         with:
+          repository: agorokh/governance-hub
           ref: {HUB_ACTION_REF}
-      - uses: ./.governance-hub/.github/actions/vault-automerge
+          path: {HUB_CHECKOUT_PATH}
+          persist-credentials: false
+      - uses: {LOCAL_ACTION_USES}
 """
 
 

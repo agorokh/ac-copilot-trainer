@@ -113,10 +113,14 @@ typedef enum {
 // Absolute INI paths on Windows can exceed 160–256 chars; keep one shared cap
 // across the out-queue, pending correlation, and row cache (codex P2 on PR #91).
 #define PT_SETUP_PATH_MAX 384
+// One shared cap for setup names too (#86): the row cache held 48 bytes and the request 64, so
+// the trainer scientist's 51-character names were silently cut on screen and no longer matched
+// the trainer's acknowledgement when the ACTIVE row was resolved.
+#define PT_SETUP_NAME_MAX 96
 
 typedef struct {
     pt_request_kind_t kind;
-    char              name[64];   // valid for PT_REQ_LOAD only
+    char              name[PT_SETUP_NAME_MAX];   // valid for PT_REQ_LOAD only
     char              path[PT_SETUP_PATH_MAX];  // optional disambiguator; "" if unknown
     char              section[32]; // valid for PT_REQ_SPINNER_SET only
     float             value;       // valid for PT_REQ_SPINNER_SET only

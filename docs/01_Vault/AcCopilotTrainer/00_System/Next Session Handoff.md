@@ -7,6 +7,7 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/issue-897-setup-list-journal-scan-2026-10-18.md
   - AcCopilotTrainer/03_Investigations/issue-86-pt-long-names-2026-10-18.md
   - AcCopilotTrainer/03_Investigations/issue-627-stable-ac-chain-2026-10-18.md
+  - AcCopilotTrainer/00_System/handoffs/2026-10-18-204100Z-post-merge-pr880-a0d3e7.md
   - AcCopilotTrainer/03_Investigations/issue-86-native-se-live-readback-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-854-agent-observed-acceptance-2026-10-17.md
   - AcCopilotTrainer/03_Investigations/issue-854-remote-inference-2026-10-17.md

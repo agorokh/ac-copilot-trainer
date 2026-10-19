@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-10
-updated: 2026-04-10
+updated: 2026-10-18
 relates_to:
   - AcCopilotTrainer/01_Decisions/_index.md
   - AcCopilotTrainer/00_System/invariants/_index.md
@@ -19,3 +19,4 @@ Deep-dive analyses that inform decisions and architecture. Each node captures fi
 | [post-merge-determinism-overhaul-2026-04.md](post-merge-determinism-overhaul-2026-04.md) | Two-phase post-merge steward, exit-code contract, vault SAVE via labeled PR + auto-merge workflow (no more agent push to main). |
 | [pr-pain-detection-workflow-2026-04.md](pr-pain-detection-workflow-2026-04.md) | Linear pain score over merged PRs → process-learning issue in template-repo, fingerprint-deduped across child repos, allowlist-gated. |
 | [2026-10-05-repin-vault-automerge-db8b63c6.md](2026-10-05-repin-vault-automerge-db8b63c6.md) | `vault-automerge` hub pin `78a47069` to `db8b63c6` (governance-hub#711): what changed, why this public checkout-shape repo went early, rollback. |
+| [2026-10-18-sweep-caller-bound-checkout-889.md](2026-10-18-sweep-caller-bound-checkout-889.md) | **#889 / PR #890.** Hub `vault-pr-sweep` skipped every vault PR here as `caller-unreadable`; caller migrated to the bound `.scratch/governance-hub-<sha>` checkout shape, pin `5e00dad1` -> `a8f5877`, test asserts the shape. |

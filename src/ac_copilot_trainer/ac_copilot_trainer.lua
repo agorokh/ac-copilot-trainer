@@ -28,6 +28,11 @@ local lapArchive = require("lap_archive")
 local coachingOverlay = require("coaching_overlay")
 local wsBridge = require("ws_bridge")
 wsBridge.performanceCapture = require("performance_capture").new()
+-- Logs any frame gap >= 0.25 s with the trainer's own share of it, by section.
+local frameHitch = require("frame_hitch").new({
+  clock = os.preciseClock,
+  log = function(line) if ac and type(ac.log) == "function" then ac.log(line) end end,
+})
 local sessionJournal = require("session_journal")
 local ch = require("csp_helpers")
 local renderDiag = require("render_diag")
@@ -2331,8 +2336,17 @@ local function carLapInvalidatedFlag(carObj)
   return false
 end
 
+local function hitchContext()
+  local s, c = sim, car
+  return string.format("menu=%s paused=%s speed=%.0f sp=%.4f laps=%s",
+    tostring(s and s.isInMainMenu), tostring(s and s.isPaused),
+    (c and c.speedKmh) or -1, (c and c.splinePosition) or -1, tostring(state.lapsCompleted))
+end
+
 function script.update(dt)
+  frameHitch:frame(hitchContext)
   wsBridge.setupExchange.tick(dt)
+  frameHitch:mark("u:setupExchange")
   sim = ac.getSim()
   if wsBridge.performanceCapture.active then
     local perfUI = ac.getUI()
@@ -2427,6 +2441,7 @@ function script.update(dt)
     state._cachedRealtimeView = nil
     state.realtimeActiveHint = nil
   end
+  frameHitch:mark("u:coach")
 
   -- Apply a deferred config.set URL on the frame AFTER its ack was sent, before either branch can
   -- return. Keeping this below the menu return strands runtime reconfiguration while parked.
@@ -2527,16 +2542,22 @@ function script.update(dt)
     and resetCounterNow ~= nil
     and resetCounterNow ~= state.lastResetCounter
 
+  frameHitch:mark("u:preDrive")
   if not state.initialized then
     tryLoadDisk()
   end
+  frameHitch:mark("u:loadDisk")
 
   -- Issue #77 Part A: start sidecar before tick so we do not duplicate tryOpen() in the same frame.
   pcall(function() wsBridge.startSidecarIfNeeded(appDir, dt) end)
   wsBridge.tick(ch.simSeconds(sim), dt)
+  frameHitch:mark("u:wsTick")
   wsBridge.pollInbound(8)
+  frameHitch:mark("u:wsInbound")
   pumpLapArchiveJobs()
+  frameHitch:mark("u:archiveJobs")
   pumpLapArchiveNotifications()
+  frameHitch:mark("u:archiveNotify")
 
   -- Issue #180 Part D step 2: lifecycle topics, published AFTER wsBridge.tick()/pollInbound()
   -- so they observe the CURRENT-frame WS state and always precede the `lap` boundary below
@@ -2648,6 +2669,7 @@ function script.update(dt)
       end
     end
   end)
+  frameHitch:mark("u:lifecycle")
 
   -- Issue #180 Part D step 2: telemetry topics (continuous streams, no ordering contract).
   -- `delta` is published only once a reference lap exists (state.bestSortedTrace) using the
@@ -2730,6 +2752,7 @@ function script.update(dt)
       sessionLapsTotal = readSessionLapsTotal(),
     })
   end)
+  frameHitch:mark("u:telemetryPub")
   -- Round 10: drain any corner_advice replies into state.cornerAdvisories.
   -- The takeCornerAdvisory API returns the cached text for a label without
   -- consuming it — we walk known corner labels from trackSegments and copy.
@@ -2774,6 +2797,7 @@ function script.update(dt)
       end
     end
   end
+  frameHitch:mark("u:advicePrime")
 
   local lc = car.lapCount or 0
   local sp = car.splinePosition or 0
@@ -3056,6 +3080,7 @@ function script.update(dt)
 
     persistSnapshotLive()
   end
+  frameHitch:mark("u:lapBoundary")
 
   -- Start collecting after lap counter is synced; span guard above avoids saving a partial trace as PB reference.
   if tel:lapStartTime() == nil and not sim.isInMainMenu and state.lastLapCount >= 0 then
@@ -3103,6 +3128,7 @@ function script.update(dt)
   end
 
   tires:update(car, dt, sp)
+  frameHitch:mark("u:sensors")
 
   if config.enableRenderDiagnostics then
     renderDiag.tick(dt)
@@ -3153,6 +3179,7 @@ function script.update(dt)
   state.lastSplinePos = sp
   state.lastSplineSector = sp
   state.lastResetCounter = resetCounterNow
+  frameHitch:mark("u:tail")
 end
 
 function script.onWindowHide()
@@ -3240,5 +3267,13 @@ function script.Draw3D(_dt)
     if mode == "last" or mode == "both" then
       racingLine.drawLineStrip(c, state.racingLastLine, rgbm(0.85, 0.75, 0.0, 0.55), nil, style)
     end
+  end
+end
+
+-- Charge every frame callback to the hitch watchdog (wrapped after definition; CSP resolves the
+-- manifest's FUNCTION_* names from `script` once this file has run).
+for _, name in ipairs({ "update", "windowMain", "windowSettings", "windowCoaching", "Draw3D" }) do
+  if type(script[name]) == "function" then
+    script[name] = frameHitch:wrap(name, script[name])
   end
 end
