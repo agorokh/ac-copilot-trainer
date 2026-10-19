@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-10-19T06:40:00Z
+last_updated: 2026-10-19T07:20:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-86-device-capture-2026-10-19.md
   - AcCopilotTrainer/03_Investigations/issue-627-c2-settled-2026-10-19.md
   - AcCopilotTrainer/03_Investigations/issue-897-setup-list-journal-scan-2026-10-18.md
   - AcCopilotTrainer/03_Investigations/issue-86-pt-long-names-2026-10-18.md
@@ -146,6 +147,24 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-10-19) — #86 on-device screen capture; Copilot compared with the render
+
+PR #904 (`5e88fe9`) adds `python -m tools.screen_capture --out x.png`, which captures the rig
+screen's own pixels over the sidecar link. The firmware is flashed to COM6 (hash verified). The
+packaged Game Point (`16068f3`) has **no** capture route until the EXE is rebuilt; until then,
+run the source sidecar on COM6 to capture.
+
+- The AC Copilot screen was captured mid-drive at Spa and compared with `esp32_rig.png`: the
+  layout, palette and type match. Five content differences are listed on #86 for an operator
+  decision (state enum header, `T1 T1` chip, `V` glyph, next-corner delta, BACK button).
+- **#86 still open.** The Pocket Technician load, the Setup Exchange download → install, and the
+  installed setup loading in Pocket Technician have not been observed on the glass. They need
+  someone at the rig: Spa, in the pits, with captures running.
+- Pitfall: an ESP32 HWCDC TX stall over 100 ms silently drops all serial output. Never write a big
+  frame unless `availableForWrite()` covers it.
+
+Detail: [[issue-86-device-capture-2026-10-19]].
 
 ## Delivered (2026-10-19) — #627 C2 settled and closed
 
