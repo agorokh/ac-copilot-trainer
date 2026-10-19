@@ -676,9 +676,20 @@ static bool capture_build_chunk(size_t offset, size_t n, bool done, const char* 
   return ok;
 }
 
-// A request that arrives while a capture streams gets an explicit refusal under its own id, so
-// the requester fails fast instead of timing out. Dropped if the TX ring cannot take it now.
-static void capture_send_busy(const char* id) {
+// Every capture frame goes out through this gate. Never let one wait inside Serial.write: when
+// the host does not read for 100 ms there, the core's HWCDC marks the link disconnected and
+// silently drops all later output, which took the whole screen link down mid-capture during a
+// live session. Returns false (nothing written) unless the TX ring can take the whole frame now.
+static bool capture_try_send(const String& frame) {
+#if SCREEN_TRANSPORT_SERIAL
+  if (Serial.availableForWrite() < static_cast<int>(frame.length()) + 1) return false;
+#endif
+  transport_send(frame);
+  return true;
+}
+
+// Terminal `done` + `error` frame for `id`, so a requester fails fast instead of timing out.
+static String capture_error_frame(const char* id, const char* error) {
   JsonDocument doc;
   doc["v"]          = 1;
   doc["type"]       = "screen.capture.chunk";
@@ -690,18 +701,29 @@ static void capture_send_busy(const char* id) {
   doc["total"]      = static_cast<size_t>(SCREEN_W) * SCREEN_H * sizeof(uint16_t);
   doc["data"]       = "";
   doc["done"]       = true;
-  doc["error"]      = "screen is already streaming a capture";
+  doc["error"]      = error;
   String out;
   serializeJson(doc, out);
-#if SCREEN_TRANSPORT_SERIAL
-  if (Serial.availableForWrite() < static_cast<int>(out.length()) + 1) return;
-#endif
-  transport_send(out);
+  return out;
+}
+
+// One pending terminal error, sent from the loop as soon as the TX ring has room (it is small,
+// so it goes out long before the next chunk would).
+static String capture_notice;
+
+static void capture_queue_notice(const char* id, const char* error) {
+  if (capture_notice.length() == 0) capture_notice = capture_error_frame(id, error);
+}
+
+static void screen_capture_abort() {
+  heap_caps_free(capture_buf);
+  capture_buf   = nullptr;
+  capture_frame = "";
 }
 
 static void screen_capture_begin(const char* id) {
   if (capture_buf) {
-    capture_send_busy(id);
+    capture_queue_notice(id, "screen is already streaming a capture");
     return;
   }
   strncpy(capture_id, id ? id : "", sizeof(capture_id) - 1);
@@ -711,9 +733,7 @@ static void screen_capture_begin(const char* id) {
   uint16_t* fb = gfx_canvas ? gfx_canvas->getFramebuffer() : nullptr;
   if (fb) capture_buf = static_cast<uint8_t*>(heap_caps_malloc(capture_total, MALLOC_CAP_SPIRAM));
   if (!fb || !capture_buf) {
-    String out;
-    capture_build_chunk(0, 0, true, fb ? "psram alloc failed" : "no framebuffer", out);
-    transport_send(out);
+    capture_queue_notice(capture_id, fb ? "psram alloc failed" : "no framebuffer");
     return;
   }
   memcpy(capture_buf, fb, capture_total);
@@ -722,13 +742,8 @@ static void screen_capture_begin(const char* id) {
   capture_progress_ms = millis();
 }
 
-static void screen_capture_abort() {
-  heap_caps_free(capture_buf);
-  capture_buf   = nullptr;
-  capture_frame = "";
-}
-
 static void screen_capture_tick() {
+  if (capture_notice.length() > 0 && capture_try_send(capture_notice)) capture_notice = "";
   if (!capture_buf) return;
   if (capture_frame.length() == 0) {
     size_t n = capture_total - capture_offset;
@@ -738,19 +753,15 @@ static void screen_capture_tick() {
     const bool done    = capture_offset >= capture_total;
     capture_frame_last = !capture_build_chunk(offset, n, done, nullptr, capture_frame) || done;
   }
-#if SCREEN_TRANSPORT_SERIAL
-  // Never let a chunk wait inside Serial.write: when the host does not read for 100 ms there,
-  // the core's HWCDC marks the link disconnected and silently drops all later output, which
-  // took the whole screen link down mid-capture during a live session. Send only when the
-  // TX ring can take the whole frame now.
-  if (Serial.availableForWrite() < static_cast<int>(capture_frame.length()) + 1) {
-    // No progress for CAPTURE_STALL_ABORT_MS: give the PSRAM copy back and accept new
-    // requests rather than holding the capture until a reboot.
-    if (millis() - capture_progress_ms > CAPTURE_STALL_ABORT_MS) screen_capture_abort();
+  if (!capture_try_send(capture_frame)) {
+    // No progress for CAPTURE_STALL_ABORT_MS: give the PSRAM copy back, accept new requests and
+    // tell the requester (once there is room) rather than holding the capture until a reboot.
+    if (millis() - capture_progress_ms > CAPTURE_STALL_ABORT_MS) {
+      screen_capture_abort();
+      capture_queue_notice(capture_id, "screen TX stalled; capture aborted");
+    }
     return;
   }
-#endif
-  transport_send(capture_frame);
   capture_frame       = "";
   capture_progress_ms = millis();
   if (capture_frame_last) screen_capture_abort();
