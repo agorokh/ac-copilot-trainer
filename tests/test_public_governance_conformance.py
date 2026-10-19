@@ -42,6 +42,7 @@ GOVERNED_SHIMS = (
     "hook_memory_query_stamp.py",
     "hook_stale_main_gate.py",
     "hook_session_start_post_merge_steward.py",
+    "hook_sensitive_file_guard.py",
 )
 
 

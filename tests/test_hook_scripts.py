@@ -120,98 +120,9 @@ def test_hook_detect_git_commit_rejects_symlink_escape(
     assert det._canonical_impl_path() is None
 
 
-# ---------------------------------------------------------------------------
-# hook_sensitive_file_guard.sh
-# ---------------------------------------------------------------------------
-
-GUARD = SCRIPTS / "hook_sensitive_file_guard.sh"
-
-
-@_SKIP_NO_BASH
-@pytest.mark.parametrize(
-    "file_path",
-    [
-        "src/foo.py",
-        "README.md",
-        ".env.example",
-        ".env.sample",
-        ".env.template",
-        "docs/notes.md",
-        "scripts/hook_protect_main.sh",
-    ],
-)
-def test_guard_allows_normal_paths(file_path: str) -> None:
-    assert _run(GUARD, {"tool_input": {"file_path": file_path}}) == 0
-
-
-@_SKIP_NO_BASH
-def test_guard_allows_ascii_doc_asc_under_docs() -> None:
-    """``.asc`` is often AsciiDoc; do not blanket-block outside key paths (Codex)."""
-    assert _run(GUARD, {"tool_input": {"file_path": "docs/README.asc"}}) == 0
-
-
-@_SKIP_NO_BASH
-def test_guard_blocks_uppercase_env_filename() -> None:
-    assert _run(GUARD, {"tool_input": {"file_path": ".ENV"}}) == 2
-
-
-@_SKIP_NO_BASH
-@pytest.mark.parametrize(
-    "file_path",
-    [
-        ".env",
-        ".env.production",
-        ".env.local",
-        "poetry.lock",
-        "package-lock.json",
-        "pnpm-lock.yaml",
-        "yarn.lock",
-        "Cargo.lock",
-        "uv.lock",
-        "composer.lock",
-        "Gemfile.lock",
-        "go.sum",
-        "npm-shrinkwrap.json",
-        "shrinkwrap.yaml",
-        "id_rsa",
-        "id_ed25519",
-        "certs/server.pem",
-        "path/to/secret.key",
-        "path/to/cert.p12",
-        "keys/file.asc",
-        "archive/old-config.yaml",
-        "secrets/api.json",
-        ".secrets/token",
-        ".ssh/id_rsa",
-        ".gnupg/private.asc",
-    ],
-)
-def test_guard_blocks_sensitive_paths(file_path: str) -> None:
-    assert _run(GUARD, {"tool_input": {"file_path": file_path}}) == 2
-
-
-@_SKIP_NO_BASH
-def test_guard_handles_windows_separators() -> None:
-    # Backslashes should still match the archive/ pattern.
-    assert _run(GUARD, {"tool_input": {"file_path": r"archive\old\file.md"}}) == 2
-
-
-@_SKIP_NO_BASH
-def test_guard_allows_missing_file_path() -> None:
-    assert _run(GUARD, {"tool_input": {}}) == 0
-
-
-@_SKIP_NO_BASH
-def test_guard_handles_malformed_json() -> None:
-    result = subprocess.run(
-        ["bash", str(GUARD)],
-        input="not json",
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=15,
-    )
-    assert result.returncode == 0
+# Not covered here, on purpose: the sensitive-file guard's behavior. It is hub-canonical since
+# governance-hub#862 (this repo carries the shim scripts/hook_sensitive_file_guard.py), so its
+# tests live in the hub. tests/test_hook_sensitive_file_guard_wiring.py pins the wiring here.
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +161,7 @@ def test_base_settings_has_no_unsafe_prompt_flow_control() -> None:
                 continue
             prompt = str(h.get("prompt", "")).lower()
 
-            if matcher == "Edit|Write" and (
+            if matcher in ("Edit|Write", "Edit|Write|MultiEdit|NotebookEdit") and (
                 "sensitive file" in prompt or "sensitive-file" in prompt
             ):
                 offenders.append(
@@ -259,16 +170,16 @@ def test_base_settings_has_no_unsafe_prompt_flow_control() -> None:
 
     sensitive_cmd = False
     for group in hooks.get("PreToolUse", []) or []:
-        if group.get("matcher") != "Edit|Write":
+        if group.get("matcher") not in ("Edit|Write", "Edit|Write|MultiEdit|NotebookEdit"):
             continue
         for h in group.get("hooks", []) or []:
             if h.get("type") != "command":
                 continue
-            if "hook_sensitive_file_guard.sh" in str(h.get("command", "")):
+            if "hook_sensitive_file_guard.py" in str(h.get("command", "")):
                 sensitive_cmd = True
                 break
     if not sensitive_cmd:
-        offenders.append("PreToolUse:Edit|Write missing command hook hook_sensitive_file_guard.sh")
+        offenders.append("PreToolUse:Edit|Write missing command hook hook_sensitive_file_guard.py")
 
     for group in hooks.get("PreToolUse", []) or []:
         if group.get("matcher") != "Bash":
@@ -304,16 +215,6 @@ def test_base_settings_has_no_unsafe_prompt_flow_control() -> None:
         + "\n  - ".join(offenders)
         + "\nSee docs/00_Core/HOOK_DESIGN.md for the convention."
     )
-
-
-def test_hook_scripts_are_executable_bit_or_runnable() -> None:
-    """Not all filesystems preserve +x (Windows); functional tests run via `bash script`."""
-    impl = SCRIPTS / "hook_protect_main_impl.py"
-    orch = SCRIPTS / "hook_bash_pre_tool.sh"
-    jf = SCRIPTS / "hook_json_field.py"
-    det = SCRIPTS / "hook_detect_git_commit.py"
-    for script in (PROTECT_MAIN, impl, orch, jf, det, GUARD):
-        assert script.is_file(), f"missing hook script: {script}"
 
 
 def test_hook_json_field_extracts_tool_input_command() -> None:
