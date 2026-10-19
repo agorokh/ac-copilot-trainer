@@ -184,6 +184,21 @@ local config or firmware build.
   Firmware emits `[serial][bp] ok=… drop=… max_drain_ms=…` after a ≥8-frame
   drain burst.
 
+## Screen capture (#86)
+
+Capture exactly what the panel shows, with live data, over the normal sidecar link. The
+sidecar keeps COM6, so nothing has to be stopped; it needs a sidecar build that routes
+`screen.capture` (Game Point builds from this change on).
+
+```powershell
+py -3 -m tools.screen_capture --out .scratch\screen.png
+```
+
+The screen copies its LVGL canvas to PSRAM and streams it as `screen.capture.chunk` frames
+(RGB565 little-endian, 320×480), one per loop and only when the USB TX ring can take the whole
+frame, so the UI keeps running and a slow host read never stalls `Serial.write`. A capture
+takes ~15 s during a live session and well under a second when idle.
+
 ## Layout
 
 ```text

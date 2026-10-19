@@ -109,6 +109,14 @@ TYPE_SETUP_EXCHANGE_CSP_REQUEST = "se.csp.request"
 TYPE_SETUP_EXCHANGE_CSP_RESULT = "se.csp.result"
 MAX_SETUP_EXCHANGE_CSP_BYTES = 2 * 1024 * 1024
 TYPE_SESSION_REVIEW_GENERATE = "session.review.generate"
+# Issue #86 closure gate: any peer may ask the rig screen for its framebuffer; the screen
+# answers with base64 `screen.capture.chunk` frames (3 KiB raw each) that the generic relay
+# fans out like other peer replies. Read-only: the screen never acts on its content.
+TYPE_SCREEN_CAPTURE = "screen.capture"
+TYPE_SCREEN_CAPTURE_CHUNK = "screen.capture.chunk"
+SCREEN_CAPTURE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+MAX_SCREEN_CAPTURE_BYTES = 4 * 1024 * 1024
+MAX_SCREEN_CAPTURE_CHUNK_CHARS = 8192
 # Issue #726: resilient-launch harness → trainer Lua request that presses CSP's supported
 # in-sim Start control while AC is rendering at the pre-drive menu but Car0 does not exist yet.
 TYPE_SESSION_START = "session.start"
@@ -687,6 +695,33 @@ def _validate_haptic_event(frame: dict[str, Any]) -> str | None:
     return None
 
 
+def _strict_int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _validate_screen_capture_chunk(frame: dict[str, Any]) -> str | None:
+    capture_id = frame.get("capture_id")
+    if not isinstance(capture_id, str) or not SCREEN_CAPTURE_ID_RE.match(capture_id):
+        return "screen.capture.chunk requires a valid 'capture_id'"
+    width, height = _strict_int(frame.get("width")), _strict_int(frame.get("height"))
+    if width is None or height is None or not (0 < width <= 2048 and 0 < height <= 2048):
+        return "screen.capture.chunk requires integer 'width'/'height' in 1-2048"
+    total, offset = _strict_int(frame.get("total")), _strict_int(frame.get("offset"))
+    if total is None or not 0 < total <= MAX_SCREEN_CAPTURE_BYTES:
+        return f"screen.capture.chunk 'total' must be an integer in 1-{MAX_SCREEN_CAPTURE_BYTES}"
+    if offset is None or not 0 <= offset <= total:
+        return "screen.capture.chunk 'offset' must be an integer in 0-total"
+    data = frame.get("data")
+    if not isinstance(data, str) or len(data) > MAX_SCREEN_CAPTURE_CHUNK_CHARS:
+        return f"screen.capture.chunk 'data' must be a str of <= {MAX_SCREEN_CAPTURE_CHUNK_CHARS}"
+    if not isinstance(frame.get("done"), bool):
+        return "screen.capture.chunk requires boolean 'done'"
+    error = frame.get("error")
+    if error is not None and (not isinstance(error, str) or len(error) > 200):
+        return "screen.capture.chunk optional 'error' must be a short string"
+    return None
+
+
 def validate_inbound(frame: dict[str, Any]) -> str | None:
     """Return ``None`` if ``frame`` is structurally valid, else an error string."""
     version = frame.get(ENVELOPE_KEY)
@@ -1021,6 +1056,13 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
             if topic not in KNOWN_TOPICS:
                 return f"unknown topic: {topic!r}"
         return None
+    if t == TYPE_SCREEN_CAPTURE:
+        capture_id = frame.get("capture_id")
+        if not isinstance(capture_id, str) or not SCREEN_CAPTURE_ID_RE.match(capture_id):
+            return "screen.capture requires 'capture_id' of 1-64 letters/digits/underscore/hyphen"
+        return None
+    if t == TYPE_SCREEN_CAPTURE_CHUNK:
+        return _validate_screen_capture_chunk(frame)
     # Server→client types may legitimately appear when the Lua client forwards
     # a reply for the sidecar to fan out — accept silently.
     if t in (

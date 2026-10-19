@@ -75,6 +75,8 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_HELLO,
     TYPE_HELLO_ACK,
     TYPE_KEY,
+    TYPE_SCREEN_CAPTURE,
+    TYPE_SCREEN_CAPTURE_CHUNK,
     TYPE_SESSION_REVIEW_GENERATE,
     TYPE_SESSION_REVIEW_RESULT,
     TYPE_SESSION_START,
@@ -197,6 +199,12 @@ _setup_exchange_user_setups_root: Path | None = None
 _setup_exchange_broker = SetupExchangeBroker()
 _setup_exchange_tasks: dict[Any, asyncio.Task[Any]] = {}
 _external_peer_classes: dict[Any, str] = {}
+# #86: the rig-screen framebuffer capture in flight, capture_id -> (requester, last activity).
+# The screen streams one capture at a time and ignores requests while busy, so the sidecar admits
+# one and rejects the rest. Every chunk refreshes the activity time, so a slow stream under a
+# live session stays admitted; only a capture with no chunk for SCREEN_CAPTURE_STALE_S expires.
+_screen_capture_requesters: dict[str, tuple[Any, float]] = {}
+SCREEN_CAPTURE_STALE_S = 60.0
 _sidecar_state_cache: dict[str, dict[str, Any]] = {}
 # #531 Part B: which peer produced each cached IDENTITY_REPLAY_TOPICS snapshot — the cache
 # entry is dropped when that peer disconnects (its identity dies with it).
@@ -575,6 +583,7 @@ def _reset_external_state() -> None:
     _session_start_authorized_peers.clear()
     _lua_authorized_peers.clear()
     _external_peer_classes.clear()
+    _screen_capture_requesters.clear()
     _sidecar_state_cache.clear()
     _identity_cache_producers.clear()
     _identity_cache_observed_monotonic.clear()
@@ -1644,6 +1653,51 @@ def make_process_request(token: str | None):
     return _process_request
 
 
+def _drop_screen_captures_for(peer: Any) -> None:
+    """A capture whose requester left cannot be delivered; free the slot for the next one."""
+    for capture_id, (requester, _) in list(_screen_capture_requesters.items()):
+        if requester is peer:
+            _screen_capture_requesters.pop(capture_id, None)
+
+
+async def _route_screen_capture(websocket: Any, data: dict[str, Any]) -> None:
+    """#86: requests go to rig-screen peers only; chunks return to the requester alone.
+
+    A capture is ~300 KB, so it must not fan out to the trainer Lua or the tablet.
+    """
+    t = data[TYPE_KEY]
+    capture_id = data["capture_id"]
+    if t == TYPE_SCREEN_CAPTURE:
+        screens = _targets_for_classes(exclude=websocket, classes=frozenset({CLIENT_CLASS_SCREEN}))
+        if not screens:
+            await _safe_send(websocket, make_error("no rig screen connected", ref_type=t))
+            return
+        now = time.monotonic()
+        for active_id, (_, last_activity) in list(_screen_capture_requesters.items()):
+            if now - last_activity > SCREEN_CAPTURE_STALE_S:
+                _screen_capture_requesters.pop(active_id, None)
+        if _screen_capture_requesters:
+            await _safe_send(
+                websocket, make_error("a screen capture is already in progress", ref_type=t)
+            )
+            return
+        _screen_capture_requesters[capture_id] = (websocket, now)
+        await _broadcast_targets(data, targets=screens)
+        return
+    if _peer_class(websocket) != CLIENT_CLASS_SCREEN:
+        await _safe_send(
+            websocket, make_error(f"{t} is accepted only from rig screens", ref_type=t)
+        )
+        return
+    active = _screen_capture_requesters.get(capture_id)
+    if data.get("done"):
+        _screen_capture_requesters.pop(capture_id, None)
+    elif active is not None:
+        _screen_capture_requesters[capture_id] = (active[0], time.monotonic())
+    if active is not None and active[0] in _external_peers:
+        await _broadcast_targets(data, targets=[active[0]])
+
+
 async def _broadcast_external(frame: dict[str, Any], *, exclude: Any) -> None:
     """Forward a ``{v,type}`` frame to every external peer except ``exclude``."""
     targets = [p for p in _external_peers if p is not exclude]
@@ -1709,6 +1763,7 @@ def _drop_external_peer(peer: Any) -> None:
     _session_start_authorized_peers.discard(peer)
     _lua_authorized_peers.discard(peer)
     _external_peer_classes.pop(peer, None)
+    _drop_screen_captures_for(peer)
     _voice_mic_subscribers.discard(peer)
     _voice_mic_streams.pop(peer, None)
     _release_observer_feed(peer)
@@ -2991,6 +3046,9 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             _echo_interval(record, "t_receive_ms", "t_play_ms"),
         )
         return
+    if t in (TYPE_SCREEN_CAPTURE, TYPE_SCREEN_CAPTURE_CHUNK):
+        await _route_screen_capture(websocket, data)
+        return
     if t == TYPE_VOICE_DEMO:
         # Issue #511 Part D / #381: loopback-only synthetic advisory through the REAL voice
         # path (scheduler arbitration → dispatch tap → coaching.voice broadcast). Bench
@@ -3428,6 +3486,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
         _session_start_authorized_peers.discard(websocket)
         _lua_authorized_peers.discard(websocket)
         _external_peer_classes.pop(websocket, None)
+        _drop_screen_captures_for(websocket)
         # Identity snapshots cached for late-subscriber replay die with their producer:
         # replaying a disconnected trainer's setup/session to a fresh tablet would render
         # a dead session as current (Codex on PR #547).
