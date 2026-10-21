@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Pre-commit reminder: if staged paths touch policy-sensitive areas (.claude/,
 # docs/01_Vault/, scripts/, .github/workflows/) and the commit does NOT also
-# include a vault follow-up artefact (investigation, decision, handoff, or
-# SESSION_LIFECYCLE / MAINTAINING_THE_TEMPLATE update), block with an
+# include a vault follow-up artefact (investigation, decision, dated handoff
+# node, or SESSION_LIFECYCLE / MAINTAINING_THE_TEMPLATE update), block with an
 # actionable hint. Otherwise allow silently.
+#
+# A handoff is one new dated node under 00_System/handoffs/ (governance-hub#918).
+# The shared files (Next Session Handoff.md, Current Focus.md, any _index.md) are
+# not acknowledgements: two handoffs that edit them conflict by construction, so
+# this hook never asks for them.
 #
 # Deterministic by design — works the same in Claude Code, Cursor, and Codex.
 # (Replaces the `prompt`-type PreToolUse hook that required LLM acknowledgement
@@ -37,7 +42,9 @@ fi
 
 # Acknowledgement signals — any of these in the same staged set means the
 # author has already addressed vault/workflow discipline for this commit.
-ACKED="$(printf '%s\n' "$STAGED" | grep -E '^(docs/01_Vault/[^/]+/01_Decisions/|docs/01_Vault/[^/]+/02_Investigations/|docs/01_Vault/[^/]+/00_System/Next Session Handoff\.md$|docs/01_Vault/[^/]+/00_System/Current Focus\.md$|docs/00_Core/SESSION_LIFECYCLE\.md$|docs/00_Core/MAINTAINING_THE_TEMPLATE\.md$)' || true)"
+# The handoff entry matches one dated node FILE (YYYY-MM-DD-HHMMSSZ-<slug>.md),
+# never the handoffs/ directory as a whole and never handoffs/_index.md.
+ACKED="$(printf '%s\n' "$STAGED" | grep -E '^(docs/01_Vault/[^/]+/01_Decisions/|docs/01_Vault/[^/]+/02_Investigations/|docs/01_Vault/[^/]+/00_System/handoffs/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}Z-[A-Za-z0-9][A-Za-z0-9._-]*\.md$|docs/00_Core/SESSION_LIFECYCLE\.md$|docs/00_Core/MAINTAINING_THE_TEMPLATE\.md$)' || true)"
 
 if [[ -n "$ACKED" ]]; then
   exit 0
@@ -52,12 +59,13 @@ Per docs/00_Core/SESSION_LIFECYCLE.md, commits touching .claude/, docs/01_Vault/
 scripts/, or .github/workflows/ should also stage at least one of:
   - docs/01_Vault/<ProjectKey>/01_Decisions/<adr>.md
   - docs/01_Vault/<ProjectKey>/02_Investigations/<note>.md
-  - docs/01_Vault/<ProjectKey>/00_System/Next Session Handoff.md
-  - docs/01_Vault/<ProjectKey>/00_System/Current Focus.md
+  - docs/01_Vault/<ProjectKey>/00_System/handoffs/YYYY-MM-DD-HHMMSSZ-<slug>.md
   - docs/00_Core/SESSION_LIFECYCLE.md
   - docs/00_Core/MAINTAINING_THE_TEMPLATE.md
 
-Add the appropriate vault note (or update the handoff) and stage it before
-re-running the commit. This check is deterministic and identical across hosts.
+Add the appropriate vault note (one new dated handoff node is enough) and stage
+it before re-running the commit. Do not edit Next Session Handoff.md,
+Current Focus.md or an _index.md for this. This check is deterministic and
+identical across hosts.
 EOF
 exit 1
