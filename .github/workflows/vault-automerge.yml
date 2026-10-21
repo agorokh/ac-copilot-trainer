@@ -66,11 +66,11 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: agorokh/governance-hub
-          ref: 3205985ac49fdbacf3385ab7d0e257d90ff2bdf4  # pragma: allowlist secret (git SHA, not a secret)
+          ref: 9f43d51197911fdb8f809a9c4154acfa014d0c61  # pragma: allowlist secret (git SHA, not a secret)
           token: ${{ steps.app-token.outputs.token }}
-          path: .scratch/governance-hub-3205985ac49fdbacf3385ab7d0e257d90ff2bdf4
+          path: .scratch/governance-hub-9f43d51197911fdb8f809a9c4154acfa014d0c61
           persist-credentials: false
-      - uses: ./.scratch/governance-hub-3205985ac49fdbacf3385ab7d0e257d90ff2bdf4/.github/actions/vault-automerge
+      - uses: ./.scratch/governance-hub-9f43d51197911fdb8f809a9c4154acfa014d0c61/.github/actions/vault-automerge
         with:
           github-token: ${{ github.token }}
           pr-number: ${{ github.event.pull_request.number }}
