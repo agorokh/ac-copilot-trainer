@@ -58,7 +58,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: agorokh/governance-hub
-          ref: 9fac00b4bec8215e333556a7814e214d45810fe0  # pragma: allowlist secret (git SHA, not a secret)
+          ref: 01160960b5d085386c6e82c26826da3768fbf99a  # pragma: allowlist secret (git SHA, not a secret)
           token: ${{ steps.hub-token.outputs.token }}
           path: .governance-hub
       - name: Run process miner
