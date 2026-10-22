@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import importlib
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,7 +16,14 @@ MODULES = Path(__file__).resolve().parents[1] / "src/ac_copilot_trainer/modules"
 
 @pytest.fixture(params=["lua51", "luajit21"])
 def runtime(tmp_path, request):
-    target = importlib.import_module(f"lupa.{request.param}")
+    try:
+        target = importlib.import_module(f"lupa.{request.param}")
+    except ModuleNotFoundError as exc:
+        # Upstream setup.py deliberately excludes bundled LuaJIT on macOS.
+        # Lua5.1 still runs here; Linux/Windows must provide the requested JIT.
+        if sys.platform == "darwin" and request.param == "luajit21" and exc.name == "lupa.luajit21":
+            pytest.skip("Lupa does not bundle LuaJIT on macOS; exercised by Linux CI")
+        raise
     lua = target.LuaRuntime(unpack_returned_tuples=True)
     lua.execute(f"package.path = package.path .. {json.dumps(';' + MODULES.as_posix() + '/?.lua')}")
     lua.execute(
@@ -81,6 +90,19 @@ def runtime(tmp_path, request):
         """
     )
     return lua, directory, decoded_sizes
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_missing_luajit_remains_an_error_on_ci_platforms(tmp_path, monkeypatch, platform):
+    def missing(name):
+        assert name == "lupa.luajit21"
+        raise ModuleNotFoundError(name=name)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, "platform", platform)
+        patch.setattr(importlib, "import_module", missing)
+        with pytest.raises(ModuleNotFoundError):
+            runtime.__wrapped__(tmp_path, SimpleNamespace(param="luajit21"))
 
 
 def record(path="C:/setups/car/track/gp/race.ini", lap_ms=90000, **changes):
