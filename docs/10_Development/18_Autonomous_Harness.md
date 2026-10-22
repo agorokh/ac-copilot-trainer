@@ -664,6 +664,8 @@ session through `remote_launcher start --label <name> -- <argv>`:
    --start-sidecar` opens Game Point with the instrumented sidecar.
 3. `-m tools.ac_harness.auto_drive … --rig-owner-pid <owner> --no-sidecar-autostart` verifies
    that owner instead of acquiring the lock, and reuses the listening instrumented sidecar.
+   Every launch and sim-death relaunch re-verifies the owner first. A lost owner refuses
+   the launch. A peer that takes a released rig replaces AC, which ends the drive as sim-death.
 4. As soon as `acs.exe` exists, arm the guardian with the same owner and the AC and sidecar
    identities. The driver drives right after launch and hijack. Record this short unguarded
    window rather than claiming the guardian preceded motion.

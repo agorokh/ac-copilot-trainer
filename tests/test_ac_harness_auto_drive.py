@@ -5196,3 +5196,32 @@ def test_rig_owner_pid_is_optional_and_must_be_positive():
     for bad in ("0", "-4", "abc"):
         with pytest.raises(SystemExit):
             _build_arg_parser().parse_args(["--track", "spa", "--rig-owner-pid", bad])
+
+
+def test_delegated_drive_reverifies_its_owner_before_every_launch(tmp_path):
+    from tools.ac_harness.auto_drive import owner_guarded_launch
+    from tools.ac_harness.rig_lock import RigOwnerMismatch
+
+    owners = iter(
+        [{"pid": 7}, RigOwnerMismatch("rig owner mismatch: expected PID 7; observed None")]
+    )
+    checks, launches = [], []
+
+    def verify(pid, path):
+        checks.append((pid, path))
+        owner = next(owners)
+        if isinstance(owner, Exception):
+            raise owner
+        return owner
+
+    def launch(config):
+        launches.append(config)
+        return True, "live"
+
+    guarded = owner_guarded_launch(launch, 7, tmp_path / "rig.lock", verify=verify)
+    assert guarded("first") == (True, "live")
+    ok, reason = guarded("sim-death relaunch")
+    assert not ok
+    assert reason.startswith("delegated rig owner lost before launch")
+    assert launches == ["first"]  # the relaunch never reached Content Manager
+    assert checks == [(7, tmp_path / "rig.lock")] * 2

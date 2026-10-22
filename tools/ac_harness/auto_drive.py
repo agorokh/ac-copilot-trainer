@@ -3120,6 +3120,33 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
             watcher.stop()
 
 
+def owner_guarded_launch(
+    launch: LaunchFn,
+    owner_pid: int,
+    lock_path: Path,
+    *,
+    verify: Callable[[int, Path], object] | None = None,
+) -> LaunchFn:
+    """Refuse every (re)launch unless the delegated rig owner still holds the lock (#815).
+
+    A delegated drive does not hold the byte lock itself. A peer that takes a released rig ends
+    this drive by replacing AC (sim-death), so the remaining risk is this process launching or
+    sim-death-relaunching AC after its owner is gone. Each launch attempt re-verifies first.
+    """
+    from tools.ac_harness.rig_lock import RigOwnerMismatch, require_rig_session_owner
+
+    check = verify or require_rig_session_owner
+
+    def guarded(config: AutoDriveConfig) -> tuple[bool, str]:
+        try:
+            check(owner_pid, lock_path)
+        except RigOwnerMismatch as exc:
+            return False, f"delegated rig owner lost before launch: {exc}"
+        return launch(config)
+
+    return guarded
+
+
 def rig_restart_launcher(config: AutoDriveConfig) -> None:  # pragma: no cover - rig-only
     """Restart Content Manager so the next :func:`rig_launch` cold-starts a FRESH CM (#558).
 
@@ -4967,13 +4994,20 @@ def _main_impl(
             )
             periodic_hud.start()
             print(f"auto-drive: HUD frame every {args.hud_every:g}s -> {periodic_hud.out_dir}")
+        launch_fn = (
+            rig_launch
+            if args.rig_owner_pid is None
+            else owner_guarded_launch(
+                rig_launch, args.rig_owner_pid, default_rig_session_lock_path()
+            )
+        )
         run_started_epoch = time.time()
         rig_telemetry_cleanup_holds: list[Controller] = []
         try:
             report = asyncio.run(
                 run_auto_drive_with_sim_retries(
                     config,
-                    launch=rig_launch,
+                    launch=launch_fn,
                     hijack=lambda run_config: rig_hijack(
                         run_config,
                         retain_telemetry_controller=rig_telemetry_cleanup_holds.append,
