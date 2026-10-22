@@ -817,6 +817,22 @@ def test_dispatch_without_monotonic_stamp_fails_a_gate_instead_of_crashing(tmp_p
     assert report["engineering_acceptance"] == "NO_GO"
 
 
+def test_unconvertible_chirp_writes_an_explicit_no_go_report(tmp_path, monkeypatch, capsys):
+    capture, _ = build_bundle(tmp_path)
+    capture["chirps"][1]["t_dac_wall_ms"] = 1.0  # no recorder stamp within one second
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    out = tmp_path / "analysis.json"
+    monkeypatch.setattr(
+        sys, "argv", ["live_acceptance", "analyze", "--capture", str(tmp_path), "--out", str(out)]
+    )
+    assert live.main() == 2
+    written = json.loads(out.read_text())
+    assert written["engineering_acceptance"] == "NO_GO"
+    assert written["failed_gates"] == ["analysis_incomplete"]
+    assert "monotonic DAC anchor" in written["error"]
+    assert json.loads(capsys.readouterr().out)["acceptance"] == "NO_GO"
+
+
 def test_cue_producer_must_match_actual_current_session_ingress(tmp_path):
     capture, taps = build_bundle(tmp_path)
     for row in taps:

@@ -311,10 +311,11 @@ def play_chirp(
         t_dac_mono_ms=state["dac_mono_ms"],
     )
     _log.info(
-        "chirp %s: wall=%.1f dac_wall=%s latency=%s",
+        "chirp %s: wall=%.1f dac_wall=%s dac_mono=%s latency=%s",
         label,
         mark.t_wall_ms,
         f"{mark.t_dac_wall_ms:.1f}" if mark.t_dac_wall_ms else "n/a",
+        f"{mark.t_dac_mono_ms:.1f}" if mark.t_dac_mono_ms else "n/a",
         f"{mark.output_latency_ms:.1f}ms" if mark.output_latency_ms else "n/a",
     )
     return mark
