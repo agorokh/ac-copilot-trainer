@@ -156,10 +156,12 @@ built on the rig against SimHub 9.13.2, copied into SimHub with SimHub stopped, 
 `PluginsActivation.json`. SimHub loads it with all 11 existing plugins (3/3 starts), and the
 sidecar accepts it as `client=simhub-car-enrichment`. No ShakeIt or dashboard profile was touched.
 
-- **#534 still open.** The property-picker/NCalc readback was not observed: the rig console was
-  locked all session. About 1 minute at the rig: SimHub → *Available properties* → filter
-  `AcCopilotDataPlugin` (`CarClass = unknown` with no sidecar; the car's class with AC running).
-- SimHub was left running with the plugin enabled.
+- **Readback verified after the operator unlocked the rig.** In *Available properties*, the 911
+  GT3 R @ magione showed `CarClass = rear-engine-gt` (`override`), and the NCalc tester returned
+  1.15. With no trainer it showed `unknown` and 1. The #534 checkbox is ticked.
+- **#534 stays open** only for the hardware-gated Parts C/D and the optional Part E; whether to
+  close or split the epic is an operator decision.
+- SimHub was left running (minimized) with the plugin enabled.
 - Unexplained: two early SimHub starts built an empty plugin manager after forced stops; later
   starts were normal. Check `Creating plugin manager with plugins :` first if shakers go silent.
 

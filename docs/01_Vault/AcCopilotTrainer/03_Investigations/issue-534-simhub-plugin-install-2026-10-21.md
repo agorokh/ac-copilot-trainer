@@ -30,12 +30,27 @@ ShakeIt or dashboard profiles). Evidence comment:
 - **Wire:** source sidecar on 8765 logged `client=simhub-car-enrichment class=external`; the
   socket's owner is `SimHubWPF`. Stopping the sidecar puts the plugin back in its bounded retry loop.
 
-## Still open
+## Readback verified (after the operator unlocked the rig)
 
-The property-picker/NCalc readback. The console was locked (`LogonUI` running, black desktop
-capture), UI Automation can't reach SimHub's WPF window while locked, and `/api/getgamedata`
-carries no plugin properties. About 1 minute at the rig: *Available properties*, filter
-`AcCopilotDataPlugin`.
+The first attempt was blocked: the console was locked, UI Automation can't reach SimHub's WPF
+window while locked, and `/api/getgamedata` carries no plugin properties. After the unlock,
+SimHub → *Available properties*, plus the built-in **Ncalc tester** (not bound to any profile)
+with `if([AcCopilotDataPlugin.CarClass] = 'rear-engine-gt', 1.15, 1.0)`:
+
+| State | CarClass | ClassSource | Sidecar / Trainer | NCalc |
+|---|---|---|---|---|
+| No sidecar | `unknown` | — | False / False | 1 |
+| AC live, `ks_porsche_911_gt3_r_2016` @ magione | `rear-engine-gt` | `override` | True / True | 1.15 |
+| Sidecar up, AC closed | `unknown` | — | True / False | — |
+
+AC came up through `remote_launcher` → `auto_drive --driver cruise --keep-sidecar` (exit 0). The
+#534 checkbox is ticked; the epic stays open for the gated Parts C/D and the optional Part E.
+Evidence: [#534#issuecomment-6330968961](https://github.com/agorokh/ac-copilot-trainer/issues/534#issuecomment-6330968961).
+
+Driving SimHub off-rig: SimHub's controls carry no UIA names, so click by screenshot
+coordinates. Bring SimHub back from the tray by relaunching `SimHubWPF.exe`. Minimize a
+full-screen `acs` and tap Alt before `SetForegroundWindow`. Paste formulas through the
+clipboard: typing `[` autocompletes and corrupts them.
 
 ## Rig-ops lessons
 
