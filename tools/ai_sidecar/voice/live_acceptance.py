@@ -43,6 +43,16 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def monotonic_clock_info():
+    info = time.get_clock_info("monotonic")
+    return dict(
+        implementation=info.implementation,
+        monotonic=info.monotonic,
+        adjustable=info.adjustable,
+        resolution=info.resolution,
+    )
+
+
 def write_json(path, value):
     with Path(path).open("x", encoding="utf-8") as file:
         json.dump(value, file, indent=2, allow_nan=False)
@@ -485,6 +495,7 @@ def record(config, out, owner_pid):
         config=config,
         started_wall_ms=time.time_ns() / 1e6,
         started_mono_ms=time.monotonic_ns() / 1e6,
+        monotonic_clock=monotonic_clock_info(),
         errors=[],
         capture_code_sha256=sha(__file__),
     )
@@ -589,7 +600,7 @@ def brake_events(ticks):
     """Same >.05 / >=3 samples / peak>=.35 pedal-run contract as track_reference.
 
     Requires a preceding pedal-off sample; a recording beginning mid-braking is censored.
-    Event time is bracketed on the sidecar ingress clock, not invented simulator time.
+    Event time is bracketed on the sidecar ingress monotonic clock, not invented simulator time.
     """
     events = []
     i = 1
@@ -616,8 +627,8 @@ def brake_events(ticks):
                     lap=p["lap"],
                     spline=p["spline"],
                     end_spline=run[-1]["frame"]["payload"]["spline"],
-                    onset_wall_ms=row["wall_ms"],
-                    earliest_wall_ms=previous["wall_ms"],
+                    onset_ms=row["mono_ms"],
+                    earliest_ms=previous["mono_ms"],
                     peak=peak,
                     samples=len(run),
                     onset_tick_seq=row["frame"].get("seq"),
@@ -739,7 +750,7 @@ def anticipatory_assessment(cues, submissions, events, targets, config):
     )
 
 
-def match_audio(recording, rate, clock, dispatches, bank):
+def match_audio(recording, rate, clock, dispatches, bank, time_key="t_mono_ms"):
     import numpy as np
 
     # Captured samples are spaced by the measured clock, not necessarily the WAV
@@ -755,7 +766,7 @@ def match_audio(recording, rate, clock, dispatches, bank):
             clip_id=dispatch["clip_id"],
             matched=False,
             complete=False,
-            completion_wall_ms=None,
+            completion_ms=None,
             template_effective_samplerate=effective_rate,
             recording_nominal_samplerate=rate,
         )
@@ -770,7 +781,7 @@ def match_audio(recording, rate, clock, dispatches, bank):
         start = max(
             0,
             clock.anchor_sample
-            + int((dispatch["t_wall_ms"] - 100 - clock.anchor_wall_ms) / clock.ms_per_sample),
+            + int((dispatch[time_key] - 100 - clock.anchor_wall_ms) / clock.ms_per_sample),
             occupied.get(dispatch["clip_id"], 0),
         )
         end = min(len(recording), start + int(3100 / clock.ms_per_sample) + len(template))
@@ -787,8 +798,8 @@ def match_audio(recording, rate, clock, dispatches, bank):
         occupied[dispatch["clip_id"]] = onset + len(template) // 2
         result.update(
             matched=True,
-            onset_wall_ms=clock.wall_ms(onset),
-            latency_ms=clock.wall_ms(onset) - dispatch["t_wall_ms"],
+            onset_ms=clock.wall_ms(onset),
+            latency_ms=clock.wall_ms(onset) - dispatch[time_key],
         )
         # Verify every energetic 40ms portion, including the final consonant. A strong prefix
         # alone is not a complete phrase. Small alignment search accommodates capture jitter.
@@ -819,7 +830,7 @@ def match_audio(recording, rate, clock, dispatches, bank):
                 result.update(complete=False, reason="acoustic_interval_already_assigned")
             else:
                 completed_intervals.append(interval)
-                result["completion_wall_ms"] = clock.wall_ms(interval[1])
+                result["completion_ms"] = clock.wall_ms(interval[1])
         else:
             result["reason"] = "truncated_or_masked_phrase"
         results.append(result)
@@ -834,15 +845,23 @@ def producer_identity(producer):
     return (json.dumps(producer["frame"], sort_keys=True), producer["wall_ms"], producer["mono_ms"])
 
 
-def clock_offset_evidence(capture, wire, taps, begin, finish):
-    """Bound wall/monotonic agreement throughout the run, including temporary wall steps."""
+def _timed_rows(capture, wire, taps, begin, finish):
+    rows = list(capture.get("microphone", {}).get("callback_stamps", []))
+    rows += [row for row in wire + taps if begin <= row.get("mono_ms", -math.inf) <= finish]
+    return rows
+
+
+def wall_clock_drift_evidence(capture, wire, taps, begin, finish):
+    """Report wall/monotonic divergence (time-sync slew or steps); diagnostic, not a join basis.
+
+    Run 03 of #815 measured 37.4 ms over seven minutes while Windows Time disciplined the
+    system clock. Every cross-process join uses the monotonic clock instead.
+    """
     pairs = [
         (capture.get(f"{part}_wall_ms"), capture.get(f"{part}_mono_ms"))
         for part in ("started", "finished")
     ]
-    rows = list(capture.get("microphone", {}).get("callback_stamps", []))
-    rows += [row for row in wire + taps if begin <= row.get("wall_ms", -math.inf) <= finish]
-    for row in rows:
+    for row in _timed_rows(capture, wire, taps, begin, finish):
         pairs.append((row.get("wall_ms"), row.get("mono_ms")))
         if row.get("kind") == "voice_dispatch":
             dispatch = row["dispatch"]
@@ -857,7 +876,89 @@ def clock_offset_evidence(capture, wire, taps, begin, finish):
         samples=len(pairs),
         complete=complete,
         spread_ms=spread,
-        passed=complete and spread is not None and spread <= 10,
+        gating=False,
+        basis="diagnostic_wall_clock_only",
+    )
+
+
+def monotonic_timebase_evidence(capture, wire, taps, begin, finish):
+    """Qualify the shared monotonic clock that every cross-process join uses.
+
+    Recorder, wire tap and sidecar tap run on one host, where the monotonic clock is
+    system-wide (QueryPerformanceCounter on Windows with Python >= 3.13; older Windows
+    builds use 15.6 ms GetTickCount64, which the resolution check rejects).
+    """
+    reasons = []
+    stamps = []
+    for row in _timed_rows(capture, wire, taps, begin, finish):
+        stamps.append(row.get("mono_ms"))
+        if row.get("kind") == "voice_dispatch":
+            stamps.append(row["dispatch"].get("t_mono_ms"))
+        producer = row.get("producer_tick") or (row.get("correlation") or {}).get("producer_tick")
+        if producer:
+            stamps.append(producer.get("mono_ms"))
+    if not stamps or not all(finite(value) for value in stamps):
+        reasons.append("monotonic_stamp_missing")
+    started, finished = capture.get("started_mono_ms"), capture.get("finished_mono_ms")
+    if not (finite(started) and finite(finished) and finished > started):
+        reasons.append("capture_monotonic_interval_invalid")
+    wire_mono = [row.get("mono_ms") for row in wire]
+    if not all(finite(value) for value in wire_mono) or any(
+        b < a for a, b in zip(wire_mono, wire_mono[1:], strict=False)
+    ):
+        reasons.append("wire_monotonic_order_violated")
+    callbacks = [
+        row.get("mono_ms") for row in capture.get("microphone", {}).get("callback_stamps", [])
+    ]
+    # A millisecond-tick clock (GetTickCount64) only ever yields whole milliseconds.
+    fractional = sum(finite(value) and abs(value - round(value)) > 1e-6 for value in callbacks)
+    if not callbacks or fractional < max(1, len(callbacks) // 10):
+        reasons.append("monotonic_resolution_unproven")
+    info = capture.get("monotonic_clock")
+    if info is not None and not (
+        info.get("monotonic") is True
+        and finite(info.get("resolution"))
+        and info["resolution"] <= 0.001
+    ):
+        reasons.append("monotonic_clock_info_inadequate")
+    return dict(
+        stamps=len(stamps),
+        sub_millisecond_callback_stamps=fractional,
+        clock_info=info,
+        reasons=reasons,
+        passed=not reasons,
+    )
+
+
+def chirp_monotonic_anchor(mark, callback_stamps):
+    """Express one chirp's DAC instant on the monotonic clock.
+
+    New captures record ``t_dac_mono_ms`` directly. Older captures stored only the DAC wall
+    instant, so convert it through the wall/monotonic offset that the recorder stamped
+    within one second of it; the offsets' spread there is the conversion uncertainty.
+    """
+    if finite(mark.t_dac_mono_ms):
+        return dict(
+            label=mark.label, anchor_ms=mark.t_dac_mono_ms, basis="recorded", uncertainty_ms=0.0
+        )
+    wall = mark.t_dac_wall_ms
+    nearby = [
+        row["wall_ms"] - row["mono_ms"]
+        for row in callback_stamps
+        if finite(row.get("wall_ms"))
+        and finite(row.get("mono_ms"))
+        and finite(wall)
+        and abs(row["wall_ms"] - wall) <= 1000
+    ]
+    if len(nearby) < 2:
+        return dict(label=mark.label, anchor_ms=None, basis="unconvertible", uncertainty_ms=None)
+    nearby.sort()
+    offset = nearby[len(nearby) // 2]
+    return dict(
+        label=mark.label,
+        anchor_ms=wall - offset,
+        basis="wall_converted_with_local_offset",
+        uncertainty_ms=nearby[-1] - nearby[0],
     )
 
 
@@ -970,7 +1071,7 @@ def acoustic_chirp_band(chirps, rate):
     return low, high
 
 
-def microphone_clock_evidence(clock, marks, chirps, independent, rate, wall_offsets):
+def microphone_clock_evidence(clock, marks, dac_anchors, independent, rate, timebase):
     """Qualify compensated sample time without relaxing nominal-drift or cue limits."""
     period_valid = finite(clock.ms_per_sample) and clock.ms_per_sample > 0
     drift = (clock.ms_per_sample * rate / 1000 - 1) * 1e6 if period_valid else None
@@ -993,12 +1094,12 @@ def microphone_clock_evidence(clock, marks, chirps, independent, rate, wall_offs
         or clock.anchors_used != 2
         or len(anchors) != 2
         or [mark["label"] for mark in anchors] != ["start", "end"]
-        or len(chirps) != 2
-        or not all(finite(mark.t_dac_wall_ms) for mark in chirps)
+        or len(dac_anchors) != 2
+        or not all(finite(anchor["anchor_ms"]) for anchor in dac_anchors)
     ):
         result["reasons"].append("two_ordered_dac_anchors_required")
         return result
-    if not independent["passed"] or not wall_offsets["passed"]:
+    if not independent["passed"] or not timebase["passed"]:
         result["reasons"].append("independent_timebase_unqualified")
         return result
     first, last = (anchor["onset_sample"] for anchor in anchors)
@@ -1023,7 +1124,7 @@ def microphone_clock_evidence(clock, marks, chirps, independent, rate, wall_offs
         dac_and_acoustic_systematics=BASE_CLOCK_UNCERTAINTY_MS,
         independent_prediction_error=independent["maximum_prediction_error_ms"],
         anchor_slope_disagreement=disagreement,
-        observed_wall_clock_spread=wall_offsets["spread_ms"],
+        chirp_anchor_conversion=max(anchor["uncertainty_ms"] for anchor in dac_anchors),
     )
     result.update(
         calibrated_sample_interval=[first, last],
@@ -1058,12 +1159,7 @@ def analyze_bundle(directory, output):
         "capture_code_unchanged"
     ) is True and capture.get("capture_code_sha256") == sha(__file__)
     gates["recording_complete"] = capture.get("recording_complete") is True
-    clock_fields = ("started_wall_ms", "started_mono_ms", "finished_wall_ms", "finished_mono_ms")
-    gates["capture_wall_clock_stable"] = all(finite(capture.get(key)) for key in clock_fields)
-    if gates["capture_wall_clock_stable"]:
-        wall_elapsed = capture["finished_wall_ms"] - capture["started_wall_ms"]
-        mono_elapsed = capture["finished_mono_ms"] - capture["started_mono_ms"]
-        gates["capture_wall_clock_stable"] = abs(wall_elapsed - mono_elapsed) <= 10
+    report["timebase"] = "monotonic"
     gates["immutable_inputs"] = bool(capture.get("input_hashes_before")) and capture[
         "input_hashes_before"
     ] == capture.get("input_hashes_after")
@@ -1095,15 +1191,23 @@ def analyze_bundle(directory, output):
     report["instrumented_run"] = True
     report["tap_pid"] = starts[0].get("pid") if len(starts) == 1 else None
     chirps = [al.ChirpMark(**mark) for mark in capture.get("chirps", [])]
-    gates["two_dac_chirps"] = len(chirps) == 2 and all(
-        mark.t_dac_wall_ms is not None for mark in chirps
-    )
     if len(chirps) != 2:
         raise ValueError("capture lacks both calibration chirps; no timing can be analyzed")
-    begin, finish = [mark.anchor_wall_ms() for mark in chirps]
-    report["clock_offsets"] = clock_offset_evidence(capture, wire, taps, begin, finish)
-    gates["all_event_wall_clocks_stable"] = report["clock_offsets"]["passed"]
-    scoped = [row for row in wire if begin <= row["wall_ms"] <= finish]
+    callback_stamps = capture.get("microphone", {}).get("callback_stamps", [])
+    anchors = [chirp_monotonic_anchor(mark, callback_stamps) for mark in chirps]
+    report["chirp_monotonic_anchors"] = anchors
+    gates["two_dac_chirps"] = all(
+        mark.t_dac_wall_ms is not None or mark.t_dac_mono_ms is not None for mark in chirps
+    ) and all(finite(anchor["anchor_ms"]) for anchor in anchors)
+    if not gates["two_dac_chirps"]:
+        raise ValueError(
+            "calibration chirps lack a monotonic DAC anchor; no timing can be analyzed"
+        )
+    begin, finish = [anchor["anchor_ms"] for anchor in anchors]
+    report["wall_clock_drift"] = wall_clock_drift_evidence(capture, wire, taps, begin, finish)
+    report["monotonic_timebase"] = monotonic_timebase_evidence(capture, wire, taps, begin, finish)
+    gates["monotonic_timebase_valid"] = report["monotonic_timebase"]["passed"]
+    scoped = [row for row in wire if begin <= row["mono_ms"] <= finish]
     sessions = {
         row["session"]["session_uuid"]
         for row in scoped
@@ -1129,13 +1233,13 @@ def analyze_bundle(directory, output):
     verified_producers = set()
     for row in ticks:
         matches = ingress.get(json.dumps(row["frame"], sort_keys=True), [])
-        matches = [match for match in matches if abs(match["wall_ms"] - row["wall_ms"]) < 1000]
+        matches = [match for match in matches if abs(match["mono_ms"] - row["mono_ms"]) < 1000]
         if len(matches) == 1:
             identity = producer_identity(matches[0])
             if identity is not None:
                 verified_producers.add(identity)
-            row["wire_received_wall_ms"] = row["wall_ms"]
-            row["wall_ms"] = matches[0]["wall_ms"]
+            row["wire_received_mono_ms"] = row["mono_ms"]
+            row["mono_ms"] = matches[0]["mono_ms"]
         else:
             missing += 1
     gates["exact_tick_clock_join"] = missing == 0
@@ -1155,12 +1259,12 @@ def analyze_bundle(directory, output):
         and all(isinstance(s, int) for s in sequences)
         and all(b > a for a, b in zip(sequences, sequences[1:], strict=False))
     )
-    gaps = [b["wall_ms"] - a["wall_ms"] for a, b in zip(valid, valid[1:], strict=False)]
+    gaps = [b["mono_ms"] - a["mono_ms"] for a, b in zip(valid, valid[1:], strict=False)]
     gates["telemetry_contiguous"] = bool(gaps) and min(gaps) > 0 and max(gaps) <= 250
     report["telemetry"] = dict(
         ticks=len(ticks),
         max_ingress_gap_ms=max(gaps) if gaps else None,
-        clock_basis="instrumented_sidecar_ingress",
+        clock_basis="instrumented_sidecar_ingress_monotonic",
         ambiguous_joins=missing,
     )
     events = brake_events(valid)
@@ -1177,13 +1281,13 @@ def analyze_bundle(directory, output):
     dispatches = [
         row["frame"]["payload"] for row in scoped if row["frame"].get("topic") == "coaching.voice"
     ]
-    dispatches.sort(key=lambda item: item["t_wall_ms"])
+    dispatches.sort(key=lambda item: item["t_mono_ms"])
     gates["cues_present"] = len(dispatches) >= config.get("minimum_cues", 1)
     gates["dispatch_ids_unique"] = len({d["seq"] for d in dispatches}) == len(dispatches)
     voice_taps = [
         row
         for row in taps
-        if row["kind"] == "voice_dispatch" and begin <= row["dispatch"]["t_wall_ms"] <= finish
+        if row["kind"] == "voice_dispatch" and begin <= row["dispatch"]["t_mono_ms"] <= finish
     ]
     gates["physical_dispatch_wire_bijection"] = bool(voice_taps) and sorted(
         json.dumps(row["dispatch"], sort_keys=True) for row in voice_taps
@@ -1194,20 +1298,20 @@ def analyze_bundle(directory, output):
         json.dumps(manifest.to_dict(), sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     manifests = [
-        row for row in taps if row["kind"] == "resolver_manifest" and row["wall_ms"] <= finish
+        row for row in taps if row["kind"] == "resolver_manifest" and row["mono_ms"] <= finish
     ]
-    current_manifests = [row for row in manifests if row["wall_ms"] >= begin]
-    earlier_manifests = [row for row in manifests if row["wall_ms"] < begin]
+    current_manifests = [row for row in manifests if row["mono_ms"] >= begin]
+    earlier_manifests = [row for row in manifests if row["mono_ms"] < begin]
     if earlier_manifests:
         current_manifests.insert(0, earlier_manifests[-1])
     gates["actual_resolver_manifest_matches_capture_bank"] = (
         len(current_manifests) == 1 and current_manifests[0]["canonical_sha256"] == manifest_hash
     )
     endpoints = [
-        row for row in taps if row["kind"] == "playback_endpoint" and row["wall_ms"] <= finish
+        row for row in taps if row["kind"] == "playback_endpoint" and row["mono_ms"] <= finish
     ]
-    current_endpoints = [row for row in endpoints if row["wall_ms"] >= begin]
-    earlier = [row for row in endpoints if row["wall_ms"] < begin]
+    current_endpoints = [row for row in endpoints if row["mono_ms"] >= begin]
+    earlier = [row for row in endpoints if row["mono_ms"] < begin]
     if earlier:
         current_endpoints.insert(0, earlier[-1])
     report["playback_endpoints"] = current_endpoints
@@ -1229,6 +1333,11 @@ def analyze_bundle(directory, output):
         directory / "microphone.wav", config["microphone"].get("analysis_channel", 0)
     )
     independent = callback_clock_evidence(microphone, len(audio), rate)
+    by_label = {anchor["label"]: anchor["anchor_ms"] for anchor in anchors}
+
+    def anchor_of(mark):
+        return by_label[mark.label]
+
     # Correct chirp-template duration using independent callback time before locating
     # anchors. No acoustic score/prominence threshold changes or fitted-on-match rate.
     template_rate = independent.get("effective_samplerate", rate) if independent["passed"] else rate
@@ -1240,10 +1349,12 @@ def analyze_bundle(directory, output):
         band_hz=acoustic_chirp_band(chirps, template_rate),
         min_score=ACOUSTIC_CHIRP_MIN_SCORE,
         min_prominence=ACOUSTIC_CHIRP_MIN_PROMINENCE,
+        anchor_ms=anchor_of,
+        timebase="monotonic",
     )
     gates["microphone_clock_calibrated"] = clock.anchors_used == 2
     clock_evidence = microphone_clock_evidence(
-        clock, marks, chirps, independent, rate, report["clock_offsets"]
+        clock, marks, anchors, independent, rate, report["monotonic_timebase"]
     )
     clock_evidence["chirp_template_samplerate"] = template_rate
     report["microphone_clock"] = clock_evidence
@@ -1303,12 +1414,12 @@ def analyze_bundle(directory, output):
                     event for event in events if event["event_id"] == cue["brake_event_id"]
                 )
                 cue["brake_event_id"] = event["event_id"]
-                if cue["completion_wall_ms"] is not None and cue["timing_qualified"]:
+                if cue["completion_ms"] is not None and cue["timing_qualified"]:
                     cue["minimum_completion_lead_ms"] = (
-                        event["earliest_wall_ms"] - cue["completion_wall_ms"] - uncertainty
+                        event["earliest_ms"] - cue["completion_ms"] - uncertainty
                     )
                     cue["maximum_completion_lead_ms"] = (
-                        event["onset_wall_ms"] - cue["completion_wall_ms"] + uncertainty
+                        event["onset_ms"] - cue["completion_ms"] + uncertainty
                     )
     report["cues"] = cues
     gates["all_cues_exactly_correlated"] = bool(cues) and all(
@@ -1334,7 +1445,7 @@ def analyze_bundle(directory, output):
     submissions = [
         row
         for row in taps
-        if row["kind"] == "advisory_submitted" and begin <= row["wall_ms"] <= finish
+        if row["kind"] == "advisory_submitted" and begin <= row["mono_ms"] <= finish
     ]
     gates["submitted_producers_verified"] = all(
         producer_identity(row.get("producer_tick")) in verified_producers
@@ -1365,12 +1476,14 @@ def analyze_bundle(directory, output):
         for channel in range(lb["channels"]):
             signal, sr = load_wav(directory / "loopback.wav", channel)
             try:
-                mapping, anchors = al.build_clock_map(signal, sr, chirps, np)
+                mapping, located = al.build_clock_map(
+                    signal, sr, chirps, np, anchor_ms=anchor_of, timebase="monotonic"
+                )
                 channels.append(
                     dict(
                         channel_zero_based=channel,
                         clock=mapping.to_dict(),
-                        chirps=anchors,
+                        chirps=located,
                         cues=match_audio(signal, sr, mapping, dispatches, bank),
                     )
                 )
@@ -1391,7 +1504,7 @@ def analyze_bundle(directory, output):
     report["human_live_qualification"] = "NOT_ESTABLISHED_BY_THIS_ENGINEERING_CAPTURE"
     report["scheduler_decision_counts"] = {}
     for row in taps:
-        if row["kind"] == "scheduler_decision" and begin <= row["wall_ms"] <= finish:
+        if row["kind"] == "scheduler_decision" and begin <= row["mono_ms"] <= finish:
             reason = row["reason"]
             report["scheduler_decision_counts"][reason] = (
                 report["scheduler_decision_counts"].get(reason, 0) + 1

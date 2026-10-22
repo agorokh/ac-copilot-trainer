@@ -48,6 +48,7 @@ import time
 import urllib.parse
 import urllib.request
 import wave
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -101,6 +102,9 @@ class ChirpMark:
     output_latency_ms: float | None
     f0_hz: float = CHIRP_F0_HZ
     f1_hz: float = CHIRP_F1_HZ
+    #: The same DAC instant on the monotonic clock (QueryPerformanceCounter on Windows with
+    #: Python >= 3.13); unlike the wall clock it is never slewed by time synchronisation.
+    t_dac_mono_ms: float | None = None
 
     def anchor_wall_ms(self) -> float:
         return self.t_dac_wall_ms if self.t_dac_wall_ms is not None else self.t_wall_ms
@@ -256,19 +260,27 @@ def play_chirp(
         channel_map=channel_map,
     )
     chirp = make_chirp(samplerate, np, f0_hz=f0_hz, f1_hz=f1_hz)
-    state: dict[str, Any] = {"pos": 0, "dac_wall_ms": None, "latency_ms": None}
+    state: dict[str, Any] = {
+        "pos": 0,
+        "dac_wall_ms": None,
+        "dac_mono_ms": None,
+        "latency_ms": None,
+    }
     done = __import__("threading").Event()
 
     def _callback(outdata: Any, frames: int, time_info: Any, status: Any) -> None:
         if state["dac_wall_ms"] is None:
             now_wall = time.time()
+            now_mono = time.monotonic()
             try:
                 stream_now = stream.time
                 dac = time_info.outputBufferDacTime
                 state["dac_wall_ms"] = (now_wall + (dac - stream_now)) * 1000.0
+                state["dac_mono_ms"] = (now_mono + (dac - stream_now)) * 1000.0
                 state["latency_ms"] = float(stream.latency) * 1000.0
             except Exception:  # noqa: BLE001 — DAC stamping is best-effort refinement
                 state["dac_wall_ms"] = None
+                state["dac_mono_ms"] = None
         pos = state["pos"]
         chunk = chirp[pos : pos + frames]
         outdata.fill(0.0)
@@ -296,6 +308,7 @@ def play_chirp(
         output_latency_ms=state["latency_ms"],
         f0_hz=f0_hz,
         f1_hz=f1_hz,
+        t_dac_mono_ms=state["dac_mono_ms"],
     )
     _log.info(
         "chirp %s: wall=%.1f dac_wall=%s latency=%s",
@@ -426,6 +439,8 @@ class ClockMap:
     anchor_wall_ms: float
     ms_per_sample: float
     anchors_used: int = 1
+    #: Clock the anchor times (and therefore ``wall_ms(sample)``) are expressed on.
+    timebase: str = "wall"
 
     def wall_ms(self, sample: int) -> float:
         return self.anchor_wall_ms + (sample - self.anchor_sample) * self.ms_per_sample
@@ -443,6 +458,8 @@ def build_clock_map(
     band_hz: tuple[float, float] | None = None,
     min_score: float = MATCH_MIN_SCORE,
     min_prominence: float = MATCH_MIN_PROMINENCE,
+    anchor_ms: Callable[[ChirpMark], float] | None = None,
+    timebase: str = "wall",
 ) -> tuple[ClockMap, list[dict[str, Any]]]:
     """Locate each chirp in the recording and fit the sample↔wall-clock map.
 
@@ -451,6 +468,7 @@ def build_clock_map(
     every downstream number would be fiction. ``band_hz`` searches a zero-phase band-limited
     copy (onsets unchanged); callers that relax the score floor must cross-validate anchors.
     """
+    anchor = anchor_ms or ChirpMark.anchor_wall_ms
     if band_hz is not None:
         recording = bandlimit(recording, samplerate, band_hz[0], band_hz[1], np)
     criteria = {"min_score": min_score, "min_prominence": min_prominence}
@@ -479,6 +497,8 @@ def build_clock_map(
                 "score": round(score, 4),
                 "prominence": round(prom, 2),
                 "anchor_wall_ms": mark.anchor_wall_ms(),
+                "anchor_ms": anchor(mark),
+                "timebase": timebase,
                 "band_hz": list(band_hz) if band_hz is not None else None,
                 **criteria,
             }
@@ -491,10 +511,10 @@ def build_clock_map(
     if len(found) >= 2:
         (m0, s0), (m1, s1) = found[0], found[-1]
         if s1 > s0 + samplerate:  # anchors must be well separated to fit a slope
-            slope = (m1.anchor_wall_ms() - m0.anchor_wall_ms()) / (s1 - s0)
+            slope = (anchor(m1) - anchor(m0)) / (s1 - s0)
             # A capture clock more than 5% off nominal means a mis-located chirp, not drift.
             if abs(slope - nominal) / nominal < 0.05:
-                return ClockMap(s0, m0.anchor_wall_ms(), slope, anchors_used=2), detail
+                return ClockMap(s0, anchor(m0), slope, 2, timebase), detail
             _log.warning(
                 "chirp-pair slope %.6f ms/sample deviates >5%% from nominal %.6f — "
                 "falling back to single-anchor map",
@@ -502,7 +522,7 @@ def build_clock_map(
                 nominal,
             )
     mark, sample = found[0]
-    return ClockMap(sample, mark.anchor_wall_ms(), nominal, anchors_used=1), detail
+    return ClockMap(sample, anchor(mark), nominal, 1, timebase), detail
 
 
 def _load_wav_mono(path: Path, np: Any) -> tuple[Any, int]:
