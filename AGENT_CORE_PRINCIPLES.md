@@ -78,7 +78,7 @@ Promote stable facts from Tier 1 into the vault when they become architectural.
 - [ ] Issue linked (or waiver noted).
 - [ ] `make ci-fast` passes locally.
 - [ ] No new forbidden top-level dirs (see `scripts/check_agent_forbidden.py`).
-- [ ] Vault handoff updated if the session changed focus or left loose ends (`Next Session Handoff.md`).
+- [ ] Vault handoff written as one new dated node under `00_System/handoffs/` if the session changed focus or left loose ends; `Next Session Handoff.md` and `Current Focus.md` are not edited.
 
 ---
 

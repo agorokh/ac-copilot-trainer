@@ -69,6 +69,9 @@ INSTRUCTION_SURFACES = (
     ".cursor/rules/**/*.mdc",
     ".cursor/rules/**/*.md",
     "docs/01_Vault/**/pitfalls/vault-path-integrity.md",
+    # Agent-facing guides AGENTS.md lists as mandatory reading.
+    "AGENT_CORE_PRINCIPLES.md",
+    "docs/10_Development/**/*.md",
 )
 
 # Exact sentences that match the rule but are not a SAVE or handoff instruction. Keep this short:
@@ -98,6 +101,9 @@ def _surfaces() -> list[Path]:
         "**Session end (SAVE):** update `Next Session Handoff.md`;",
         "Update `Next Session Handoff.md` when leaving work incomplete.",
         "3. **Update `_index.md`** entries in the parent directory",
+        "- Update vault **`Next Session Handoff.md`** when context will be needed later.",
+        "- [ ] Vault handoff updated if the session changed focus or left loose ends "
+        "(`Next Session Handoff.md`).",
     ],
 )
 def test_rule_catches_the_removed_instructions(removed: str) -> None:
