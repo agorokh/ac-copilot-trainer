@@ -1278,16 +1278,21 @@ def analyze_bundle(directory, output):
         targets = {}
         report["reference_corner_target_error"] = str(exc)
         gates["qualified_reference_corner_targets"] = False
-    dispatches = [
+    wire_dispatches = [
         row["frame"]["payload"] for row in scoped if row["frame"].get("topic") == "coaching.voice"
     ]
+    # VoiceDispatch stamps time.monotonic(); a payload without it is a failed gate, not a crash.
+    dispatches = [d for d in wire_dispatches if finite(d.get("t_mono_ms"))]
+    gates["dispatch_monotonic_stamped"] = len(dispatches) == len(wire_dispatches)
     dispatches.sort(key=lambda item: item["t_mono_ms"])
     gates["cues_present"] = len(dispatches) >= config.get("minimum_cues", 1)
     gates["dispatch_ids_unique"] = len({d["seq"] for d in dispatches}) == len(dispatches)
     voice_taps = [
         row
         for row in taps
-        if row["kind"] == "voice_dispatch" and begin <= row["dispatch"]["t_mono_ms"] <= finish
+        if row["kind"] == "voice_dispatch"
+        and finite(row["dispatch"].get("t_mono_ms"))
+        and begin <= row["dispatch"]["t_mono_ms"] <= finish
     ]
     gates["physical_dispatch_wire_bijection"] = bool(voice_taps) and sorted(
         json.dumps(row["dispatch"], sort_keys=True) for row in voice_taps

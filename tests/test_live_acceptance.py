@@ -801,6 +801,22 @@ def test_physical_dispatch_missing_from_wire_is_not_silently_omitted(tmp_path):
     assert not report["gates"]["physical_dispatch_wire_bijection"]
 
 
+def test_dispatch_without_monotonic_stamp_fails_a_gate_instead_of_crashing(tmp_path):
+    capture, _ = build_bundle(tmp_path)
+    wire_path = tmp_path / "wire.jsonl"
+    wire = live.read_jsonl(wire_path)
+    for row in wire:
+        if row["frame"].get("topic") == "coaching.voice":
+            del row["frame"]["payload"]["t_mono_ms"]  # a legacy/malformed producer payload
+    wire_path.write_text("".join(json.dumps(row) + "\n" for row in wire))
+    capture["wire_sha256"] = live.sha(wire_path)
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert not report["gates"]["dispatch_monotonic_stamped"]
+    assert not report["gates"]["cues_present"]
+    assert report["engineering_acceptance"] == "NO_GO"
+
+
 def test_cue_producer_must_match_actual_current_session_ingress(tmp_path):
     capture, taps = build_bundle(tmp_path)
     for row in taps:
