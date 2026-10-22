@@ -679,6 +679,19 @@ when their slope agrees with the independently fitted monotonic callback clock. 
 WASAPI `inputBufferAdcTime` is the callback stream time plus a whole-buffer estimate, not a
 hardware clock. Its steps are reported as `adc_time_diagnostic` but are not fitted.
 
+Every cross-process join uses the host's monotonic clock (`mono_ms`, `t_mono_ms` and the
+chirp's `t_dac_mono_ms`), not the wall clock. Windows Time slews the rig's wall clock, by
+37 ms over seven minutes in run 03, so wall/monotonic divergence is reported only as
+`wall_clock_drift`. The `monotonic_timebase_valid` gate requires these things:
+- every scoped event carries a monotonic stamp;
+- the capture interval increases;
+- the single-writer wire stream never runs backwards;
+- callbacks show sub-millisecond stamps (QueryPerformanceCounter; Python 3.13+ on Windows).
+
+A capture made before chirps recorded `t_dac_mono_ms` converts each DAC wall stamp through
+the wall/monotonic offset the recorder stamped within one second of it. The spread there is
+carried as `chirp_anchor_conversion` uncertainty.
+
 The tap records exact advisory/utterance identities, producer timestamps, scheduler drops,
 actual output mapping, source hashes, and any writer loss. Captures retain microphone WAV,
 separate digital loopback WAV, wire events, and immutable-input receipts. Keep them private in

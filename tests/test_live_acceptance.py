@@ -29,7 +29,8 @@ def voice_signal():
     return signal
 
 
-def callback_evidence(*, frames=RATE * 10, period=1000 / RATE, buffer_frames=480):
+def callback_evidence(*, frames=RATE * 10, period=1000 / RATE, buffer_frames=480, start=100000.25):
+    # A QueryPerformanceCounter-backed monotonic clock stamps sub-millisecond values.
     return dict(
         frames=frames,
         samplerate=RATE,
@@ -38,9 +39,9 @@ def callback_evidence(*, frames=RATE * 10, period=1000 / RATE, buffer_frames=480
             dict(
                 sample=sample,
                 frames=min(buffer_frames, frames - sample),
-                mono_ms=100000 + sample * period,
-                wall_ms=100000 + sample * period,
-                adc_time=(100000 + sample * period - 10) / 1000,
+                mono_ms=start + sample * period,
+                wall_ms=start + sample * period,
+                adc_time=(start + sample * period - 10) / 1000,
             )
             for sample in range(0, frames, buffer_frames)
         ],
@@ -67,12 +68,12 @@ def test_whole_phrase_required_after_successful_onset_match(cut):
     bank = Bank(samplerate=RATE, clips={"brake": signal}, channels=1)
     clock = al.ClockMap(0, 100000, 1000 / RATE, anchors_used=2)
     result = live.match_audio(
-        recording, RATE, clock, [dict(seq=1, clip_id="brake", t_wall_ms=100800)], bank
+        recording, RATE, clock, [dict(seq=1, clip_id="brake", t_mono_ms=100800)], bank
     )[0]
     assert result["matched"]
     assert result["latency_ms"] == pytest.approx(200, abs=2)
     assert result["complete"] is (cut is None)
-    assert (result["completion_wall_ms"] is not None) is (cut is None)
+    assert (result["completion_ms"] is not None) is (cut is None)
 
 
 def test_silence_cannot_match_a_dispatched_phrase():
@@ -81,7 +82,7 @@ def test_silence_cannot_match_a_dispatched_phrase():
         np.zeros(RATE * 4),
         RATE,
         al.ClockMap(0, 100000, 1000 / RATE, anchors_used=2),
-        [dict(seq=1, clip_id="brake", t_wall_ms=100800)],
+        [dict(seq=1, clip_id="brake", t_mono_ms=100800)],
         bank,
     )[0]
     assert not result["matched"]
@@ -94,8 +95,8 @@ def test_one_sound_cannot_satisfy_two_different_dispatches():
     recording[RATE : RATE + len(signal)] = signal
     bank = Bank(samplerate=RATE, clips={"one": signal, "two": signal}, channels=1)
     dispatches = [
-        dict(seq=1, clip_id="one", t_wall_ms=100800),
-        dict(seq=2, clip_id="two", t_wall_ms=100850),
+        dict(seq=1, clip_id="one", t_mono_ms=100800),
+        dict(seq=2, clip_id="two", t_mono_ms=100850),
     ]
     results = live.match_audio(
         recording, RATE, al.ClockMap(0, 100000, 1000 / RATE, anchors_used=2), dispatches, bank
@@ -108,7 +109,7 @@ def test_one_sound_cannot_satisfy_two_different_dispatches():
 def test_brake_event_is_global_run_with_preceding_off_sample():
     def tick(i, brake, lap=2):
         return dict(
-            wall_ms=1000 + i * 50,
+            mono_ms=1000 + i * 50,
             frame=dict(
                 seq=i, payload=dict(lap=lap, brake=brake, spline=0.1 + i * 0.001, speed_kmh=150)
             ),
@@ -117,8 +118,8 @@ def test_brake_event_is_global_run_with_preceding_off_sample():
     rows = [tick(i, b) for i, b in enumerate([0.8, 0.8, 0.8, 0, 0.06, 0.4, 0.6, 0.3, 0, 0.8, 0])]
     events = live.brake_events(rows)
     assert len(events) == 1  # beginning mid-braking and one-sample spike are not invented onsets
-    assert events[0]["onset_wall_ms"] == 1200
-    assert events[0]["earliest_wall_ms"] == 1150
+    assert events[0]["onset_ms"] == 1200
+    assert events[0]["earliest_ms"] == 1150
     assert events[0]["samples"] == 4
 
 
@@ -529,12 +530,22 @@ def test_capture_orchestration_closes_only_owned_resources(tmp_path, monkeypatch
     )
 
 
-def test_wall_clock_step_is_an_explicit_failure(tmp_path):
+def test_wall_clock_step_is_diagnostic_but_a_broken_monotonic_interval_fails(tmp_path):
     capture, _ = build_bundle(tmp_path)
-    capture["finished_wall_ms"] += 1000
+    baseline = live.analyze_bundle(tmp_path, tmp_path / "baseline.json")
+    capture["finished_wall_ms"] += 1000  # NTP step/slew: the wall clock is not a join basis.
     (tmp_path / "capture.json").write_text(json.dumps(capture))
-    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
-    assert not report["gates"]["capture_wall_clock_stable"]
+    stepped = live.analyze_bundle(tmp_path, tmp_path / "stepped.json")
+    assert stepped["timebase"] == "monotonic"
+    assert stepped["gates"] == baseline["gates"]
+    assert stepped["wall_clock_drift"]["spread_ms"] == 1000
+    assert stepped["wall_clock_drift"]["gating"] is False
+    capture["finished_mono_ms"] = capture["started_mono_ms"] - 1
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    broken = live.analyze_bundle(tmp_path, tmp_path / "broken.json")
+    assert not broken["gates"]["monotonic_timebase_valid"]
+    assert "capture_monotonic_interval_invalid" in broken["monotonic_timebase"]["reasons"]
+    assert not broken["gates"]["microphone_timebase_qualified"]
 
 
 @pytest.mark.parametrize(
@@ -766,15 +777,15 @@ def test_overlapping_suffix_cannot_count_as_a_second_complete_physical_phrase():
         RATE,
         al.ClockMap(0, 100000, 1000 / RATE, anchors_used=2),
         [
-            dict(seq=1, clip_id="full", t_wall_ms=100800),
-            dict(seq=2, clip_id="suffix", t_wall_ms=100850),
+            dict(seq=1, clip_id="full", t_mono_ms=100800),
+            dict(seq=2, clip_id="suffix", t_mono_ms=100850),
         ],
         bank,
     )
     assert cues[0]["complete"]
     assert cues[1]["matched"]
     assert not cues[1]["complete"]
-    assert cues[1]["completion_wall_ms"] is None
+    assert cues[1]["completion_ms"] is None
     assert cues[1]["reason"] == "acoustic_interval_already_assigned"
 
 
@@ -788,6 +799,38 @@ def test_physical_dispatch_missing_from_wire_is_not_silently_omitted(tmp_path):
     rewrite_taps(capture, taps)
     report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
     assert not report["gates"]["physical_dispatch_wire_bijection"]
+
+
+def test_dispatch_without_monotonic_stamp_fails_a_gate_instead_of_crashing(tmp_path):
+    capture, _ = build_bundle(tmp_path)
+    wire_path = tmp_path / "wire.jsonl"
+    wire = live.read_jsonl(wire_path)
+    for row in wire:
+        if row["frame"].get("topic") == "coaching.voice":
+            del row["frame"]["payload"]["t_mono_ms"]  # a legacy/malformed producer payload
+    wire_path.write_text("".join(json.dumps(row) + "\n" for row in wire))
+    capture["wire_sha256"] = live.sha(wire_path)
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert not report["gates"]["dispatch_monotonic_stamped"]
+    assert not report["gates"]["cues_present"]
+    assert report["engineering_acceptance"] == "NO_GO"
+
+
+def test_unconvertible_chirp_writes_an_explicit_no_go_report(tmp_path, monkeypatch, capsys):
+    capture, _ = build_bundle(tmp_path)
+    capture["chirps"][1]["t_dac_wall_ms"] = 1.0  # no recorder stamp within one second
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    out = tmp_path / "analysis.json"
+    monkeypatch.setattr(
+        sys, "argv", ["live_acceptance", "analyze", "--capture", str(tmp_path), "--out", str(out)]
+    )
+    assert live.main() == 2
+    written = json.loads(out.read_text())
+    assert written["engineering_acceptance"] == "NO_GO"
+    assert written["failed_gates"] == ["analysis_incomplete"]
+    assert "monotonic DAC anchor" in written["error"]
+    assert json.loads(capsys.readouterr().out)["acceptance"] == "NO_GO"
 
 
 def test_cue_producer_must_match_actual_current_session_ingress(tmp_path):
@@ -804,8 +847,9 @@ def test_cue_producer_must_match_actual_current_session_ingress(tmp_path):
     assert "minimum_completion_lead_ms" not in report["cues"][0]
 
 
-def test_temporary_wall_clock_step_cannot_improve_reaction_lead(tmp_path):
+def test_temporary_wall_clock_step_cannot_move_brake_or_reaction_timing(tmp_path):
     capture, taps = build_bundle(tmp_path)
+    baseline = live.analyze_bundle(tmp_path, tmp_path / "baseline.json")
     wire_path = tmp_path / "wire.jsonl"
     wire = live.read_jsonl(wire_path)
     for row in wire + taps:
@@ -817,9 +861,58 @@ def test_temporary_wall_clock_step_cannot_improve_reaction_lead(tmp_path):
     (tmp_path / "capture.json").write_text(json.dumps(capture))
     rewrite_taps(capture, taps)
     report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
-    assert report["gates"]["capture_wall_clock_stable"]  # Endpoint-only check missed this.
-    assert not report["gates"]["all_event_wall_clocks_stable"]
-    assert report["clock_offsets"]["spread_ms"] == 40
+    assert report["wall_clock_drift"]["spread_ms"] == 40  # still visible, never a join basis
+    assert report["brake_events"] == baseline["brake_events"]
+    assert report["gates"] == baseline["gates"]
+    for key in ("minimum_completion_lead_ms", "maximum_completion_lead_ms", "latency_ms"):
+        assert report["cues"][0].get(key) == baseline["cues"][0].get(key)
+
+
+def test_wire_monotonic_disorder_fails_the_timebase(tmp_path):
+    capture, _ = build_bundle(tmp_path)
+    wire_path = tmp_path / "wire.jsonl"
+    wire = live.read_jsonl(wire_path)
+    wire[40]["mono_ms"] = wire[39]["mono_ms"] - 5  # a single writer cannot run backwards
+    wire_path.write_text("".join(json.dumps(row) + "\n" for row in wire))
+    capture["wire_sha256"] = live.sha(wire_path)
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert "wire_monotonic_order_violated" in report["monotonic_timebase"]["reasons"]
+    assert not report["gates"]["microphone_timebase_qualified"]
+
+
+@pytest.mark.parametrize("info", [None, {"monotonic": True, "resolution": 0.015625}])
+def test_millisecond_tick_monotonic_clock_is_rejected(info):
+    # Python < 3.13 on Windows backs time.monotonic with GetTickCount64 (15.6 ms ticks).
+    capture = dict(started_mono_ms=1.0, finished_mono_ms=2.0, monotonic_clock=info)
+    capture["microphone"] = callback_evidence(start=100000)
+    for row in capture["microphone"]["callback_stamps"]:
+        row["mono_ms"] = float(round(row["mono_ms"] / 15.625) * 15)
+    if info is not None:
+        capture["microphone"] = callback_evidence()
+    result = live.monotonic_timebase_evidence(capture, [], [], 0, 1)
+    assert not result["passed"]
+    expected = (
+        "monotonic_resolution_unproven" if info is None else "monotonic_clock_info_inadequate"
+    )
+    assert expected in result["reasons"]
+
+
+def test_legacy_wall_only_chirp_converts_through_its_local_offset():
+    stamps = callback_evidence()["callback_stamps"]
+    for row in stamps:  # wall leads monotonic by 5 s and is slewing at ~78 ppm
+        row["wall_ms"] = row["mono_ms"] + 5000 + (row["mono_ms"] - 100000) * 78e-6
+    wall = 104000.0 + 5000 + 4000 * 78e-6
+    legacy = live.chirp_monotonic_anchor(al.ChirpMark("start", wall, wall, 0), stamps)
+    assert legacy["basis"] == "wall_converted_with_local_offset"
+    assert legacy["anchor_ms"] == pytest.approx(104000.0, abs=0.2)
+    assert legacy["uncertainty_ms"] < 0.2
+    recorded = live.chirp_monotonic_anchor(
+        al.ChirpMark("start", wall, wall, 0, t_dac_mono_ms=104000.5), stamps
+    )
+    assert (recorded["basis"], recorded["anchor_ms"]) == ("recorded", 104000.5)
+    lost = live.chirp_monotonic_anchor(al.ChirpMark("end", 1.0, 1.0, 0), stamps)
+    assert lost["anchor_ms"] is None
 
 
 def test_matching_corrects_template_time_scale_using_calibrated_sample_period():
@@ -834,13 +927,13 @@ def test_matching_corrects_template_time_scale_using_calibrated_sample_period():
         recording,
         RATE,
         al.ClockMap(0, 100000, 1000 / effective_rate, anchors_used=2),
-        [dict(seq=1, clip_id="brake", t_wall_ms=100800)],
+        [dict(seq=1, clip_id="brake", t_mono_ms=100800)],
         bank,
     )[0]
     assert cue["complete"]
     assert cue["template_effective_samplerate"] == pytest.approx(effective_rate)
     assert cue["latency_ms"] == pytest.approx(200, abs=1)
-    assert cue["completion_wall_ms"] == pytest.approx(101400, abs=2)
+    assert cue["completion_ms"] == pytest.approx(101400, abs=2)
 
 
 def test_microphone_records_every_callback_buffer_without_opening_hardware(monkeypatch):
@@ -1049,12 +1142,12 @@ def test_two_acoustic_anchors_alone_do_not_qualify_timebase(defect):
     else:
         marks[1]["onset_sample"] = RATE * 10
     evidence = live.microphone_clock_evidence(
-        al.ClockMap(0, 100000, period, anchors),
+        al.ClockMap(0, 100000, period, anchors, "monotonic"),
         marks,
-        chirps,
+        [live.chirp_monotonic_anchor(mark, metadata["callback_stamps"]) for mark in chirps],
         independent,
         RATE,
-        dict(passed=True, spread_ms=0),
+        dict(passed=True),
     )
     assert not evidence["qualified"]
     assert evidence["reasons"]
@@ -1085,14 +1178,14 @@ def test_measured_uncertainty_is_carried_into_act_latency_and_both_brake_bounds(
     assert not report["gates"]["act_latency_budget"]
     event = report["brake_events"][0]
     if onset_seconds == 3.33:
-        assert event["earliest_wall_ms"] - cue["completion_wall_ms"] - 15 >= 1200
+        assert event["earliest_ms"] - cue["completion_ms"] - 15 >= 1200
         assert cue["minimum_completion_lead_ms"] < 1200
         assert not report["gates"]["brake_cues_complete_with_reaction_lead"]
     assert cue["minimum_completion_lead_ms"] == pytest.approx(
-        event["earliest_wall_ms"] - cue["completion_wall_ms"] - uncertainty
+        event["earliest_ms"] - cue["completion_ms"] - uncertainty
     )
     assert cue["maximum_completion_lead_ms"] == pytest.approx(
-        event["onset_wall_ms"] - cue["completion_wall_ms"] + uncertainty
+        event["onset_ms"] - cue["completion_ms"] + uncertainty
     )
 
 
