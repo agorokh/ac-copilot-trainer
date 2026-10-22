@@ -650,6 +650,28 @@ Then analyze, after verifying the tap footer and guardian cleanup receipts:
 python -m tools.ai_sidecar.voice.live_acceptance analyze --capture "$runDir/capture" --out "$runDir/analysis.json"
 ```
 
+### Composing the capture with the autonomous driver (off-rig)
+
+When `auto_drive` drives instead of a human or MOZA AI, one holder owns the rig for the whole
+run. The capture, guardian and driver all bind to that owner. Each step runs in the console
+session through `remote_launcher start --label <name> -- <argv>`:
+
+1. `-m tools.ac_harness.rig_lock hold --stop-file <run>/rig-owner.stop --max-hold-s 3600
+   --car <car> --track <track>` takes the canonical lock. Its stdout `held` line names the
+   owner PID. The stop path must not exist yet, and the hold ends at the stop file or its
+   fixed bound.
+2. `-m tools.ac_harness.live_voice --run-dir <run> --capture-config <cfg> --owner-pid <owner>
+   --start-sidecar` opens Game Point with the instrumented sidecar.
+3. `-m tools.ac_harness.auto_drive … --rig-owner-pid <owner> --no-sidecar-autostart` verifies
+   that owner instead of acquiring the lock, and reuses the listening instrumented sidecar.
+   Every launch and sim-death relaunch re-verifies the owner first. A lost owner refuses
+   the launch. A peer that takes a released rig replaces AC, which ends the drive as sim-death.
+4. As soon as `acs.exe` exists, arm the guardian with the same owner and the AC and sidecar
+   identities. The driver drives right after launch and hijack. Record this short unguarded
+   window rather than claiming the guardian preceded motion.
+5. Run `live_acceptance record --owner-pid <owner>`, then close Game Point and write the stop
+   file to release the rig.
+
 The analyzer locates both microphone chirps inside their sweep band. Room reverberation caps
 a microphone chirp's normalized correlation below the near-field 0.20 floor, so an acoustic
 anchor is accepted at score ≥ 0.10 with prominence ≥ 10. Anchors qualify the timebase only

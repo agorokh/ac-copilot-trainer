@@ -320,3 +320,79 @@ def test_unexpected_lock_os_error_is_not_reported_as_busy(
     with pytest.raises(OSError, match="device failure") as exc_info:
         lock.acquire()
     assert exc_info.value.errno == errno.EIO
+
+
+def test_delegated_owner_must_hold_the_canonical_lock(tmp_path: Path) -> None:
+    path = tmp_path / "rig-session.lock"
+    with pytest.raises(rig_lock_module.RigOwnerMismatch, match="observed None"):
+        rig_lock_module.require_rig_session_owner(os.getpid(), path)  # idle rig
+    with RigSessionLock(path, owner=_owner(os.getpid())):
+        owner = rig_lock_module.require_rig_session_owner(os.getpid(), path)
+        assert owner["pid"] == os.getpid()
+        with pytest.raises(rig_lock_module.RigOwnerMismatch, match="expected PID 1"):
+            rig_lock_module.require_rig_session_owner(1, path)
+    for bad in (0, -1, True, "7"):
+        with pytest.raises(ValueError):
+            rig_lock_module.require_rig_session_owner(bad, path)  # type: ignore[arg-type]
+
+
+def test_hold_owns_the_rig_until_its_fresh_stop_file_appears(tmp_path: Path) -> None:
+    path = tmp_path / "rig-session.lock"
+    stop = tmp_path / "rig-owner.stop"
+    events: list[dict] = []
+
+    def emit(line: str) -> None:
+        events.append(json.loads(line))
+        if events[-1]["status"] == "held":
+            with pytest.raises(RigSessionBusy):  # a peer cannot take the held rig
+                RigSessionLock(path, owner=_owner(2)).acquire()
+            assert rig_lock_module.require_rig_session_owner(os.getpid(), path)
+            stop.write_text("release", encoding="utf-8")
+
+    owner = _owner(os.getpid())
+    reason = rig_lock_module.hold_rig_session(
+        path, owner=owner, stop_file=stop, max_hold_s=30, poll_interval=0.01, emit=emit
+    )
+    assert reason == "stop_file"
+    assert [event["status"] for event in events] == ["held", "released"]
+    assert events[0]["owner"] == owner.to_dict()
+    assert read_rig_session_owner(path) is None
+
+
+def test_hold_refuses_a_reused_stop_file_and_unbounded_holds(tmp_path: Path) -> None:
+    path = tmp_path / "rig-session.lock"
+    stop = tmp_path / "rig-owner.stop"
+    for bad in (0, -1, float("inf"), float("nan"), rig_lock_module.MAX_HOLD_SECONDS + 1):
+        with pytest.raises(ValueError):
+            rig_lock_module.hold_rig_session(
+                path, owner=_owner(1), stop_file=stop, max_hold_s=bad, emit=lambda _: None
+            )
+    stop.write_text("old epoch", encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        rig_lock_module.hold_rig_session(
+            path, owner=_owner(1), stop_file=stop, max_hold_s=5, emit=lambda _: None
+        )
+    assert read_rig_session_owner(path) is None
+
+
+def test_hold_releases_at_its_fixed_bound(tmp_path: Path) -> None:
+    path = tmp_path / "rig-session.lock"
+    reason = rig_lock_module.hold_rig_session(
+        path,
+        owner=_owner(os.getpid()),
+        stop_file=tmp_path / "never.stop",
+        max_hold_s=0.05,
+        poll_interval=0.01,
+        emit=lambda _: None,
+    )
+    assert reason == "max_hold_elapsed"
+    assert read_rig_session_owner(path) is None
+
+
+def test_hold_cli_reports_busy_rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    path = tmp_path / "rig-session.lock"
+    monkeypatch.setattr(rig_lock_module, "default_rig_session_lock_path", lambda: path)
+    with RigSessionLock(path, owner=_owner(4242)):
+        rc = rig_lock_module.main(["hold", "--stop-file", str(tmp_path / "s.stop")])
+    assert rc == 3
+    assert "RIG BUSY" in capsys.readouterr().out

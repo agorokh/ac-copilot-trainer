@@ -130,6 +130,10 @@ _ALLOWED_PAYLOAD_MODULES = frozenset(
         "tools.ac_harness.alien_scientist",
         "tools.ac_harness.corner_refine",
         "tools.ac_harness.rig_watchdog",
+        # #815 composed live voice capture: the canonical owner holder and the Game Point capture
+        # UI both need the console session's desktop and audio, like the drive they accompany.
+        "tools.ac_harness.rig_lock",
+        "tools.ac_harness.live_voice",
     }
 )
 #: Exit code recorded when the console-session shim itself fails before/around the payload, so a
@@ -259,6 +263,8 @@ def validate_payload_argv(argv: Sequence[str]) -> list[str]:
         )
     if tokens[1] == "tools.ac_harness.rig_watchdog" and tokens[2:3] != ["scheduled-run"]:
         raise RemoteLaunchError("watchdog transport permits only its bounded scheduled-run payload")
+    if tokens[1] == "tools.ac_harness.rig_lock" and tokens[2:3] != ["hold"]:
+        raise RemoteLaunchError("rig_lock transport permits only its bounded hold payload")
     return tokens
 
 

@@ -3120,6 +3120,33 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
             watcher.stop()
 
 
+def owner_guarded_launch(
+    launch: LaunchFn,
+    owner_pid: int,
+    lock_path: Path,
+    *,
+    verify: Callable[[int, Path], object] | None = None,
+) -> LaunchFn:
+    """Refuse every (re)launch unless the delegated rig owner still holds the lock (#815).
+
+    A delegated drive does not hold the byte lock itself. A peer that takes a released rig ends
+    this drive by replacing AC (sim-death), so the remaining risk is this process launching or
+    sim-death-relaunching AC after its owner is gone. Each launch attempt re-verifies first.
+    """
+    from tools.ac_harness.rig_lock import RigOwnerMismatch, require_rig_session_owner
+
+    check = verify or require_rig_session_owner
+
+    def guarded(config: AutoDriveConfig) -> tuple[bool, str]:
+        try:
+            check(owner_pid, lock_path)
+        except RigOwnerMismatch as exc:
+            return False, f"delegated rig owner lost before launch: {exc}"
+        return launch(config)
+
+    return guarded
+
+
 def rig_restart_launcher(config: AutoDriveConfig) -> None:  # pragma: no cover - rig-only
     """Restart Content Manager so the next :func:`rig_launch` cold-starts a FRESH CM (#558).
 
@@ -4097,6 +4124,18 @@ def _nonneg_int(value: str) -> int:
     return parsed
 
 
+def _positive_int(value: str) -> int:
+    """argparse type: a positive integer (a process id)."""
+
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"must be an integer > 0, got {value!r}") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"must be an integer > 0, got {value!r}")
+    return parsed
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Composed autonomous self-test (#154 Part G): drive any car/track + assert"
@@ -4303,6 +4342,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="seconds to wait for another auto-drive process to release the single-rig lock; "
         "0 fails immediately and reports the owner (#555)",
+    )
+    p.add_argument(
+        "--rig-owner-pid",
+        type=_positive_int,
+        default=None,
+        help="run under this canonical rig-lock owner (e.g. `python -m tools.ac_harness.rig_lock "
+        "hold`) instead of acquiring the lock; fails RIG BUSY unless that PID owns it (#815)",
     )
     p.add_argument(
         "--preflight-only",
@@ -4786,31 +4832,44 @@ def _main_impl(
     # different worktrees, so own the shared LocalAppData lock from before sidecar/launch through
     # drive teardown. A peer fails/waits here BEFORE either process can kill or relaunch its AC.
     from tools.ac_harness.rig_lock import (
+        RigOwnerMismatch,
         RigSessionBusy,
         RigSessionLock,
         RigSessionOwner,
         default_rig_session_lock_path,
+        require_rig_session_owner,
     )
 
-    rig_lock = RigSessionLock(
-        default_rig_session_lock_path(),
-        owner=RigSessionOwner(
-            pid=os.getpid(),
-            cwd=str(Path.cwd()),
-            car=config.car_id,
-            track=config.track_id,
-            started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            session_kind="auto_drive",
-        ),
-        timeout=args.rig_lock_timeout,
-    )
-    try:
-        rig_lock.acquire()
-    except RigSessionBusy as exc:
-        print(f"auto-drive: RIG BUSY — {exc}")
-        return 3
-    cleanup.callback(rig_lock.release)
-    print(f"auto-drive: rig lock acquired -> {rig_lock.path}")
+    if args.rig_owner_pid is not None:
+        # #815: a composed capture already owns the rig through a separate holder for the whole
+        # run (guardian, voice capture and this driver share it). Verify that exact owner instead
+        # of acquiring; peers stay excluded because the holder keeps the byte lock throughout.
+        try:
+            owner = require_rig_session_owner(args.rig_owner_pid, default_rig_session_lock_path())
+        except RigOwnerMismatch as exc:
+            print(f"auto-drive: RIG BUSY — {exc}")
+            return 3
+        print(f"auto-drive: rig lock delegated to canonical owner pid={owner['pid']}")
+    else:
+        rig_lock = RigSessionLock(
+            default_rig_session_lock_path(),
+            owner=RigSessionOwner(
+                pid=os.getpid(),
+                cwd=str(Path.cwd()),
+                car=config.car_id,
+                track=config.track_id,
+                started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                session_kind="auto_drive",
+            ),
+            timeout=args.rig_lock_timeout,
+        )
+        try:
+            rig_lock.acquire()
+        except RigSessionBusy as exc:
+            print(f"auto-drive: RIG BUSY — {exc}")
+            return 3
+        cleanup.callback(rig_lock.release)
+        print(f"auto-drive: rig lock acquired -> {rig_lock.path}")
 
     # #575 (PR #587 review): the installed app is shared rig state, so its provenance must be
     # measured UNDER the lock — same reasoning as the plant/line resolution below. The pre-lock
@@ -4935,13 +4994,20 @@ def _main_impl(
             )
             periodic_hud.start()
             print(f"auto-drive: HUD frame every {args.hud_every:g}s -> {periodic_hud.out_dir}")
+        launch_fn = (
+            rig_launch
+            if args.rig_owner_pid is None
+            else owner_guarded_launch(
+                rig_launch, args.rig_owner_pid, default_rig_session_lock_path()
+            )
+        )
         run_started_epoch = time.time()
         rig_telemetry_cleanup_holds: list[Controller] = []
         try:
             report = asyncio.run(
                 run_auto_drive_with_sim_retries(
                     config,
-                    launch=rig_launch,
+                    launch=launch_fn,
                     hijack=lambda run_config: rig_hijack(
                         run_config,
                         retain_telemetry_controller=rig_telemetry_cleanup_holds.append,
