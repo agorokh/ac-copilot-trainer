@@ -30,6 +30,12 @@ from tools.ai_sidecar.voice.playback import Bank
 from tools.ai_sidecar.voice.shadow_replay import cue_timing_class
 
 BASE_CLOCK_UNCERTAINTY_MS = 15
+# A room microphone hears the chirp through reverberation, which caps its normalized
+# correlation (run 02 of #815: 0.19-0.21 with 30x prominence). Acoustic anchors are therefore
+# searched inside the chirp band and accepted at a calibrated detection level; they qualify a
+# timebase only through microphone_clock_evidence's independent callback-clock agreement.
+ACOUSTIC_CHIRP_MIN_SCORE = 0.10
+ACOUSTIC_CHIRP_MIN_PROMINENCE = 10.0
 _LOOPBACK_WARNINGS_LOCK = threading.Lock()
 
 
@@ -855,6 +861,34 @@ def clock_offset_evidence(capture, wire, taps, begin, finish):
     )
 
 
+def adc_time_diagnostic(rows):
+    """Summarize PortAudio's input ADC estimate without treating it as a second clock.
+
+    On Windows WASAPI, PortAudio derives ``inputBufferAdcTime`` from the callback's own
+    stream time plus a whole-buffer queue estimate (run 02 of #815: always +10 or +20 ms).
+    Two buffers delivered back to back therefore step it backwards by one period although
+    the samples are contiguous. Its steps are reported, but only the monotonic callback
+    clock is fitted as independent evidence.
+    """
+    values = [row.get("adc_time") for row in rows]
+    if not values or not all(finite(value) for value in values):
+        return dict(available=False, gating=False)
+    offsets = sorted(
+        {
+            round((row["adc_time"] - row["stream_time"]) * 1000, 3)
+            for row in rows
+            if finite(row.get("stream_time"))
+        }
+    )
+    return dict(
+        available=True,
+        gating=False,
+        basis="host_estimate_from_callback_stream_time",
+        nonincreasing_steps=sum(b <= a for a, b in zip(values, values[1:], strict=False)),
+        adc_minus_stream_ms=offsets[:16],
+    )
+
+
 def callback_clock_evidence(microphone, frames, rate):
     """Validate every buffer and fit sample time independently of acoustic chirps.
 
@@ -874,7 +908,7 @@ def callback_clock_evidence(microphone, frames, rate):
             or row["sample"] != expected
             or type(size) is not int
             or size <= 0
-            or not all(finite(row.get(key)) for key in ("wall_ms", "mono_ms", "adc_time"))
+            or not all(finite(row.get(key)) for key in ("wall_ms", "mono_ms"))
         ):
             result["reasons"].append("incomplete_or_noncontiguous_callback_buffers")
             return result
@@ -894,25 +928,25 @@ def callback_clock_evidence(microphone, frames, rate):
         "last_half": np.arange(len(x) // 2, len(x)),
     }
     maximum_error = 0.0
-    for field, scale in (("mono_ms", 1), ("adc_time", 1000)):
-        y = np.asarray([row[field] * scale for row in rows])
-        if not np.all(np.diff(y) > 0):
-            result["reasons"].append(f"nonincreasing_{field}")
+    result["adc_time_diagnostic"] = adc_time_diagnostic(rows)
+    y = np.asarray([row["mono_ms"] for row in rows])
+    if not np.all(np.diff(y) > 0):
+        result["reasons"].append("nonincreasing_mono_ms")
+        return result
+    fits = {}
+    for label, selected in selections.items():
+        dx, dy = x - x[selected[0]], y - y[selected[0]]
+        matrix = np.column_stack((dx[selected], np.ones(len(selected))))
+        period, intercept = np.linalg.lstsq(matrix, dy[selected], rcond=None)[0]
+        residual = dy - (intercept + period * dx)
+        error = float(np.max(np.abs(residual)))
+        if not finite(float(period)) or period <= 0 or not finite(error):
+            result["reasons"].append("nonfinite_or_nonpositive_clock_fit")
             return result
-        fits = {}
-        for label, selected in selections.items():
-            dx, dy = x - x[selected[0]], y - y[selected[0]]
-            matrix = np.column_stack((dx[selected], np.ones(len(selected))))
-            period, intercept = np.linalg.lstsq(matrix, dy[selected], rcond=None)[0]
-            residual = dy - (intercept + period * dx)
-            error = float(np.max(np.abs(residual)))
-            if not finite(float(period)) or period <= 0 or not finite(error):
-                result["reasons"].append("nonfinite_or_nonpositive_clock_fit")
-                return result
-            fits[label] = dict(ms_per_sample=float(period), maximum_prediction_error_ms=error)
-            maximum_error = max(maximum_error, error)
-        result["fits"][field] = fits
-    period = result["fits"]["mono_ms"]["all"]["ms_per_sample"]
+        fits[label] = dict(ms_per_sample=float(period), maximum_prediction_error_ms=error)
+        maximum_error = max(maximum_error, error)
+    result["fits"]["mono_ms"] = fits
+    period = fits["all"]["ms_per_sample"]
     result.update(
         ms_per_sample=period,
         effective_samplerate=1000 / period,
@@ -925,6 +959,15 @@ def callback_clock_evidence(microphone, frames, rate):
         result["reasons"].append("independent_clock_prediction_error")
     result["passed"] = not result["reasons"]
     return result
+
+
+def acoustic_chirp_band(chirps, rate):
+    """Search band covering every chirp's sweep with a small margin, kept below Nyquist."""
+    low = min(mark.f0_hz for mark in chirps) * 0.9
+    high = min(max(mark.f1_hz for mark in chirps) * 1.03, rate * 0.49)
+    if not low < high:
+        raise ValueError("chirp sweep does not fit below the recording Nyquist frequency")
+    return low, high
 
 
 def microphone_clock_evidence(clock, marks, chirps, independent, rate, wall_offsets):
@@ -1189,7 +1232,15 @@ def analyze_bundle(directory, output):
     # Correct chirp-template duration using independent callback time before locating
     # anchors. No acoustic score/prominence threshold changes or fitted-on-match rate.
     template_rate = independent.get("effective_samplerate", rate) if independent["passed"] else rate
-    clock, marks = al.build_clock_map(audio, template_rate, chirps, np)
+    clock, marks = al.build_clock_map(
+        audio,
+        template_rate,
+        chirps,
+        np,
+        band_hz=acoustic_chirp_band(chirps, template_rate),
+        min_score=ACOUSTIC_CHIRP_MIN_SCORE,
+        min_prominence=ACOUSTIC_CHIRP_MIN_PROMINENCE,
+    )
     gates["microphone_clock_calibrated"] = clock.anchors_used == 2
     clock_evidence = microphone_clock_evidence(
         clock, marks, chirps, independent, rate, report["clock_offsets"]

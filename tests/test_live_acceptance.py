@@ -871,7 +871,7 @@ def test_microphone_records_every_callback_buffer_without_opening_hardware(monke
 
 
 @pytest.mark.parametrize(
-    "defect", ["sparse", "missing_size", "bad_count", "rate", "overflow", "adc", "warp"]
+    "defect", ["sparse", "missing_size", "bad_count", "rate", "overflow", "mono", "warp"]
 )
 def test_independent_clock_evidence_rejects_incomplete_or_nonlinear_capture(defect):
     metadata = callback_evidence()
@@ -886,8 +886,8 @@ def test_independent_clock_evidence_rejects_incomplete_or_nonlinear_capture(defe
         metadata["samplerate"] = 44100
     elif defect == "overflow":
         metadata["statuses"] = ["input overflow"]
-    elif defect == "adc":
-        rows[50]["adc_time"] = rows[49]["adc_time"]
+    elif defect == "mono":
+        rows[50]["mono_ms"] = rows[49]["mono_ms"]
     else:
         for i, row in enumerate(rows):
             displacement = 25 * np.sin(i / len(rows) * 2 * np.pi)
@@ -896,6 +896,89 @@ def test_independent_clock_evidence_rejects_incomplete_or_nonlinear_capture(defe
     result = live.callback_clock_evidence(metadata, RATE * 10, RATE)
     assert not result["passed"]
     assert result["reasons"]
+
+
+def test_wasapi_adc_estimate_is_reported_but_not_fitted_as_a_second_clock():
+    # Run 02 of #815: PortAudio WASAPI reported adc = stream time + 10 or 20 ms. A buffer
+    # delivered back to back after a late one stepped "ADC time" backwards 90 times while
+    # the samples themselves stayed contiguous and uniformly spaced.
+    metadata = callback_evidence()
+    rows = metadata["callback_stamps"]
+    late = range(49, len(rows), 250)
+    for i, row in enumerate(rows):
+        if i in late:  # delivered ~one period late, immediately followed by the next buffer
+            row["mono_ms"] += 9.9
+        row["stream_time"] = row["mono_ms"] / 1000
+        row["adc_time"] = row["stream_time"] + (0.020 if i in late else 0.010)
+    result = live.callback_clock_evidence(metadata, RATE * 10, RATE)
+    assert result["passed"]
+    assert list(result["fits"]) == ["mono_ms"]
+    diagnostic = result["adc_time_diagnostic"]
+    assert diagnostic["gating"] is False
+    assert diagnostic["nonincreasing_steps"] == len(late)
+    assert diagnostic["adc_minus_stream_ms"] == [10.0, 20.0]
+
+
+def room_bundle_audio(tmp_path, capture, *, chirp_seconds=(0.5, 9)):
+    """Reverberant chirps under strong low-frequency engine tone (no voice phrase)."""
+    rng = np.random.default_rng(815)
+    t = np.arange(int(0.25 * RATE)) / RATE
+    response = rng.normal(0, 1, len(t)) * np.exp(-t / 0.06)
+    response[0] = 6.0  # direct path dominates every individual reflection
+    response /= np.sqrt(np.sum(response**2))
+    room_chirp = np.convolve(al.make_chirp(RATE, np), response)
+    recording = np.zeros(RATE * 10)
+    for seconds in chirp_seconds:
+        onset = round(RATE * seconds)
+        recording[onset : onset + len(room_chirp)] += room_chirp
+    tt = np.arange(len(recording)) / RATE
+    recording += 0.2 * (np.sin(2 * np.pi * 110 * tt) + 0.5 * np.sin(2 * np.pi * 220 * tt + 1))
+    recording += 0.002 * rng.normal(0, 1, len(recording))
+    live.write_wav(tmp_path / "microphone.wav", recording, RATE)
+    capture["microphone"] = dict(
+        sha256=live.sha(tmp_path / "microphone.wav"),
+        **callback_evidence(frames=len(recording)),
+    )
+    return recording
+
+
+def test_reverberant_acoustic_chirps_anchor_inside_band_with_independent_agreement(tmp_path):
+    capture, _ = build_bundle(tmp_path)
+    recording = room_bundle_audio(tmp_path, capture)
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    chirps = [al.ChirpMark(**mark) for mark in capture["chirps"]]
+    with pytest.raises(ValueError, match="no sync chirp"):
+        al.build_clock_map(recording, RATE, chirps, np)  # near-field floor rejects the room
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    clock = report["microphone_clock"]
+    assert report["gates"]["microphone_timebase_qualified"]
+    assert clock["qualified"]
+    assert [mark["onset_sample"] for mark in clock["chirps"]] == [RATE // 2, RATE * 9]
+    for mark in clock["chirps"]:
+        assert live.ACOUSTIC_CHIRP_MIN_SCORE <= mark["score"] < al.MATCH_MIN_SCORE
+        assert mark["prominence"] >= live.ACOUSTIC_CHIRP_MIN_PROMINENCE
+        assert mark["band_hz"] == list(live.acoustic_chirp_band(chirps, RATE))
+    assert clock["uncertainty_components_ms"]["anchor_slope_disagreement"] < 1
+
+
+def test_relaxed_acoustic_floor_cannot_invent_a_missing_end_anchor(tmp_path):
+    capture, _ = build_bundle(tmp_path)
+    room_bundle_audio(tmp_path, capture, chirp_seconds=(0.5,))
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    clock = report["microphone_clock"]
+    assert [mark["onset_sample"] for mark in clock["chirps"]] == [RATE // 2, None]
+    assert not report["gates"]["microphone_clock_calibrated"]
+    assert not report["gates"]["microphone_timebase_qualified"]
+    assert clock["reasons"] == ["two_ordered_dac_anchors_required"]
+
+
+def test_engine_tone_alone_never_becomes_an_acoustic_anchor(tmp_path):
+    capture, _ = build_bundle(tmp_path)
+    room_bundle_audio(tmp_path, capture, chirp_seconds=())
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    with pytest.raises(ValueError, match="no sync chirp"):
+        live.analyze_bundle(tmp_path, tmp_path / "result.json")
 
 
 def replace_bundle_audio(tmp_path, capture, *, effective_rate=RATE, onset_seconds=2):

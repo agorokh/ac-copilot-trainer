@@ -337,6 +337,32 @@ def normalized_match(recording: Any, template: Any, np: Any) -> Any:
     return np.abs(corr) / denom
 
 
+def bandlimit(signal: Any, samplerate: float, low_hz: float, high_hz: float, np: Any) -> Any:
+    """Zero-phase FFT band-pass with 500 Hz raised-cosine skirts.
+
+    Zero phase keeps every onset in place, so a band-limited search reports the same sample
+    as the unfiltered signal would. Out-of-band energy (engine rumble under a 5-15 kHz chirp)
+    otherwise inflates the normalized-score denominator without carrying anchor evidence.
+    """
+    if not (
+        math.isfinite(low_hz) and math.isfinite(high_hz) and 0 < low_hz < high_hz < samplerate / 2
+    ):
+        raise ValueError("band edges must be finite, ordered, positive and below Nyquist")
+    values = np.asarray(signal, dtype=np.float64)
+    size = 1
+    while size < len(values):
+        size *= 2
+    spectrum = np.fft.rfft(values, size)
+    freqs = np.fft.rfftfreq(size, 1.0 / samplerate)
+    skirt = 500.0
+    weights = ((freqs >= low_hz) & (freqs <= high_hz)).astype(np.float64)
+    rise = (freqs > low_hz - skirt) & (freqs < low_hz)
+    weights[rise] = 0.5 - 0.5 * np.cos(np.pi * (freqs[rise] - (low_hz - skirt)) / skirt)
+    fall = (freqs > high_hz) & (freqs < high_hz + skirt)
+    weights[fall] = 0.5 + 0.5 * np.cos(np.pi * (freqs[fall] - high_hz) / skirt)
+    return np.fft.irfft(spectrum * weights, size)[: len(values)]
+
+
 def find_onset(
     recording: Any,
     template: Any,
@@ -344,6 +370,8 @@ def find_onset(
     *,
     start: int = 0,
     end: int | None = None,
+    min_score: float = MATCH_MIN_SCORE,
+    min_prominence: float = MATCH_MIN_PROMINENCE,
 ) -> tuple[int | None, float, float]:
     """Best template onset inside ``recording[start:end]``.
 
@@ -357,7 +385,7 @@ def find_onset(
         return None, 0.0, 0.0
     median = float(np.median(scores))
     peak_idx = int(np.argmax(scores))
-    if float(scores[peak_idx]) < MATCH_MIN_SCORE:
+    if float(scores[peak_idx]) < min_score:
         peak = float(scores[peak_idx])
         return None, peak, peak / max(median, 1e-9)
     # EARLIEST comparable instance, not the loudest: with two instances of the same clip in
@@ -375,14 +403,12 @@ def find_onset(
             break
         earlier = scores[:cutoff]
         candidate = int(np.argmax(earlier))
-        if float(earlier[candidate]) < max(
-            MATCH_MIN_SCORE, _REGION_DOMINANCE * float(scores[peak_idx])
-        ):
+        if float(earlier[candidate]) < max(min_score, _REGION_DOMINANCE * float(scores[peak_idx])):
             break
         peak_idx = candidate
     peak = float(scores[peak_idx])
     prominence = peak / max(median, 1e-9)
-    if prominence < MATCH_MIN_PROMINENCE:
+    if prominence < min_prominence:
         return None, peak, prominence
     return start + peak_idx, peak, prominence
 
@@ -413,13 +439,21 @@ def build_clock_map(
     samplerate: int,
     chirps: list[ChirpMark],
     np: Any,
+    *,
+    band_hz: tuple[float, float] | None = None,
+    min_score: float = MATCH_MIN_SCORE,
+    min_prominence: float = MATCH_MIN_PROMINENCE,
 ) -> tuple[ClockMap, list[dict[str, Any]]]:
     """Locate each chirp in the recording and fit the sample↔wall-clock map.
 
     With two located chirps the slope corrects capture-clock drift; with one, the nominal
     samplerate is trusted. Raises ``ValueError`` when no chirp is found — without an anchor
-    every downstream number would be fiction.
+    every downstream number would be fiction. ``band_hz`` searches a zero-phase band-limited
+    copy (onsets unchanged); callers that relax the score floor must cross-validate anchors.
     """
+    if band_hz is not None:
+        recording = bandlimit(recording, samplerate, band_hz[0], band_hz[1], np)
+    criteria = {"min_score": min_score, "min_prominence": min_prominence}
     third = len(recording) // 3
     found: list[tuple[ChirpMark, int]] = []
     detail: list[dict[str, Any]] = []
@@ -427,7 +461,9 @@ def build_clock_map(
     for mark in chirps:
         template = make_chirp(samplerate, np, f0_hz=mark.f0_hz, f1_hz=mark.f1_hz)
         if mark.label == "start":
-            onset, score, prom = find_onset(recording, template, np, start=0, end=2 * third)
+            onset, score, prom = find_onset(
+                recording, template, np, start=0, end=2 * third, **criteria
+            )
             if onset is not None:
                 start_onset = onset
         else:
@@ -435,7 +471,7 @@ def build_clock_map(
             # overlapping regions could lock both anchors onto the SAME chirp instance on a
             # short run, degenerating the pair (PR #519 adversarial review).
             search_from = start_onset + 2 * len(template) if start_onset is not None else third
-            onset, score, prom = find_onset(recording, template, np, start=search_from)
+            onset, score, prom = find_onset(recording, template, np, start=search_from, **criteria)
         detail.append(
             {
                 "label": mark.label,
@@ -443,6 +479,8 @@ def build_clock_map(
                 "score": round(score, 4),
                 "prominence": round(prom, 2),
                 "anchor_wall_ms": mark.anchor_wall_ms(),
+                "band_hz": list(band_hz) if band_hz is not None else None,
+                **criteria,
             }
         )
         if onset is not None:

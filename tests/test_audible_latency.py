@@ -229,6 +229,39 @@ def test_clock_map_requires_a_chirp() -> None:
         al.build_clock_map(0.01 * RNG.standard_normal(SR), SR, [al.ChirpMark("start", 0, 0, 0)], np)
 
 
+def test_bandlimit_is_zero_phase_and_removes_out_of_band_energy() -> None:
+    t = np.arange(SR) / SR
+    in_band = np.sin(2 * np.pi * 8_000 * t)
+    rumble = 2.0 * np.sin(2 * np.pi * 110 * t)
+    filtered = al.bandlimit(in_band + rumble, SR, 4_500, 15_450, np)
+    middle = slice(SR // 4, 3 * SR // 4)
+    # Kept tone is unshifted (zero phase); the low-frequency rumble is gone.
+    np.testing.assert_allclose(filtered[middle], in_band[middle], atol=0.02)
+    assert len(filtered) == SR
+
+
+@pytest.mark.parametrize("edges", [(0, 4_000), (5_000, 4_000), (4_000, SR / 2), (float("nan"), 9)])
+def test_bandlimit_rejects_invalid_edges(edges) -> None:
+    with pytest.raises(ValueError):
+        al.bandlimit(np.zeros(1024), SR, edges[0], edges[1], np)
+
+
+def test_band_limited_clock_map_keeps_the_exact_onset_and_defaults() -> None:
+    chirp = al.make_chirp(SR, np)
+    t = np.arange(SR * 14) / SR
+    recording = 0.03 * RNG.standard_normal(SR * 14) + 0.5 * np.sin(2 * np.pi * 90 * t)
+    _place(recording, chirp, SR)
+    _place(recording, chirp, 12 * SR)
+    marks = [al.ChirpMark("start", 0.0, 0.0, 10.0), al.ChirpMark("end", 11_000.0, 11_000.0, 10.0)]
+    plain, plain_detail = al.build_clock_map(recording, SR, marks, np)
+    banded, banded_detail = al.build_clock_map(recording, SR, marks, np, band_hz=(4_500, 15_450))
+    assert plain.anchor_sample == banded.anchor_sample == SR
+    assert [row["onset_sample"] for row in banded_detail] == [SR, 12 * SR]
+    assert banded_detail[0]["score"] > plain_detail[0]["score"]
+    assert plain_detail[0]["band_hz"] is None
+    assert plain_detail[0]["min_score"] == al.MATCH_MIN_SCORE
+
+
 def test_end_to_end_analysis_on_synthetic_room(tmp_path: Path) -> None:
     bake_bank(tmp_path, ToneBackend())
     manifest = Manifest.load(tmp_path / MANIFEST_FILENAME)
