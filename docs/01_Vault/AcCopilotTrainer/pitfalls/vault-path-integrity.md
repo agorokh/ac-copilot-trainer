@@ -2,7 +2,7 @@
 type: pitfall
 status: active
 created: 2026-04-10
-updated: 2026-04-10
+updated: 2026-10-21
 severity: reliability
 scope_paths:
   - "docs/01_Vault/**"
@@ -33,7 +33,7 @@ Vault wikilinks, `relates_to` frontmatter, and file references break after renam
 
 Most common forms:
 - `relates_to` paths still reference `AcCopilotTrainer/` after bootstrap renamed to project key
-- `_index.md` not updated when new nodes are added to a directory
+- A moved or renamed node still listed under its old path in an `_index.md`
 - Markdown links use title-only references instead of explicit file paths
 - Bootstrap `find-replace` misses files outside the main vault directory (e.g., Graph Schema)
 
@@ -42,7 +42,7 @@ Most common forms:
 When touching vault nodes or docs:
 1. **Grep for all references** to the file being modified: `grep -r "filename" docs/`
 2. **Update `relates_to`** in frontmatter of all files that link to the changed file
-3. **Update `_index.md`** entries in the parent directory
+3. **Fix existing `_index.md` rows** that point at a path you moved or renamed. A **new** node needs no `_index.md` row: a handoff is one dated node under `00_System/handoffs/`, found by its filename at LOAD, and other new nodes are reached through `relates_to`. A handoff PR that adds only its dated node is complete; do not ask it for an `_index.md`, `Next Session Handoff.md` or `Current Focus.md` edit (governance-hub#918).
 4. **Use full relative paths** from `docs/01_Vault/` in all `relates_to` fields, never title-only
 5. **After bootstrap/rename:** run `grep -r "AcCopilotTrainer" docs/` to find missed replacements
 

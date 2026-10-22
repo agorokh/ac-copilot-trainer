@@ -27,7 +27,7 @@ VAULT_TESTS = tests/test_no_stale_hook_refs.py tests/test_instruction_coherence.
 	tests/test_invariants_present.py tests/test_scripts/test_fleet_inventory_refresh.py \
 	tests/test_doppler_doctor.py tests/test_merge_memory_contract.py \
 	tests/test_memory_vault_paths.py tests/test_public_governance_conformance.py \
-	tests/test_vendored_classifier_pin.py
+	tests/test_vendored_classifier_pin.py tests/test_no_shared_vault_edits.py
 
 ci-vault: ci-conventional ci-secrets ci-policy
 	$(PYTHON) -m pytest -q $(VAULT_TESTS)

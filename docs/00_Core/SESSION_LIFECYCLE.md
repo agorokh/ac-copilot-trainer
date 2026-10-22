@@ -7,9 +7,9 @@ All agents working in this repository should treat a session as three explicit p
 
 ## LOAD
 
-1. Read **`Next Session Handoff.md`** under `docs/01_Vault/<ProjectKey>/00_System/` (template: `AcCopilotTrainer`).
+1. Read the **newest dated handoff node** under `docs/01_Vault/<ProjectKey>/00_System/handoffs/` (template: `AcCopilotTrainer`). Session start prints it (`scripts/hook_session_start_handoff.py`), with the names of the next older nodes. `Next Session Handoff.md` holds older history.
 2. Follow **`relates_to` links** in frontmatter to load a **small subgraph** (indexes + relevant invariant or glossary nodes) — do not load the entire vault.
-3. Read **`Current Focus.md`** for branch, PR, and active intent.
+3. Read **`Current Focus.md`** for standing intent; the newest handoff node is more recent when they differ.
 4. For work that touches architecture or security, read linked **invariant** nodes (e.g. `00_System/invariants/no-secrets.md`) via `invariants/_index.md`.
 
 ## OPERATE
@@ -21,9 +21,9 @@ All agents working in this repository should treat a session as three explicit p
 
 Always run SAVE before ending a session or abandoning a thread — including after **failure**.
 
-1. Update **`Next Session Handoff.md`**: resume pointer, what shipped, what remains, blockers.
-2. **Create or update** vault nodes with valid frontmatter and **`relates_to`** (see graph schema). Prefer **new small files** over appending long sections to existing monoliths.
-3. Update **`Current Focus.md`** if the active branch, PR, or focus changed.
+1. Write **one new dated handoff node** `docs/01_Vault/<ProjectKey>/00_System/handoffs/YYYY-MM-DD-HHMMSSZ-<slug>.md` (UTC time, six digits, then `Z`): frontmatter with `type: handoff` and `status: active`, then the resume pointer, what shipped, what remains, blockers.
+2. **Create** other vault nodes (investigation, decision) with valid frontmatter and **`relates_to`** (see graph schema) when the session produced them, and link them from the handoff node. Prefer **new small files** over appending long sections to existing monoliths.
+3. Do **not** edit `Next Session Handoff.md`, `Current Focus.md` or any `_index.md` in a SAVE (governance-hub#918). Two handoffs that edit one of them conflict by construction; LOAD finds the new node by its filename, so the node alone is the handoff. `scripts/check_vault_follow_up.sh` accepts the dated node as a commit's vault follow-up.
 
 ### Vault-only updates (labeled PR + auto-merge)
 

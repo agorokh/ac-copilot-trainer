@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; cat \"$root/docs/01_Vault/AcCopilotTrainer/00_System/Next Session Handoff.md\" 2>/dev/null || echo 'No handoff found'"
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; PY=\"$root/.venv/Scripts/python.exe\"; [ -x \"$PY\" ] || PY=\"$root/.venv/bin/python\"; [ -x \"$PY\" ] || PY=\"$(command -v python3 || command -v python)\"; \"$PY\" \"$root/scripts/hook_session_start_handoff.py\" \"$root\" docs/01_Vault/AcCopilotTrainer/00_System 2>/dev/null || echo 'No handoff found'"
           },
           {
             "type": "command",

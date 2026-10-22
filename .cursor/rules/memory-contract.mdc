@@ -18,7 +18,7 @@ At session start, the SessionStart command hook (`scripts/hook_session_start_mem
 
 ## SAVE
 
-Short operational facts go to **Tier 1** (`AGENTS.md`). Structured knowledge goes to **Tier 2** — small linked vault nodes per [`docs/01_Vault/00_Graph_Schema.md`](../../docs/01_Vault/00_Graph_Schema.md). Update `Next Session Handoff.md`. **Tier 3** (the semantic substrate) ingests Tier-2 automatically — do not double-write. **Never** write to `~/.claude/projects/.../memory/` — that auto-memory side channel is deprecated for this project (invariant: [`memory-three-tiers.md`](../../docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md)).
+Short operational facts go to **Tier 1** (`AGENTS.md`). Structured knowledge goes to **Tier 2** — small linked vault nodes per [`docs/01_Vault/00_Graph_Schema.md`](../../docs/01_Vault/00_Graph_Schema.md). A handoff is a new dated node under `00_System/handoffs/`; do not edit `Next Session Handoff.md`, `Current Focus.md` or an `_index.md`. **Tier 3** (the semantic substrate) ingests Tier-2 automatically — do not double-write. **Never** write to `~/.claude/projects/.../memory/` — that auto-memory side channel is deprecated for this project (invariant: [`memory-three-tiers.md`](../../docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md)).
 
 ## Cursor Task subagents
 

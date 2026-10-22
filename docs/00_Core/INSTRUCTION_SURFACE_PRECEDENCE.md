@@ -29,7 +29,7 @@ must **never** be described as proven local-hook enforcement.
 Resolve instruction conflicts in this order. A **higher** item never overrides a **lower** one
 for the same topic; a lower item only adds detail that does not contradict a higher one.
 
-1. **Active handoff** — `docs/01_Vault/<ProjectKey>/00_System/Next Session Handoff.md` (task-specific, current).
+1. **Active handoff** — the newest dated node under `docs/01_Vault/<ProjectKey>/00_System/handoffs/` (task-specific, current; session start prints it, and falls back to `Next Session Handoff.md` when there is none).
 2. **Active ADR / gaps registry** — `docs/01_Vault/.../01_Decisions/*` marked `status: active`; `docs/00_Core/GOVERNANCE-GAPS.md`.
 3. **Repo `AGENTS.md` / `CLAUDE.md`** — repo-specific persistent guidance.
 4. **Canonical contracts** — `MEMORY_CONTRACT.md`, `HOOK_DESIGN.md`, `SESSION_LIFECYCLE.md`, the invariants under `00_System/invariants/`.

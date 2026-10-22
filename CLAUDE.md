@@ -36,9 +36,9 @@ See `~/.agents/skills/vault-memory/SKILL.md` and **`docs/00_Core/SESSION_LIFECYC
 - **Tier 1** — `AGENTS.md` (quick facts, changelog block at bottom).
 - **Tier 2** — Obsidian vault graph: `docs/01_Vault/AcCopilotTrainer/` (rename on bootstrap); schema at `docs/01_Vault/00_Graph_Schema.md` (outside the renamed folder).
 
-**Session start (LOAD):** `Next Session Handoff.md` → follow `relates_to` / `_index.md` for needed subgraph → `Current Focus.md` → `Project State.md` as needed.
+**Session start (LOAD):** the newest dated node under `00_System/handoffs/` (session start prints it) → follow `relates_to` / `_index.md` for needed subgraph → `Current Focus.md` → `Project State.md` as needed; `Next Session Handoff.md` holds older history.
 
-**Session end (SAVE):** update `Next Session Handoff.md`; add or update **small linked nodes** (not only monolithic edits). See `SESSION_LIFECYCLE.md`.
+**Session end (SAVE):** write a new dated node under `00_System/handoffs/` (`YYYY-MM-DD-HHMMSSZ-<slug>.md`); add **small linked nodes** (not monolithic edits). Do **not** edit `Next Session Handoff.md`, `Current Focus.md` or an `_index.md` (governance-hub#918). See `SESSION_LIFECYCLE.md`.
 
 ### Memory architecture (three tiers, no side channels)
 

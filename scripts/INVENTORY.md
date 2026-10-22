@@ -7,7 +7,8 @@ Short index of `scripts/` entry points. Classification: **CI** (automation check
 | `bootstrap_knowledge.py` | Seed SQLite repo-knowledge DB from AGENTS.md, vault invariants, principles | dev / CI | #38 |
 | `check_agent_forbidden.py` | Enforce repo layout / root file allowlist | CI | template |
 | `check_bootstrap_complete.py` | Validate bootstrap / template completeness | CI | template |
-| `check_vault_follow_up.sh` | PreToolUse Bash hook: block git commit if sensitive paths staged without vault follow-up (deterministic; works in Claude Code, Cursor, Codex) | agent | post-merge overhaul 2026-04 |
+| `check_vault_follow_up.sh` | PreToolUse Bash hook: block git commit if sensitive paths staged without vault follow-up (deterministic; works in Claude Code, Cursor, Codex). One dated `00_System/handoffs/` node is enough; shared vault files are no acknowledgement | agent | post-merge overhaul 2026-04; governance-hub#918 |
+| `hook_session_start_handoff.py` | SessionStart command hook: prints the newest dated handoff node(s) under `00_System/handoffs/` (falls back to `Next Session Handoff.md` when there is none), so a SAVE needs no shared-file edit to be found. Never fails a session | agent | governance-hub#918 |
 | `ci_policy.py` | Branch name + PR title checks (conventional commits) | CI | #42 |
 | `check_policy_docs.py` | Portable policy checks on canonical docs used by `make ci-fast` | CI | #407 |
 | `check_policy_docs.sh` | Policy checks on canonical docs | CI | template |

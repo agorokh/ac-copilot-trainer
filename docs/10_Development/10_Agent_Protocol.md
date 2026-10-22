@@ -43,7 +43,7 @@ Customize this table when you specialize the repository.
 
 ## Session hygiene
 
-- Update vault **`Next Session Handoff.md`** when context will be needed later.
+- When context will be needed later, write a new dated handoff node under `docs/01_Vault/AcCopilotTrainer/00_System/handoffs/`; do not edit `Next Session Handoff.md`, `Current Focus.md` or an `_index.md` (governance-hub#918).
 - Prefer linking Issues/PRs in handoff notes.
 
 ---
