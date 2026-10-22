@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-10-19T07:20:00Z
+last_updated: 2026-10-22T00:45:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-534-simhub-plugin-install-2026-10-21.md
   - AcCopilotTrainer/03_Investigations/issue-86-device-capture-2026-10-19.md
   - AcCopilotTrainer/03_Investigations/issue-627-c2-settled-2026-10-19.md
   - AcCopilotTrainer/03_Investigations/issue-897-setup-list-journal-scan-2026-10-18.md
@@ -147,6 +148,22 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-10-21) — #534 SimHub car-enrichment plugin installed and enabled on the rig
+
+The operator unparked #534 (`not-this-cycle` removed) and authorized the install. The DLL was
+built on the rig against SimHub 9.13.2, copied into SimHub with SimHub stopped, and enabled via
+`PluginsActivation.json`. SimHub loads it with all 11 existing plugins (3/3 starts), and the
+sidecar accepts it as `client=simhub-car-enrichment`. No ShakeIt or dashboard profile was touched.
+
+- **#534 still open.** The property-picker/NCalc readback was not observed: the rig console was
+  locked all session. About 1 minute at the rig: SimHub → *Available properties* → filter
+  `AcCopilotDataPlugin` (`CarClass = unknown` with no sidecar; the car's class with AC running).
+- SimHub was left running with the plugin enabled.
+- Unexplained: two early SimHub starts built an empty plugin manager after forced stops; later
+  starts were normal. Check `Creating plugin manager with plugins :` first if shakers go silent.
+
+Detail: [[issue-534-simhub-plugin-install-2026-10-21]].
 
 ## Delivered (2026-10-19) — #86 on-device screen capture; Copilot compared with the render
 
