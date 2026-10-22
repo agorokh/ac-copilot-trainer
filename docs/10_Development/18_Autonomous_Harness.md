@@ -650,6 +650,13 @@ Then analyze, after verifying the tap footer and guardian cleanup receipts:
 python -m tools.ai_sidecar.voice.live_acceptance analyze --capture "$runDir/capture" --out "$runDir/analysis.json"
 ```
 
+The analyzer locates both microphone chirps inside their sweep band. Room reverberation caps
+a microphone chirp's normalized correlation below the near-field 0.20 floor, so an acoustic
+anchor is accepted at score ≥ 0.10 with prominence ≥ 10. Anchors qualify the timebase only
+when their slope agrees with the independently fitted monotonic callback clock. PortAudio's
+WASAPI `inputBufferAdcTime` is the callback stream time plus a whole-buffer estimate, not a
+hardware clock. Its steps are reported as `adc_time_diagnostic` but are not fitted.
+
 The tap records exact advisory/utterance identities, producer timestamps, scheduler drops,
 actual output mapping, source hashes, and any writer loss. Captures retain microphone WAV,
 separate digital loopback WAV, wire events, and immutable-input receipts. Keep them private in
