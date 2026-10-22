@@ -5187,3 +5187,12 @@ def test_zero_timed_laps_reason_names_the_lap_window_assert_not_see_notes():
     assert "see notes" not in report.reason
     # It rides the normal failed-check path, so the bundle carries it like any other assert.
     assert [c.name for c in report.checks if not c.ok] == ["laps:timed-window"]
+
+
+def test_rig_owner_pid_is_optional_and_must_be_positive():
+    assert _build_arg_parser().parse_args(["--track", "spa"]).rig_owner_pid is None
+    args = _build_arg_parser().parse_args(["--track", "spa", "--rig-owner-pid", "51316"])
+    assert args.rig_owner_pid == 51316
+    for bad in ("0", "-4", "abc"):
+        with pytest.raises(SystemExit):
+            _build_arg_parser().parse_args(["--track", "spa", "--rig-owner-pid", bad])

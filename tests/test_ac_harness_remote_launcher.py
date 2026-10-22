@@ -1418,3 +1418,25 @@ def test_discard_control_dir_survives_a_sharing_violation(
         Path, "unlink", lambda self, **kw: (_ for _ in ()).throw(PermissionError("in use"))
     )
     rl._discard_control_dir("locked")  # must not raise
+
+
+@pytest.mark.parametrize("command", ["status", "release", "", "hold-forever"])
+def test_rig_lock_transport_rejects_everything_except_hold(command):
+    argv = ["-m", "tools.ac_harness.rig_lock"] + ([command] if command else [])
+    with pytest.raises(rl.RemoteLaunchError, match="only its bounded hold"):
+        rl.validate_payload_argv(argv)
+
+
+def test_composed_live_voice_capture_modules_are_allowlisted():
+    assert (
+        rl.validate_payload_argv(
+            ["-m", "tools.ac_harness.rig_lock", "hold", "--stop-file", "C:/run/rig-owner.stop"]
+        )[2]
+        == "hold"
+    )
+    assert (
+        rl.validate_payload_argv(
+            ["-m", "tools.ac_harness.live_voice", "--run-dir", "C:/run", "--owner-pid", "7"]
+        )[1]
+        == "tools.ac_harness.live_voice"
+    )

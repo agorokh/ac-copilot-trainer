@@ -72,6 +72,10 @@ class RigSessionBusy(RuntimeError):
         )
 
 
+class RigOwnerMismatch(RuntimeError):
+    """Raised when a delegated run's expected owner does not hold the canonical lock."""
+
+
 class RigSessionLock:
     """Non-reentrant cross-process file lock with stale-safe owner metadata."""
 
@@ -294,3 +298,93 @@ def read_rig_session_owner(path: str | Path) -> dict[str, Any] | None:
             lock_file.close()
         except OSError:
             pass
+
+
+def require_rig_session_owner(owner_pid: int, path: str | Path) -> dict[str, Any]:
+    """Verify that ``owner_pid`` holds the canonical rig lock now; never acquire or replace it.
+
+    A composed run (#815: voice capture, bounded guardian and autonomous driver) shares one owner
+    that a separate process holds for the whole run, instead of each tool taking the lock in turn.
+    """
+    if type(owner_pid) is not int or owner_pid <= 0:
+        raise ValueError("owner PID must be positive")
+    owner = read_rig_session_owner(path)
+    if not owner or owner.get("pid") != owner_pid:
+        raise RigOwnerMismatch(f"rig owner mismatch: expected PID {owner_pid}; observed {owner}")
+    return owner
+
+
+MAX_HOLD_SECONDS = 4 * 60 * 60
+
+
+def hold_rig_session(
+    path: str | Path,
+    *,
+    owner: RigSessionOwner,
+    stop_file: str | Path,
+    max_hold_s: float,
+    poll_interval: float = 0.5,
+    emit=print,  # noqa: ANN001 - injectable for tests
+) -> str:
+    """Own the rig until ``stop_file`` appears or the fixed hold bound elapses.
+
+    The stop path must not exist beforehand: one hold is one ownership epoch, and a leftover stop
+    request cannot be mistaken for the release of a new hold. Returns the release reason.
+    """
+    if not math.isfinite(max_hold_s) or not 0 < max_hold_s <= MAX_HOLD_SECONDS:
+        raise ValueError(f"max hold must be within (0, {MAX_HOLD_SECONDS}] seconds")
+    stop = Path(stop_file)
+    if stop.exists():
+        raise FileExistsError(f"stop file already exists; start a fresh hold epoch: {stop}")
+    deadline = time.monotonic() + max_hold_s
+    with RigSessionLock(path, owner=owner) as lock:
+        emit(json.dumps({"status": "held", "lock": str(lock.path), "owner": owner.to_dict()}))
+        reason = "stop_file"
+        while not stop.exists():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                reason = "max_hold_elapsed"
+                break
+            time.sleep(min(poll_interval, remaining))
+    emit(json.dumps({"status": "released", "reason": reason}))
+    return reason
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="python -m tools.ac_harness.rig_lock")
+    sub = parser.add_subparsers(dest="command", required=True)
+    hold = sub.add_parser("hold", help="own the canonical rig lock until a stop file appears")
+    hold.add_argument("--stop-file", required=True, type=Path)
+    hold.add_argument("--max-hold-s", type=float, default=60 * 60)
+    hold.add_argument("--car")
+    hold.add_argument("--track")
+    hold.add_argument("--session-kind", default="held_session")
+    args = parser.parse_args(argv)
+    owner = RigSessionOwner(
+        pid=os.getpid(),
+        cwd=str(Path.cwd()),
+        car=args.car,
+        track=args.track,
+        started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        session_kind=args.session_kind,
+    )
+    try:
+        hold_rig_session(
+            default_rig_session_lock_path(),
+            owner=owner,
+            stop_file=args.stop_file,
+            max_hold_s=args.max_hold_s,
+        )
+    except RigSessionBusy as exc:
+        print(f"rig-lock: RIG BUSY — {exc}")
+        return 3
+    except (ValueError, FileExistsError) as exc:
+        print(f"rig-lock: {exc}")
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
