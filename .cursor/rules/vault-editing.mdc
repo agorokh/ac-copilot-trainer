@@ -8,7 +8,7 @@ When editing these files:
 
 1. **Frontmatter** — Valid YAML per `docs/01_Vault/00_Graph_Schema.md`.
 2. **Size** — Prefer small linked nodes over long monoliths (aim under ~100 lines body).
-3. **Indexes** — Link new nodes from the appropriate `_index.md` or via `relates_to` from a hub file.
+3. **Links** — A new node is reached through `relates_to` from a hub file (a dated handoff node by its filename under `00_System/handoffs/`); do not edit an `_index.md` in a handoff (governance-hub#918).
 4. **Anchors** — Keep `relates_to` paths consistent with the graph schema (vault root under `docs/01_Vault/`).
 
 See also `.claude/rules/vault-editing.md` and `~/.agents/skills/vault-memory/SKILL.md`.
