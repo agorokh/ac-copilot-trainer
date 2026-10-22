@@ -72,11 +72,28 @@ INSTRUCTION_SURFACES = (
     # Agent-facing guides AGENTS.md lists as mandatory reading.
     "AGENT_CORE_PRINCIPLES.md",
     "docs/10_Development/**/*.md",
+    # governance-hub#918 addendum: every root doc (AGENT_CORE_PRINCIPLES.md, AGENTS.md,
+    # CLAUDE.md, ...), the development protocol, agent definitions and Codex config.
+    "*.md",
+    ".github/agents/**/*.md",
+    ".agents/**/*.md",
+    ".codex/**/*.toml",
 )
 
 # Exact sentences that match the rule but are not a SAVE or handoff instruction. Keep this short:
 # a new entry needs a reason a reviewer can check.
 NOT_A_SAVE = {
+    # Bootstrap-time path rename: the agent READS these indexes; "update paths after
+    # bootstrap" tells the bootstrapper to rename the vault key in the path, not a SAVE.
+    (
+        ".github/agents/issue-refiner.agent.md",
+        (
+            "Check `docs/01_Vault/AcCopilotTrainer/00_System/invariants/_index.md` and "
+            "`docs/01_Vault/AcCopilotTrainer/00_System/glossary/_index.md` (and linked term "
+            "nodes as needed) for constraints (**update paths after bootstrap** — see "
+            "`docs/00_Core/BOOTSTRAP_NEW_PROJECT.md`)."
+        ),
+    ),
     # One-time restructuring when a new project is bootstrapped from the template.
     (
         "docs/00_Core/BOOTSTRAP_NEW_PROJECT.md",
@@ -121,6 +138,9 @@ def test_rule_passes_negated_and_read_only_mentions() -> None:
 def test_no_instruction_surface_asks_for_a_shared_vault_edit() -> None:
     surfaces = _surfaces()
     assert any(p.name == "SESSION_LIFECYCLE.md" for p in surfaces), "instruction surfaces not found"
+    names = {p.relative_to(REPO_ROOT).as_posix() for p in surfaces}
+    for rel in ("AGENT_CORE_PRINCIPLES.md", "docs/10_Development/10_Agent_Protocol.md"):
+        assert rel in names or not (REPO_ROOT / rel).is_file(), rel
     offenders = {}
     for path in surfaces:
         rel = path.relative_to(REPO_ROOT).as_posix()
@@ -139,6 +159,27 @@ def test_not_a_save_entries_still_exist() -> None:
     for rel, sentence in NOT_A_SAVE:
         text = (REPO_ROOT / rel).read_text(encoding="utf-8")
         assert sentence in instructed_shared_edits(text), (rel, sentence)
+
+
+# The sentence rule needs a write verb, so it does not see these. The two vault-editing rules told
+# every new vault node, a handoff node included, to get an ``_index.md`` row; the precedence doc
+# named the shared monolith as the active handoff.
+NO_PHRASE = (
+    (".claude/rules/vault-editing.md", "discoverable via the relevant `_index.md`"),
+    (".cursor/rules/vault-editing.mdc", "Link new nodes from the appropriate `_index.md`"),
+    (
+        "docs/00_Core/INSTRUCTION_SURFACE_PRECEDENCE.md",
+        "Active handoff** — `docs/01_Vault/<ProjectKey>/00_System/Next Session Handoff.md`",
+    ),
+)
+
+
+@pytest.mark.parametrize(("rel", "phrase"), NO_PHRASE)
+def test_no_surface_routes_a_new_node_through_a_shared_file(rel: str, phrase: str) -> None:
+    path = REPO_ROOT / rel
+    if not path.is_file():
+        pytest.skip(f"{rel} not in this repository")
+    assert phrase not in path.read_text(encoding="utf-8")
 
 
 # --- the commit hook: three cases -------------------------------------------------------------
