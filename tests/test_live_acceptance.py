@@ -209,6 +209,20 @@ def test_reverb_aware_completeness_accepts_reverberant_complete_phrases():
         assert abs(result["completion_sample"] - speech_end) <= live.SEGMENT_SLACK_SAMPLES + 1
 
 
+def test_reverb_aware_completeness_realigns_a_displaced_matched_filter_onset():
+    # |correlation| onsets can land on a neighbouring reverberant lobe (run 05 of #815).
+    audio, cues, bank, exclusions = synthetic_room()
+    shift = int(0.004 * RATE)
+    true_onset = cues[2]["onset_sample"]
+    cues[2] = dict(cues[2], onset_sample=true_onset + shift)
+    results = live.reverb_aware_completeness(audio, RATE, cues, bank, exclusions, seed=1, nulls=120)
+    assert [r["complete"] for r in results] == [True] * len(cues)
+    assert abs(results[2]["alignment_lag_ms"] * RATE / 1000 + shift) <= 1
+    clip = bank.get(cues[2]["clip_id"])
+    speech_end = true_onset + int(np.flatnonzero(np.abs(clip) > 0)[-1]) + 1
+    assert abs(results[2]["completion_sample"] - speech_end) <= live.SEGMENT_SLACK_SAMPLES + 1
+
+
 def test_reverb_aware_completeness_rejects_a_phrase_cut_before_its_last_syllable():
     audio, cues, bank, exclusions = synthetic_room(truncate=(3, 0.75))
     results = live.reverb_aware_completeness(audio, RATE, cues, bank, exclusions, seed=1, nulls=120)

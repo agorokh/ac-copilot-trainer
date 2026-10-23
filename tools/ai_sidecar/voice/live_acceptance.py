@@ -55,6 +55,11 @@ SEGMENT_TAIL_S = 0.050
 # systematic delay). A wider search would let an inverted copy of never-played speech, left by
 # subtracting its predicted echo, align positively at a shifted lag.
 SEGMENT_SLACK_SAMPLES = 2
+# The matched-filter onset ranks |correlation|, so in a reverberant room it can lock onto an
+# inverted lobe a half pitch period away (run 05 of #815: 5/19 phrases, room-model z near -21).
+# Each phrase is re-aligned once, by a signed search against its own leave-one-out prediction,
+# and the room-model null searches the same width.
+PHRASE_ALIGNMENT_SEARCH_S = 0.010
 _LOOPBACK_WARNINGS_LOCK = threading.Lock()
 
 
@@ -876,6 +881,7 @@ def reverb_aware_completeness(recording, rate, cues, bank, exclusions, *, seed, 
     rng = np.random.default_rng(seed)
     pre, tail = int(ROOM_RESPONSE_PRE_S * rate), int(ROOM_RESPONSE_TAIL_S * rate)
     ext = int(SEGMENT_TAIL_S * rate)
+    align = int(PHRASE_ALIGNMENT_SEARCH_S * rate)
     items = {}
     for index, cue in enumerate(cues):
         clip = bank.get(cue.get("clip_id"))
@@ -887,15 +893,27 @@ def reverb_aware_completeness(recording, rate, cues, bank, exclusions, *, seed, 
             (np.zeros(pre), al._resample_linear(np.asarray(clip, float), bank.samplerate, eff, np))
         )
         lo = onset - pre
-        if lo < 0 or lo + len(dry) + tail > len(recording):
+        if lo - align < 0 or lo + len(dry) + tail + align > len(recording):
             continue
-        items[index] = dict(dry=dry, lo=lo, y=recording[lo : lo + len(dry) + tail], eff=eff)
+        items[index] = dict(dry=dry, lo=lo, eff=eff, lag=0)
     size = 1 << int(
-        math.ceil(math.log2(max([len(i["y"]) + len(i["dry"]) for i in items.values()] or [2])))
+        math.ceil(math.log2(max([2 * len(i["dry"]) + tail for i in items.values()] or [2])))
     )
-    spectra = {
-        k: (np.fft.rfft(i["dry"], size), np.fft.rfft(i["y"], size)) for k, i in items.items()
-    }
+
+    def window(item):
+        lo = item["lo"] + item["lag"]
+        return recording[lo : lo + len(item["dry"]) + tail]
+
+    def spectra_of():
+        return {
+            k: (np.fft.rfft(i["dry"], size), np.fft.rfft(window(i), size)) for k, i in items.items()
+        }
+
+    def leave_one_out(index, spectra):
+        others = [k for k in items if k != index]
+        num = sum(spectra[k][1] * np.conj(spectra[k][0]) for k in others)
+        den = sum(np.abs(spectra[k][0]) ** 2 for k in others)
+        return np.fft.irfft(num / (den + 1e-3 * den.mean()), size)[: pre + tail]
 
     def null_offsets(center, length):
         lo = max(0, int(center - COMPLETENESS_NULL_RADIUS_S * rate))
@@ -929,6 +947,20 @@ def reverb_aware_completeness(recording, rate, cues, bank, exclusions, *, seed, 
         null = np.asarray([best(recording[o : o + width], template)[0] for o in offsets])
         return (observed - float(null.mean())) / (float(null.std()) + 1e-12), null
 
+    def predict_and_align(item, h):
+        # One signed lag per phrase, searched around the located onset (not per segment).
+        predicted = _fft_convolve(np, item["dry"], h)[: len(item["dry"])]
+        lo = item["lo"] - align
+        observed, k = best(recording[lo : item["lo"] + len(predicted) + align], predicted)
+        return predicted, observed, k - align
+
+    if len(items) > COMPLETENESS_MIN_OTHER_PHRASES:
+        initial = spectra_of()
+        lags = {k: predict_and_align(i, leave_one_out(k, initial))[2] for k, i in items.items()}
+        for k, lag in lags.items():
+            items[k]["lag"] = lag
+    spectra = spectra_of()
+
     results = []
     for index in range(len(cues)):
         result = dict(
@@ -948,20 +980,18 @@ def reverb_aware_completeness(recording, rate, cues, bank, exclusions, *, seed, 
             result["reason"] = "room_model_unqualified:too_few_other_phrases"
             continue
         it = items[index]
-        num = sum(spectra[k][1] * np.conj(spectra[k][0]) for k in others)
-        den = sum(np.abs(spectra[k][0]) ** 2 for k in others)
-        h = np.fft.irfft(num / (den + 1e-3 * den.mean()), size)[: pre + tail]
+        h = leave_one_out(index, spectra)
         slack = SEGMENT_SLACK_SAMPLES
-        y, dry = it["y"], it["dry"]
-        predicted = _fft_convolve(np, dry, h)[: len(dry)]
-        offsets = null_offsets(it["lo"], len(predicted) + 2 * slack)
+        predicted, observed, it["lag"] = predict_and_align(it, h)
+        y, dry = window(it), it["dry"]
+        offsets = null_offsets(it["lo"], len(predicted) + 2 * align)
         result["other_phrases"] = len(others)
         if offsets is None:
             result["reason"] = "null_material_insufficient"
             continue
-        observed, _ = best(y[: len(predicted) + slack], predicted)
-        model_z, _ = z_against(predicted, observed, offsets, slack)
+        model_z, _ = z_against(predicted, observed, offsets, align)
         result["room_model_z"] = model_z
+        result["alignment_lag_ms"] = it["lag"] / it["eff"] * 1000
         result["evaluated"] = True
         if model_z < COMPLETENESS_MIN_Z:
             result["reason"] = "room_model_unqualified:no_better_than_null"
@@ -1003,7 +1033,7 @@ def reverb_aware_completeness(recording, rate, cues, bank, exclusions, *, seed, 
         result["complete"] = all(segment["present"] for segment in result["segments"])
         if result["complete"]:
             # Bounded by the measured end of the last detected segment, not by nominal length.
-            result["completion_sample"] = it["lo"] + bounds[-1] + last_lag
+            result["completion_sample"] = it["lo"] + it["lag"] + bounds[-1] + last_lag
         else:
             result["reason"] = "segment_not_significant"
     return results

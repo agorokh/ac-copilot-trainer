@@ -700,7 +700,10 @@ follows:
 
 1. It estimates a dry-clip-to-microphone room response (10 ms pre-onset, 300 ms tail). This is a
    frequency-domain least-squares fit over the run's *other* located phrases (leave-one-out). The
-   calibration chirps sweep 5–15 kHz and cannot characterize the speech band.
+   calibration chirps sweep 5–15 kHz and cannot characterize the speech band. The matched-filter
+   onset ranks |correlation| and can lock onto an inverted reverberant lobe. So each phrase is
+   re-aligned once, by a signed ±10 ms search against its own leave-one-out prediction
+   (`alignment_lag_ms`), and the room-model null searches the same width.
 2. It splits the clip into six segments of equal dry speech energy. Each segment's predicted
    contribution is scored against the microphone after the predicted echo of all earlier speech
    is subtracted. The score is a signed normalized correlation with ±2 samples of slack.
