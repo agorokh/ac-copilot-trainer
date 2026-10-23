@@ -819,6 +819,36 @@ def test_prime_matches_reference_corner_not_emission_position(
     assert report["anticipatory_assessment"]["coverage_denominator"] == 1
 
 
+def test_act_gate_is_reported_not_exercised_when_no_act_cue_was_dispatched(
+    tmp_path, single_phrase_completeness
+):
+    # #815 run 06: only prepare/info cues fired. No act latency exists to measure; that is
+    # reported as not exercised, neither failed nor passed.
+    capture, taps = build_bundle(tmp_path)
+    for row in taps:
+        for part in (
+            row.get("dispatch"),
+            row.get("advisory"),
+            row.get("correlation", {}).get("advisory"),
+        ):
+            if isinstance(part, dict):
+                part.update(urgency="prepare", register="calm")
+    rewrite_taps(capture, taps)
+    wire_path = tmp_path / "wire.jsonl"
+    wire = live.read_jsonl(wire_path)
+    for row in wire:
+        if row["frame"].get("topic") == "coaching.voice":
+            row["frame"]["payload"].update(urgency="prepare", register="calm")
+    wire_path.write_text("".join(json.dumps(row) + "\n" for row in wire))
+    capture["wire_sha256"] = live.sha(wire_path)
+    (tmp_path / "capture.json").write_text(json.dumps(capture))
+    report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
+    assert report["gates"]["physical_dispatch_wire_bijection"]
+    assert "act_latency_budget" not in report["gates"]
+    assert "act_latency_budget" not in report["failed_gates"]
+    assert report["not_exercised_gates"] == {"act_latency_budget": "no_act_cues_dispatched"}
+
+
 def test_reactive_save_keeps_acoustic_and_act_gates_without_false_anticipatory_pass(
     tmp_path, single_phrase_completeness
 ):

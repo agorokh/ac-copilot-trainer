@@ -726,7 +726,11 @@ ignored run storage; do not commit recordings or personal lap data. A completed 
 not an acceptance pass. Missing cues, source changes, lost tap rows, incomplete clocks or audio,
 and insufficient timing evidence remain explicit failed gates. Anticipatory coverage counts
 submitted brake targets, including scheduler drops; non-emitting eligible opportunities remain
-`NOT_ESTABLISHED`. Reactive SAVE cues cannot establish anticipatory brake timing. Acoustic
+`NOT_ESTABLISHED`. A run that dispatched no `act` cue has no act latency to measure, so
+`act_latency_budget` is listed under `not_exercised_gates` (not failed, not passed) and is left
+out of the GO decision. The observer stays silent on a brake zone the car can make by lifting
+alone (0.1 g coast to the apex; an accelerating approach is projected to the mark first), so a
+slow lap is not cued to brake where it will not. Reactive SAVE cues cannot establish anticipatory brake timing. Acoustic
 waveform evidence does not establish human intelligibility, reference expertise, or permission
 to teach from an unproved reference. Offline parity tests are synthetic engineering evidence;
 physical rig/audio acceptance still requires the bounded measured run.

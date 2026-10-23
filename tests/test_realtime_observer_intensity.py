@@ -55,7 +55,7 @@ def test_register_for_cap_clamps() -> None:
 def test_brake_cue_calm_when_on_pace_anticipatory() -> None:
     # Arriving on pace (low closing speed), in the anticipatory lead window BEFORE the brake point.
     ref = _ref(optimal_apex_kmh=150.0, best_observed_apex_kmh=150.0)
-    obs = RealtimeObserver([ref], lap_length_m=2500.0)
+    obs = RealtimeObserver([ref], lap_length_m=2500.0, coast_decel_mps2=0.0)
     # speed 152 km/h ≈ target+2 → tiny closing; lead ≈ (152/3.6)*0.8/2500 ≈ 0.0135 spline.
     out = obs.observe({"spline": 0.443, "speed": 152.0, "brake": 0.0, "throttle": 0.0})
     brake = [a for a in out if a.kind == "late_brake"]
@@ -84,7 +84,7 @@ def test_calm_prepare_is_the_only_live_cue_across_frames() -> None:
     # ONLY live brake cue. Arriving hot past the point speaks nothing — the miss is owned
     # by exit grading, never by a live alarm that would always land after the fact.
     ref = _ref(optimal_apex_kmh=120.0, best_observed_apex_kmh=120.0)
-    obs = RealtimeObserver([ref], lap_length_m=2500.0)
+    obs = RealtimeObserver([ref], lap_length_m=2500.0, coast_decel_mps2=0.0)
     first = [
         a
         for a in obs.observe({"spline": 0.443, "speed": 122.0, "brake": 0.0, "throttle": 0.0})

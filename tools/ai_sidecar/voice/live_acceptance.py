@@ -1697,9 +1697,14 @@ def analyze_bundle(directory, output):
     )
     gates["no_canceled_phrases"] = bool(cues) and all(not cue.get("cancellations") for cue in cues)
     acts = [cue for cue in cues if cue["dispatch"].get("urgency") == "act"]
-    gates["act_latency_budget"] = bool(acts) and all(
-        cue["timing_qualified"] and 0 <= cue["maximum_latency_ms"] <= 450 for cue in acts
-    )
+    report["not_exercised_gates"] = {}
+    if acts:
+        gates["act_latency_budget"] = all(
+            cue["timing_qualified"] and 0 <= cue["maximum_latency_ms"] <= 450 for cue in acts
+        )
+    else:
+        # Nothing to measure is not a pass: reported, and left out of the GO decision (#815).
+        report["not_exercised_gates"]["act_latency_budget"] = "no_act_cues_dispatched"
     report["cue_timing_counts"] = {
         category: sum(cue.get("timing_class") == category for cue in cues)
         for category in ("anticipatory_brake", "reactive_save", "diagnostic_or_other")
@@ -1815,6 +1820,7 @@ def main():
                 report=str(args.out),
                 acceptance=result["engineering_acceptance"],
                 failed_gates=result["failed_gates"],
+                not_exercised_gates=sorted(result.get("not_exercised_gates") or {}),
             )
         )
     )

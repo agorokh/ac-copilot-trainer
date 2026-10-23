@@ -65,6 +65,11 @@ _THROTTLE_ON = 0.1
 
 #: km/h above a corner's apex target that counts as "fully hot" (severity closing term saturates).
 _CLOSING_REF_KMH = 35.0
+#: lift-off deceleration (m/s^2) assumed when deciding whether a corner needs braking at all:
+#: a conservative floor (0.1 g) below the aero + rolling + engine-braking decel of a race car at
+#: approach speeds, so the check errs toward cueing. #815 run 06: the slow AI lap was cued at
+#: T3-T8 within 0-3 km/h of the apex target and never braked there.
+_COAST_DECEL_MPS2 = 0.1 * 9.81
 #: km/h of apex-speed deficit that counts as "egregious" (apex_deficit severity saturates).
 _DEFICIT_REF_KMH = 18.0
 #: brake fraction past the apex that flags over-braking (the ``brake_release`` cue).
@@ -241,6 +246,18 @@ def _num(value: Any) -> float | None:
     return f if f == f and abs(f) != float("inf") else None
 
 
+def _frame_forward_accel_mps2(frame: dict[str, Any]) -> float:
+    """Forward acceleration (m/s^2, >= 0) from the frame's ``long_g``; 0 when absent or braking.
+
+    Clamped to 2 g so a corrupt sample cannot project an absurd speed.
+    """
+    payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
+    long_g = _num(frame.get("long_g", payload.get("long_g")))
+    if long_g is None:
+        return 0.0
+    return min(max(long_g, 0.0), 2.0) * 9.81
+
+
 def _normalize_frame(
     frame: dict[str, Any],
 ) -> tuple[float | None, float | None, float, float, float | None]:
@@ -335,6 +352,7 @@ class RealtimeObserver:
         lap_length_m: float | None = None,
         track_id: str | None = None,
         track_layout: str | None = None,
+        coast_decel_mps2: float = _COAST_DECEL_MPS2,
     ) -> None:
         # sorted by entry so the in/out-of-window scan is stable
         self._refs = sorted(references, key=lambda r: r.spline_lo)
@@ -347,6 +365,9 @@ class RealtimeObserver:
             lap_length_m if lap_length_m is not None else track_length_m
         )
         self._brake_prepare_lead_s = max(0.0, brake_prepare_lead_s)
+        # 0 reduces "nothing to brake for" to "already at or below the apex target".
+        self._coast_decel_mps2 = max(0.0, coast_decel_mps2)
+        self._frame_accel_mps2 = 0.0  # forward acceleration of the frame being observed
         # per-driver brake-mark calibration state (issue #522 part 2): zone (corner idx, zone
         # ordinal) -> (EMA of the driver's demonstrated onset spline, laps folded in). Survives
         # lap wraps and reset() — it is knowledge about the driver, not pass state.
@@ -523,6 +544,7 @@ class RealtimeObserver:
     def observe(self, frame: dict[str, Any]) -> list[Advisory]:
         """Process one live frame; return the advisories it triggers (possibly empty)."""
         spline, speed, brake, throttle, lap = _normalize_frame(frame)
+        self._frame_accel_mps2 = _frame_forward_accel_mps2(frame)
         if spline is None or speed is None:
             return []
 
@@ -696,6 +718,34 @@ class RealtimeObserver:
             return bp % 1.0
         return (bp - lead - CAL_MATCH_TOL_M / self._track_length_m) % 1.0
 
+    def _coast_reachable(
+        self, ref: CornerReference, bp: float, spline: float, speed: float
+    ) -> bool:
+        """True when lifting alone sheds the excess over the apex target by the apex:
+        ``v^2 - v_apex^2 <= 2 * a_coast * d``. Then there is nothing to brake for.
+
+        ``d`` runs to the apex, where the target applies (to the mark when the mark lies past the
+        apex). Measured to the mark instead, any approach above target would flip to "brake" just
+        before the mark, a cue too late to act on.
+
+        A car still accelerating (``long_g`` > 0 on this frame) is projected to the mark at that
+        acceleration and coasts only from there: judged at its current speed, an out-lap
+        approach looked reachable at the window edge and was cued 0.45 s late (#815 run 06
+        replay, T1 lap 0 at 0.56 g).
+        """
+        ahead = _forward_spline_delta(spline, ref.apex_spline)
+        if ahead > _LAP_WRAP_DROP:
+            ahead = _forward_spline_delta(spline, bp)
+            if ahead > _LAP_WRAP_DROP:
+                ahead = 0.0
+        v2 = (speed / 3.6) ** 2
+        to_mark = _forward_spline_delta(spline, bp)
+        if self._frame_accel_mps2 > 0.0 and to_mark <= _LAP_WRAP_DROP:
+            v2 += 2.0 * self._frame_accel_mps2 * to_mark * self._track_length_m
+            ahead = max(0.0, ahead - to_mark)
+        excess = v2 - (ref.target_apex_kmh / 3.6) ** 2
+        return excess <= 2.0 * self._coast_decel_mps2 * ahead * self._track_length_m
+
     def _brake_cue(
         self,
         ref: CornerReference,
@@ -756,8 +806,11 @@ class RealtimeObserver:
             # mark already behind the car. The moment has passed: stay silent, lock out
             # further imperatives for this zone, and flag it so corner-exit grading owns the
             # feedback ("brake earlier next lap") where it is actionable.
+            # A pass that never needed braking did not "run deep" (#815 run 06). Judged from the
+            # mark, not the car's position: closer to the apex any excess looks unreachable.
             st.zone_cued[zi] = True
-            st.late_uncoached = True
+            if not self._coast_reachable(ref, bp, bp, speed):
+                st.late_uncoached = True
             return None
         if st.zone_cued[zi]:
             return None  # already gave this zone its heads-up
@@ -765,6 +818,9 @@ class RealtimeObserver:
             # another zone of this corner already cued on THIS frame: leave this zone's state
             # untouched so it emits on the next frame (PR #525 review — a same-batch pair would
             # make the voice scheduler drop one of the two).
+            return None
+        if self._coast_reachable(ref, bp, spline, speed):
+            # Nothing to brake for: stay quiet, and re-check next frame in case the car speeds up.
             return None
         # One calm anticipatory heads-up per zone per pass — the ONLY live brake cue (#522). A
         # live fault imperative is unfixable in principle: a driver braking exactly at the mark

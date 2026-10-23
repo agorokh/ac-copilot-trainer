@@ -164,7 +164,9 @@ def test_brake_prepare_fires_before_brake_point():
         best_brake_point_spline=0.45,
         n_corpus=1,
     )
-    obs = RealtimeObserver([ref], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    obs = RealtimeObserver(
+        [ref], track_length_m=2500.0, brake_prepare_lead_s=1.0, coast_decel_mps2=0.0
+    )
     # At 110 km/h, one second is 30.6 m, i.e. about 0.012 spline on a 2500 m track.
     out = obs.observe({"spline": 0.44, "speed": 110.0, "brake": 0.0})
     prepare = [a for a in out if a.kind == "late_brake" and a.urgency == "prepare"]
@@ -183,7 +185,9 @@ def test_brake_prepare_is_not_post_fact_and_does_not_repeat():
         best_brake_point_spline=0.45,
         n_corpus=1,
     )
-    obs = RealtimeObserver([ref], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    obs = RealtimeObserver(
+        [ref], track_length_m=2500.0, brake_prepare_lead_s=1.0, coast_decel_mps2=0.0
+    )
     assert obs.observe({"spline": 0.44, "speed": 110.0, "brake": 0.0})
     assert [
         a
@@ -448,7 +452,9 @@ def test_prepare_lead_default_covers_audibility_budget():
     """#522: the default lead is the full audibility budget (~3.2 s), so the prepare clip
     FINISHES with human reaction time to spare — not the old 0.8 s that made 0/8 cues
     actionable in the instrumented lap."""
-    obs = RealtimeObserver([_i522_ref()], track_length_m=2500.0)  # default lead
+    obs = RealtimeObserver(
+        [_i522_ref()], track_length_m=2500.0, coast_decel_mps2=0.0
+    )  # default lead
     # 110 km/h = 30.6 m/s; 3.2 s = 97.8 m = 0.0391 spline, measured from the earliest onset
     # credited to the zone (mark - 50 m = 0.43, #815) -> window opens at ~0.3909.
     out = obs.observe({"spline": 0.392, "speed": 110.0, "brake": 0.0})
@@ -468,7 +474,7 @@ def test_heads_up_finishes_with_reaction_time_before_any_credited_early_onset(sp
     0.35-0.80 s before braking. The budget now runs to the band's earliest edge, so a ~1.3 s
     clip plus 0.1 s audio path still leaves >= 1.2 s to react for an onset anywhere in it."""
     track_m, frame_hz = 2500.0, 20.0
-    obs = RealtimeObserver([_i522_ref()], track_length_m=track_m)
+    obs = RealtimeObserver([_i522_ref()], track_length_m=track_m, coast_decel_mps2=0.0)
     v = speed_kmh / 3.6
     step = v / frame_hz / track_m
     s, fired_at = 0.30, None
@@ -487,12 +493,86 @@ def test_heads_up_finishes_with_reaction_time_before_any_credited_early_onset(sp
 def test_braking_inside_the_credited_band_latches_the_zone_even_when_slow():
     """At low speed, 40 m before the mark is more than _LEAD_LATCH_TTA_S away, yet it is
     braking FOR this zone (inside CAL_MATCH_TOL_M): no heads-up may follow it."""
-    obs = RealtimeObserver([_i522_ref()], track_length_m=2500.0)
+    slow = CornerReference(
+        index=0,
+        apex_spline=0.50,
+        spline_lo=0.40,
+        spline_hi=0.60,
+        optimal_apex_kmh=40.0,
+        best_observed_apex_kmh=40.0,
+        best_brake_point_spline=0.45,
+        n_corpus=1,
+    )
+    # A 40 km/h apex and no coast allowance: 50-60 km/h still needs braking, so only the latch
+    # can keep the heads-up quiet here.
+    obs = RealtimeObserver([slow], track_length_m=2500.0, coast_decel_mps2=0.0)
     # 60 km/h = 16.7 m/s: 40 m = 0.016 spline = 2.4 s before the mark.
     braking = obs.observe({"spline": 0.434, "speed": 60.0, "brake": 0.8})
     assert [a for a in braking if a.kind == "late_brake"] == []
     released = obs.observe({"spline": 0.437, "speed": 50.0, "brake": 0.0})
     assert [a for a in released if a.kind == "late_brake"] == []
+
+
+def _approach(obs, speed_kmh, *, start=0.30, end=0.62, track_m=2500.0, frame_hz=20.0):
+    """Drive straight through _i522_ref at constant speed without braking; return advisories."""
+    out, s = [], start
+    step = speed_kmh / 3.6 / frame_hz / track_m
+    while s < end:
+        out += [(s, a) for a in obs.observe({"spline": s, "speed": speed_kmh, "brake": 0.0})]
+        s += step
+    return out
+
+
+@pytest.mark.parametrize("speed_kmh", [95.0, 100.0, 105.0, 110.0])
+def test_no_heads_up_or_ran_deep_verdict_when_lifting_alone_reaches_the_apex_target(speed_kmh):
+    """#815 run 06: the slow AI lap was cued "brake" at T3-T8 within 0-3 km/h of the apex
+    target and never braked. At or below target, or when a 0.1 g lift sheds the excess by the
+    apex (110 -> 100 km/h needs 64 m; the mark sits 125 m before the apex), there is nothing to
+    brake for: no heads-up, and no "ran deep past your brake point" at exit."""
+    obs = RealtimeObserver([_i522_ref()], track_length_m=2500.0)
+    out = _approach(obs, speed_kmh)
+    assert [a for _, a in out if a.kind == "late_brake"] == []
+    assert not any(a.detail.get("braked_late_uncoached") for _, a in out)
+
+
+def test_hot_approach_still_gets_its_heads_up_at_the_window_edge():
+    """160 km/h into a 100 km/h apex: a lift sheds only ~0.6 of the excess over the 317 m from
+    the window to the apex, so the heads-up fires as soon as the window opens."""
+    obs = RealtimeObserver([_i522_ref()], track_length_m=2500.0)
+    out = _approach(obs, 160.0)
+    fired = [(s, a) for s, a in out if a.kind == "late_brake" and a.urgency == "prepare"]
+    assert len(fired) == 1
+    s, _ = fired[0]
+    earliest = 0.45 - rt.CAL_MATCH_TOL_M / 2500.0
+    assert (earliest - s) * 2500.0 / (160.0 / 3.6) >= rt._LEAD_S - 0.05
+
+
+def test_accelerating_approach_is_cued_at_the_window_edge_not_once_it_is_fast():
+    """#815 run 06 replay, T1 lap 0: out of the pits at 0.56 g the car was still below the
+    apex target at the window edge, and judging it at its current speed delayed the cue by
+    0.45 s. Projected to the mark at the measured long_g, it is cued as the window opens."""
+    track_m, frame_hz, kmh = 2500.0, 20.0, 95.0
+    obs = RealtimeObserver([_i522_ref()], track_length_m=track_m)
+    step = kmh / 3.6 / frame_hz / track_m
+    s, fired_at = 0.30, None
+    while s < 0.45 and fired_at is None:
+        frame = {"spline": s, "speed": kmh, "brake": 0.0, "throttle": 1.0, "long_g": 0.5}
+        if any(a.kind == "late_brake" for a in obs.observe(frame)):
+            fired_at = s
+        s += step
+    assert fired_at is not None
+    earliest = 0.45 - rt.CAL_MATCH_TOL_M / track_m
+    assert (earliest - fired_at) * track_m / (kmh / 3.6) >= rt._LEAD_S - 1.0 / frame_hz
+    # the same approach at steady speed is lift-reachable: nothing to brake for
+    assert [
+        a for _, a in _approach(RealtimeObserver([_i522_ref()]), kmh) if a.kind == "late_brake"
+    ] == []
+
+
+def test_missed_brake_on_a_hot_approach_is_still_graded_ran_deep():
+    obs = RealtimeObserver([_i522_ref()], track_length_m=2500.0)
+    out = _approach(obs, 160.0)
+    assert any(a.detail.get("braked_late_uncoached") for _, a in out)
 
 
 def test_deep_past_point_imperative_is_silenced_and_graded_at_exit():
@@ -558,7 +638,9 @@ def _esses_ref() -> CornerReference:
 def test_each_zone_of_a_merged_corner_gets_its_own_heads_up():
     """#522 coverage: braking for (and being cued about) the first zone must not consume the
     second zone's heads-up — each real brake zone gets exactly one calm anticipatory cue."""
-    obs = RealtimeObserver([_esses_ref()], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    obs = RealtimeObserver(
+        [_esses_ref()], track_length_m=2500.0, brake_prepare_lead_s=1.0, coast_decel_mps2=0.0
+    )
     fired = []
     # 110 km/h -> 1 s lead = ~0.0122 spline: zone 1 window opens ~0.4378, zone 2 ~0.4878
     fired += obs.observe({"spline": 0.440, "speed": 110.0, "brake": 0.0})  # zone 1 heads-up
@@ -576,7 +658,9 @@ def test_each_zone_of_a_merged_corner_gets_its_own_heads_up():
 def test_missed_second_zone_flags_late_uncoached_at_exit():
     """Braking correctly for zone 1 but sailing past zone 2's mark is still a late-brake miss —
     silence live, owned by exit grading (#522)."""
-    obs = RealtimeObserver([_esses_ref()], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    obs = RealtimeObserver(
+        [_esses_ref()], track_length_m=2500.0, brake_prepare_lead_s=1.0, coast_decel_mps2=0.0
+    )
     obs.observe({"spline": 0.449, "speed": 110.0, "brake": 0.7})  # brakes for zone 1
     obs.observe({"spline": 0.470, "speed": 95.0, "brake": 0.0})
     out = obs.observe({"spline": 0.505, "speed": 95.0, "brake": 0.0})  # past mark 2, no brake
@@ -658,7 +742,9 @@ def test_calibration_moves_the_mark_to_the_drivers_demonstrated_point():
     """#522 part 2: after the driver's own lap shows a sustained brake onset near the synthetic
     mark, the cue anchors on the DRIVER's point with honest provenance."""
     ref = _i522_ref()  # synthetic mark at 0.45
-    obs = RealtimeObserver([ref], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    obs = RealtimeObserver(
+        [ref], track_length_m=2500.0, brake_prepare_lead_s=1.0, coast_decel_mps2=0.0
+    )
     updated = obs.calibrate_from_driver_lap(_driver_trace(0.46, end=0.49))
     assert updated == 1
     out = obs.observe({"spline": 0.4505, "speed": 110.0, "brake": 0.0})
@@ -789,7 +875,9 @@ def test_trail_braking_previous_corner_does_not_latch_next_corner():
             n_corpus=1,
         )
 
-    obs = RealtimeObserver([_tight_ref()], track_length_m=2500.0)  # default 3.2 s lead
+    obs = RealtimeObserver(
+        [_tight_ref()], track_length_m=2500.0, coast_decel_mps2=0.0
+    )  # default 3.2 s lead
     # 110 km/h: lead window opens ~0.412; trail-brake at 0.413 (tta ~3 s) -> must NOT latch
     out = obs.observe({"spline": 0.413, "speed": 110.0, "brake": 0.6})
     assert out == []
@@ -902,17 +990,18 @@ def test_pit_return_resuming_before_the_mark_still_gets_the_heads_up():
     first-corner mark must not keep the carried zone_cued — the deferral is bounded by
     frames (a true wrap's counter advances within ~1 frame), so the revert lands before
     the car reaches the mark."""
+    # A 40 km/h apex: the 60 km/h creep after the pit return still needs braking (#815).
     ref = CornerReference(
         index=0,
         apex_spline=0.06,
         spline_lo=0.02,
         spline_hi=0.10,
-        optimal_apex_kmh=80.0,
-        best_observed_apex_kmh=80.0,
+        optimal_apex_kmh=40.0,
+        best_observed_apex_kmh=40.0,
         best_brake_point_spline=0.03,
         n_corpus=1,
     )
-    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    obs = RealtimeObserver([ref], track_length_m=2500.0, coast_decel_mps2=0.0)
     obs.observe({"spline": 0.90, "speed": 180.0, "brake": 0.0, "lap": 1})
     fired = obs.observe({"spline": 0.97, "speed": 180.0, "brake": 0.0, "lap": 1})
     assert [a for a in fired if a.kind == "late_brake"]  # pre-wrap heads-up spoken
@@ -987,7 +1076,7 @@ def test_two_zones_inside_one_lead_emit_on_consecutive_frames_not_one_batch():
         n_corpus=1,
         brake_marks=[0.45, 0.475],  # both arcs open inside the default 3.2 s lead
     )
-    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    obs = RealtimeObserver([ref], track_length_m=2500.0, coast_decel_mps2=0.0)
     first = obs.observe({"spline": 0.440, "speed": 110.0, "brake": 0.0})
     second = obs.observe({"spline": 0.4405, "speed": 110.0, "brake": 0.0})
     c1 = [a for a in first if a.kind == "late_brake"]
