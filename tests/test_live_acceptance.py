@@ -20,6 +20,10 @@ from tools.ai_sidecar.voice.manifest import MANIFEST_VERSION, ClipEntry, Manifes
 from tools.ai_sidecar.voice.playback import Bank  # noqa: E402
 
 RATE = 48000
+# The phrase lag and the final segment's lag each sit on a correlation peak a few samples wide,
+# and platform FFT rounding can move either argmax. 0.2 ms is still two orders of magnitude
+# below the live timing uncertainty (about 26 ms on the rig).
+COMPLETION_TOLERANCE_SAMPLES = int(0.0002 * RATE)
 
 
 def voice_signal():
@@ -207,7 +211,7 @@ def test_reverb_aware_completeness_accepts_reverberant_complete_phrases():
         # silence), not onset + nominal clip length.
         clip = bank.get(cue["clip_id"])
         speech_end = cue["onset_sample"] + int(np.flatnonzero(np.abs(clip) > 0)[-1]) + 1
-        assert abs(result["completion_sample"] - speech_end) <= live.SEGMENT_SLACK_SAMPLES + 1
+        assert abs(result["completion_sample"] - speech_end) <= COMPLETION_TOLERANCE_SAMPLES
 
 
 def test_reverb_aware_completeness_realigns_a_displaced_matched_filter_onset():
@@ -221,7 +225,7 @@ def test_reverb_aware_completeness_realigns_a_displaced_matched_filter_onset():
     assert abs(results[2]["alignment_lag_ms"] * RATE / 1000 + shift) <= 1
     clip = bank.get(cues[2]["clip_id"])
     speech_end = true_onset + int(np.flatnonzero(np.abs(clip) > 0)[-1]) + 1
-    assert abs(results[2]["completion_sample"] - speech_end) <= live.SEGMENT_SLACK_SAMPLES + 1
+    assert abs(results[2]["completion_sample"] - speech_end) <= COMPLETION_TOLERANCE_SAMPLES
 
 
 def evaluation(complete, start=None, end=None, reason=None):
