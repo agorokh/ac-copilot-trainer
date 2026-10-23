@@ -74,7 +74,8 @@ _RELEASE_BRAKE_MIN = 0.45
 #: mark (issue #522: with the old 0.8 s lead, 0/8 brake cues in an instrumented lap were
 #: actionable — every one finished after the brake point). Budget: prepare-clip duration
 #: (~1.3 s) + audio-path latency (0.1 s PC / 0.45 s tablet) + auditory comprehension-and-
-#: reaction (~1.2 s) + margin ≈ 3.2 s before the mark.
+#: reaction (~1.2 s) + margin ≈ 3.2 s before the EARLIEST onset credited to the zone — the mark
+#: less ``CAL_MATCH_TOL_M`` — not before the mark itself (#815, see ``_lead_start``).
 _LEAD_S = 3.2
 #: default track length (m) for the lead-time → spline conversion when a track length is not
 #: supplied.
@@ -599,10 +600,7 @@ class RealtimeObserver:
             marks = self._effective_marks(ref)
             corner_cued_this_frame = False
             for zi, (bp, mark_source) in enumerate(marks):
-                lead = _lead_spline_fraction(
-                    speed, self._track_length_m, self._brake_prepare_lead_s
-                )
-                lead_start = (bp - lead) % 1.0
+                lead_start = self._lead_start(bp, speed)
                 # A zone's braking segment runs from its mark to the next zone's mark (last
                 # zone: to the apex, or the window end for a mark past the apex) — braking
                 # there is braking FOR this zone, so a later release isn't "late to brake".
@@ -685,6 +683,19 @@ class RealtimeObserver:
                     out.append(a)
         return out
 
+    def _lead_start(self, bp: float, speed: float) -> float:
+        """Where a zone's heads-up window opens: the audibility budget before the EARLIEST onset
+        that still counts as braking for this zone (``CAL_MATCH_TOL_M`` before the mark).
+
+        The same tolerance decides calibration and which measured onset a cue is judged against,
+        so a budget timed to the mark itself is spent by any driver braking inside it (#815 run
+        05: braking 30-34 m before the T1 mark left 0.35-0.80 s, not 1.2 s, to react).
+        """
+        lead = _lead_spline_fraction(speed, self._track_length_m, self._brake_prepare_lead_s)
+        if lead <= 0.0:
+            return bp % 1.0
+        return (bp - lead - CAL_MATCH_TOL_M / self._track_length_m) % 1.0
+
     def _brake_cue(
         self,
         ref: CornerReference,
@@ -722,12 +733,17 @@ class RealtimeObserver:
             # Braking near the mark IS braking for this zone (codex review #371) — but with
             # the #522 lead the window can overlap the PREVIOUS corner/zone on closely spaced
             # turns, and trail-braking that one must not latch this zone (PR #523 review).
-            # Discriminator: only braking within the last _LEAD_LATCH_TTA_S of the approach
+            # Discriminator: only braking within the last _LEAD_LATCH_TTA_S of the approach, or
+            # within CAL_MATCH_TOL_M of the mark (the same band that calibrates this zone),
             # counts as braking FOR this zone; farther out we just stay quiet on this frame
             # and let the heads-up fire once the driver is off the brakes.
             delta = _forward_spline_delta(spline, bp)
             tta_now = delta * self._track_length_m / max(speed / 3.6, 0.1)
-            if not (0.0 < delta <= _LAP_WRAP_DROP) or tta_now <= _LEAD_LATCH_TTA_S:
+            if (
+                not (0.0 < delta <= _LAP_WRAP_DROP)
+                or tta_now <= _LEAD_LATCH_TTA_S
+                or delta * self._track_length_m <= CAL_MATCH_TOL_M
+            ):
                 st.zone_braked[zi] = True
             return None
         # "anticipatory" = the car has not yet reached the brake point — robust to a lead window
