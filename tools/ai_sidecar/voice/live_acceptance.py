@@ -36,6 +36,30 @@ BASE_CLOCK_UNCERTAINTY_MS = 15
 # timebase only through microphone_clock_evidence's independent callback-clock agreement.
 ACOUSTIC_CHIRP_MIN_SCORE = 0.10
 ACOUSTIC_CHIRP_MIN_PROMINENCE = 10.0
+# Reverb-aware phrase completeness (#815 runs 03-05; council-reviewed 2026-10-23). A room
+# microphone hears each clip through the speaker/cabin response, so the dry 40 ms block rule
+# (kept as a diagnostic) fails on quiet blocks after loud syllables even when the digital mix is
+# complete. Each phrase is instead split into equal-speech-energy segments; every segment's own
+# new speech, through a room response estimated from the run's OTHER phrases, must stand out from
+# a local same-recording null after the predicted echo of earlier speech is subtracted.
+COMPLETENESS_SEGMENTS = 6
+COMPLETENESS_MIN_Z = 6.0
+COMPLETENESS_NULL_SAMPLES = 300
+COMPLETENESS_NULL_RADIUS_S = 60.0
+COMPLETENESS_MIN_NULL_MATERIAL_S = 10.0
+COMPLETENESS_MIN_OTHER_PHRASES = 5
+ROOM_RESPONSE_PRE_S = 0.010
+ROOM_RESPONSE_TAIL_S = 0.300
+SEGMENT_TAIL_S = 0.050
+# Segment positions are fixed by the located onset and the room response (which absorbs any
+# systematic delay). A wider search would let an inverted copy of never-played speech, left by
+# subtracting its predicted echo, align positively at a shifted lag.
+SEGMENT_SLACK_SAMPLES = 2
+# The matched-filter onset ranks |correlation|, so in a reverberant room it can lock onto an
+# inverted lobe a half pitch period away (run 05 of #815: 5/19 phrases, room-model z near -21).
+# Each phrase is re-aligned once, by a signed search against its own leave-one-out prediction,
+# and the room-model null searches the same width.
+PHRASE_ALIGNMENT_SEARCH_S = 0.010
 _LOOPBACK_WARNINGS_LOCK = threading.Lock()
 
 
@@ -837,6 +861,209 @@ def match_audio(recording, rate, clock, dispatches, bank, time_key="t_mono_ms"):
     return results
 
 
+def _fft_convolve(np, x, h):
+    size = 1 << int(math.ceil(math.log2(len(x) + len(h))))
+    return np.fft.irfft(np.fft.rfft(x, size) * np.fft.rfft(h, size), size)[: len(x) + len(h) - 1]
+
+
+def reverb_aware_completeness(recording, rate, cues, bank, exclusions, *, seed, nulls=None):
+    """Judge each located phrase complete only if all its new speech reached the microphone.
+
+    ``cues`` are ``match_audio`` results (``onset_sample``, ``template_effective_samplerate``).
+    ``exclusions`` are recording sample spans that may hold speech; they never feed a null.
+    Returns one evaluation per cue, aligned with ``cues``. Fails closed when the room response
+    cannot be estimated from enough other phrases, does not predict the phrase better than the
+    local null, or the local null lacks cue-free material.
+    """
+    import numpy as np
+
+    nulls = nulls or COMPLETENESS_NULL_SAMPLES
+    rng = np.random.default_rng(seed)
+    pre, tail = int(ROOM_RESPONSE_PRE_S * rate), int(ROOM_RESPONSE_TAIL_S * rate)
+    ext = int(SEGMENT_TAIL_S * rate)
+    align = int(PHRASE_ALIGNMENT_SEARCH_S * rate)
+    items = {}
+    for index, cue in enumerate(cues):
+        clip = bank.get(cue.get("clip_id"))
+        onset = cue.get("onset_sample")
+        if not cue.get("matched") or clip is None or onset is None:
+            continue
+        eff = cue["template_effective_samplerate"]
+        dry = np.concatenate(
+            (np.zeros(pre), al._resample_linear(np.asarray(clip, float), bank.samplerate, eff, np))
+        )
+        lo = onset - pre
+        if lo - align < 0 or lo + len(dry) + tail + align > len(recording):
+            continue
+        items[index] = dict(dry=dry, lo=lo, eff=eff, lag=0)
+    size = 1 << int(
+        math.ceil(math.log2(max([2 * len(i["dry"]) + tail for i in items.values()] or [2])))
+    )
+
+    def window(item):
+        lo = item["lo"] + item["lag"]
+        return recording[lo : lo + len(item["dry"]) + tail]
+
+    def spectra_of():
+        return {
+            k: (np.fft.rfft(i["dry"], size), np.fft.rfft(window(i), size)) for k, i in items.items()
+        }
+
+    def leave_one_out(index, spectra):
+        others = [k for k in items if k != index]
+        num = sum(spectra[k][1] * np.conj(spectra[k][0]) for k in others)
+        den = sum(np.abs(spectra[k][0]) ** 2 for k in others)
+        return np.fft.irfft(num / (den + 1e-3 * den.mean()), size)[: pre + tail]
+
+    def null_offsets(center, length):
+        lo = max(0, int(center - COMPLETENESS_NULL_RADIUS_S * rate))
+        hi = min(len(recording) - length, int(center + COMPLETENESS_NULL_RADIUS_S * rate))
+        free = np.ones(max(0, hi - lo), dtype=bool)
+        for a, b in exclusions:
+            free[max(0, a - length - lo) : max(0, min(hi, b) - lo)] = False
+        allowed = np.flatnonzero(free) + lo
+        if len(allowed) < COMPLETENESS_MIN_NULL_MATERIAL_S * rate:
+            return None
+        return rng.choice(allowed, size=nulls, replace=True)
+
+    def best(target, template):
+        # Signed, unlike normalized_match: subtracting the echo of speech that was never played
+        # leaves an inverted copy, which must not count as the segment being present.
+        n, length = len(target), len(template)
+        if length == 0 or n < length:
+            return 0.0, 0
+        fft = 1 << int(math.ceil(math.log2(n + length)))
+        corr = np.fft.irfft(np.fft.rfft(target, fft) * np.conj(np.fft.rfft(template, fft)), fft)[
+            : n - length + 1
+        ]
+        energy = np.concatenate(([0.0], np.cumsum(target * target)))
+        window = np.sqrt(np.maximum(energy[length:] - energy[: n - length + 1], 1e-12))
+        scores = corr / (window * max(float(np.linalg.norm(template)), 1e-12))
+        k = int(np.argmax(scores))
+        return float(scores[k]), k
+
+    def z_against(template, observed, offsets, slack):
+        width = len(template) + 2 * slack
+        null = np.asarray([best(recording[o : o + width], template)[0] for o in offsets])
+        return (observed - float(null.mean())) / (float(null.std()) + 1e-12), null
+
+    def predict_and_align(item, h):
+        # One signed lag per phrase, searched around the located onset (not per segment).
+        predicted = _fft_convolve(np, item["dry"], h)[: len(item["dry"])]
+        lo = item["lo"] - align
+        observed, k = best(recording[lo : item["lo"] + len(predicted) + align], predicted)
+        return predicted, observed, k - align
+
+    if len(items) > COMPLETENESS_MIN_OTHER_PHRASES:
+        initial = spectra_of()
+        lags = {k: predict_and_align(i, leave_one_out(k, initial))[2] for k, i in items.items()}
+        for k, lag in lags.items():
+            items[k]["lag"] = lag
+    spectra = spectra_of()
+
+    results = []
+    for index in range(len(cues)):
+        result = dict(
+            criterion="reverb_aware_new_content_segments",
+            evaluated=False,
+            complete=False,
+            speech_start_sample=None,
+            completion_sample=None,
+            reason=None,
+            segments=[],
+        )
+        results.append(result)
+        if index not in items:
+            result["reason"] = "phrase_not_located"
+            continue
+        others = [k for k in items if k != index]
+        if len(others) < COMPLETENESS_MIN_OTHER_PHRASES:
+            result["reason"] = "room_model_unqualified:too_few_other_phrases"
+            continue
+        it = items[index]
+        h = leave_one_out(index, spectra)
+        slack = SEGMENT_SLACK_SAMPLES
+        predicted, observed, it["lag"] = predict_and_align(it, h)
+        y, dry = window(it), it["dry"]
+        offsets = null_offsets(it["lo"], len(predicted) + 2 * align)
+        result["other_phrases"] = len(others)
+        if offsets is None:
+            result["reason"] = "null_material_insufficient"
+            continue
+        model_z, _ = z_against(predicted, observed, offsets, align)
+        result["room_model_z"] = model_z
+        result["alignment_lag_ms"] = it["lag"] / it["eff"] * 1000
+        result["evaluated"] = True
+        if model_z < COMPLETENESS_MIN_Z:
+            result["reason"] = "room_model_unqualified:no_better_than_null"
+            continue
+        energy = np.cumsum(dry**2)
+        bounds = [
+            int(np.searchsorted(energy, energy[-1] * q / COMPLETENESS_SEGMENTS))
+            for q in range(COMPLETENESS_SEGMENTS + 1)
+        ]
+        bounds[0] = pre
+        last_lag = 0
+        for a, b in zip(bounds[:-1], bounds[1:], strict=False):
+            mask = np.zeros_like(dry)
+            mask[a:b] = 1.0
+            own = _fft_convolve(np, dry * mask, h)[a : b + ext]
+            earlier = np.where(np.arange(len(dry)) < a, dry, 0.0)
+            target = y - _fft_convolve(np, earlier, h)[: len(y)]
+            start = max(0, a - slack)
+            observed, k = best(target[start : a + len(own) + slack], own)
+            seg_offsets = null_offsets(it["lo"] + a, len(own) + 2 * slack)
+            if seg_offsets is None:
+                result["reason"] = "null_material_insufficient"
+                break
+            z, null = z_against(own, observed, seg_offsets, slack)
+            last_lag = start + k - a
+            result["segments"].append(
+                dict(
+                    start_ms=(a - pre) / it["eff"] * 1000,
+                    end_ms=(b - pre) / it["eff"] * 1000,
+                    score=observed,
+                    null_mean=float(null.mean()),
+                    null_sd=float(null.std()),
+                    z=z,
+                    present=z >= COMPLETENESS_MIN_Z,
+                )
+            )
+        if result["reason"]:
+            continue
+        result["complete"] = all(segment["present"] for segment in result["segments"])
+        if result["complete"]:
+            # Bounded by the measured end of the last detected segment, not by nominal length.
+            result["speech_start_sample"] = it["lo"] + it["lag"] + pre
+            result["completion_sample"] = it["lo"] + it["lag"] + bounds[-1] + last_lag
+        else:
+            result["reason"] = "segment_not_significant"
+    return results
+
+
+def apply_completeness(cues, completeness, wall_ms):
+    """Make the reverb-aware evaluation each cue's completeness verdict, reason and completion.
+
+    The dry 40 ms result stays only as ``dry_blocks_complete``. Two dispatches can never both
+    claim one stretch of played speech, whichever rule judged them complete.
+    """
+    completed_intervals = []
+    for cue, evaluation in zip(cues, completeness, strict=True):
+        cue["dry_blocks_complete"] = cue["complete"]  # diagnostic only; not a pass path
+        interval = (evaluation.pop("speech_start_sample"), evaluation.pop("completion_sample"))
+        cue["acoustic_completeness"] = evaluation
+        cue["complete"] = evaluation["complete"]
+        if cue.get("matched"):
+            cue["reason"] = evaluation["reason"]
+        if cue["complete"] and any(
+            interval[0] < end and interval[1] > start for start, end in completed_intervals
+        ):
+            cue.update(complete=False, reason="acoustic_interval_already_assigned")
+        if cue["complete"]:
+            completed_intervals.append(interval)
+        cue["completion_ms"] = wall_ms(interval[1]) if cue["complete"] else None
+
+
 def producer_identity(producer):
     if not isinstance(producer, dict) or not isinstance(producer.get("frame"), dict):
         return None
@@ -1366,6 +1593,36 @@ def analyze_bundle(directory, output):
     gates["microphone_timebase_qualified"] = clock_evidence["qualified"]
     uncertainty = clock_evidence["systematic_uncertainty_ms"]
     cues = match_audio(audio, rate, clock, dispatches, bank)
+    exclusions = []
+    for dispatch in dispatches:
+        start = clock.anchor_sample + int(
+            (dispatch["t_mono_ms"] - clock.anchor_wall_ms) / clock.ms_per_sample
+        )
+        clip = bank.get(dispatch["clip_id"])
+        speech = (len(clip) / bank.samplerate if clip is not None else 3.0) + ROOM_RESPONSE_TAIL_S
+        exclusions.append((start - rate, start + int((3.1 + speech + 1.0) * rate)))
+    for mark in marks:
+        if mark.get("onset_sample") is not None:
+            exclusions.append((mark["onset_sample"] - rate, mark["onset_sample"] + 2 * rate))
+    completeness = reverb_aware_completeness(
+        audio,
+        rate,
+        cues,
+        bank,
+        exclusions,
+        seed=int(hashlib.sha256(str(capture["run_id"]).encode()).hexdigest()[:8], 16),
+    )
+    apply_completeness(cues, completeness, clock.wall_ms)
+    report["completeness_criterion"] = dict(
+        name="reverb_aware_new_content_segments",
+        segments=COMPLETENESS_SEGMENTS,
+        min_z=COMPLETENESS_MIN_Z,
+        null_samples=COMPLETENESS_NULL_SAMPLES,
+        null_radius_s=COMPLETENESS_NULL_RADIUS_S,
+        min_other_phrases=COMPLETENESS_MIN_OTHER_PHRASES,
+        room_response_s=[ROOM_RESPONSE_PRE_S, ROOM_RESPONSE_TAIL_S],
+        dry_40ms_block_rule="diagnostic_only",
+    )
     used_tokens = set()
     for dispatch, cue in zip(dispatches, cues, strict=True):
         bracket = clock_evidence.get("calibrated_sample_interval")

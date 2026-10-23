@@ -692,6 +692,33 @@ A capture made before chirps recorded `t_dac_mono_ms` converts each DAC wall sta
 the wall/monotonic offset the recorder stamped within one second of it. The spread there is
 carried as `chirp_anchor_conversion` uncertainty.
 
+A phrase is acoustically complete by the reverb-aware criterion (`completeness_criterion` in the
+report). Room reverberation smears quiet 40 ms blocks of the dry clip below any fixed block
+threshold, even when the digital loopback is complete. So the dry 40 ms block rule is kept only
+as the `dry_blocks_complete` diagnostic. Instead, for each located phrase, the analyzer works as
+follows:
+
+1. It estimates a dry-clip-to-microphone room response (10 ms pre-onset, 300 ms tail). This is a
+   frequency-domain least-squares fit over the run's *other* located phrases (leave-one-out). The
+   calibration chirps sweep 5–15 kHz and cannot characterize the speech band. The matched-filter
+   onset ranks |correlation| and can lock onto an inverted reverberant lobe. So each phrase is
+   re-aligned once, by a signed ±10 ms search against its own leave-one-out prediction
+   (`alignment_lag_ms`), and the room-model null searches the same width.
+2. It splits the clip into six segments of equal dry speech energy. Each segment's predicted
+   contribution is scored against the microphone after the predicted echo of all earlier speech
+   is subtracted. The score is a signed normalized correlation with ±2 samples of slack.
+3. Each score becomes a z value against an empirical null: the same prediction at 300 cue-free
+   offsets within ±60 s of the same recording.
+
+A phrase is complete only when every segment and the room model itself reach z ≥ 6. The
+criterion fails closed in three cases: fewer than five other phrases
+(`room_model_unqualified:too_few_other_phrases`), less than 10 s of cue-free null material, or a
+model no better than the null. Completion is the measured end of the last segment, not onset plus
+clip length. The acoustic test proves presence through the final sixth of speech energy. Finer
+endpoint truncation (for example a clipped final consonant) is proved by the digital loopback
+40 ms rule (`loopback_phrase_proof`), and both must pass. The criterion was reviewed by a model
+council on #815 before adoption.
+
 The tap records exact advisory/utterance identities, producer timestamps, scheduler drops,
 actual output mapping, source hashes, and any writer loss. Captures retain microphone WAV,
 separate digital loopback WAV, wire events, and immutable-input receipts. Keep them private in
