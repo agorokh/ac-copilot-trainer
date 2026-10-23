@@ -138,10 +138,11 @@ def single_phrase_completeness(monkeypatch):
                 criterion="test_stand_in_dry_rule",
                 evaluated=True,
                 complete=bool(cue.get("complete")),
+                speech_start_sample=cue["onset_sample"] if cue.get("complete") else None,
                 completion_sample=(
                     cue["onset_sample"] + cue["template_samples"] if cue.get("complete") else None
                 ),
-                reason=None,
+                reason=None if cue.get("complete") else cue.get("reason"),
                 segments=[],
             )
             for cue in cues
@@ -221,6 +222,56 @@ def test_reverb_aware_completeness_realigns_a_displaced_matched_filter_onset():
     clip = bank.get(cues[2]["clip_id"])
     speech_end = true_onset + int(np.flatnonzero(np.abs(clip) > 0)[-1]) + 1
     assert abs(results[2]["completion_sample"] - speech_end) <= live.SEGMENT_SLACK_SAMPLES + 1
+
+
+def evaluation(complete, start=None, end=None, reason=None):
+    return dict(
+        criterion="reverb_aware_new_content_segments",
+        evaluated=True,
+        complete=complete,
+        speech_start_sample=start,
+        completion_sample=end,
+        reason=reason,
+        segments=[],
+    )
+
+
+def test_completeness_verdict_replaces_the_dry_rule_reason_both_ways():
+    cues = [
+        dict(matched=True, complete=False, reason="truncated_or_masked_phrase"),
+        dict(matched=True, complete=True, reason=None),
+        dict(matched=False, complete=False, reason="acoustic_onset_already_assigned_to_another"),
+    ]
+    live.apply_completeness(
+        cues,
+        [
+            evaluation(True, 1000, 2000),
+            evaluation(False, reason="segment_not_significant"),
+            evaluation(False, reason="phrase_not_located"),
+        ],
+        lambda sample: sample / 10,
+    )
+    assert [c["complete"] for c in cues] == [True, False, False]
+    assert [c["dry_blocks_complete"] for c in cues] == [False, True, False]
+    assert [c["reason"] for c in cues] == [
+        None,
+        "segment_not_significant",
+        "acoustic_onset_already_assigned_to_another",  # the locating failure stays specific
+    ]
+    assert [c["completion_ms"] for c in cues] == [200, None, None]
+
+
+def test_reverb_complete_phrases_still_cannot_share_one_acoustic_interval():
+    # A suffix clip dispatched over the full clip: the dry rule never recorded the full clip's
+    # interval (reverb failed its quiet blocks), yet both pass the reverb-aware test.
+    cues = [dict(matched=True, complete=False, reason="truncated_or_masked_phrase") for _ in "ab"]
+    live.apply_completeness(
+        cues, [evaluation(True, 1000, 2000), evaluation(True, 1480, 2000)], lambda s: s
+    )
+    assert cues[0]["complete"] and cues[0]["completion_ms"] == 2000
+    assert not cues[1]["complete"]
+    assert cues[1]["reason"] == "acoustic_interval_already_assigned"
+    assert cues[1]["completion_ms"] is None
 
 
 def test_reverb_aware_completeness_rejects_a_phrase_cut_before_its_last_syllable():

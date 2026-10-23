@@ -967,6 +967,7 @@ def reverb_aware_completeness(recording, rate, cues, bank, exclusions, *, seed, 
             criterion="reverb_aware_new_content_segments",
             evaluated=False,
             complete=False,
+            speech_start_sample=None,
             completion_sample=None,
             reason=None,
             segments=[],
@@ -1033,10 +1034,34 @@ def reverb_aware_completeness(recording, rate, cues, bank, exclusions, *, seed, 
         result["complete"] = all(segment["present"] for segment in result["segments"])
         if result["complete"]:
             # Bounded by the measured end of the last detected segment, not by nominal length.
+            result["speech_start_sample"] = it["lo"] + it["lag"] + pre
             result["completion_sample"] = it["lo"] + it["lag"] + bounds[-1] + last_lag
         else:
             result["reason"] = "segment_not_significant"
     return results
+
+
+def apply_completeness(cues, completeness, wall_ms):
+    """Make the reverb-aware evaluation each cue's completeness verdict, reason and completion.
+
+    The dry 40 ms result stays only as ``dry_blocks_complete``. Two dispatches can never both
+    claim one stretch of played speech, whichever rule judged them complete.
+    """
+    completed_intervals = []
+    for cue, evaluation in zip(cues, completeness, strict=True):
+        cue["dry_blocks_complete"] = cue["complete"]  # diagnostic only; not a pass path
+        interval = (evaluation.pop("speech_start_sample"), evaluation.pop("completion_sample"))
+        cue["acoustic_completeness"] = evaluation
+        cue["complete"] = evaluation["complete"]
+        if cue.get("matched"):
+            cue["reason"] = evaluation["reason"]
+        if cue["complete"] and any(
+            interval[0] < end and interval[1] > start for start, end in completed_intervals
+        ):
+            cue.update(complete=False, reason="acoustic_interval_already_assigned")
+        if cue["complete"]:
+            completed_intervals.append(interval)
+        cue["completion_ms"] = wall_ms(interval[1]) if cue["complete"] else None
 
 
 def producer_identity(producer):
@@ -1587,12 +1612,7 @@ def analyze_bundle(directory, output):
         exclusions,
         seed=int(hashlib.sha256(str(capture["run_id"]).encode()).hexdigest()[:8], 16),
     )
-    for cue, evaluation in zip(cues, completeness, strict=True):
-        cue["dry_blocks_complete"] = cue["complete"]  # diagnostic only; not a pass path
-        sample = evaluation.pop("completion_sample")
-        cue["acoustic_completeness"] = evaluation
-        cue["complete"] = evaluation["complete"]
-        cue["completion_ms"] = clock.wall_ms(sample) if evaluation["complete"] else None
+    apply_completeness(cues, completeness, clock.wall_ms)
     report["completeness_criterion"] = dict(
         name="reverb_aware_new_content_segments",
         segments=COMPLETENESS_SEGMENTS,
