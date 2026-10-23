@@ -547,6 +547,28 @@ def test_hot_approach_still_gets_its_heads_up_at_the_window_edge():
     assert (earliest - s) * 2500.0 / (160.0 / 3.6) >= rt._LEAD_S - 0.05
 
 
+def test_accelerating_approach_is_cued_at_the_window_edge_not_once_it_is_fast():
+    """#815 run 06 replay, T1 lap 0: out of the pits at 0.56 g the car was still below the
+    apex target at the window edge, and judging it at its current speed delayed the cue by
+    0.45 s. Projected to the mark at the measured long_g, it is cued as the window opens."""
+    track_m, frame_hz, kmh = 2500.0, 20.0, 95.0
+    obs = RealtimeObserver([_i522_ref()], track_length_m=track_m)
+    step = kmh / 3.6 / frame_hz / track_m
+    s, fired_at = 0.30, None
+    while s < 0.45 and fired_at is None:
+        frame = {"spline": s, "speed": kmh, "brake": 0.0, "throttle": 1.0, "long_g": 0.5}
+        if any(a.kind == "late_brake" for a in obs.observe(frame)):
+            fired_at = s
+        s += step
+    assert fired_at is not None
+    earliest = 0.45 - rt.CAL_MATCH_TOL_M / track_m
+    assert (earliest - fired_at) * track_m / (kmh / 3.6) >= rt._LEAD_S - 1.0 / frame_hz
+    # the same approach at steady speed is lift-reachable: nothing to brake for
+    assert [
+        a for _, a in _approach(RealtimeObserver([_i522_ref()]), kmh) if a.kind == "late_brake"
+    ] == []
+
+
 def test_missed_brake_on_a_hot_approach_is_still_graded_ran_deep():
     obs = RealtimeObserver([_i522_ref()], track_length_m=2500.0)
     out = _approach(obs, 160.0)

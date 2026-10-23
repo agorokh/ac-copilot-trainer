@@ -246,6 +246,18 @@ def _num(value: Any) -> float | None:
     return f if f == f and abs(f) != float("inf") else None
 
 
+def _frame_forward_accel_mps2(frame: dict[str, Any]) -> float:
+    """Forward acceleration (m/s^2, >= 0) from the frame's ``long_g``; 0 when absent or braking.
+
+    Clamped to 2 g so a corrupt sample cannot project an absurd speed.
+    """
+    payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
+    long_g = _num(frame.get("long_g", payload.get("long_g")))
+    if long_g is None:
+        return 0.0
+    return min(max(long_g, 0.0), 2.0) * 9.81
+
+
 def _normalize_frame(
     frame: dict[str, Any],
 ) -> tuple[float | None, float | None, float, float, float | None]:
@@ -355,6 +367,7 @@ class RealtimeObserver:
         self._brake_prepare_lead_s = max(0.0, brake_prepare_lead_s)
         # 0 reduces "nothing to brake for" to "already at or below the apex target".
         self._coast_decel_mps2 = max(0.0, coast_decel_mps2)
+        self._frame_accel_mps2 = 0.0  # forward acceleration of the frame being observed
         # per-driver brake-mark calibration state (issue #522 part 2): zone (corner idx, zone
         # ordinal) -> (EMA of the driver's demonstrated onset spline, laps folded in). Survives
         # lap wraps and reset() — it is knowledge about the driver, not pass state.
@@ -531,6 +544,7 @@ class RealtimeObserver:
     def observe(self, frame: dict[str, Any]) -> list[Advisory]:
         """Process one live frame; return the advisories it triggers (possibly empty)."""
         spline, speed, brake, throttle, lap = _normalize_frame(frame)
+        self._frame_accel_mps2 = _frame_forward_accel_mps2(frame)
         if spline is None or speed is None:
             return []
 
@@ -713,16 +727,23 @@ class RealtimeObserver:
         ``d`` runs to the apex, where the target applies (to the mark when the mark lies past the
         apex). Measured to the mark instead, any approach above target would flip to "brake" just
         before the mark, a cue too late to act on.
+
+        A car still accelerating (``long_g`` > 0 on this frame) is projected to the mark at that
+        acceleration and coasts only from there: judged at its current speed, an out-lap
+        approach looked reachable at the window edge and was cued 0.45 s late (#815 run 06
+        replay, T1 lap 0 at 0.56 g).
         """
-        target = ref.target_apex_kmh
-        if speed <= target:
-            return True
         ahead = _forward_spline_delta(spline, ref.apex_spline)
         if ahead > _LAP_WRAP_DROP:
             ahead = _forward_spline_delta(spline, bp)
             if ahead > _LAP_WRAP_DROP:
                 ahead = 0.0
-        excess = (speed / 3.6) ** 2 - (target / 3.6) ** 2
+        v2 = (speed / 3.6) ** 2
+        to_mark = _forward_spline_delta(spline, bp)
+        if self._frame_accel_mps2 > 0.0 and to_mark <= _LAP_WRAP_DROP:
+            v2 += 2.0 * self._frame_accel_mps2 * to_mark * self._track_length_m
+            ahead = max(0.0, ahead - to_mark)
+        excess = v2 - (ref.target_apex_kmh / 3.6) ** 2
         return excess <= 2.0 * self._coast_decel_mps2 * ahead * self._track_length_m
 
     def _brake_cue(
