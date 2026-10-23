@@ -123,6 +123,139 @@ def test_brake_event_is_global_run_with_preceding_off_sample():
     assert events[0]["samples"] == 4
 
 
+@pytest.fixture
+def single_phrase_completeness(monkeypatch):
+    """Single-phrase synthetic bundles test timing/target logic, not completeness.
+
+    The reverb-aware rule needs >= 5 other phrases for its room response and fails closed on
+    these bundles by design; the dedicated multi-phrase tests below cover it. Here the dry-rule
+    result stands in, so these tests keep exercising the logic they were written for.
+    """
+
+    def stand_in(recording, rate, cues, bank, exclusions, *, seed, nulls=None):
+        return [
+            dict(
+                criterion="test_stand_in_dry_rule",
+                evaluated=True,
+                complete=bool(cue.get("complete")),
+                completion_sample=(
+                    cue["onset_sample"] + cue["template_samples"] if cue.get("complete") else None
+                ),
+                reason=None,
+                segments=[],
+            )
+            for cue in cues
+        ]
+
+    monkeypatch.setattr(live, "reverb_aware_completeness", stand_in)
+
+
+def room_phrase(seed, seconds=0.6):
+    """A voice-like clip: band-limited noise shaped into three syllables."""
+    rng = np.random.default_rng(seed)
+    n = int(RATE * seconds)
+    carrier = np.convolve(rng.normal(0, 1, n), np.ones(6) / 6, mode="same")
+    envelope = np.zeros(n)
+    for start, end in ((0.02, 0.22), (0.27, 0.42), (0.46, 0.58)):
+        a, b = int(start * RATE), int(end * RATE)
+        envelope[a:b] = np.hanning(b - a)
+    return 0.3 * carrier * envelope
+
+
+def synthetic_room(phrases=8, *, truncate=None, gap_s=4.0, noise=0.01, seed=7):
+    """Play clips through a reverberant room into a noisy mic; return audio, cues and bank."""
+    rng = np.random.default_rng(seed)
+    t = np.arange(int(0.25 * RATE)) / RATE
+    response = rng.normal(0, 1, len(t)) * np.exp(-t / 0.05)
+    response[0] = 6.0
+    response /= np.sqrt(np.sum(response**2))
+    clips = {f"clip{i}": room_phrase(100 + i) for i in range(phrases)}
+    total = int(RATE * (gap_s * phrases + 30))
+    audio = noise * rng.normal(0, 1, total)
+    cues, exclusions = [], []
+    for i, (clip_id, clip) in enumerate(clips.items()):
+        onset = int(RATE * (20 + gap_s * i))
+        played = clip.copy()
+        if truncate is not None and truncate[0] == i:
+            played[int(truncate[1] * len(played)) :] = 0.0
+        acoustic = np.convolve(played, response)
+        audio[onset : onset + len(acoustic)] += acoustic
+        cues.append(
+            dict(
+                clip_id=clip_id,
+                matched=True,
+                onset_sample=onset,
+                template_effective_samplerate=RATE,
+                template_samples=len(clip),
+                complete=True,
+            )
+        )
+        exclusions.append((onset - RATE, onset + 3 * RATE))
+    bank = Bank(samplerate=RATE, clips=clips, channels=1)
+    return audio, cues, bank, exclusions
+
+
+def test_reverb_aware_completeness_accepts_reverberant_complete_phrases():
+    audio, cues, bank, exclusions = synthetic_room()
+    results = live.reverb_aware_completeness(audio, RATE, cues, bank, exclusions, seed=1, nulls=120)
+    assert [r["complete"] for r in results] == [True] * len(cues)
+    for cue, result in zip(cues, results, strict=True):
+        assert len(result["segments"]) == live.COMPLETENESS_SEGMENTS
+        assert result["room_model_z"] >= live.COMPLETENESS_MIN_Z
+        # Completion is the measured end of the last speech energy (the clip ends in 20 ms of
+        # silence), not onset + nominal clip length.
+        clip = bank.get(cue["clip_id"])
+        speech_end = cue["onset_sample"] + int(np.flatnonzero(np.abs(clip) > 0)[-1]) + 1
+        assert abs(result["completion_sample"] - speech_end) <= live.SEGMENT_SLACK_SAMPLES + 1
+
+
+def test_reverb_aware_completeness_rejects_a_phrase_cut_before_its_last_syllable():
+    audio, cues, bank, exclusions = synthetic_room(truncate=(3, 0.75))
+    results = live.reverb_aware_completeness(audio, RATE, cues, bank, exclusions, seed=1, nulls=120)
+    cut = results[3]
+    assert not cut["complete"]
+    assert cut["reason"] == "segment_not_significant"
+    assert cut["completion_sample"] is None
+    assert not cut["segments"][-1]["present"]
+    assert all(r["complete"] for i, r in enumerate(results) if i != 3)
+
+
+def test_reverb_aware_completeness_fails_closed_without_enough_other_phrases():
+    audio, cues, bank, exclusions = synthetic_room(phrases=5)
+    results = live.reverb_aware_completeness(audio, RATE, cues, bank, exclusions, seed=1, nulls=50)
+    assert all(not r["complete"] for r in results)
+    assert {r["reason"] for r in results} == {"room_model_unqualified:too_few_other_phrases"}
+
+
+def test_reverb_aware_completeness_fails_closed_without_cue_free_null_material():
+    audio, cues, bank, exclusions = synthetic_room()
+    everything = [(0, len(audio))]
+    results = live.reverb_aware_completeness(audio, RATE, cues, bank, everything, seed=1, nulls=50)
+    assert {r["reason"] for r in results} == {"null_material_insufficient"}
+    assert not any(r["complete"] for r in results)
+
+
+def test_reverb_aware_completeness_never_passes_an_unplayed_phrase():
+    audio, cues, bank, exclusions = synthetic_room()
+    silent = room_phrase(999)
+    bank.clips["never_played"] = silent
+    ghost = dict(cues[0], clip_id="never_played", onset_sample=int(RATE * 8))  # cue-free span
+    results = live.reverb_aware_completeness(
+        audio,
+        RATE,
+        [*cues, ghost],
+        bank,
+        [*exclusions, (int(RATE * 7), int(RATE * 11))],
+        seed=1,
+        nulls=120,
+    )
+    assert not results[-1]["complete"]
+    assert results[-1]["reason"] in {
+        "room_model_unqualified:no_better_than_null",
+        "segment_not_significant",
+    }
+
+
 def build_bundle(tmp_path):
     """Synthetic bytes deliberately stamped synthetic, never windows_live."""
     bank_dir = tmp_path / "bank"
@@ -335,7 +468,9 @@ def build_bundle(tmp_path):
     return capture, taps
 
 
-def test_full_math_pipeline_retains_synthetic_label_and_never_claims_live_pass(tmp_path):
+def test_full_math_pipeline_retains_synthetic_label_and_never_claims_live_pass(
+    tmp_path, single_phrase_completeness
+):
     build_bundle(tmp_path)
     report = live.analyze_bundle(tmp_path, tmp_path / "result.json")
     assert report["failed_gates"] == ["actual_capture_kind"]
@@ -598,7 +733,9 @@ def rewrite_taps(capture, taps):
 
 
 @pytest.mark.parametrize("kind", ["early_brake", "brake_late"])
-def test_prime_matches_reference_corner_not_emission_position(tmp_path, kind):
+def test_prime_matches_reference_corner_not_emission_position(
+    tmp_path, kind, single_phrase_completeness
+):
     capture, taps = build_bundle(tmp_path)
     advisory = next(row for row in taps if row["kind"] == "advisory_submitted")["advisory"]
     advisory.update(kind=kind, spline=0.60, detail={"coach": "prime", "root": kind})
@@ -613,7 +750,9 @@ def test_prime_matches_reference_corner_not_emission_position(tmp_path, kind):
     assert report["anticipatory_assessment"]["coverage_denominator"] == 1
 
 
-def test_reactive_save_keeps_acoustic_and_act_gates_without_false_anticipatory_pass(tmp_path):
+def test_reactive_save_keeps_acoustic_and_act_gates_without_false_anticipatory_pass(
+    tmp_path, single_phrase_completeness
+):
     capture, taps = build_bundle(tmp_path)
     advisory = next(row for row in taps if row["kind"] == "advisory_submitted")["advisory"]
     advisory.update(kind="save", detail={"coach": "save"})
@@ -1090,7 +1229,9 @@ def replace_bundle_audio(tmp_path, capture, *, effective_rate=RATE, onset_second
     )
 
 
-def test_large_stable_skew_needs_independent_proof_and_preserves_nominal_diagnostic(tmp_path):
+def test_large_stable_skew_needs_independent_proof_and_preserves_nominal_diagnostic(
+    tmp_path, single_phrase_completeness
+):
     capture, _ = build_bundle(tmp_path)
     replace_bundle_audio(tmp_path, capture, effective_rate=RATE / 0.9962)
     (tmp_path / "capture.json").write_text(json.dumps(capture))
@@ -1155,7 +1296,7 @@ def test_two_acoustic_anchors_alone_do_not_qualify_timebase(defect):
 
 @pytest.mark.parametrize("onset_seconds", [2.23, 3.33])
 def test_measured_uncertainty_is_carried_into_act_latency_and_both_brake_bounds(
-    tmp_path, onset_seconds
+    tmp_path, onset_seconds, single_phrase_completeness
 ):
     capture, _ = build_bundle(tmp_path)
     replace_bundle_audio(tmp_path, capture, onset_seconds=onset_seconds)
