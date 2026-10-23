@@ -6,6 +6,7 @@ import math
 
 import pytest
 
+from tools.ai_sidecar import realtime_observer as rt
 from tools.ai_sidecar.lap_dynamics import lap_trace_from_archive
 from tools.ai_sidecar.realtime_observer import (
     _DEFAULT_TRACK_LENGTH_M,
@@ -448,14 +449,50 @@ def test_prepare_lead_default_covers_audibility_budget():
     FINISHES with human reaction time to spare — not the old 0.8 s that made 0/8 cues
     actionable in the instrumented lap."""
     obs = RealtimeObserver([_i522_ref()], track_length_m=2500.0)  # default lead
-    # 110 km/h = 30.6 m/s; 3.2 s = 97.8 m = 0.0391 spline -> window opens at ~0.4109.
-    out = obs.observe({"spline": 0.412, "speed": 110.0, "brake": 0.0})
+    # 110 km/h = 30.6 m/s; 3.2 s = 97.8 m = 0.0391 spline, measured from the earliest onset
+    # credited to the zone (mark - 50 m = 0.43, #815) -> window opens at ~0.3909.
+    out = obs.observe({"spline": 0.392, "speed": 110.0, "brake": 0.0})
     prepare = [a for a in out if a.kind == "late_brake" and a.urgency == "prepare"]
-    assert prepare, "prepare must fire ~3.2 s before the mark (issue #522)"
-    assert prepare[0].detail["lead_s"] == pytest.approx(3.1, abs=0.15)
+    assert prepare, "prepare must fire ~3.2 s before the earliest credited onset (#522, #815)"
+    # lead_s stays time-to-the-mark: 3.1 s to the earliest onset + 50 m / 30.6 m/s
+    assert prepare[0].detail["lead_s"] == pytest.approx(3.1 + 50.0 / 30.56, abs=0.15)
     # before the window opens: silence
     obs2 = RealtimeObserver([_i522_ref()], track_length_m=2500.0)
-    assert obs2.observe({"spline": 0.405, "speed": 110.0, "brake": 0.0}) == []
+    assert obs2.observe({"spline": 0.385, "speed": 110.0, "brake": 0.0}) == []
+
+
+@pytest.mark.parametrize("speed_kmh", [105.0, 145.0, 220.0])
+def test_heads_up_finishes_with_reaction_time_before_any_credited_early_onset(speed_kmh):
+    """#815 run 05: the driver braked 30-34 m before the T1 mark, inside the 50 m band that
+    calibration and the acceptance analyzer both credit to the zone, and the heads-up finished
+    0.35-0.80 s before braking. The budget now runs to the band's earliest edge, so a ~1.3 s
+    clip plus 0.1 s audio path still leaves >= 1.2 s to react for an onset anywhere in it."""
+    track_m, frame_hz = 2500.0, 20.0
+    obs = RealtimeObserver([_i522_ref()], track_length_m=track_m)
+    v = speed_kmh / 3.6
+    step = v / frame_hz / track_m
+    s, fired_at = 0.30, None
+    while s < 0.45 and fired_at is None:
+        out = obs.observe({"spline": s, "speed": speed_kmh, "brake": 0.0})
+        if any(a.kind == "late_brake" and a.urgency == "prepare" for a in out):
+            fired_at = s
+        s += step
+    assert fired_at is not None
+    earliest_onset = 0.45 - rt.CAL_MATCH_TOL_M / track_m
+    time_to_earliest = (earliest_onset - fired_at) * track_m / v
+    assert time_to_earliest >= rt._LEAD_S - 1.0 / frame_hz
+    assert time_to_earliest - 1.3 - 0.1 >= 1.2
+
+
+def test_braking_inside_the_credited_band_latches_the_zone_even_when_slow():
+    """At low speed, 40 m before the mark is more than _LEAD_LATCH_TTA_S away, yet it is
+    braking FOR this zone (inside CAL_MATCH_TOL_M): no heads-up may follow it."""
+    obs = RealtimeObserver([_i522_ref()], track_length_m=2500.0)
+    # 60 km/h = 16.7 m/s: 40 m = 0.016 spline = 2.4 s before the mark.
+    braking = obs.observe({"spline": 0.434, "speed": 60.0, "brake": 0.8})
+    assert [a for a in braking if a.kind == "late_brake"] == []
+    released = obs.observe({"spline": 0.437, "speed": 50.0, "brake": 0.0})
+    assert [a for a in released if a.kind == "late_brake"] == []
 
 
 def test_deep_past_point_imperative_is_silenced_and_graded_at_exit():
