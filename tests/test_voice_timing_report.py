@@ -159,7 +159,7 @@ def test_long_track_injection_hits_anticipatory_lead_window() -> None:
         best_brake_point_spline=0.25,
         n_corpus=1,
     )
-    observer = RealtimeObserver([ref], track_length_m=20_000.0)
+    observer = RealtimeObserver([ref], track_length_m=20_000.0, coast_decel_mps2=0.0)
     manifest = build_manifest()
 
     rep = build_timing_report(
