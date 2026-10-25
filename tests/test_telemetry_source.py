@@ -357,3 +357,83 @@ def test_build_live_tick_payload_propagates_shm_thermals_and_rejects_bool_nan():
     assert payload["weather_type"] == "mid_clear"
     assert payload["tyre_compound"] == "slick"
     assert payload["conditions"]["trackGripLevel"] == pytest.approx(0.98)
+
+
+def test_stream_live_maps_physics_map_bytes_and_unpacks_shm_thermals_and_conditions(monkeypatch):
+    import json
+    import struct
+
+    from tools.ac_harness.racing_telemetry import GFX_BYTES
+    from tools.ac_harness.shared_memory import PHYSICS_MAP_BYTES, SHM_GRAPHICS, SHM_PHYSICS
+
+    opened_sizes: dict[str, int] = {}
+    read_sizes: dict[str, int] = {}
+    sent_frames: list[dict] = []
+
+    raw_phys = bytearray(PHYSICS_MAP_BYTES)
+    struct.pack_into("<i", raw_phys, 0, 42)  # packetId
+    struct.pack_into("<2f", raw_phys, 4, 0.75, 0.10)  # gas, brake
+    struct.pack_into("<2i", raw_phys, 16, 4, 6400)  # gear (4 -> 3rd), rpm
+    struct.pack_into("<2f", raw_phys, 24, 22.5, 142.0)  # steer, speedKmh
+    struct.pack_into("<3f", raw_phys, 44, 0.85, 0.0, -0.35)  # accG [lat, vert, lon]
+    struct.pack_into("<4f", raw_phys, 152, 83.0, 84.5, 80.0, 81.5)  # tyreCoreTemperature[4] @ 152
+    struct.pack_into("<2f", raw_phys, 288, 22.5, 31.0)  # airTemp @ 288, roadTemp @ 292
+    struct.pack_into("<4f", raw_phys, 348, 420.0, 430.0, 360.0, 365.0)  # brakeTemp[4] @ 348
+
+    raw_gfx = bytearray(GFX_BYTES)
+    struct.pack_into("<2i", raw_gfx, 0, 10, 2)  # packetId, status=LIVE
+    struct.pack_into("<i", raw_gfx, 132, 4)  # completedLaps @ 132
+    compound_bytes = "Slick Medium\x00".encode("utf-16-le")
+    raw_gfx[176 : 176 + len(compound_bytes)] = compound_bytes  # tyreCompound[33] @ 176
+    struct.pack_into("<f", raw_gfx, 248, 0.375)  # normalizedCarPosition @ 248
+
+    class _Map:
+        def __init__(self, name: str, size: int):
+            self.name = name
+            opened_sizes[name] = size
+
+        def read(self, size: int) -> bytes:
+            read_sizes[self.name] = size
+            return bytes(raw_phys[:size]) if self.name == SHM_PHYSICS else bytes(raw_gfx[:size])
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "tools.ac_harness.shared_memory.open_shared_memory",
+        lambda name, size: _Map(name, size),
+    )
+
+    class _FakeWS:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def send(self, msg: str) -> None:
+            sent_frames.append(json.loads(msg))
+            if len(sent_frames) >= 2:
+                raise RuntimeError("stop-after-first-tick")
+
+    monkeypatch.setattr("websockets.connect", lambda *_args, **_kwargs: _FakeWS())
+
+    with pytest.raises(RuntimeError, match="stop-after-first-tick"):
+        asyncio.run(telemetry_source.stream_live("ws://127.0.0.1:8765", hz=20.0))
+
+    assert opened_sizes == {SHM_PHYSICS: PHYSICS_MAP_BYTES, SHM_GRAPHICS: GFX_BYTES}
+    assert read_sizes == {SHM_PHYSICS: PHYSICS_MAP_BYTES, SHM_GRAPHICS: GFX_BYTES}
+    assert len(sent_frames) == 2
+    tick = sent_frames[1]
+    assert validate_inbound(tick) is None
+    p = tick["payload"]
+    assert p["tyre_temps_c"] == {"fl": 83.0, "fr": 84.5, "rl": 80.0, "rr": 81.5}
+    assert p["brake_temps_c"] == {"fl": 420.0, "fr": 430.0, "rl": 360.0, "rr": 365.0}
+    assert p["ambient_temp_c"] == pytest.approx(22.5)
+    assert p["track_temp_c"] == pytest.approx(31.0)
+    assert p["tyre_compound"] == "Slick Medium"
+    assert p["conditions"] == {
+        "ambientTempC": pytest.approx(22.5),
+        "trackTempC": pytest.approx(31.0),
+        "tyreCompound": "Slick Medium",
+    }

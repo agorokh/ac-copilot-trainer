@@ -422,6 +422,44 @@ def test_combined_entry_braking_turn_in_saturation_suppresses_early_brake():
             assert st is not None and st.root is RootError.EARLY_BRAKE
 
 
+def test_entry_combined_saturation_does_not_suppress_slow_apex_with_lateral_headroom():
+    """#938: corner-entry combined braking+turn-in saturation (entry_util >= 0.95) must only gate
+    EARLY_BRAKE and must NOT contaminate SLOW_APEX when apex lateral utilization has headroom."""
+    gt3_ggv = _combo_ggv(1.50, 1.65, ellipse_n=1.35)
+    archive = _ref()
+    rt = build_coach_runtime(
+        archive,
+        use_environment=False,
+        ggv_model=gt3_ggv,
+        capability_gate_mode="condition_indexed",
+    )
+    assert rt is not None
+    rt.ledger.assess_laps = 0
+    rt.ledger.hysteresis = 1
+    r = rt.refs[0]
+    frames = _lap_frames(archive)
+    for f in frames:
+        if (rt.anchors[r.index].brake - 0.04) <= f["spline"] <= r.spline_hi:
+            f["tyre_temps_c"] = {"fl": 86.0, "fr": 86.0, "rl": 84.0, "rr": 84.0}
+            if abs(f["spline"] - r.apex_spline) <= 0.015:
+                f["speed"] = max(20.0, f["speed"] - 25.0)
+            if f["spline"] < r.apex_spline - 0.01:
+                # Entry combined utilization >= 0.98, but lateral utilization = 1.05 / 1.50 = 0.70.
+                f["lat_g"] = 1.05
+                f["long_g"] = -1.38
+            else:
+                # Apex lateral utilization = 0.90 / 1.50 = 0.60 (< 0.95 -> plenty of headroom).
+                f["lat_g"] = 0.90
+                f["long_g"] = 0.0
+
+    _drive(rt, [frames])
+    st = rt.ledger.state(r.index)
+    assert rt.last_pass_capability[r.index]["max_entry_grip_used"] >= 0.95
+    assert rt.last_pass_capability[r.index]["max_lat_grip_used"] < 0.95
+    assert rt.last_pass_capability[r.index]["max_grip_used"] < 0.95
+    assert st is not None and st.root is RootError.SLOW_APEX
+
+
 @pytest.mark.parametrize(
     ("frame_extras", "expected_reason"),
     [

@@ -58,10 +58,17 @@ _BRAKE_TEMP_COL_SPECS: tuple[tuple[str, ...], ...] = (
     ("rl", "brakeTemp_rl", "brake_temp_rl"),
     ("rr", "brakeTemp_rr", "brake_temp_rr"),
 )
-# Optional AC SPageFilePhysics thermal offsets when an extended buffer is supplied.
+# AC SPageFilePhysics / SPageFileGraphic thermal and condition offsets within
+# PHYSICS_MAP_BYTES (512) and GFX_BYTES (256).
 _SHM_TYRE_CORE_TEMP_OFFSET = 152
+_SHM_AIR_TEMP_OFFSET = 288
+_SHM_ROAD_TEMP_OFFSET = 292
 _SHM_BRAKE_TEMP_OFFSET = 348
+_SHM_GFX_TYRE_COMPOUND_OFFSET = 176
+_SHM_GFX_TYRE_COMPOUND_BYTES = 66
+_SHM_GFX_SURFACE_GRIP_OFFSET = 280
 _SHM_WHEEL_VEC4 = struct.Struct("<4f")
+_SHM_FLOAT32 = struct.Struct("<f")
 
 
 def _finite_float(value: Any) -> float | None:
@@ -369,11 +376,35 @@ def _shm_wheel_map(buf: bytes | None, offset: int) -> dict[str, float] | None:
     return sanitized
 
 
+def _shm_scalar_float(buf: bytes | None, offset: int) -> float | None:
+    """Unpack a non-zero finite float from a shared-memory buffer when in bounds."""
+    if not isinstance(buf, bytes | bytearray | memoryview):
+        return None
+    if len(buf) < offset + _SHM_FLOAT32.size:
+        return None
+    val = _finite_float(_SHM_FLOAT32.unpack_from(buf, offset)[0])
+    if val is None or val == 0.0:
+        return None
+    return val
+
+
+def _shm_utf16_str(buf: bytes | None, offset: int, byte_len: int) -> str | None:
+    """Decode a NUL-terminated UTF-16LE string slice from a shared-memory buffer when non-empty."""
+    if not isinstance(buf, bytes | bytearray | memoryview):
+        return None
+    end = offset + byte_len
+    if len(buf) < end:
+        return None
+    raw = bytes(buf[offset:end]).decode("utf-16-le", "replace").split("\x00", 1)[0].strip()
+    return raw if raw else None
+
+
 def build_live_tick_payload(
     phys: Any,
     gfx: Any,
     *,
     phys_buf: bytes | None = None,
+    gfx_buf: bytes | None = None,
     conditions: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a sanitized ``telemetry_tick`` payload from AC shared-memory samples (pure)."""
@@ -433,6 +464,27 @@ def build_live_tick_payload(
             if val is not None and cond_key not in raw_cond:
                 raw_cond[cond_key] = val
 
+    if "ambientTempC" not in raw_cond:
+        air_temp = _shm_scalar_float(phys_buf, _SHM_AIR_TEMP_OFFSET)
+        if air_temp is not None:
+            raw_cond["ambientTempC"] = air_temp
+    if "trackTempC" not in raw_cond:
+        road_temp = _shm_scalar_float(phys_buf, _SHM_ROAD_TEMP_OFFSET)
+        if road_temp is not None:
+            raw_cond["trackTempC"] = road_temp
+    if "tyreCompound" not in raw_cond:
+        compound = _shm_utf16_str(
+            gfx_buf,
+            _SHM_GFX_TYRE_COMPOUND_OFFSET,
+            _SHM_GFX_TYRE_COMPOUND_BYTES,
+        )
+        if compound is not None:
+            raw_cond["tyreCompound"] = compound
+    if "trackGripLevel" not in raw_cond:
+        surface_grip = _shm_scalar_float(gfx_buf, _SHM_GFX_SURFACE_GRIP_OFFSET)
+        if surface_grip is not None and 0.0 < surface_grip <= 1.2:
+            raw_cond["trackGripLevel"] = surface_grip
+
     cond_dict, top_cond_fields = _sanitize_conditions(raw_cond or None)
     if top_cond_fields:
         payload.update(top_cond_fields)
@@ -475,22 +527,22 @@ async def stream_live(url: str, *, hz: float = DEFAULT_HZ, token: str | None = N
 
     from tools.ac_harness.racing_telemetry import (
         GFX_BYTES,
-        PHYS_BYTES,
         parse_graphics,
         parse_physics,
     )
     from tools.ac_harness.shared_memory import (
+        PHYSICS_MAP_BYTES,
         SHM_GRAPHICS,
         SHM_PHYSICS,
         open_shared_memory,
     )
 
-    # Map/read lengths come from racing_telemetry's own parser constants (single source of truth):
-    # speedKmh@28/brake@8 (phys) and normalizedCarPosition@248/completedLaps@132 (gfx).
+    # Map/read PHYSICS_MAP_BYTES (512) for acpmf_physics so parse_physics (160) AND thermal or
+    # condition offsets (tyreCoreTemperature@152, airTemp@288, roadTemp@292, brakeTemp@348) fit.
     phys_map = None
     gfx_map = None
     try:
-        phys_map = open_shared_memory(SHM_PHYSICS, PHYS_BYTES)
+        phys_map = open_shared_memory(SHM_PHYSICS, PHYSICS_MAP_BYTES)
         gfx_map = open_shared_memory(SHM_GRAPHICS, GFX_BYTES)
         headers = {AUTH_HEADER: token} if token else {}
         period = period_seconds(hz)
@@ -499,14 +551,19 @@ async def stream_live(url: str, *, hz: float = DEFAULT_HZ, token: str | None = N
             await ws.send(json.dumps(make_hello_frame("telemetry-source-live")))
             while True:
                 try:
-                    raw_phys = phys_map.read(PHYS_BYTES)
+                    raw_phys = phys_map.read(PHYSICS_MAP_BYTES)
                     raw_gfx = gfx_map.read(GFX_BYTES)
                     phys = parse_physics(raw_phys)
                     gfx = parse_graphics(raw_gfx)
                 except ValueError:
                     await asyncio.sleep(max(period, _PARSE_FAILURE_SLEEP_S))
                     continue
-                payload = build_live_tick_payload(phys, gfx, phys_buf=raw_phys)
+                payload = build_live_tick_payload(
+                    phys,
+                    gfx,
+                    phys_buf=raw_phys,
+                    gfx_buf=raw_gfx,
+                )
                 await ws.send(json.dumps(make_telemetry_tick(payload, seq=seq)))
                 seq += 1
                 await asyncio.sleep(period)

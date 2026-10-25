@@ -481,8 +481,7 @@ class CoachRuntime:
                     if cap.entry_util is not None and spline <= r.apex_spline:
                         st.has_grip_evidence = True
                         st.max_entry_grip_used = max(st.max_entry_grip_used, cap.entry_util)
-                        st.max_grip_used = max(st.max_grip_used, cap.entry_util)
-                    elif grip is not None:
+                    elif cap.lat_util is None and grip is not None:
                         st.has_grip_evidence = True
                         st.max_grip_used = max(st.max_grip_used, grip)
                     if cap.has_thermal_evidence:
@@ -570,9 +569,9 @@ class CoachRuntime:
                     self.capability_gate_mode == "condition_indexed"
                     and diag.root is RootError.EARLY_BRAKE
                 ):
-                    used = max(st.max_entry_grip_used, st.max_grip_used)
+                    used = max(st.max_entry_grip_used, st.max_lat_grip_used, st.max_grip_used)
                 else:
-                    used = max(st.max_lat_grip_used, st.max_grip_used)
+                    used = st.max_lat_grip_used if st.has_grip_evidence else st.max_grip_used
                 if used >= _GRIP_GATE_FRAC:
                     if self.capability_gate_mode == "condition_indexed":
                         self._set_suppress_reason("grip_envelope_saturated")
