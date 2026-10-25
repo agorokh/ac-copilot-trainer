@@ -589,7 +589,7 @@ class CoachRuntime:
                     self.capability_gate_mode == "condition_indexed"
                     and diag.root is RootError.EARLY_BRAKE
                 ):
-                    used = max(st.max_entry_grip_used, st.max_lat_grip_used, st.max_grip_used)
+                    used = st.max_entry_grip_used if st.has_grip_evidence else st.max_grip_used
                 else:
                     used = st.max_lat_grip_used if st.has_grip_evidence else st.max_grip_used
                 if used >= _GRIP_GATE_FRAC:
@@ -914,16 +914,18 @@ def _evaluate_frame_capability(
     tyre_temps = _sanitize_corner_map(pick("tyre_temps_c", "tire_temps_c"))
     brake_temps = _sanitize_corner_map(pick("brake_temps_c", "brake_temp_c"))
     cond_dict, frame_compound, frame_opt_temp = _extract_frame_conditions(frame, payload)
-    has_cond_evidence = cond_dict is not None
+    has_cond_evidence = False
     has_brake_evidence = bool(brake_temps)
     has_tyre_evidence = bool(tyre_temps)
-    has_thermal_evidence = bool(has_cond_evidence or has_brake_evidence or has_tyre_evidence)
+    has_thermal_evidence = bool(cond_dict is not None or has_brake_evidence or has_tyre_evidence)
     cond_reason = ""
     brake_reason = ""
     tyre_reason = ""
 
     if cond_dict is not None:
         cond_report = analyze_conditions(cond_dict)
+        if cond_report.regime in {"wet", "dry"}:
+            has_cond_evidence = True
         if cond_report.regime == "wet":
             cond_reason = "wet_regime"
 

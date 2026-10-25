@@ -557,6 +557,87 @@ def test_malformed_archive_ggv_falls_back_cleanly_and_conditions_only_frames_pre
     assert rt.cue_suppress_reason == "tyre_temp_cold"
 
 
+def test_post_apex_lateral_peak_does_not_suppress_early_brake_and_wet_regime_stays_sticky():
+    """#938 Round-3 regressions:
+    1. Post-apex lateral saturation (spline > apex_spline, lat_util >= 0.95) with soft corner-entry
+       utilization (entry_util < 0.95) must NOT suppress EARLY_BRAKE.
+    2. A temperature-only conditions fragment (trackTempC/ambientTempC without weatherType) must not
+       clear a sticky wet_regime PRIME abstention."""
+    gt3_ggv = _combo_ggv(1.50, 1.65, ellipse_n=1.35)
+    archive = _ref()
+    rt = build_coach_runtime(
+        archive,
+        use_environment=False,
+        ggv_model=gt3_ggv,
+        capability_gate_mode="condition_indexed",
+    )
+    assert rt is not None
+    rt.ledger.assess_laps = 0
+    rt.ledger.hysteresis = 1
+    r = next(
+        ref
+        for ref in rt.refs
+        if rt.ref_sigs[ref.index].brake_point_spline is not None
+        and rt.anchors[ref.index].brake > 0.05
+    )
+    bp = rt.ref_sigs[r.index].brake_point_spline
+    frames = _lap_frames(archive)
+    _inject_early_brake(frames, bp)
+    for f in frames:
+        if (rt.anchors[r.index].brake - 0.04) <= f["spline"] <= r.spline_hi:
+            f["tyre_temps_c"] = {"fl": 86.0, "fr": 86.0, "rl": 84.0, "rr": 84.0}
+            if f["spline"] <= r.apex_spline:
+                # Soft corner entry (well below 0.95 envelope)
+                f["lat_g"] = 0.70
+                f["long_g"] = -0.60
+            else:
+                # High post-apex lateral load (>= 0.96 of 1.50g)
+                f["lat_g"] = 1.46
+                f["long_g"] = 0.10
+
+    _drive(rt, [frames])
+    st = rt.ledger.state(r.index)
+    assert rt.last_pass_capability[r.index]["max_entry_grip_used"] < 0.95
+    assert rt.last_pass_capability[r.index]["max_lat_grip_used"] >= 0.95
+    assert st is not None and st.root is RootError.EARLY_BRAKE
+
+    # Now verify sticky wet_regime survives a temperature-only conditions frame before PRIME anchor.
+    rt2 = build_coach_runtime(archive, use_environment=False, ggv_model=gt3_ggv)
+    assert rt2 is not None
+    rt2.ledger.assess_laps = 0
+    rt2.ledger.hysteresis = 1
+    cst = rt2.ledger._states.setdefault(r.index, CornerState(r.index))
+    cst.status = Status.ARMED
+    cst.root = RootError.EARLY_BRAKE
+    cst.time_lost_s = 5.0
+    rt2.ledger.begin_lap(2)
+    rt2.ledger._speak_set = {r.index}
+    fire_at = rt2.anchors[r.index].brake
+
+    rt2.observe(
+        {
+            "spline": (fire_at - 0.01) % 1.0,
+            "speed": 140.0,
+            "brake": 0.0,
+            "lat_g": 0.2,
+            "lap": 2,
+            "conditions": {"weatherType": "rain", "trackGripLevel": 0.78},
+        }
+    )
+    advs = rt2.observe(
+        {
+            "spline": (fire_at + 0.001) % 1.0,
+            "speed": 140.0,
+            "brake": 0.0,
+            "lat_g": 0.2,
+            "lap": 2,
+            "conditions": {"trackTempC": 28.0, "ambientTempC": 21.0},
+        }
+    )
+    assert not any(a.detail.get("coach") == "prime" for a in advs)
+    assert rt2.cue_suppress_reason == "wet_regime"
+
+
 @pytest.mark.parametrize(
     ("frame_extras", "expected_reason"),
     [

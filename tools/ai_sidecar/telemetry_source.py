@@ -533,7 +533,11 @@ async def stream_live(url: str, *, hz: float = DEFAULT_HZ, token: str | None = N
     )
 
     # Map/read PHYSICS_MAP_BYTES (512) for acpmf_physics so parse_physics (160) AND thermal or
-    # condition offsets (tyreCoreTemperature@152, airTemp@288, roadTemp@292, brakeTemp@348) fit.
+    # condition offsets (tyreCoreTemperature@152, airTemp@288, roadTemp@292, brakeTemp@348) fit,
+    # plus tyreCompound@176 within GFX_BYTES (256). AC shared memory does not expose a weatherType
+    # string and places surfaceGrip past the version-dependent carCoordinates block outside the
+    # 256-byte graphics prefix, so weather/grip gates fail-open on raw SHM unless supplied via
+    # conditions or the in-game Lua telemetry_publisher.
     phys_map = None
     gfx_map = None
     try:
