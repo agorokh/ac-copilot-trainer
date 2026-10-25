@@ -636,6 +636,50 @@ def test_post_apex_lateral_peak_does_not_suppress_early_brake_and_wet_regime_sta
     )
     assert not any(a.detail.get("coach") == "prime" for a in advs)
     assert rt2.cue_suppress_reason == "wet_regime"
+    assert cst.status is Status.ARMED
+    assert rt2.ledger._spoken_this_lap == 0
+
+
+def test_gated_pass_and_prime_hold_ledger_state_without_false_confirm():
+    """#938 Round-4 regression: capability/thermal abstention must hold CoachingLedger state
+    unchanged (valid=False) rather than recording RootError.NONE as a clean fix ('Good.' confirm
+    or wiping ARMED consecutive count), and PRIME abstention must not burn lap budget."""
+    gt3_ggv = _combo_ggv(1.50, 1.65, ellipse_n=1.35)
+    archive = _ref()
+    rt = build_coach_runtime(archive, use_environment=False, ggv_model=gt3_ggv)
+    assert rt is not None
+    rt.ledger.assess_laps = 0
+    rt.ledger.hysteresis = 1
+    r = next(
+        ref
+        for ref in rt.refs
+        if rt.ref_sigs[ref.index].brake_point_spline is not None
+        and rt.anchors[ref.index].brake > 0.05
+    )
+    bp = rt.ref_sigs[r.index].brake_point_spline
+
+    # Seed corner r as PRIMED for EARLY_BRAKE, then drive an early-brake pass under cold tyres.
+    cst = rt.ledger._states.setdefault(r.index, CornerState(r.index))
+    cst.status = Status.PRIMED
+    cst.root = RootError.EARLY_BRAKE
+    cst.consecutive = 2
+    cst.time_lost_s = 5.0
+    rt.ledger.begin_lap(2)
+    rt.ledger._speak_set = {r.index}
+
+    frames = _lap_frames(archive)
+    _inject_early_brake(frames, bp)
+    for f in frames:
+        f["lat_g"] = 0.70
+        f["tyre_temps_c"] = {"fl": 33.0, "fr": 34.0, "rl": 32.0, "rr": 32.0}
+
+    advs = _drive(rt, [frames])
+    assert not any(a.detail.get("coach") == "prime" for _, a in advs)
+    assert not any(a.detail.get("coach") == "confirm" for _, a in advs)
+    assert cst.status is Status.PRIMED
+    assert cst.root is RootError.EARLY_BRAKE
+    assert cst.clean_streak == 0
+    assert rt.ledger._spoken_this_lap == 0
 
 
 @pytest.mark.parametrize(

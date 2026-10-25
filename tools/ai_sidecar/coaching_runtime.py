@@ -466,22 +466,23 @@ class CoachRuntime:
             # reference is slower or tyres/brakes/conditions are out of window.
             root = self.ledger.armed_root(r.index)
             if root is not None and _crossed(self._last_spline, spline, anc.for_root(root)):
-                spoken = self.ledger.due_prime(r.index)
                 ineligible_reason = cap.ineligible_reason or self._active_ineligible_reason
                 prime_gated = (
                     self.capability_gate_mode == "condition_indexed"
-                    and spoken in _GRIP_GATED_ROOTS
+                    and root in _GRIP_GATED_ROOTS
                     and bool(ineligible_reason)
                 )
                 if prime_gated:
                     self._set_suppress_reason(ineligible_reason)
-                elif spoken is not None and not self._off_pace_reference:
-                    if spoken in _GRIP_GATED_ROOTS:
-                        self._set_suppress_reason("")
-                    gst = self.ledger.state(r.index)
-                    reg = gst.register if gst else "urgent"
-                    inten = gst.intensity if gst else 0.5
-                    out.append(_prime(r, spoken, spline, register=reg, intensity=inten))
+                else:
+                    spoken = self.ledger.due_prime(r.index)
+                    if spoken is not None and not self._off_pace_reference:
+                        if spoken in _GRIP_GATED_ROOTS:
+                            self._set_suppress_reason("")
+                        gst = self.ledger.state(r.index)
+                        reg = gst.register if gst else "urgent"
+                        inten = gst.intensity if gst else 0.5
+                        out.append(_prime(r, spoken, spline, register=reg, intensity=inten))
 
             # 2. Accumulate within the pass window [brake-lead .. exit], then finalize ON EXIT.
             # The exit check MUST come first: once a pass is active the window must be able to
@@ -572,10 +573,12 @@ class CoachRuntime:
         #    utilization against the combo GGVModel friction ellipse; SLOW_APEX checks speed-
         #    indexed lateral utilization against GGVModel.ay_max(v). Missing telemetry channels
         #    stay fail-open without fabricating saturation.
+        gated_abstain = False
         if diag.root in _GRIP_GATED_ROOTS:
             pass_ineligible = st.ineligible_reason or self._active_ineligible_reason
             if self.capability_gate_mode == "condition_indexed" and pass_ineligible:
                 self._set_suppress_reason(pass_ineligible)
+                gated_abstain = True
                 diag = Diagnosis(
                     RootError.NONE,
                     {
@@ -595,6 +598,7 @@ class CoachRuntime:
                 if used >= _GRIP_GATE_FRAC:
                     if self.capability_gate_mode == "condition_indexed":
                         self._set_suppress_reason("grip_envelope_saturated")
+                    gated_abstain = True
                     diag = Diagnosis(
                         RootError.NONE,
                         {
@@ -608,9 +612,9 @@ class CoachRuntime:
         time_lost = max(0.0, ref_sig.min_speed_kmh - st.min_speed_kmh)
         # Validity gate (B3): a pass that never reached a plausible apex (no entry samples, or the
         # min-speed sentinel never beaten) is an out-lap / pit / teleport / partial pass — do NOT
-        # let it poison the ledger. The runtime has no richer off-track flag yet; v2 trusts every
-        # on-track pass that produced real corner samples (documented in the PR).
-        valid = st.entry_count > 0 and st.min_speed_kmh < 1e9
+        # let it poison the ledger. Likewise, capability/thermal abstention holds existing ledger
+        # state unchanged (valid=False) rather than recording a false clean pass ('Good.').
+        valid = st.entry_count > 0 and st.min_speed_kmh < 1e9 and not gated_abstain
         events = self.ledger.record_pass(r.index, diag, time_lost_s=time_lost, valid=valid)
         st.reset()
         return [_confirm(r) for e in events if e.kind == "confirm"]
