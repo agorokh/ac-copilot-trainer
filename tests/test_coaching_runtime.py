@@ -247,7 +247,12 @@ def test_same_lap_rewind_does_not_advance_ledger_lap():
 def test_late_brake_not_suppressed_at_grip_ceiling():
     """LATE_BRAKE is 'Brake earlier.' — still valid coaching at high grip utilization."""
     rt = build_coach_runtime(_ref())
-    r = next(ref for ref in rt.refs if rt.ref_sigs[ref.index].brake_point_spline is not None)
+    r = next(
+        ref
+        for ref in rt.refs
+        if rt.ref_sigs[ref.index].brake_point_spline is not None
+        and rt.anchors[ref.index].brake > 0.05
+    )
     st = rt._pass[r.index]
     st.active = True
     st.entry_count = 5
@@ -281,7 +286,12 @@ def test_wrap_finalizes_passes_before_begin_lap():
     rt = build_coach_runtime(_ref())
     rt.ledger.assess_laps = 0
     rt.ledger.hysteresis = 1
-    r = next(ref for ref in rt.refs if rt.ref_sigs[ref.index].brake_point_spline is not None)
+    r = next(
+        ref
+        for ref in rt.refs
+        if rt.ref_sigs[ref.index].brake_point_spline is not None
+        and rt.anchors[ref.index].brake > 0.05
+    )
     st = rt._pass[r.index]
     st.active = True
     st.entry_count = 5
@@ -310,7 +320,12 @@ def test_off_pace_reference_suppresses_prime_and_save():
     assert rt.cue_suppress_reason == "reference_slower_than_rolling_best"
 
     rt.ledger.assess_laps = 0
-    r = next(ref for ref in rt.refs if rt.ref_sigs[ref.index].brake_point_spline is not None)
+    r = next(
+        ref
+        for ref in rt.refs
+        if rt.ref_sigs[ref.index].brake_point_spline is not None
+        and rt.anchors[ref.index].brake > 0.05
+    )
     st = rt.ledger._states.setdefault(r.index, CornerState(r.index))
     st.status = Status.ARMED
     st.root = RootError.EARLY_BRAKE
@@ -364,7 +379,12 @@ def test_street_car_saturation_suppressed_while_baseline_falsely_diagnoses():
         assert rt is not None
         rt.ledger.assess_laps = 0
         rt.ledger.hysteresis = 1
-        r = next(ref for ref in rt.refs if rt.ref_sigs[ref.index].brake_point_spline is not None)
+        r = next(
+            ref
+            for ref in rt.refs
+            if rt.ref_sigs[ref.index].brake_point_spline is not None
+            and rt.anchors[ref.index].brake > 0.05
+        )
         bp = rt.ref_sigs[r.index].brake_point_spline
         frames = _lap_frames(archive)
         _inject_early_brake(frames, bp)
@@ -400,7 +420,12 @@ def test_combined_entry_braking_turn_in_saturation_suppresses_early_brake():
         assert rt is not None
         rt.ledger.assess_laps = 0
         rt.ledger.hysteresis = 1
-        r = next(ref for ref in rt.refs if rt.ref_sigs[ref.index].brake_point_spline is not None)
+        r = next(
+            ref
+            for ref in rt.refs
+            if rt.ref_sigs[ref.index].brake_point_spline is not None
+            and rt.anchors[ref.index].brake > 0.05
+        )
         bp = rt.ref_sigs[r.index].brake_point_spline
         frames = _lap_frames(archive)
         _inject_early_brake(frames, bp)
@@ -460,6 +485,78 @@ def test_entry_combined_saturation_does_not_suppress_slow_apex_with_lateral_head
     assert st is not None and st.root is RootError.SLOW_APEX
 
 
+def test_malformed_archive_ggv_falls_back_cleanly_and_conditions_only_frames_preserve_tyre_gate():
+    """#938 Round-2 regressions:
+    1. Corrupt/malformed archive['ggv'] must fall back to telemetry GGV derivation instead of
+       raising ValueError during build_coach_runtime.
+    2. A frame carrying only conditions (no tyre_temps_c) must not clear an active cold-tyre
+       PRIME abstention reason, and straightaway in-window frames must not wipe out pass-exit
+       cue_suppress_reason before the next coaching evaluation."""
+    archive = _ref()
+    archive["ggv"] = {"mu_lat_g": -5.0, "ellipse_n": "bad"}
+    rt = build_coach_runtime(archive, use_environment=False)
+    assert rt is not None
+    assert rt.ggv_model.mu_lat_g > 0.5
+    rt.ledger.assess_laps = 0
+    rt.ledger.hysteresis = 1
+
+    r = next(
+        ref
+        for ref in rt.refs
+        if rt.ref_sigs[ref.index].brake_point_spline is not None
+        and rt.anchors[ref.index].brake > 0.05
+    )
+    cst = rt.ledger._states.setdefault(r.index, CornerState(r.index))
+    cst.status = Status.ARMED
+    cst.root = RootError.EARLY_BRAKE
+    cst.time_lost_s = 5.0
+    rt.ledger.begin_lap(2)
+    rt.ledger._speak_set = {r.index}
+    fire_at = rt.anchors[r.index].brake
+
+    # Frame 1 before anchor: cold tyres reported, no cue evaluated yet -> suppress_reason stays "".
+    rt.observe(
+        {
+            "spline": (fire_at - 0.01) % 1.0,
+            "speed": 140.0,
+            "brake": 0.0,
+            "lat_g": 0.2,
+            "lap": 2,
+            "tyre_temps_c": {"fl": 33.0, "fr": 34.0, "rl": 32.0, "rr": 32.0},
+        }
+    )
+    assert rt.cue_suppress_reason == ""
+
+    # Frame 2 crosses PRIME anchor with conditions-only metadata (omitting tyre_temps_c):
+    # active cold-tyre state must remain in effect and gate the PRIME cue.
+    advs = rt.observe(
+        {
+            "spline": (fire_at + 0.001) % 1.0,
+            "speed": 140.0,
+            "brake": 0.0,
+            "lat_g": 0.2,
+            "lap": 2,
+            "conditions": {"trackGripLevel": 0.98, "trackTempC": 30.0, "weatherType": "clear"},
+        }
+    )
+    assert not any(a.detail.get("coach") == "prime" for a in advs)
+    assert rt.cue_suppress_reason == "tyre_temp_cold"
+
+    # Frame 3 on straightaway with warm tyres (outside any PRIME or pass finalization) updates
+    # active tyre state to in-window but does not prematurely wipe the last cue_suppress_reason.
+    rt.observe(
+        {
+            "spline": (fire_at + 0.002) % 1.0,
+            "speed": 140.0,
+            "brake": 0.0,
+            "lat_g": 0.2,
+            "lap": 2,
+            "tyre_temps_c": {"fl": 82.0, "fr": 82.0, "rl": 80.0, "rr": 80.0},
+        }
+    )
+    assert rt.cue_suppress_reason == "tyre_temp_cold"
+
+
 @pytest.mark.parametrize(
     ("frame_extras", "expected_reason"),
     [
@@ -507,7 +604,12 @@ def test_thermal_and_condition_gates_suppress_prime_and_pass_diagnosis(
     assert rt is not None
     rt.ledger.assess_laps = 0
     rt.ledger.hysteresis = 1
-    r = next(ref for ref in rt.refs if rt.ref_sigs[ref.index].brake_point_spline is not None)
+    r = next(
+        ref
+        for ref in rt.refs
+        if rt.ref_sigs[ref.index].brake_point_spline is not None
+        and rt.anchors[ref.index].brake > 0.05
+    )
     bp = rt.ref_sigs[r.index].brake_point_spline
 
     # Arm EARLY_BRAKE on corner r, then cross the PRIME anchor under the ineligible state.
@@ -559,7 +661,12 @@ def test_bool_nan_inf_and_missing_telemetry_pitfalls():
     assert rt is not None
     rt.ledger.assess_laps = 0
     rt.ledger.hysteresis = 1
-    r = next(ref for ref in rt.refs if rt.ref_sigs[ref.index].brake_point_spline is not None)
+    r = next(
+        ref
+        for ref in rt.refs
+        if rt.ref_sigs[ref.index].brake_point_spline is not None
+        and rt.anchors[ref.index].brake > 0.05
+    )
     bp = rt.ref_sigs[r.index].brake_point_spline
 
     # Pass 1: frames carry bool/NaN/±inf on every capability channel -> treated as missing, not 1.0g

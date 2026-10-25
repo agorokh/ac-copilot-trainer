@@ -143,6 +143,12 @@ class _FrameCapability:
     entry_util: float | None = None
     has_grip_evidence: bool = False
     has_thermal_evidence: bool = False
+    has_cond_evidence: bool = False
+    has_brake_evidence: bool = False
+    has_tyre_evidence: bool = False
+    cond_reason: str = ""
+    brake_reason: str = ""
+    tyre_reason: str = ""
     ineligible_reason: str = ""
 
 
@@ -210,6 +216,9 @@ class CoachRuntime:
     #: derived brake/turn cues are suppressed (visible via :attr:`cue_suppress_reason`).
     _off_pace_reference: bool = False
     cue_suppress_reason: str = ""
+    _active_cond_reason: str = ""
+    _active_brake_reason: str = ""
+    _active_tyre_reason: str = ""
     _active_ineligible_reason: str = ""
     _pass: dict[int, _PassState] = field(default_factory=dict)
     _last_spline: float | None = None
@@ -259,6 +268,9 @@ class CoachRuntime:
         )
         self._pass = {r.index: _PassState() for r in self.refs}
         self.last_pass_capability.clear()
+        self._active_cond_reason = ""
+        self._active_brake_reason = ""
+        self._active_tyre_reason = ""
         self._active_ineligible_reason = ""
         self._set_suppress_reason("")
         self._last_spline = None
@@ -397,12 +409,16 @@ class CoachRuntime:
             default_compound=self.reference_compound,
             default_optimal_temp_c=self.reference_optimal_temp_c,
         )
+        if cap.has_cond_evidence:
+            self._active_cond_reason = cap.cond_reason
+        if cap.has_brake_evidence:
+            self._active_brake_reason = cap.brake_reason
+        if cap.has_tyre_evidence:
+            self._active_tyre_reason = cap.tyre_reason
         if cap.has_thermal_evidence:
-            self._active_ineligible_reason = cap.ineligible_reason
-            if cap.ineligible_reason:
-                self._set_suppress_reason(cap.ineligible_reason)
-            elif not self._off_pace_reference:
-                self._set_suppress_reason("")
+            self._active_ineligible_reason = (
+                self._active_cond_reason or self._active_brake_reason or self._active_tyre_reason
+            )
         out: list[Advisory] = []
 
         # Deferred wrap finalization when lapCount lags the spline drop by a frame (codex #294).
@@ -460,6 +476,8 @@ class CoachRuntime:
                 if prime_gated:
                     self._set_suppress_reason(ineligible_reason)
                 elif spoken is not None and not self._off_pace_reference:
+                    if spoken in _GRIP_GATED_ROOTS:
+                        self._set_suppress_reason("")
                     gst = self.ledger.state(r.index)
                     reg = gst.register if gst else "urgent"
                     inten = gst.intensity if gst else 0.5
@@ -486,8 +504,9 @@ class CoachRuntime:
                         st.max_grip_used = max(st.max_grip_used, grip)
                     if cap.has_thermal_evidence:
                         st.has_thermal_evidence = True
-                        if cap.ineligible_reason and not st.ineligible_reason:
-                            st.ineligible_reason = cap.ineligible_reason
+                        frame_reason = cap.ineligible_reason or self._active_ineligible_reason
+                        if frame_reason and not st.ineligible_reason:
+                            st.ineligible_reason = frame_reason
 
         self._last_spline = spline
         if lap is not None:
@@ -554,13 +573,14 @@ class CoachRuntime:
         #    indexed lateral utilization against GGVModel.ay_max(v). Missing telemetry channels
         #    stay fail-open without fabricating saturation.
         if diag.root in _GRIP_GATED_ROOTS:
-            if self.capability_gate_mode == "condition_indexed" and st.ineligible_reason:
-                self._set_suppress_reason(st.ineligible_reason)
+            pass_ineligible = st.ineligible_reason or self._active_ineligible_reason
+            if self.capability_gate_mode == "condition_indexed" and pass_ineligible:
+                self._set_suppress_reason(pass_ineligible)
                 diag = Diagnosis(
                     RootError.NONE,
                     {
                         "capability_gated": 1.0,
-                        "reason": st.ineligible_reason,
+                        "reason": pass_ineligible,
                         "evidence_quality": evidence_quality,
                     },
                 )
@@ -582,6 +602,8 @@ class CoachRuntime:
                             "evidence_quality": evidence_quality,
                         },
                     )
+                elif not self._off_pace_reference:
+                    self._set_suppress_reason("")
         # time-lost proxy: apex-speed deficit (km/h) stands in until lap-time deltas are wired
         time_lost = max(0.0, ref_sig.min_speed_kmh - st.min_speed_kmh)
         # Validity gate (B3): a pass that never reached a plausible apex (no entry samples, or the
@@ -892,22 +914,27 @@ def _evaluate_frame_capability(
     tyre_temps = _sanitize_corner_map(pick("tyre_temps_c", "tire_temps_c"))
     brake_temps = _sanitize_corner_map(pick("brake_temps_c", "brake_temp_c"))
     cond_dict, frame_compound, frame_opt_temp = _extract_frame_conditions(frame, payload)
-    has_thermal_evidence = bool(tyre_temps or brake_temps or cond_dict)
-    ineligible_reason = ""
+    has_cond_evidence = cond_dict is not None
+    has_brake_evidence = bool(brake_temps)
+    has_tyre_evidence = bool(tyre_temps)
+    has_thermal_evidence = bool(has_cond_evidence or has_brake_evidence or has_tyre_evidence)
+    cond_reason = ""
+    brake_reason = ""
+    tyre_reason = ""
 
     if cond_dict is not None:
         cond_report = analyze_conditions(cond_dict)
         if cond_report.regime == "wet":
-            ineligible_reason = "wet_regime"
+            cond_reason = "wet_regime"
 
-    if not ineligible_reason and brake_temps:
+    if brake_temps:
         max_brake_c = max(brake_temps.values())
         if max_brake_c >= _BRAKE_CRITICAL_C:
-            ineligible_reason = "brake_temp_critical"
+            brake_reason = "brake_temp_critical"
         elif max_brake_c >= _BRAKE_HOT_C:
-            ineligible_reason = "brake_temp_overheat"
+            brake_reason = "brake_temp_overheat"
 
-    if not ineligible_reason and tyre_temps:
+    if tyre_temps:
         tyre_report = analyze_tyres(
             tyre_temps,
             compound=frame_compound or default_compound,
@@ -915,17 +942,25 @@ def _evaluate_frame_capability(
         )
         statuses = set(tyre_report.status.values())
         if "critical" in statuses:
-            ineligible_reason = "tyre_temp_critical"
+            tyre_reason = "tyre_temp_critical"
         elif "overheat" in statuses:
-            ineligible_reason = "tyre_temp_overheat"
+            tyre_reason = "tyre_temp_overheat"
         elif "cold" in statuses or "warming" in statuses:
-            ineligible_reason = "tyre_temp_cold"
+            tyre_reason = "tyre_temp_cold"
+
+    ineligible_reason = cond_reason or brake_reason or tyre_reason
 
     return _FrameCapability(
         lat_util=lat_util,
         entry_util=entry_util,
         has_grip_evidence=has_grip_evidence,
         has_thermal_evidence=has_thermal_evidence,
+        has_cond_evidence=has_cond_evidence,
+        has_brake_evidence=has_brake_evidence,
+        has_tyre_evidence=has_tyre_evidence,
+        cond_reason=cond_reason,
+        brake_reason=brake_reason,
+        tyre_reason=tyre_reason,
         ineligible_reason=ineligible_reason,
     )
 
@@ -990,7 +1025,10 @@ def _derive_combo_ggv(
         if isinstance(car_obj, Mapping) and isinstance(car_obj.get("ggv"), Mapping):
             raw_ggv = car_obj.get("ggv")
     if isinstance(raw_ggv, Mapping):
-        return GGVModel.from_dict(dict(raw_ggv))
+        try:
+            return GGVModel.from_dict(dict(raw_ggv))
+        except (TypeError, ValueError):
+            pass
 
     samples: list[dict[str, float]] = []
     n_samples = len(ref_lap)

@@ -66,7 +66,6 @@ _SHM_ROAD_TEMP_OFFSET = 292
 _SHM_BRAKE_TEMP_OFFSET = 348
 _SHM_GFX_TYRE_COMPOUND_OFFSET = 176
 _SHM_GFX_TYRE_COMPOUND_BYTES = 66
-_SHM_GFX_SURFACE_GRIP_OFFSET = 280
 _SHM_WHEEL_VEC4 = struct.Struct("<4f")
 _SHM_FLOAT32 = struct.Struct("<f")
 
@@ -480,10 +479,6 @@ def build_live_tick_payload(
         )
         if compound is not None:
             raw_cond["tyreCompound"] = compound
-    if "trackGripLevel" not in raw_cond:
-        surface_grip = _shm_scalar_float(gfx_buf, _SHM_GFX_SURFACE_GRIP_OFFSET)
-        if surface_grip is not None and 0.0 < surface_grip <= 1.2:
-            raw_cond["trackGripLevel"] = surface_grip
 
     cond_dict, top_cond_fields = _sanitize_conditions(raw_cond or None)
     if top_cond_fields:
