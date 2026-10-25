@@ -20,12 +20,21 @@ frame streams.
 
 from __future__ import annotations
 
+import math
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from tools.ac_harness.ggv_profile import (
+    G as _G_ACCEL,
+)
+from tools.ac_harness.ggv_profile import (
+    GGVModel,
+    ggv_from_telemetry,
+)
 from tools.ai_sidecar.coaching_diagnosis import (
     ANCHOR,
     APEX_KMH_FLOOR,
@@ -36,6 +45,7 @@ from tools.ai_sidecar.coaching_diagnosis import (
     classify_root_error,
 )
 from tools.ai_sidecar.coaching_ledger import CoachingLedger
+from tools.ai_sidecar.conditions_model import analyze_conditions
 from tools.ai_sidecar.driver_profile import DEFAULT_PROFILE_PATH, load_profile, sanitize_profile
 from tools.ai_sidecar.driver_progression import (
     DriverCuePolicy,
@@ -48,6 +58,7 @@ from tools.ai_sidecar.lap_dynamics import (
     corner_signatures,
     lap_trace_from_archive,
 )
+from tools.ai_sidecar.race_management import _BRAKE_CRITICAL_C, _BRAKE_HOT_C
 from tools.ai_sidecar.realtime_observer import (
     _CAL_EMA_ALPHA,
     CAL_MATCH_TOL_M,
@@ -59,9 +70,11 @@ from tools.ai_sidecar.track_reference import (
     build_references,
     sustained_brake_onsets,
 )
+from tools.ai_sidecar.tyre_model import analyze_tyres
 from tools.lap_qualification import qualify_archive
 
-#: Roots that demand more speed / later braking — suppressed at the grip ceiling (P3).
+#: Roots that demand more speed / later braking — suppressed at the grip ceiling (P3) or when
+#: thermal / track-condition eligibility gates abstain (#938).
 #: LATE_BRAKE maps to "Brake earlier." and is NOT grip-gated (still valid at the grip ceiling).
 _GRIP_GATED_ROOTS = frozenset({RootError.SLOW_APEX, RootError.EARLY_BRAKE})
 
@@ -69,14 +82,12 @@ _GRIP_GATED_ROOTS = frozenset({RootError.SLOW_APEX, RootError.EARLY_BRAKE})
 _BRAKE_ON = 0.05
 _THROTTLE_ON = 0.20
 _STEER_ON = 0.05
-_GRIP_CEILING_G = 1.55  # GT3 peak lateral g (the Magione reference corners at 1.40–1.56 g)
-# At/above this fraction of the grip ceiling the corner is grip-limited (setup/tyre), not
-# technique, so "carry more"/"brake later" would lie and is suppressed. The signal is the frame's
-# lateral-g: lat_g is REQUIRED by the telemetry_tick contract (external_protocol), so the gate is
-# LIVE-ACTIVE with the real producer; fail-open only for a producer that omits it (contract forbids
-# that). We do NOT fabricate grip from v²·κ against an at-the-limit reference (can never fire
-# honestly — the Magione reference itself corners at 1.40–1.56 g). See council P3.
+_BASELINE_GRIP_CEILING_G = 1.55  # legacy GT3 scalar kept only for baseline mode comparison (#938)
+_GRIP_CEILING_G = _BASELINE_GRIP_CEILING_G
 _GRIP_GATE_FRAC = 0.95
+_CAPABILITY_GATE_MODES = frozenset({"condition_indexed", "ggv_denominator_only", "baseline"})
+_MACHINE_CODE_RE = re.compile(r"^[a-z0-9_]+$")
+_WHEELS: tuple[str, ...] = ("fl", "fr", "rl", "rr")
 _DEFAULT_TRACK_M = 2455.7
 _DEFAULT_LEAD_S = 1.3  # reference-travel seconds before the action point a PRIME audio onset lands
 _LAP_WRAP_DROP = 0.5  # backward spline jump that means a start/finish wrap OR same-lap rewind
@@ -114,9 +125,38 @@ class _PassState:
     entry_count: int = 0
     save_fired: bool = False
     max_grip_used: float = 0.0  # peak grip-utilisation fraction this pass (0 if no signal)
+    max_lat_grip_used: float = 0.0  # peak speed-indexed lateral utilisation fraction
+    max_entry_grip_used: float = 0.0  # peak corner-entry combined braking/turn-in utilisation
+    has_grip_evidence: bool = False
+    has_thermal_evidence: bool = False
+    ineligible_reason: str = ""
 
     def reset(self) -> None:
         self.__init__()  # type: ignore[misc]
+
+
+@dataclass(frozen=True)
+class _FrameCapability:
+    """Per-frame capability utilization and thermal/condition eligibility evaluation (#938)."""
+
+    lat_util: float | None = None
+    entry_util: float | None = None
+    has_grip_evidence: bool = False
+    has_thermal_evidence: bool = False
+    ineligible_reason: str = ""
+
+
+def _default_ggv_model() -> GGVModel:
+    return GGVModel(
+        mu_lat_g=_BASELINE_GRIP_CEILING_G,
+        k_aero_lat=0.0,
+        brake_b0_g=1.60,
+        brake_b1=0.0,
+        drive_b0_g=0.80,
+        drive_b1=0.0,
+        drive_min_g=0.25,
+        ellipse_n=1.4,
+    )
 
 
 def _lead_spline(ref_speed_kmh: float, track_m: float, lead_s: float) -> float:
@@ -148,6 +188,11 @@ class CoachRuntime:
     track_id: str | None = None
     track_layout: str | None = None
     reference_lap_ms: float | None = None
+    ggv_model: GGVModel = field(default_factory=_default_ggv_model)
+    capability_gate_mode: str = "condition_indexed"
+    reference_compound: str | None = None
+    reference_optimal_temp_c: float | None = None
+    last_pass_capability: dict[int, dict[str, Any]] = field(default_factory=dict)
     # A dynamic index remains internal; only a geometry-bound canonical name may leave the engine.
     corner_identity: dict[str, Any] = field(
         default_factory=lambda: {
@@ -165,6 +210,7 @@ class CoachRuntime:
     #: derived brake/turn cues are suppressed (visible via :attr:`cue_suppress_reason`).
     _off_pace_reference: bool = False
     cue_suppress_reason: str = ""
+    _active_ineligible_reason: str = ""
     _pass: dict[int, _PassState] = field(default_factory=dict)
     _last_spline: float | None = None
     _last_lap: float | None = None
@@ -173,9 +219,26 @@ class CoachRuntime:
     _pending_pre_lap: float | None = None
 
     def __post_init__(self) -> None:
+        if self.capability_gate_mode not in _CAPABILITY_GATE_MODES:
+            raise ValueError(
+                f"capability_gate_mode must be one of {sorted(_CAPABILITY_GATE_MODES)}, "
+                f"got {self.capability_gate_mode!r}"
+            )
         self.refs = sorted(self.refs, key=lambda r: r.spline_lo)
         self._pass = {r.index: _PassState() for r in self.refs}
         self.ledger.begin_lap(self._lap)
+
+    def _set_suppress_reason(self, reason: str) -> None:
+        """Assign a public `/health`-safe lowercase machine code (`[a-z0-9_]+`) or `""` (#938)."""
+        if not reason:
+            self.cue_suppress_reason = (
+                "reference_slower_than_rolling_best" if self._off_pace_reference else ""
+            )
+            return
+        clean = reason.strip().lower()
+        self.cue_suppress_reason = (
+            clean if _MACHINE_CODE_RE.fullmatch(clean) else "capability_gate_suppressed"
+        )
 
     def reset(self) -> None:
         """Clear ALL session state — call on pit-exit / producer reconnect / session restart (B4).
@@ -195,6 +258,9 @@ class CoachRuntime:
             }
         )
         self._pass = {r.index: _PassState() for r in self.refs}
+        self.last_pass_capability.clear()
+        self._active_ineligible_reason = ""
+        self._set_suppress_reason("")
         self._last_spline = None
         self._last_lap = None
         self._lap = 1
@@ -316,9 +382,27 @@ class CoachRuntime:
         self.ledger.begin_lap(self._lap)
 
     def observe(self, frame: dict[str, Any]) -> list[Advisory]:
-        spline, speed, brake, throttle, steer, lap, grip = _normalize(frame)
+        spline, speed, brake, throttle, steer, lap, grip = _normalize(
+            frame,
+            ggv_model=self.ggv_model,
+            mode=self.capability_gate_mode,
+        )
         if spline is None or speed is None:
             return []
+        cap = _evaluate_frame_capability(
+            frame,
+            speed_kmh=speed,
+            ggv_model=self.ggv_model,
+            mode=self.capability_gate_mode,
+            default_compound=self.reference_compound,
+            default_optimal_temp_c=self.reference_optimal_temp_c,
+        )
+        if cap.has_thermal_evidence:
+            self._active_ineligible_reason = cap.ineligible_reason
+            if cap.ineligible_reason:
+                self._set_suppress_reason(cap.ineligible_reason)
+            elif not self._off_pace_reference:
+                self._set_suppress_reason("")
         out: list[Advisory] = []
 
         # Deferred wrap finalization when lapCount lags the spline drop by a frame (codex #294).
@@ -361,12 +445,21 @@ class CoachRuntime:
             anc = self.anchors[r.index]
 
             # 1. PRIME — fire on crossing the armed root's anchor (before the action point).
-            # Part 4 off-pace: still advance ledger state (due_prime spends budget) but do not speak
-            # reference-derived brake/turn cues when the reference itself is slower than the driver.
+            # Part 4 off-pace and #938 thermal/condition abstention: advance ledger state
+            # (due_prime spends budget) but abstain from demand-increasing PRIME cues when the
+            # reference is slower or tyres/brakes/conditions are out of window.
             root = self.ledger.armed_root(r.index)
             if root is not None and _crossed(self._last_spline, spline, anc.for_root(root)):
                 spoken = self.ledger.due_prime(r.index)
-                if spoken is not None and not self._off_pace_reference:
+                ineligible_reason = cap.ineligible_reason or self._active_ineligible_reason
+                prime_gated = (
+                    self.capability_gate_mode == "condition_indexed"
+                    and spoken in _GRIP_GATED_ROOTS
+                    and bool(ineligible_reason)
+                )
+                if prime_gated:
+                    self._set_suppress_reason(ineligible_reason)
+                elif spoken is not None and not self._off_pace_reference:
                     gst = self.ledger.state(r.index)
                     reg = gst.register if gst else "urgent"
                     inten = gst.intensity if gst else 0.5
@@ -380,8 +473,22 @@ class CoachRuntime:
                 out.extend(self._finalize_pass(r))
             elif (anc.brake - 0.04) <= spline <= r.spline_hi:
                 self._accumulate(st, r, spline, speed, brake, throttle, steer, out)
-                if grip is not None and st.active:
-                    st.max_grip_used = max(st.max_grip_used, grip)
+                if st.active:
+                    if cap.lat_util is not None:
+                        st.has_grip_evidence = True
+                        st.max_lat_grip_used = max(st.max_lat_grip_used, cap.lat_util)
+                        st.max_grip_used = max(st.max_grip_used, cap.lat_util)
+                    if cap.entry_util is not None and spline <= r.apex_spline:
+                        st.has_grip_evidence = True
+                        st.max_entry_grip_used = max(st.max_entry_grip_used, cap.entry_util)
+                        st.max_grip_used = max(st.max_grip_used, cap.entry_util)
+                    elif grip is not None:
+                        st.has_grip_evidence = True
+                        st.max_grip_used = max(st.max_grip_used, grip)
+                    if cap.has_thermal_evidence:
+                        st.has_thermal_evidence = True
+                        if cap.ineligible_reason and not st.ineligible_reason:
+                            st.ineligible_reason = cap.ineligible_reason
 
         self._last_spline = spline
         if lap is not None:
@@ -425,11 +532,57 @@ class CoachRuntime:
             return []
         sig = _signature_from_pass(st, r)
         diag = _classify_for_policy(sig, ref_sig, self.cue_policy)
-        # GRIP-GATE (P3): at the lateral-grip ceiling the loss is setup/tyre, not technique —
-        # demanding more speed/later braking would lie, so suppress. Fail-open: fires only when a
-        # real grip signal was present this pass (see _GRIP_GATE_FRAC).
-        if diag.root in _GRIP_GATED_ROOTS and st.max_grip_used >= _GRIP_GATE_FRAC:
-            diag = Diagnosis(RootError.NONE, {"grip_gated": round(st.max_grip_used, 3)})
+        if st.has_grip_evidence and st.has_thermal_evidence:
+            evidence_quality = "full"
+        elif st.has_grip_evidence:
+            evidence_quality = "kinematic_only"
+        elif st.has_thermal_evidence:
+            evidence_quality = "thermal_only"
+        else:
+            evidence_quality = "missing"
+        self.last_pass_capability[r.index] = {
+            "evidence_quality": evidence_quality,
+            "max_grip_used": round(st.max_grip_used, 3),
+            "max_lat_grip_used": round(st.max_lat_grip_used, 3),
+            "max_entry_grip_used": round(st.max_entry_grip_used, 3),
+            "ineligible_reason": st.ineligible_reason,
+        }
+        # CONDITION-INDEXED CAPABILITY & THERMAL GATE (#938 / P3):
+        # 1. Thermal/condition eligibility: when tyres/brakes are out of window or regime is wet,
+        #    demand-increasing roots (EARLY_BRAKE, SLOW_APEX) abstain.
+        # 2. Envelope saturation: EARLY_BRAKE checks corner-entry combined braking/turn-in
+        #    utilization against the combo GGVModel friction ellipse; SLOW_APEX checks speed-
+        #    indexed lateral utilization against GGVModel.ay_max(v). Missing telemetry channels
+        #    stay fail-open without fabricating saturation.
+        if diag.root in _GRIP_GATED_ROOTS:
+            if self.capability_gate_mode == "condition_indexed" and st.ineligible_reason:
+                self._set_suppress_reason(st.ineligible_reason)
+                diag = Diagnosis(
+                    RootError.NONE,
+                    {
+                        "capability_gated": 1.0,
+                        "reason": st.ineligible_reason,
+                        "evidence_quality": evidence_quality,
+                    },
+                )
+            else:
+                if (
+                    self.capability_gate_mode == "condition_indexed"
+                    and diag.root is RootError.EARLY_BRAKE
+                ):
+                    used = max(st.max_entry_grip_used, st.max_grip_used)
+                else:
+                    used = max(st.max_lat_grip_used, st.max_grip_used)
+                if used >= _GRIP_GATE_FRAC:
+                    if self.capability_gate_mode == "condition_indexed":
+                        self._set_suppress_reason("grip_envelope_saturated")
+                    diag = Diagnosis(
+                        RootError.NONE,
+                        {
+                            "grip_gated": round(used, 3),
+                            "evidence_quality": evidence_quality,
+                        },
+                    )
         # time-lost proxy: apex-speed deficit (km/h) stands in until lap-time deltas are wired
         time_lost = max(0.0, ref_sig.min_speed_kmh - st.min_speed_kmh)
         # Validity gate (B3): a pass that never reached a plausible apex (no entry samples, or the
@@ -605,8 +758,184 @@ def _crossed(prev: float | None, cur: float, target: float) -> bool:
     return target > prev or target <= cur  # wrapped over start/finish
 
 
+def _finite_float(value: Any) -> float | None:
+    """Return a finite float for ``value``, rejecting ``bool``, ``None``, ``NaN``, and ``±inf``."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _sanitize_corner_map(raw: Any) -> dict[str, float] | None:
+    """Return a sanitized ``{fl, fr, rl, rr}`` float dict, rejecting bool/NaN/±inf."""
+    if isinstance(raw, Mapping):
+        out: dict[str, float] = {}
+        for wheel in _WHEELS:
+            f = _finite_float(raw.get(wheel))
+            if f is not None:
+                out[wheel] = f
+        return out or None
+    return None
+
+
+def _extract_frame_conditions(
+    frame: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, Any] | None, str | None, float | None]:
+    """Extract sanitized conditions dict, tyre compound, and optimal temp from a frame."""
+    nested = payload.get("conditions")
+    if not isinstance(nested, Mapping):
+        nested = frame.get("conditions") if isinstance(frame.get("conditions"), Mapping) else {}
+
+    def pick_cond(*keys: str) -> Any:
+        for src in (nested, payload, frame):
+            if isinstance(src, Mapping):
+                for k in keys:
+                    if k in src:
+                        return src[k]
+        return None
+
+    cond: dict[str, Any] = {}
+    grip = _finite_float(pick_cond("trackGripLevel", "track_grip_level"))
+    if grip is not None:
+        cond["trackGripLevel"] = grip
+    track_temp = _finite_float(pick_cond("trackTempC", "track_temp_c"))
+    if track_temp is not None:
+        cond["trackTempC"] = track_temp
+    ambient_temp = _finite_float(pick_cond("ambientTempC", "ambient_temp_c"))
+    if ambient_temp is not None:
+        cond["ambientTempC"] = ambient_temp
+    weather = pick_cond("weatherType", "weather_type")
+    if isinstance(weather, str) and weather.strip():
+        cond["weatherType"] = weather.strip()
+
+    compound_raw = pick_cond("tyreCompound", "tyre_compound", "tire_compound")
+    compound = (
+        compound_raw.strip() if isinstance(compound_raw, str) and compound_raw.strip() else None
+    )
+    opt_temp = _finite_float(pick_cond("optimalTempC", "tyre_optimal_temp_c", "optimal_temp_c"))
+    if opt_temp is not None and opt_temp <= 0.0:
+        opt_temp = None
+
+    return (cond if cond else None), compound, opt_temp
+
+
+def _evaluate_frame_capability(
+    frame: dict[str, Any],
+    *,
+    speed_kmh: float | None,
+    ggv_model: GGVModel,
+    mode: str = "condition_indexed",
+    default_compound: str | None = None,
+    default_optimal_temp_c: float | None = None,
+) -> _FrameCapability:
+    """Evaluate per-frame capability envelope utilization and thermal/condition eligibility (#938).
+
+    Thermal and condition states act strictly as eligibility/abstention gates (never uncalibrated
+    friction multipliers). Missing channels remain fail-open and record their absence via
+    ``has_grip_evidence`` / ``has_thermal_evidence``.
+    """
+    payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
+
+    def pick(*keys: str) -> Any:
+        for src in (frame, payload):
+            for k in keys:
+                if k in src:
+                    return src[k]
+        return None
+
+    v_ms = max(0.0, (speed_kmh or 0.0) / 3.6)
+    direct_grip = _finite_float(pick("grip", "grip_used"))
+    lat_g = _finite_float(pick("lat_g", "latg", "accG"))
+    long_g = _finite_float(pick("long_g", "longg", "accG_lon"))
+
+    lat_util: float | None = None
+    entry_util: float | None = None
+    has_grip_evidence = False
+
+    if direct_grip is not None and direct_grip >= 0.0:
+        lat_util = direct_grip
+        entry_util = direct_grip
+        has_grip_evidence = True
+    elif lat_g is not None:
+        has_grip_evidence = True
+        if mode == "baseline":
+            lat_util = abs(lat_g) / _BASELINE_GRIP_CEILING_G
+            entry_util = lat_util
+        else:
+            ay_cap_g = max(0.3, ggv_model.ay_max(v_ms) / _G_ACCEL)
+            lat_util = abs(lat_g) / ay_cap_g
+            if mode == "condition_indexed" and long_g is not None and long_g < 0.0:
+                ax_brake_cap_g = max(0.3, ggv_model.ax_brake_max(v_ms) / _G_ACCEL)
+                brake_util = max(0.0, -long_g) / ax_brake_cap_g
+                n = max(1.0, min(2.5, _finite_float(ggv_model.ellipse_n) or 1.5))
+                combined = ((lat_util**n) + (brake_util**n)) ** (1.0 / n)
+                entry_util = max(lat_util, combined)
+            else:
+                entry_util = lat_util
+    elif mode == "condition_indexed" and long_g is not None and long_g < 0.0:
+        has_grip_evidence = True
+        ax_brake_cap_g = max(0.3, ggv_model.ax_brake_max(v_ms) / _G_ACCEL)
+        entry_util = max(0.0, -long_g) / ax_brake_cap_g
+
+    if mode != "condition_indexed":
+        return _FrameCapability(
+            lat_util=lat_util,
+            entry_util=entry_util,
+            has_grip_evidence=has_grip_evidence,
+            has_thermal_evidence=False,
+            ineligible_reason="",
+        )
+
+    tyre_temps = _sanitize_corner_map(pick("tyre_temps_c", "tire_temps_c"))
+    brake_temps = _sanitize_corner_map(pick("brake_temps_c", "brake_temp_c"))
+    cond_dict, frame_compound, frame_opt_temp = _extract_frame_conditions(frame, payload)
+    has_thermal_evidence = bool(tyre_temps or brake_temps or cond_dict)
+    ineligible_reason = ""
+
+    if cond_dict is not None:
+        cond_report = analyze_conditions(cond_dict)
+        if cond_report.regime == "wet":
+            ineligible_reason = "wet_regime"
+
+    if not ineligible_reason and brake_temps:
+        max_brake_c = max(brake_temps.values())
+        if max_brake_c >= _BRAKE_CRITICAL_C:
+            ineligible_reason = "brake_temp_critical"
+        elif max_brake_c >= _BRAKE_HOT_C:
+            ineligible_reason = "brake_temp_overheat"
+
+    if not ineligible_reason and tyre_temps:
+        tyre_report = analyze_tyres(
+            tyre_temps,
+            compound=frame_compound or default_compound,
+            optimal_temp_c=frame_opt_temp or default_optimal_temp_c,
+        )
+        statuses = set(tyre_report.status.values())
+        if "critical" in statuses:
+            ineligible_reason = "tyre_temp_critical"
+        elif "overheat" in statuses:
+            ineligible_reason = "tyre_temp_overheat"
+        elif "cold" in statuses or "warming" in statuses:
+            ineligible_reason = "tyre_temp_cold"
+
+    return _FrameCapability(
+        lat_util=lat_util,
+        entry_util=entry_util,
+        has_grip_evidence=has_grip_evidence,
+        has_thermal_evidence=has_thermal_evidence,
+        ineligible_reason=ineligible_reason,
+    )
+
+
 def _normalize(
     frame: dict[str, Any],
+    *,
+    ggv_model: GGVModel | None = None,
+    mode: str = "condition_indexed",
 ) -> tuple[float | None, float | None, float, float, float, float | None, float | None]:
     payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
 
@@ -618,37 +947,104 @@ def _normalize(
         return None
 
     def num(v: Any, default: float = 0.0) -> float:
-        if isinstance(v, bool):
-            return default
-        try:
-            f = float(v)
-        except (TypeError, ValueError):
-            return default
-        return f if f == f and abs(f) != float("inf") else default
+        f = _finite_float(v)
+        return default if f is None else f
 
-    spline = pick("spline", "normalizedSplinePosition")
-    speed = pick("speed", "speed_kmh")
-    spline = None if spline is None else num(spline)
-    speed = None if speed is None else num(speed)
-    # grip utilisation: a direct fraction if supplied, else derived from a lateral-g channel; None
-    # when the frame carries neither (the live telemetry today) → the grip-gate stays fail-open.
-    grip = pick("grip", "grip_used")
+    raw_spline = pick("spline", "normalizedSplinePosition")
+    raw_speed = pick("speed", "speed_kmh")
+    spline = _finite_float(raw_spline)
+    speed = _finite_float(raw_speed)
+    raw_lap = pick("lap", "lapCount", "lap_count", "completedLaps")
+    lap = _finite_float(raw_lap)
+
+    # grip utilisation: a direct fraction if supplied, else derived against the combo GGVModel
+    # (or legacy _BASELINE_GRIP_CEILING_G in baseline mode). None when the frame carries neither.
+    grip = _finite_float(pick("grip", "grip_used"))
     if grip is None:
-        latg = pick("lat_g", "latg", "accG")
-        grip = None if latg is None else abs(num(latg)) / _GRIP_CEILING_G
+        latg = _finite_float(pick("lat_g", "latg", "accG"))
+        if latg is not None:
+            if mode == "baseline" or ggv_model is None:
+                denom_g = _BASELINE_GRIP_CEILING_G
+            else:
+                v_ms = max(0.0, (speed or 0.0) / 3.6)
+                denom_g = max(0.3, ggv_model.ay_max(v_ms) / _G_ACCEL)
+            grip = abs(latg) / denom_g
     return (
         spline,
         speed,
         num(pick("brake")),
         num(pick("throttle", "gas")),
         num(pick("steer")),
-        (
-            None
-            if pick("lap", "lapCount", "lap_count", "completedLaps") is None
-            else num(pick("lap", "lapCount", "lap_count", "completedLaps"))
-        ),
-        None if grip is None else num(grip),
+        lap,
+        grip,
     )
+
+
+def _derive_combo_ggv(
+    reference_archive: Mapping[str, Any],
+    ref_lap: LapTrace,
+) -> GGVModel:
+    """Derive a combo-specific :class:`GGVModel` from the reference archive or trace (#938)."""
+    raw_ggv = reference_archive.get("ggv")
+    if not isinstance(raw_ggv, Mapping):
+        car_obj = reference_archive.get("car")
+        if isinstance(car_obj, Mapping) and isinstance(car_obj.get("ggv"), Mapping):
+            raw_ggv = car_obj.get("ggv")
+    if isinstance(raw_ggv, Mapping):
+        return GGVModel.from_dict(dict(raw_ggv))
+
+    samples: list[dict[str, float]] = []
+    n_samples = len(ref_lap)
+    for i in range(n_samples):
+        v_kmh = _finite_float(ref_lap.v_kmh[i]) or 0.0
+        lat_g = _finite_float(ref_lap.lat_g[i]) or 0.0
+        long_g = _finite_float(ref_lap.long_g[i]) or 0.0
+        samples.append(
+            {
+                "speed_kmh": max(0.0, v_kmh),
+                "accg_lat": lat_g,
+                "accg_lon": long_g,
+            }
+        )
+
+    model = ggv_from_telemetry(
+        samples,
+        min_corner_lat_g=0.55,
+        min_samples=10,
+    )
+    prov = model.provenance if isinstance(model.provenance, dict) else {}
+    mu_lat_g = model.mu_lat_g
+    brake_b0_g = model.brake_b0_g
+    brake_b1 = model.brake_b1
+    updated = False
+    if int(prov.get("lat_corner_bins") or 0) == 0:
+        corner_lat = sorted(
+            abs(_finite_float(g) or 0.0)
+            for g in ref_lap.lat_g
+            if abs(_finite_float(g) or 0.0) >= 0.45
+        )
+        if corner_lat:
+            idx_lat = min(len(corner_lat) - 1, int(0.95 * (len(corner_lat) - 1)))
+            mu_lat_g = round(max(0.60, corner_lat[idx_lat]), 4)
+            updated = True
+    if not prov.get("brake_fit_valid"):
+        brake_lon = sorted(
+            max(0.0, -(_finite_float(g) or 0.0))
+            for g, b in zip(ref_lap.long_g, ref_lap.brake, strict=False)
+            if (_finite_float(b) or 0.0) >= 0.2 and -(_finite_float(g) or 0.0) >= 0.35
+        )
+        if brake_lon:
+            idx_brk = min(len(brake_lon) - 1, int(0.95 * (len(brake_lon) - 1)))
+            brake_b0_g = round(max(0.60, brake_lon[idx_brk]), 4)
+            brake_b1 = 0.0
+            updated = True
+        else:
+            brake_b0_g = round(max(0.60, mu_lat_g * 1.05), 4)
+            brake_b1 = 0.0
+            updated = True
+    if updated:
+        model = replace(model, mu_lat_g=mu_lat_g, brake_b0_g=brake_b0_g, brake_b1=brake_b1)
+    return model
 
 
 def _profile_for_runtime(
@@ -726,6 +1122,8 @@ def build_coach_runtime(
     expected_combo: tuple[str, str, str | None] | None = None,
     diagnostics: dict[str, Any] | None = None,
     use_environment: bool = True,
+    ggv_model: GGVModel | None = None,
+    capability_gate_mode: str = "condition_indexed",
 ) -> CoachRuntime | None:
     """Build a :class:`CoachRuntime` from a reference archive (same input as the observer).
 
@@ -910,6 +1308,19 @@ def build_coach_runtime(
             else policy.lap_budget
         ),
     )
+    resolved_ggv = ggv_model or _derive_combo_ggv(reference_archive, ref_lap)
+    car_meta = (
+        reference_archive.get("car") if isinstance(reference_archive.get("car"), Mapping) else {}
+    )
+    cond_meta = (
+        reference_archive.get("conditions")
+        if isinstance(reference_archive.get("conditions"), Mapping)
+        else {}
+    )
+    _, ref_compound, ref_opt_temp = _extract_frame_conditions(
+        {"conditions": cond_meta},
+        dict(car_meta),
+    )
     if diagnostics is not None:
         diagnostics.update(allowed=True, reason=qualification.reason)
     return CoachRuntime(
@@ -924,6 +1335,10 @@ def build_coach_runtime(
         track_id=track_id,
         track_layout=track_layout,
         reference_lap_ms=reference_lap_ms,
+        ggv_model=resolved_ggv,
+        capability_gate_mode=capability_gate_mode,
+        reference_compound=ref_compound,
+        reference_optimal_temp_c=ref_opt_temp,
     )
 
 
