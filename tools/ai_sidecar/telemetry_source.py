@@ -220,7 +220,7 @@ def _sanitize_trace_scalar(
     sample_idx: int,
     fallback: Any,
 ) -> float:
-    """Guard against ``lap_dynamics`` coercing ``bool`` cells via ``float(True) == 1.0``."""
+    """Resolve a trace scalar column (ignoring unread all-zero columns) and reject ``bool``/NaN."""
     trace = archive.get("trace") if isinstance(archive, Mapping) else None
     if isinstance(trace, Mapping):
         fields = trace.get("fields")
@@ -231,6 +231,13 @@ def _sanitize_trace_scalar(
                 for name in col_names:
                     if name in fields:
                         idx = fields.index(name)
+                        has_non_zero = any(
+                            (_finite_float(r[idx]) or 0.0) != 0.0
+                            for r in samples
+                            if isinstance(r, list | tuple) and idx < len(r)
+                        )
+                        if not has_non_zero:
+                            continue
                         if idx < len(row):
                             f = _finite_float(row[idx])
                             return 0.0 if f is None else f
@@ -325,8 +332,17 @@ def ticks_from_archive(archive: dict[str, Any]) -> list[dict[str, Any]]:
     lap = lap_trace_from_archive(archive)
     speed, spline, brake = lap.v_kmh, lap.spline, lap.brake
     throttle, steer, gear = lap.throttle, lap.steer, lap.gear
-    lat_g, long_g = lap.lat_g, lap.long_g
     n_samples = len(lap)
+    accg_lat = getattr(lap, "accg_lat", None)
+    accg_long = getattr(lap, "accg_long", None)
+    lat_g = (
+        accg_lat if isinstance(accg_lat, list | tuple) and len(accg_lat) == n_samples else lap.lat_g
+    )
+    long_g = (
+        accg_long
+        if isinstance(accg_long, list | tuple) and len(accg_long) == n_samples
+        else lap.long_g
+    )
     tyre_maps = _extract_trace_corner_maps(
         archive, lap, "tyre_temps_c", _TYRE_TEMP_COL_SPECS, n_samples
     )
@@ -346,8 +362,18 @@ def ticks_from_archive(archive: dict[str, Any]) -> list[dict[str, Any]]:
             "brake": _clamp(brake[i], 0.0, 1.0),
             "steer": _clamp(steer[i], -1.0, 1.0),
             "gear": _safe_gear(gear[i]),
-            "lat_g": _sanitize_trace_scalar(archive, ("lat_g", "latg", "accG"), i, lat_g[i]),
-            "long_g": _sanitize_trace_scalar(archive, ("long_g", "longg"), i, long_g[i]),
+            "lat_g": _sanitize_trace_scalar(
+                archive,
+                ("accG_lat", "accg_lat", "lat_g", "latg", "accG"),
+                i,
+                lat_g[i],
+            ),
+            "long_g": _sanitize_trace_scalar(
+                archive,
+                ("accG_long", "accg_long", "accG_lon", "accg_lon", "long_g", "longg"),
+                i,
+                long_g[i],
+            ),
             "spline": _clamp(spline[i], 0.0, 1.0),
         }
         if tyre_maps[i] is not None:

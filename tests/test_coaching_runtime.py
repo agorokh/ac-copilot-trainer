@@ -1082,3 +1082,111 @@ def test_discriminating_8_lap_replay_condition_indexed_vs_baseline_and_denominat
     assert cond_suppression >= 0.80
     assert cond_res["out_of_window_primes"] == 0
     assert valid_retention >= 0.70
+
+
+def test_derive_combo_ggv_uses_measured_accg_and_falls_back_when_absent():
+    """#938 Round-5 regression: _derive_combo_ggv must fit from measured accG_lat/accG_long
+    rather than kinematic curvature lat_g, and fall back to _default_ggv_model() when accG_lat
+    is absent or all-zero."""
+    base_archive = _ref()
+    # 1. Standard synthetic archive has no accG_lat -> falls back to default 1.55g ceiling.
+    rt_no_accg = build_coach_runtime(base_archive, use_environment=False)
+    assert rt_no_accg is not None
+    assert rt_no_accg.ggv_model.mu_lat_g == pytest.approx(1.55)
+
+    # 2. Archive with measured accG_lat (~1.05g street-tyre ceiling) and accG_long (~1.08g braking)
+    # derives a street-car GGVModel even though path curvature lat_g would differ.
+    arch_with_accg = json.loads(json.dumps(base_archive))
+    fields = arch_with_accg["trace"]["fields"]
+    samples = arch_with_accg["trace"]["samples"]
+    b_idx = fields.index("brake")
+    s_idx = fields.index("steer")
+    fields.extend(["accG_lat", "accG_long"])
+    for row in samples:
+        steer_val = float(row[s_idx])
+        brake_val = float(row[b_idx])
+        row.append(1.04 if abs(steer_val) > 0.12 else 0.15)
+        row.append(-1.06 if brake_val >= 0.25 else 0.10)
+
+    rt_street = build_coach_runtime(arch_with_accg, use_environment=False)
+    assert rt_street is not None
+    assert 0.95 <= rt_street.ggv_model.mu_lat_g <= 1.15
+    assert 0.95 <= rt_street.ggv_model.brake_b0_g <= 1.20
+
+
+def test_prime_abstains_when_armed_corner_is_saturated_and_in_pass_warming_clears_ineligible():
+    """#938 Round-5 regression:
+    1. PRIME abstains with cue_suppress_reason == 'grip_envelope_saturated' when an already-armed
+       corner's previous pass (last_pass_capability) or current frame is saturated (>= 0.95).
+    2. Pass-level st.ineligible_reason updates as tyres warm into the operating window mid-pass
+       instead of latching on the first cold sample or a temperature-only condition frame."""
+    gt3_ggv = _combo_ggv(1.50, 1.65, ellipse_n=1.35)
+    archive = _ref()
+    rt = build_coach_runtime(archive, use_environment=False, ggv_model=gt3_ggv)
+    assert rt is not None
+    rt.ledger.assess_laps = 0
+    rt.ledger.hysteresis = 1
+    r = next(
+        ref
+        for ref in rt.refs
+        if rt.ref_sigs[ref.index].brake_point_spline is not None
+        and rt.anchors[ref.index].brake > 0.05
+    )
+    bp = rt.ref_sigs[r.index].brake_point_spline
+
+    # Part A: Arm EARLY_BRAKE on corner r, record a saturated previous pass in last_pass_capability,
+    # and verify crossing the PRIME anchor abstains with 'grip_envelope_saturated'.
+    cst = rt.ledger._states.setdefault(r.index, CornerState(r.index))
+    cst.status = Status.ARMED
+    cst.root = RootError.EARLY_BRAKE
+    cst.time_lost_s = 5.0
+    rt.last_pass_capability[r.index] = {
+        "evidence_quality": "full",
+        "max_grip_used": 0.98,
+        "max_lat_grip_used": 0.72,
+        "max_entry_grip_used": 0.98,
+        "ineligible_reason": "",
+    }
+    rt.ledger.begin_lap(2)
+    rt.ledger._speak_set = {r.index}
+    fire_at = rt.anchors[r.index].brake
+    rt.observe({"spline": (fire_at - 0.01) % 1.0, "speed": 140.0, "brake": 0.0, "lap": 2})
+    advs = rt.observe(
+        {
+            "spline": (fire_at + 0.001) % 1.0,
+            "speed": 140.0,
+            "brake": 0.0,
+            "lat_g": 0.30,
+            "lap": 2,
+        }
+    )
+    assert not any(a.detail.get("coach") == "prime" for a in advs)
+    assert rt.cue_suppress_reason == "grip_envelope_saturated"
+    assert rt.ledger._spoken_this_lap == 0
+
+    # Part B: Pre-pass cold tyres + first in-pass frame cold, then tyres warm into the operating
+    # window before apex -> st.ineligible_reason clears to "" so the pass is NOT suppressed.
+    rt2 = build_coach_runtime(archive, use_environment=False, ggv_model=gt3_ggv)
+    assert rt2 is not None
+    rt2.ledger.assess_laps = 0
+    rt2.ledger.hysteresis = 1
+    frames = _lap_frames(archive)
+    _inject_early_brake(frames, bp)
+    anc_brake = rt2.anchors[r.index].brake
+    for f in frames:
+        s = f["spline"]
+        f["lat_g"] = 0.70
+        f["long_g"] = -0.50 if f["brake"] >= 0.2 else 0.0
+        if s < (anc_brake - 0.02):
+            f["tyre_temps_c"] = {"fl": 34.0, "fr": 35.0, "rl": 33.0, "rr": 33.0}
+        elif s < anc_brake:
+            # Temperature-only condition frame right at pass entry while sticky tyre is still cold
+            f["conditions"] = {"trackTempC": 30.0, "ambientTempC": 22.0}
+        else:
+            # Tyres warm into optimal window during the braking/apex pass
+            f["tyre_temps_c"] = {"fl": 84.0, "fr": 85.0, "rl": 82.0, "rr": 82.0}
+
+    _drive(rt2, [frames])
+    st2 = rt2.ledger.state(r.index)
+    assert rt2.last_pass_capability[r.index]["ineligible_reason"] == ""
+    assert st2 is not None and st2.root is RootError.EARLY_BRAKE

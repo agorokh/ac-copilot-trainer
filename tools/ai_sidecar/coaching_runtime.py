@@ -467,6 +467,23 @@ class CoachRuntime:
             root = self.ledger.armed_root(r.index)
             if root is not None and _crossed(self._last_spline, spline, anc.for_root(root)):
                 ineligible_reason = cap.ineligible_reason or self._active_ineligible_reason
+                if (
+                    not ineligible_reason
+                    and self.capability_gate_mode == "condition_indexed"
+                    and root in _GRIP_GATED_ROOTS
+                ):
+                    frame_util = cap.entry_util if root is RootError.EARLY_BRAKE else cap.lat_util
+                    prev_cap = self.last_pass_capability.get(r.index) or {}
+                    prev_key = (
+                        "max_entry_grip_used"
+                        if root is RootError.EARLY_BRAKE
+                        else "max_lat_grip_used"
+                    )
+                    prev_util = _finite_float(prev_cap.get(prev_key)) or 0.0
+                    if (
+                        frame_util is not None and frame_util >= _GRIP_GATE_FRAC
+                    ) or prev_util >= _GRIP_GATE_FRAC:
+                        ineligible_reason = "grip_envelope_saturated"
                 prime_gated = (
                     self.capability_gate_mode == "condition_indexed"
                     and root in _GRIP_GATED_ROOTS
@@ -505,9 +522,8 @@ class CoachRuntime:
                         st.max_grip_used = max(st.max_grip_used, grip)
                     if cap.has_thermal_evidence:
                         st.has_thermal_evidence = True
-                        frame_reason = cap.ineligible_reason or self._active_ineligible_reason
-                        if frame_reason and not st.ineligible_reason:
-                            st.ineligible_reason = frame_reason
+                    if cap.has_cond_evidence or cap.has_brake_evidence or cap.has_tyre_evidence:
+                        st.ineligible_reason = self._active_ineligible_reason
 
         self._last_spline = spline
         if lap is not None:
@@ -874,8 +890,10 @@ def _evaluate_frame_capability(
 
     v_ms = max(0.0, (speed_kmh or 0.0) / 3.6)
     direct_grip = _finite_float(pick("grip", "grip_used"))
-    lat_g = _finite_float(pick("lat_g", "latg", "accG"))
-    long_g = _finite_float(pick("long_g", "longg", "accG_lon"))
+    lat_g = _finite_float(pick("lat_g", "latg", "accG_lat", "accg_lat", "accG"))
+    long_g = _finite_float(
+        pick("long_g", "longg", "accG_long", "accg_long", "accG_lon", "accg_lon")
+    )
 
     lat_util: float | None = None
     entry_util: float | None = None
@@ -1001,7 +1019,7 @@ def _normalize(
     # (or legacy _BASELINE_GRIP_CEILING_G in baseline mode). None when the frame carries neither.
     grip = _finite_float(pick("grip", "grip_used"))
     if grip is None:
-        latg = _finite_float(pick("lat_g", "latg", "accG"))
+        latg = _finite_float(pick("lat_g", "latg", "accG_lat", "accg_lat", "accG"))
         if latg is not None:
             if mode == "baseline" or ggv_model is None:
                 denom_g = _BASELINE_GRIP_CEILING_G
@@ -1036,12 +1054,22 @@ def _derive_combo_ggv(
         except (TypeError, ValueError):
             pass
 
+    accg_lat_series = getattr(ref_lap, "accg_lat", None)
+    if not isinstance(accg_lat_series, list | tuple) or len(accg_lat_series) != len(ref_lap):
+        return _default_ggv_model()
+    accg_long_series = getattr(ref_lap, "accg_long", None)
+    lon_source = (
+        accg_long_series
+        if isinstance(accg_long_series, list | tuple) and len(accg_long_series) == len(ref_lap)
+        else ref_lap.long_g
+    )
+
     samples: list[dict[str, float]] = []
     n_samples = len(ref_lap)
     for i in range(n_samples):
         v_kmh = _finite_float(ref_lap.v_kmh[i]) or 0.0
-        lat_g = _finite_float(ref_lap.lat_g[i]) or 0.0
-        long_g = _finite_float(ref_lap.long_g[i]) or 0.0
+        lat_g = _finite_float(accg_lat_series[i]) or 0.0
+        long_g = _finite_float(lon_source[i]) or 0.0
         samples.append(
             {
                 "speed_kmh": max(0.0, v_kmh),
@@ -1063,7 +1091,7 @@ def _derive_combo_ggv(
     if int(prov.get("lat_corner_bins") or 0) == 0:
         corner_lat = sorted(
             abs(_finite_float(g) or 0.0)
-            for g in ref_lap.lat_g
+            for g in accg_lat_series
             if abs(_finite_float(g) or 0.0) >= 0.45
         )
         if corner_lat:
@@ -1073,7 +1101,7 @@ def _derive_combo_ggv(
     if not prov.get("brake_fit_valid"):
         brake_lon = sorted(
             max(0.0, -(_finite_float(g) or 0.0))
-            for g, b in zip(ref_lap.long_g, ref_lap.brake, strict=False)
+            for g, b in zip(lon_source, ref_lap.brake, strict=False)
             if (_finite_float(b) or 0.0) >= 0.2 and -(_finite_float(g) or 0.0) >= 0.35
         )
         if brake_lon:

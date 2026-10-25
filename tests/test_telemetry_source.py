@@ -437,3 +437,31 @@ def test_stream_live_maps_physics_map_bytes_and_unpacks_shm_thermals_and_conditi
         "trackTempC": pytest.approx(31.0),
         "tyreCompound": "Slick Medium",
     }
+
+
+def test_ticks_from_archive_propagates_accg_lat_long_and_skips_unread_zero_columns():
+    """#938 Round-5 regression: ticks_from_archive must prefer measured accG_lat/accG_long when
+    non-zero and fall back to kinematic curvature when accG_lat/accG_long are all-zero sentinels."""
+    archive_measured = _corner_archive()
+    tr = archive_measured["trace"]
+    tr["fields"] = list(tr["fields"]) + ["accG_lat", "accG_long"]
+    tr["samples"] = [
+        list(row) + ([1.12, -1.24] if idx == 0 else [1.28, -0.65])
+        for idx, row in enumerate(tr["samples"])
+    ]
+    ticks = telemetry_source.ticks_from_archive(archive_measured)
+    assert len(ticks) >= 2
+    assert ticks[0]["payload"]["lat_g"] == pytest.approx(1.12)
+    assert ticks[0]["payload"]["long_g"] == pytest.approx(-1.24)
+    assert ticks[1]["payload"]["lat_g"] == pytest.approx(1.28)
+    assert ticks[1]["payload"]["long_g"] == pytest.approx(-0.65)
+
+    # All-zero accG_lat/accG_long columns (unread SHM sentinel) must fall back to lap.lat_g/long_g
+    # rather than overriding non-zero kinematic lat_g/long_g with 0.0.
+    archive_zero_sentinel = _corner_archive()
+    tr_zero = archive_zero_sentinel["trace"]
+    tr_zero["fields"] = list(tr_zero["fields"]) + ["accG_lat", "accG_long"]
+    tr_zero["samples"] = [list(row) + [0.0, 0.0] for row in tr_zero["samples"]]
+    ticks_fallback = telemetry_source.ticks_from_archive(archive_zero_sentinel)
+    assert any(abs(f["payload"]["lat_g"]) > 0.1 for f in ticks_fallback)
+    assert any(abs(f["payload"]["long_g"]) > 0.05 for f in ticks_fallback)
