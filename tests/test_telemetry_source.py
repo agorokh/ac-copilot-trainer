@@ -172,3 +172,296 @@ def test_ticks_from_archive_sanitizes_nan_channels(monkeypatch):
     assert len(frames) == 1
     assert validate_inbound(frames[0]) is None
     assert frames[0]["payload"]["gear"] == 0
+
+
+def test_ticks_from_archive_propagates_thermal_and_conditions_metadata():
+    archive = _corner_archive()
+    archive["car"] = {"id": "ks_bmw_m3_e30", "tyreCompound": "street"}
+    archive["conditions"] = {
+        "trackGripLevel": 0.97,
+        "trackTempC": 29.5,
+        "ambientTempC": 21.0,
+        "weatherType": "clear",
+        "optimalTempC": 80.0,
+    }
+    tr = archive["trace"]
+    tr["fields"] = list(tr["fields"]) + [
+        "tyreCoreTemp_fl",
+        "tyreCoreTemp_fr",
+        "tyreCoreTemp_rl",
+        "tyreCoreTemp_rr",
+        "brakeTemp_fl",
+        "brakeTemp_fr",
+        "brakeTemp_rl",
+        "brakeTemp_rr",
+    ]
+    tr["samples"] = [
+        list(row) + [78.5, 79.0, 76.0, 76.5, 340.0, 345.0, 290.0, 295.0] for row in tr["samples"]
+    ]
+
+    frames = ticks_from_archive(archive)
+    assert frames
+    for frame in frames:
+        assert validate_inbound(frame) is None
+        p = frame["payload"]
+        assert p["tyre_temps_c"] == {"fl": 78.5, "fr": 79.0, "rl": 76.0, "rr": 76.5}
+        assert p["brake_temps_c"] == {"fl": 340.0, "fr": 345.0, "rl": 290.0, "rr": 295.0}
+        assert p["track_grip_level"] == pytest.approx(0.97)
+        assert p["track_temp_c"] == pytest.approx(29.5)
+        assert p["ambient_temp_c"] == pytest.approx(21.0)
+        assert p["weather_type"] == "clear"
+        assert p["tyre_compound"] == "street"
+        assert p["conditions"]["trackGripLevel"] == pytest.approx(0.97)
+        assert p["conditions"]["optimalTempC"] == pytest.approx(80.0)
+
+
+def test_ticks_from_archive_rejects_bool_nan_inf_on_thermal_and_g_channels():
+    archive = _corner_archive()
+    archive["conditions"] = {
+        "trackGripLevel": True,
+        "trackTempC": float("nan"),
+        "ambientTempC": float("inf"),
+        "weatherType": False,
+        "tyreCompound": "slick",
+    }
+    tr = archive["trace"]
+    tr["fields"] = list(tr["fields"]) + [
+        "lat_g",
+        "long_g",
+        "tyreCoreTemp_fl",
+        "tyreCoreTemp_fr",
+        "tyreCoreTemp_rl",
+        "tyreCoreTemp_rr",
+        "brakeTemp_fl",
+        "brakeTemp_fr",
+        "brakeTemp_rl",
+        "brakeTemp_rr",
+    ]
+    # Sample 0 has bool/NaN/inf values mixed with valid wheel temps; Sample 1 has all invalid temps.
+    new_samples = []
+    for idx, row in enumerate(tr["samples"]):
+        if idx == 0:
+            new_samples.append(
+                list(row)
+                + [
+                    True,
+                    float("-inf"),
+                    82.0,
+                    True,
+                    float("nan"),
+                    float("inf"),
+                    False,
+                    410.0,
+                    float("nan"),
+                    float("-inf"),
+                ]
+            )
+        else:
+            new_samples.append(
+                list(row)
+                + [
+                    0.4,
+                    -0.3,
+                    True,
+                    False,
+                    float("nan"),
+                    float("inf"),
+                    True,
+                    False,
+                    float("nan"),
+                    float("-inf"),
+                ]
+            )
+    tr["samples"] = new_samples
+
+    frames = ticks_from_archive(archive)
+    assert frames
+    for frame in frames:
+        assert validate_inbound(frame) is None
+
+    p0 = frames[0]["payload"]
+    # `True` in lat_g and `-inf` in long_g must be rejected (0.0), never coerced to 1.0.
+    assert p0["lat_g"] == 0.0
+    assert p0["long_g"] == 0.0
+    assert p0["tyre_temps_c"] == {"fl": 82.0}
+    assert p0["brake_temps_c"] == {"fr": 410.0}
+    assert "track_grip_level" not in p0
+    assert "track_temp_c" not in p0
+    assert "ambient_temp_c" not in p0
+    assert "weather_type" not in p0
+    assert p0["tyre_compound"] == "slick"
+
+    p1 = frames[1]["payload"]
+    assert "tyre_temps_c" not in p1
+    assert "brake_temps_c" not in p1
+
+
+def test_ticks_from_archive_omits_all_zero_unread_thermal_columns():
+    archive = _corner_archive()
+    tr = archive["trace"]
+    tr["fields"] = list(tr["fields"]) + [
+        "tyreCoreTemp_fl",
+        "tyreCoreTemp_fr",
+        "tyreCoreTemp_rl",
+        "tyreCoreTemp_rr",
+        "brakeTemp_fl",
+        "brakeTemp_fr",
+        "brakeTemp_rl",
+        "brakeTemp_rr",
+    ]
+    tr["samples"] = [list(row) + [0.0] * 8 for row in tr["samples"]]
+
+    frames = ticks_from_archive(archive)
+    assert frames
+    for frame in frames:
+        assert "tyre_temps_c" not in frame["payload"]
+        assert "brake_temps_c" not in frame["payload"]
+
+
+def test_build_live_tick_payload_propagates_shm_thermals_and_rejects_bool_nan():
+    import struct
+
+    class _Phys:
+        speed_kmh = 135.0
+        rpm = 6800
+        gas = 0.8
+        brake = 0.0
+        steer = 45.0
+        gear = 4
+        accg_lat = True  # bool must be rejected -> 0.0
+        accg_lon = float("nan")  # NaN must be rejected -> 0.0
+        road_temp = 32.0
+        air_temp = 24.0
+
+    class _Gfx:
+        norm_pos = 0.42
+        completed_laps = 3
+        surface_grip = 0.98
+        weather_type = "mid_clear"
+        tyre_compound = "slick"
+
+    buf = bytearray(400)
+    struct.pack_into("<4f", buf, 152, 84.0, 85.5, 81.0, 82.0)
+    struct.pack_into("<4f", buf, 348, 450.0, 460.0, 390.0, 395.0)
+
+    payload = telemetry_source.build_live_tick_payload(_Phys(), _Gfx(), phys_buf=bytes(buf))
+    frame = telemetry_source.make_telemetry_tick(payload, seq=7)
+    assert validate_inbound(frame) is None
+    assert payload["lat_g"] == 0.0
+    assert payload["long_g"] == 0.0
+    assert payload["tyre_temps_c"] == {"fl": 84.0, "fr": 85.5, "rl": 81.0, "rr": 82.0}
+    assert payload["brake_temps_c"] == {"fl": 450.0, "fr": 460.0, "rl": 390.0, "rr": 395.0}
+    assert payload["track_grip_level"] == pytest.approx(0.98)
+    assert payload["track_temp_c"] == pytest.approx(32.0)
+    assert payload["ambient_temp_c"] == pytest.approx(24.0)
+    assert payload["weather_type"] == "mid_clear"
+    assert payload["tyre_compound"] == "slick"
+    assert payload["conditions"]["trackGripLevel"] == pytest.approx(0.98)
+
+
+def test_stream_live_maps_physics_map_bytes_and_unpacks_shm_thermals_and_conditions(monkeypatch):
+    import json
+    import struct
+
+    from tools.ac_harness.racing_telemetry import GFX_BYTES
+    from tools.ac_harness.shared_memory import PHYSICS_MAP_BYTES, SHM_GRAPHICS, SHM_PHYSICS
+
+    opened_sizes: dict[str, int] = {}
+    read_sizes: dict[str, int] = {}
+    sent_frames: list[dict] = []
+
+    raw_phys = bytearray(PHYSICS_MAP_BYTES)
+    struct.pack_into("<i", raw_phys, 0, 42)  # packetId
+    struct.pack_into("<2f", raw_phys, 4, 0.75, 0.10)  # gas, brake
+    struct.pack_into("<2i", raw_phys, 16, 4, 6400)  # gear (4 -> 3rd), rpm
+    struct.pack_into("<2f", raw_phys, 24, 22.5, 142.0)  # steer, speedKmh
+    struct.pack_into("<3f", raw_phys, 44, 0.85, 0.0, -0.35)  # accG [lat, vert, lon]
+    struct.pack_into("<4f", raw_phys, 152, 83.0, 84.5, 80.0, 81.5)  # tyreCoreTemperature[4] @ 152
+    struct.pack_into("<2f", raw_phys, 288, 22.5, 31.0)  # airTemp @ 288, roadTemp @ 292
+    struct.pack_into("<4f", raw_phys, 348, 420.0, 430.0, 360.0, 365.0)  # brakeTemp[4] @ 348
+
+    raw_gfx = bytearray(GFX_BYTES)
+    struct.pack_into("<2i", raw_gfx, 0, 10, 2)  # packetId, status=LIVE
+    struct.pack_into("<i", raw_gfx, 132, 4)  # completedLaps @ 132
+    compound_bytes = "Slick Medium\x00".encode("utf-16-le")
+    raw_gfx[176 : 176 + len(compound_bytes)] = compound_bytes  # tyreCompound[33] @ 176
+    struct.pack_into("<f", raw_gfx, 248, 0.375)  # normalizedCarPosition @ 248
+
+    class _Map:
+        def __init__(self, name: str, size: int):
+            self.name = name
+            opened_sizes[name] = size
+
+        def read(self, size: int) -> bytes:
+            read_sizes[self.name] = size
+            return bytes(raw_phys[:size]) if self.name == SHM_PHYSICS else bytes(raw_gfx[:size])
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "tools.ac_harness.shared_memory.open_shared_memory",
+        lambda name, size: _Map(name, size),
+    )
+
+    class _FakeWS:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def send(self, msg: str) -> None:
+            sent_frames.append(json.loads(msg))
+            if len(sent_frames) >= 2:
+                raise RuntimeError("stop-after-first-tick")
+
+    monkeypatch.setattr("websockets.connect", lambda *_args, **_kwargs: _FakeWS())
+
+    with pytest.raises(RuntimeError, match="stop-after-first-tick"):
+        asyncio.run(telemetry_source.stream_live("ws://127.0.0.1:8765", hz=20.0))
+
+    assert opened_sizes == {SHM_PHYSICS: PHYSICS_MAP_BYTES, SHM_GRAPHICS: GFX_BYTES}
+    assert read_sizes == {SHM_PHYSICS: PHYSICS_MAP_BYTES, SHM_GRAPHICS: GFX_BYTES}
+    assert len(sent_frames) == 2
+    tick = sent_frames[1]
+    assert validate_inbound(tick) is None
+    p = tick["payload"]
+    assert p["tyre_temps_c"] == {"fl": 83.0, "fr": 84.5, "rl": 80.0, "rr": 81.5}
+    assert p["brake_temps_c"] == {"fl": 420.0, "fr": 430.0, "rl": 360.0, "rr": 365.0}
+    assert p["ambient_temp_c"] == pytest.approx(22.5)
+    assert p["track_temp_c"] == pytest.approx(31.0)
+    assert p["tyre_compound"] == "Slick Medium"
+    assert p["conditions"] == {
+        "ambientTempC": pytest.approx(22.5),
+        "trackTempC": pytest.approx(31.0),
+        "tyreCompound": "Slick Medium",
+    }
+
+
+def test_ticks_from_archive_propagates_accg_lat_long_and_skips_unread_zero_columns():
+    """#938 Round-5 regression: ticks_from_archive must prefer measured accG_lat/accG_long when
+    non-zero and fall back to kinematic curvature when accG_lat/accG_long are all-zero sentinels."""
+    archive_measured = _corner_archive()
+    tr = archive_measured["trace"]
+    tr["fields"] = list(tr["fields"]) + ["accG_lat", "accG_long"]
+    tr["samples"] = [
+        list(row) + ([1.12, -1.24] if idx == 0 else [1.28, -0.65])
+        for idx, row in enumerate(tr["samples"])
+    ]
+    ticks = telemetry_source.ticks_from_archive(archive_measured)
+    assert len(ticks) >= 2
+    assert ticks[0]["payload"]["lat_g"] == pytest.approx(1.12)
+    assert ticks[0]["payload"]["long_g"] == pytest.approx(-1.24)
+    assert ticks[1]["payload"]["lat_g"] == pytest.approx(1.28)
+    assert ticks[1]["payload"]["long_g"] == pytest.approx(-0.65)
+
+    # All-zero accG_lat/accG_long columns (unread SHM sentinel) must fall back to lap.lat_g/long_g
+    # rather than overriding non-zero kinematic lat_g/long_g with 0.0.
+    archive_zero_sentinel = _corner_archive()
+    tr_zero = archive_zero_sentinel["trace"]
+    tr_zero["fields"] = list(tr_zero["fields"]) + ["accG_lat", "accG_long"]
+    tr_zero["samples"] = [list(row) + [0.0, 0.0] for row in tr_zero["samples"]]
+    ticks_fallback = telemetry_source.ticks_from_archive(archive_zero_sentinel)
+    assert any(abs(f["payload"]["lat_g"]) > 0.1 for f in ticks_fallback)
+    assert any(abs(f["payload"]["long_g"]) > 0.05 for f in ticks_fallback)

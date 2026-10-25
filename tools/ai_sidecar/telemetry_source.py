@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import argparse
 import math
+import struct
+from collections.abc import Mapping
 from typing import Any
 
 from tools.ai_sidecar.external_protocol import (
@@ -43,12 +45,54 @@ DEFAULT_STEER_LOCK_DEG = 450.0
 #: Minimum sleep on shared-memory parse failure so a bad/unready rig cannot busy-loop.
 _PARSE_FAILURE_SLEEP_S = 0.05
 
+_WHEELS: tuple[str, ...] = ("fl", "fr", "rl", "rr")
+_TYRE_TEMP_COL_SPECS: tuple[tuple[str, ...], ...] = (
+    ("fl", "tyreCoreTemp_fl", "tyre_temp_fl"),
+    ("fr", "tyreCoreTemp_fr", "tyre_temp_fr"),
+    ("rl", "tyreCoreTemp_rl", "tyre_temp_rl"),
+    ("rr", "tyreCoreTemp_rr", "tyre_temp_rr"),
+)
+_BRAKE_TEMP_COL_SPECS: tuple[tuple[str, ...], ...] = (
+    ("fl", "brakeTemp_fl", "brake_temp_fl"),
+    ("fr", "brakeTemp_fr", "brake_temp_fr"),
+    ("rl", "brakeTemp_rl", "brake_temp_rl"),
+    ("rr", "brakeTemp_rr", "brake_temp_rr"),
+)
+# AC SPageFilePhysics / SPageFileGraphic thermal and condition offsets within
+# PHYSICS_MAP_BYTES (512) and GFX_BYTES (256).
+_SHM_TYRE_CORE_TEMP_OFFSET = 152
+_SHM_AIR_TEMP_OFFSET = 288
+_SHM_ROAD_TEMP_OFFSET = 292
+_SHM_BRAKE_TEMP_OFFSET = 348
+_SHM_GFX_TYRE_COMPOUND_OFFSET = 176
+_SHM_GFX_TYRE_COMPOUND_BYTES = 66
+_SHM_WHEEL_VEC4 = struct.Struct("<4f")
+_SHM_FLOAT32 = struct.Struct("<f")
+
+
+def _finite_float(value: Any) -> float | None:
+    """Return a finite float for ``value``, rejecting ``bool``, ``None``, ``NaN``, and ``±inf``."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _safe_number(value: Any, default: float = 0.0) -> float:
+    """Return a finite non-bool float or ``default``."""
+    f = _finite_float(value)
+    return default if f is None else f
+
 
 def period_seconds(hz: float) -> float:
     """Return the inter-frame period for ``hz``; reject non-finite/non-positive values."""
-    if not math.isfinite(hz) or hz <= 0:
+    f = _finite_float(hz)
+    if f is None or f <= 0:
         raise ValueError(f"hz must be a finite value > 0, got {hz!r}")
-    return 1.0 / hz
+    return 1.0 / f
 
 
 def close_shared_memory_maps(phys_map: Any, gfx_map: Any) -> None:
@@ -63,50 +107,411 @@ def normalize_live_steer(
     steer_angle_deg: float, *, lock_deg: float = DEFAULT_STEER_LOCK_DEG
 ) -> float:
     """Map raw AC ``steerAngle`` degrees into the telemetry_tick ``[-1, 1]`` contract."""
-    lock = lock_deg if lock_deg > 0 else DEFAULT_STEER_LOCK_DEG
-    return _clamp(steer_angle_deg / lock, -1.0, 1.0)
+    lock_f = _finite_float(lock_deg)
+    lock = lock_f if lock_f is not None and lock_f > 0 else DEFAULT_STEER_LOCK_DEG
+    steer_f = _finite_float(steer_angle_deg)
+    if steer_f is None:
+        return 0.0
+    return _clamp(steer_f / lock, -1.0, 1.0)
 
 
-def _clamp(value: float, lo: float, hi: float) -> float:
-    if not math.isfinite(value):
+def _clamp(value: Any, lo: float, hi: float) -> float:
+    f = _finite_float(value)
+    if f is None:
         return lo
-    return lo if value < lo else hi if value > hi else value
+    return lo if f < lo else hi if f > hi else f
 
 
-def _safe_gear(value: float) -> int:
-    if not math.isfinite(value):
+def _safe_gear(value: Any) -> int:
+    f = _finite_float(value)
+    if f is None:
         return 0
-    return max(0, int(value))
+    return max(0, int(f))
+
+
+def _sanitize_corner_map(raw: Any) -> dict[str, float] | None:
+    """Sanitize a per-wheel ``{fl, fr, rl, rr}`` map or 4-tuple, rejecting bool/NaN/±inf."""
+    if isinstance(raw, Mapping):
+        out: dict[str, float] = {}
+        for wheel in _WHEELS:
+            f = _finite_float(raw.get(wheel))
+            if f is not None:
+                out[wheel] = f
+        return out or None
+    if isinstance(raw, list | tuple) and len(raw) == 4:
+        out = {}
+        for wheel, item in zip(_WHEELS, raw, strict=True):
+            f = _finite_float(item)
+            if f is not None:
+                out[wheel] = f
+        return out or None
+    return None
+
+
+def _extract_trace_corner_maps(
+    archive: Mapping[str, Any],
+    lap: Any,
+    attr_name: str,
+    col_specs: tuple[tuple[str, ...], ...],
+    n_samples: int,
+) -> list[dict[str, float] | None]:
+    """Extract per-sample sanitized corner thermal maps from ``lap`` or ``archive['trace']``."""
+    lap_attr = getattr(lap, attr_name, None)
+    if isinstance(lap_attr, list | tuple):
+        return [
+            _sanitize_corner_map(lap_attr[i]) if i < len(lap_attr) else None
+            for i in range(n_samples)
+        ]
+    if isinstance(lap_attr, Mapping):
+        single = _sanitize_corner_map(lap_attr)
+        return [dict(single) if single else None for _ in range(n_samples)]
+
+    trace = archive.get("trace") if isinstance(archive, Mapping) else None
+    if not isinstance(trace, Mapping):
+        return [None] * n_samples
+    fields = trace.get("fields")
+    samples = trace.get("samples")
+    if not isinstance(fields, list) or not isinstance(samples, list):
+        return [None] * n_samples
+    field_index = {name: idx for idx, name in enumerate(fields) if isinstance(name, str)}
+
+    if attr_name in field_index:
+        col_idx = field_index[attr_name]
+        out: list[dict[str, float] | None] = []
+        for i in range(n_samples):
+            row = samples[i] if i < len(samples) and isinstance(samples[i], list | tuple) else ()
+            cell = row[col_idx] if col_idx < len(row) else None
+            out.append(_sanitize_corner_map(cell))
+        return out
+
+    wheel_cols: dict[str, int] = {}
+    for spec in col_specs:
+        wheel = spec[0]
+        for candidate in spec[1:]:
+            if candidate in field_index:
+                wheel_cols[wheel] = field_index[candidate]
+                break
+    if not wheel_cols:
+        return [None] * n_samples
+
+    per_sample: list[dict[str, float] | None] = []
+    any_non_zero = False
+    for i in range(n_samples):
+        row = samples[i] if i < len(samples) and isinstance(samples[i], list | tuple) else ()
+        sample_map: dict[str, float] = {}
+        for wheel, col_idx in wheel_cols.items():
+            if col_idx < len(row):
+                f = _finite_float(row[col_idx])
+                if f is not None:
+                    sample_map[wheel] = f
+                    if f != 0.0:
+                        any_non_zero = True
+        per_sample.append(sample_map or None)
+
+    # #266: all-zero across the entire trace means the CSP channel was unread (sentinel 0.0).
+    if not any_non_zero:
+        return [None] * n_samples
+    return per_sample
+
+
+def _sanitize_trace_scalar(
+    archive: Mapping[str, Any],
+    col_names: tuple[str, ...],
+    sample_idx: int,
+    fallback: Any,
+) -> float:
+    """Resolve a trace scalar column (ignoring unread all-zero columns) and reject ``bool``/NaN."""
+    trace = archive.get("trace") if isinstance(archive, Mapping) else None
+    if isinstance(trace, Mapping):
+        fields = trace.get("fields")
+        samples = trace.get("samples")
+        if isinstance(fields, list) and isinstance(samples, list) and sample_idx < len(samples):
+            row = samples[sample_idx]
+            if isinstance(row, list | tuple):
+                for name in col_names:
+                    if name in fields:
+                        idx = fields.index(name)
+                        has_non_zero = any(
+                            (_finite_float(r[idx]) or 0.0) != 0.0
+                            for r in samples
+                            if isinstance(r, list | tuple) and idx < len(r)
+                        )
+                        if not has_non_zero:
+                            continue
+                        if idx < len(row):
+                            f = _finite_float(row[idx])
+                            return 0.0 if f is None else f
+    return _safe_number(fallback, 0.0)
+
+
+def _pick_mapping_value(mapping: Mapping[str, Any] | None, *keys: str) -> Any:
+    if not isinstance(mapping, Mapping):
+        return None
+    for key in keys:
+        if key in mapping:
+            return mapping[key]
+    return None
+
+
+def _clean_str(value: Any) -> str | None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped if stripped else None
+    return None
+
+
+def _sanitize_conditions(
+    raw_conditions: Any,
+    raw_car: Any = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Extract sanitized ``conditions`` metadata and top-level ``telemetry_tick`` fields."""
+    cond_map = raw_conditions if isinstance(raw_conditions, Mapping) else None
+    car_map = raw_car if isinstance(raw_car, Mapping) else None
+    if cond_map is None and car_map is None:
+        return None, {}
+
+    cond_out: dict[str, Any] = {}
+    top_out: dict[str, Any] = {}
+
+    grip = _finite_float(_pick_mapping_value(cond_map, "trackGripLevel", "track_grip_level"))
+    if grip is not None and grip >= 0.0:
+        cond_out["trackGripLevel"] = grip
+        top_out["track_grip_level"] = grip
+
+    track_temp = _finite_float(_pick_mapping_value(cond_map, "trackTempC", "track_temp_c"))
+    if track_temp is not None:
+        cond_out["trackTempC"] = track_temp
+        top_out["track_temp_c"] = track_temp
+
+    ambient_temp = _finite_float(_pick_mapping_value(cond_map, "ambientTempC", "ambient_temp_c"))
+    if ambient_temp is not None:
+        cond_out["ambientTempC"] = ambient_temp
+        top_out["ambient_temp_c"] = ambient_temp
+
+    wind_speed = _finite_float(_pick_mapping_value(cond_map, "windSpeedKmh", "wind_speed_kmh"))
+    if wind_speed is not None:
+        cond_out["windSpeedKmh"] = wind_speed
+
+    wind_dir = _finite_float(
+        _pick_mapping_value(cond_map, "windDirectionDeg", "wind_direction_deg")
+    )
+    if wind_dir is not None:
+        cond_out["windDirectionDeg"] = wind_dir
+
+    optimal_temp = _finite_float(
+        _pick_mapping_value(cond_map, "optimalTempC", "tyre_optimal_temp_c", "optimal_temp_c")
+        or _pick_mapping_value(car_map, "optimalTempC", "tyre_optimal_temp_c", "optimal_temp_c")
+    )
+    if optimal_temp is not None and optimal_temp > 0.0:
+        cond_out["optimalTempC"] = optimal_temp
+
+    weather = _clean_str(_pick_mapping_value(cond_map, "weatherType", "weather_type"))
+    if weather is not None:
+        cond_out["weatherType"] = weather
+        top_out["weather_type"] = weather
+
+    compound = _clean_str(
+        _pick_mapping_value(cond_map, "tyreCompound", "tyre_compound")
+        or _pick_mapping_value(car_map, "tyreCompound", "tyre_compound")
+    )
+    if compound is not None:
+        cond_out["tyreCompound"] = compound
+        top_out["tyre_compound"] = compound
+
+    return (cond_out if cond_out else None), top_out
 
 
 def ticks_from_archive(archive: dict[str, Any]) -> list[dict[str, Any]]:
     """Build the ordered ``telemetry_tick`` frames for a stored lap archive (pure).
 
     Each frame carries the FULL payload :func:`external_protocol._validate_telemetry_tick` requires
-    (so the sidecar admits it and feeds the observer) plus ``spline`` for corner location. ``rpm``
-    is absent from the lap trace, so it is reported as 0; bounded channels are clamped to their
-    contract range to tolerate real-archive jitter. Raises ``ValueError`` (from
-    :func:`tools.ai_sidecar.lap_dynamics.lap_trace_from_archive`) when there is no usable trace.
+    (so the sidecar admits it and feeds the observer) plus ``spline`` for corner location, and
+    propagates finite per-wheel ``tyre_temps_c``, ``brake_temps_c``, and ``conditions`` metadata
+    when present so offline replay matches the Lua producer contract.
     """
     lap = lap_trace_from_archive(archive)
     speed, spline, brake = lap.v_kmh, lap.spline, lap.brake
     throttle, steer, gear = lap.throttle, lap.steer, lap.gear
-    lat_g, long_g = lap.lat_g, lap.long_g
+    n_samples = len(lap)
+    accg_lat = getattr(lap, "accg_lat", None)
+    accg_long = getattr(lap, "accg_long", None)
+    lat_g = (
+        accg_lat if isinstance(accg_lat, list | tuple) and len(accg_lat) == n_samples else lap.lat_g
+    )
+    long_g = (
+        accg_long
+        if isinstance(accg_long, list | tuple) and len(accg_long) == n_samples
+        else lap.long_g
+    )
+    tyre_maps = _extract_trace_corner_maps(
+        archive, lap, "tyre_temps_c", _TYRE_TEMP_COL_SPECS, n_samples
+    )
+    brake_maps = _extract_trace_corner_maps(
+        archive, lap, "brake_temps_c", _BRAKE_TEMP_COL_SPECS, n_samples
+    )
+    cond_dict, top_cond_fields = _sanitize_conditions(
+        archive.get("conditions") if isinstance(archive, Mapping) else None,
+        archive.get("car") if isinstance(archive, Mapping) else None,
+    )
     frames: list[dict[str, Any]] = []
-    for i in range(len(lap)):
-        payload = {
-            "speed_kmh": max(0.0, speed[i]),
+    for i in range(n_samples):
+        payload: dict[str, Any] = {
+            "speed_kmh": max(0.0, _safe_number(speed[i], 0.0)),
             "rpm": 0,
             "throttle": _clamp(throttle[i], 0.0, 1.0),
             "brake": _clamp(brake[i], 0.0, 1.0),
             "steer": _clamp(steer[i], -1.0, 1.0),
             "gear": _safe_gear(gear[i]),
-            "lat_g": lat_g[i],
-            "long_g": long_g[i],
+            "lat_g": _sanitize_trace_scalar(
+                archive,
+                ("accG_lat", "accg_lat", "lat_g", "latg", "accG"),
+                i,
+                lat_g[i],
+            ),
+            "long_g": _sanitize_trace_scalar(
+                archive,
+                ("accG_long", "accg_long", "accG_lon", "accg_lon", "long_g", "longg"),
+                i,
+                long_g[i],
+            ),
             "spline": _clamp(spline[i], 0.0, 1.0),
         }
+        if tyre_maps[i] is not None:
+            payload["tyre_temps_c"] = dict(tyre_maps[i])  # type: ignore[arg-type]
+        if brake_maps[i] is not None:
+            payload["brake_temps_c"] = dict(brake_maps[i])  # type: ignore[arg-type]
+        if top_cond_fields:
+            payload.update(top_cond_fields)
+        if cond_dict is not None:
+            payload["conditions"] = dict(cond_dict)
         frames.append(make_telemetry_tick(payload, seq=i))
     return frames
+
+
+def _shm_wheel_map(buf: bytes | None, offset: int) -> dict[str, float] | None:
+    """Unpack 4-wheel floats from an extended ``acpmf_physics`` buffer when non-zero and finite."""
+    if not isinstance(buf, bytes | bytearray | memoryview):
+        return None
+    if len(buf) < offset + _SHM_WHEEL_VEC4.size:
+        return None
+    values = _SHM_WHEEL_VEC4.unpack_from(buf, offset)
+    sanitized = _sanitize_corner_map(values)
+    if sanitized is None or all(v == 0.0 for v in sanitized.values()):
+        return None
+    return sanitized
+
+
+def _shm_scalar_float(buf: bytes | None, offset: int) -> float | None:
+    """Unpack a non-zero finite float from a shared-memory buffer when in bounds."""
+    if not isinstance(buf, bytes | bytearray | memoryview):
+        return None
+    if len(buf) < offset + _SHM_FLOAT32.size:
+        return None
+    val = _finite_float(_SHM_FLOAT32.unpack_from(buf, offset)[0])
+    if val is None or val == 0.0:
+        return None
+    return val
+
+
+def _shm_utf16_str(buf: bytes | None, offset: int, byte_len: int) -> str | None:
+    """Decode a NUL-terminated UTF-16LE string slice from a shared-memory buffer when non-empty."""
+    if not isinstance(buf, bytes | bytearray | memoryview):
+        return None
+    end = offset + byte_len
+    if len(buf) < end:
+        return None
+    raw = bytes(buf[offset:end]).decode("utf-16-le", "replace").split("\x00", 1)[0].strip()
+    return raw if raw else None
+
+
+def build_live_tick_payload(
+    phys: Any,
+    gfx: Any,
+    *,
+    phys_buf: bytes | None = None,
+    gfx_buf: bytes | None = None,
+    conditions: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a sanitized ``telemetry_tick`` payload from AC shared-memory samples (pure)."""
+    from tools.ac_harness.racing_telemetry import csv_display_gear
+
+    rpm_f = _finite_float(getattr(phys, "rpm", 0))
+    laps_f = _finite_float(getattr(gfx, "completed_laps", 0))
+    payload: dict[str, Any] = {
+        "speed_kmh": max(0.0, _safe_number(getattr(phys, "speed_kmh", 0.0), 0.0)),
+        "rpm": max(0, int(rpm_f) if rpm_f is not None else 0),
+        "throttle": _clamp(getattr(phys, "gas", 0.0), 0.0, 1.0),
+        "brake": _clamp(getattr(phys, "brake", 0.0), 0.0, 1.0),
+        "steer": normalize_live_steer(getattr(phys, "steer", 0.0)),
+        "gear": csv_display_gear(_safe_gear(getattr(phys, "gear", 0))),
+        "lat_g": _safe_number(getattr(phys, "accg_lat", 0.0), 0.0),
+        "long_g": _safe_number(getattr(phys, "accg_lon", 0.0), 0.0),
+        "spline": _clamp(getattr(gfx, "norm_pos", 0.0), 0.0, 1.0),
+        "lap": max(0, int(laps_f) if laps_f is not None else 0),
+    }
+
+    tyre_temps = (
+        _sanitize_corner_map(getattr(phys, "tyre_temps_c", None))
+        or _sanitize_corner_map(getattr(phys, "tyre_core_temp", None))
+        or _shm_wheel_map(phys_buf, _SHM_TYRE_CORE_TEMP_OFFSET)
+    )
+    if tyre_temps is not None:
+        payload["tyre_temps_c"] = tyre_temps
+
+    brake_temps = (
+        _sanitize_corner_map(getattr(phys, "brake_temps_c", None))
+        or _sanitize_corner_map(getattr(phys, "brake_temp", None))
+        or _shm_wheel_map(phys_buf, _SHM_BRAKE_TEMP_OFFSET)
+    )
+    if brake_temps is not None:
+        payload["brake_temps_c"] = brake_temps
+
+    raw_cond: dict[str, Any] = {}
+    for src in (
+        getattr(gfx, "conditions", None),
+        getattr(phys, "conditions", None),
+        conditions,
+    ):
+        if isinstance(src, Mapping):
+            raw_cond.update(src)
+    for attr_key, cond_key in (
+        ("surface_grip", "trackGripLevel"),
+        ("track_grip_level", "trackGripLevel"),
+        ("road_temp", "trackTempC"),
+        ("track_temp_c", "trackTempC"),
+        ("air_temp", "ambientTempC"),
+        ("ambient_temp_c", "ambientTempC"),
+        ("weather_type", "weatherType"),
+        ("tyre_compound", "tyreCompound"),
+    ):
+        for obj in (gfx, phys):
+            val = getattr(obj, attr_key, None)
+            if val is not None and cond_key not in raw_cond:
+                raw_cond[cond_key] = val
+
+    if "ambientTempC" not in raw_cond:
+        air_temp = _shm_scalar_float(phys_buf, _SHM_AIR_TEMP_OFFSET)
+        if air_temp is not None:
+            raw_cond["ambientTempC"] = air_temp
+    if "trackTempC" not in raw_cond:
+        road_temp = _shm_scalar_float(phys_buf, _SHM_ROAD_TEMP_OFFSET)
+        if road_temp is not None:
+            raw_cond["trackTempC"] = road_temp
+    if "tyreCompound" not in raw_cond:
+        compound = _shm_utf16_str(
+            gfx_buf,
+            _SHM_GFX_TYRE_COMPOUND_OFFSET,
+            _SHM_GFX_TYRE_COMPOUND_BYTES,
+        )
+        if compound is not None:
+            raw_cond["tyreCompound"] = compound
+
+    cond_dict, top_cond_fields = _sanitize_conditions(raw_cond or None)
+    if top_cond_fields:
+        payload.update(top_cond_fields)
+    if cond_dict is not None:
+        payload["conditions"] = cond_dict
+    return payload
 
 
 def make_hello_frame(client: str = "telemetry-source") -> dict[str, Any]:
@@ -143,23 +548,26 @@ async def stream_live(url: str, *, hz: float = DEFAULT_HZ, token: str | None = N
 
     from tools.ac_harness.racing_telemetry import (
         GFX_BYTES,
-        PHYS_BYTES,
-        csv_display_gear,
         parse_graphics,
         parse_physics,
     )
     from tools.ac_harness.shared_memory import (
+        PHYSICS_MAP_BYTES,
         SHM_GRAPHICS,
         SHM_PHYSICS,
         open_shared_memory,
     )
 
-    # Map/read lengths come from racing_telemetry's own parser constants (single source of truth):
-    # speedKmh@28/brake@8 (phys) and normalizedCarPosition@248/completedLaps@132 (gfx).
+    # Map/read PHYSICS_MAP_BYTES (512) for acpmf_physics so parse_physics (160) AND thermal or
+    # condition offsets (tyreCoreTemperature@152, airTemp@288, roadTemp@292, brakeTemp@348) fit,
+    # plus tyreCompound@176 within GFX_BYTES (256). AC shared memory does not expose a weatherType
+    # string and places surfaceGrip past the version-dependent carCoordinates block outside the
+    # 256-byte graphics prefix, so weather/grip gates fail-open on raw SHM unless supplied via
+    # conditions or the in-game Lua telemetry_publisher.
     phys_map = None
     gfx_map = None
     try:
-        phys_map = open_shared_memory(SHM_PHYSICS, PHYS_BYTES)
+        phys_map = open_shared_memory(SHM_PHYSICS, PHYSICS_MAP_BYTES)
         gfx_map = open_shared_memory(SHM_GRAPHICS, GFX_BYTES)
         headers = {AUTH_HEADER: token} if token else {}
         period = period_seconds(hz)
@@ -168,23 +576,19 @@ async def stream_live(url: str, *, hz: float = DEFAULT_HZ, token: str | None = N
             await ws.send(json.dumps(make_hello_frame("telemetry-source-live")))
             while True:
                 try:
-                    phys = parse_physics(phys_map.read(PHYS_BYTES))
-                    gfx = parse_graphics(gfx_map.read(GFX_BYTES))
+                    raw_phys = phys_map.read(PHYSICS_MAP_BYTES)
+                    raw_gfx = gfx_map.read(GFX_BYTES)
+                    phys = parse_physics(raw_phys)
+                    gfx = parse_graphics(raw_gfx)
                 except ValueError:
                     await asyncio.sleep(max(period, _PARSE_FAILURE_SLEEP_S))
                     continue
-                payload = {
-                    "speed_kmh": max(0.0, phys.speed_kmh),
-                    "rpm": max(0, phys.rpm),
-                    "throttle": _clamp(phys.gas, 0.0, 1.0),
-                    "brake": _clamp(phys.brake, 0.0, 1.0),
-                    "steer": normalize_live_steer(phys.steer),
-                    "gear": csv_display_gear(phys.gear),
-                    "lat_g": phys.accg_lat,
-                    "long_g": phys.accg_lon,
-                    "spline": _clamp(gfx.norm_pos, 0.0, 1.0),
-                    "lap": max(0, gfx.completed_laps),
-                }
+                payload = build_live_tick_payload(
+                    phys,
+                    gfx,
+                    phys_buf=raw_phys,
+                    gfx_buf=raw_gfx,
+                )
                 await ws.send(json.dumps(make_telemetry_tick(payload, seq=seq)))
                 seq += 1
                 await asyncio.sleep(period)
