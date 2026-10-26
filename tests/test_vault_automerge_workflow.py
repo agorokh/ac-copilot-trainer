@@ -22,7 +22,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github/workflows/vault-automerge.yml"
 PUBLIC_WORKFLOW = REPO_ROOT / ".github/workflows/vault-automerge-public.yml"
-HUB_ACTION_REF = "0a6aab0905308f94036496ce14f8a3e2346987ca"  # pragma: allowlist secret
+HUB_ACTION_REF = "06a23e6300b8055243c1fc232dcea7a87a36eac5"  # pragma: allowlist secret
 # Canonical bound-checkout shape for the public variant (#889). The hub vault-pr-sweep
 # (governance-hub scripts/vault_sweep_discover.py::_bound_local_action) admits a LOCAL hub
 # action only when the IMMEDIATELY preceding checkout pins the same SHA into
