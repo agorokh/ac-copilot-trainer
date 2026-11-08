@@ -112,10 +112,16 @@ def _fallback_manifest_from_text(text: str) -> dict[str, Any]:
       PyYAML-less host python still sees the current central host
       (governance-hub#517 / agent-factory#1888).
     * Top-level ``repo:`` block with ``code_dirs`` / ``code_top_level`` lists
-      and ``tier3_workspace_id`` scalar (Qodo PR #194 HIGH: without this, the
-      per-repo override silently drops in PyYAML-missing hook runtimes and the
-      gate falls back to template defaults — re-introducing the wave-introduced
-      clobber regression for repos relying on the override).
+      and the ``tier3_workspace_id`` / ``memory_gate_mode`` scalars (Qodo PR #194
+      HIGH: without this, the per-repo override silently drops in PyYAML-missing
+      hook runtimes and the gate falls back to template defaults — re-introducing
+      the wave-introduced clobber regression for repos relying on the override).
+      ``memory_gate_mode`` joined the subset for gov-hub#853: the warn-pilot switch
+      was parsed only by PyYAML, so on hosts whose hook ``python3`` lacks it
+      (m4max-studio, epam-m1max, the MacBook Air on 2026-11-07) the hub's committed
+      ``warn`` read back as ``block`` and the pilot never ran there. Every scalar
+      the gate or prefetch reads from ``repo:`` must be listed here, or a
+      PyYAML-less runtime silently disagrees with CI.
     """
     hosts: list[dict[str, Any]] = []
     repo_block: dict[str, Any] = {}
@@ -171,7 +177,8 @@ def _fallback_manifest_from_text(text: str) -> dict[str, Any]:
             # A scalar key or the start of a list (`code_dirs:`, `code_top_level:`,
             # `tier3_workspace_id: "..."`).
             scalar_m = re.match(
-                r"(code_dirs|code_top_level|tier3_workspace_id):\s*(.*)$", stripped
+                r"(code_dirs|code_top_level|tier3_workspace_id|memory_gate_mode):\s*(.*)$",
+                stripped,
             )
             if scalar_m:
                 key = scalar_m.group(1)
@@ -600,6 +607,37 @@ def repo_code_dir_top_level(manifest: dict[str, Any] | None) -> frozenset[str]:
     return DEFAULT_CODE_DIR_TOP_LEVEL
 
 
+# Enforcement mode for the memory gate (gov-hub#853). ``block`` is the historical
+# behavior: a code-path edit without a fresh, relevant Tier-3 stamp is refused.
+# ``warn`` relaxes the DISCIPLINE refusals (missing/stale/irrelevant/wrong-workspace
+# stamp) to a visible warning plus an audit row, while SUBSTRATE/TRUST faults
+# (bridge mismatch, degraded budget, fractured derivation) keep blocking. The mode
+# is operator-owned per-repo DATA (committed ``ops/memory_manifest.yml``), NOT an
+# env var: ``CLAUDE_MEMORY_GATE=0`` was retired (council 2026-06-18) because a
+# silent, agent-settable env bypass is indistinguishable from an attack. A repo
+# opts into the warn pilot by committing one line; removing it restores ``block``.
+# Council sign-off 2026-10-17 (gov-hub#853) + cross-repo-change-gate (#350).
+DEFAULT_MEMORY_GATE_MODE = "block"
+VALID_MEMORY_GATE_MODES: frozenset[str] = frozenset({"block", "warn"})
+
+
+def repo_memory_gate_mode(manifest: dict[str, Any] | None) -> str:
+    """Per-repo memory-gate enforcement mode; absent/invalid → ``block`` (fail-closed).
+
+    Reads ``repo.memory_gate_mode`` from ``ops/memory_manifest.yml``. Any value
+    that is not exactly ``block`` or ``warn`` (case/space-insensitive) falls back
+    to ``block`` so a typo can never silently disable enforcement — the gate emits
+    a visible diagnostic for the invalid-value case (see ``_gate_mode``).
+    """
+    repo = load_repo_section(manifest)
+    raw = repo.get("memory_gate_mode")
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized in VALID_MEMORY_GATE_MODES:
+            return normalized
+    return DEFAULT_MEMORY_GATE_MODE
+
+
 def repo_tier3_workspace_id(manifest: dict[str, Any] | None) -> str | None:
     """The Tier-3 workspace this repo's memory canonically lives in (per-repo data).
 
@@ -736,6 +774,7 @@ class EndpointCandidate:
     # Present when the registry row that produced this URL named ``tls_server_name``.
     # The prefetch uses it as the SNI host for raw-IP HTTPS (governance-hub#473).
     tls_server_name: str | None = None
+    endpoint_kind: str = "writer"
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -894,6 +933,7 @@ def resolve_memory_endpoints(
     *,
     env: dict[str, str] | None = None,
     registry_sources: list[tuple[Path, str]] | None = None,
+    prefer_naive: bool = False,
 ) -> list[EndpointCandidate]:
     """Resolve ordered, allowlist-validated substrate endpoints for THIS host.
 
@@ -906,6 +946,9 @@ def resolve_memory_endpoints(
     # (priority, source, scheme, host, port)
     raw: list[tuple[int, str, str, str, int]] = []
     registry_hosts: set[str] = set()
+    naive_keys: set[tuple[str, str, int]] = set()
+    writer_keys: set[tuple[str, str, int]] = set()
+    naive_raw: set[tuple[int, str, str, str, int]] = set()
     # SNI from the first trusted registry row that named each endpoint.  Keep
     # manifest SNI separate: the operated repo is branch-controlled, so its TLS
     # virtual-host choice must never bleed into a higher-priority registry or
@@ -929,24 +972,39 @@ def resolve_memory_endpoints(
             # An empty workspace must not match every registry row.
             if not keys or not (name_match_keys(rid) & keys):
                 continue
-            endpoint = _row_endpoint(row, defaults)
-            if endpoint is None:
-                continue
-            parsed = _split_endpoint(endpoint)
-            if parsed and parsed[2] not in _PLACEHOLDER_PORTS:
-                # Collect from ALL sources; precedence is enforced by the
-                # priority ordering (consumer registries rank above legacy),
-                # and callers probe in order. We intentionally do NOT stop at
-                # the first matching source: if a higher-precedence row is later
-                # rejected by the allowlist (e.g. plain-HTTP to a tailnet IP), a
-                # valid HTTPS endpoint from a lower-precedence registry must
-                # still survive as a fallback.
-                raw.append((20 + index, label, *parsed))
-                if not _is_loopback_host(parsed[1]):
-                    registry_hosts.add(parsed[1])
-                tls_sni = _row_tls_server_name(row)
-                if tls_sni:
-                    sni_by_key.setdefault(parsed, tls_sni)
+            endpoints = [(20 + index, _row_endpoint(row, defaults), False)]
+            if prefer_naive:
+                endpoints.insert(0, (-20 + index, row.get("naive_endpoint"), True))
+            for priority, endpoint, is_naive in endpoints:
+                parsed = (
+                    _split_endpoint(endpoint) if isinstance(endpoint, str) else None
+                )
+                if parsed and parsed[2] not in _PLACEHOLDER_PORTS:
+                    raw.append((priority, label, *parsed))
+                    if is_naive:
+                        naive_keys.add(parsed)
+                        naive_raw.add((priority, label, *parsed))
+                    else:
+                        writer_keys.add(parsed)
+                    if not _is_loopback_host(parsed[1]):
+                        registry_hosts.add(parsed[1])
+                    tls_sni = _row_tls_server_name(row)
+                    if tls_sni:
+                        sni_by_key.setdefault(parsed, tls_sni)
+
+    # A conflicting registry declaration must never attach a reader credential to
+    # an endpoint also declared as a writer (including loopback aliases).
+    collisions = {
+        key
+        for key in naive_keys
+        if key in writer_keys
+        or (
+            _is_loopback_host(key[1])
+            and any(_is_loopback_host(w[1]) and key[2] == w[2] for w in writer_keys)
+        )
+    }
+    naive_keys -= collisions
+    raw = [r for r in raw if not (r in naive_raw and tuple(r[2:]) in collisions)]
 
     # SSRF guard (#7) WARN is DEFERRED (gh#111): if the manifest names a loopback
     # endpoint on an untrusted port we reject it below, but only surface that as a
@@ -1038,7 +1096,10 @@ def resolve_memory_endpoints(
     port_seeds = sorted(
         (pri, port)
         for (pri, _src, scheme, host, port) in raw
-        if _accepted(scheme, host) and port not in _PLACEHOLDER_PORTS and port != 443
+        if _accepted(scheme, host)
+        and port not in _PLACEHOLDER_PORTS
+        and port != 443
+        and (scheme, host, port) not in naive_keys
     )
     base_port = port_seeds[0][1] if port_seeds else _DEFAULT_SUBSTRATE_PORT
     # A "real substrate" is any accepted, non-placeholder endpoint (443 included).
@@ -1080,7 +1141,9 @@ def resolve_memory_endpoints(
 
     seen: set[str] = set()
     out: list[EndpointCandidate] = []
-    for priority, source, scheme, host, port in sorted(raw, key=lambda item: item[0]):
+    for priority, source, scheme, host, port in sorted(
+        raw, key=lambda item: (tuple(item[2:]) not in naive_keys, item[0])
+    ):
         if not _is_loopback_host(host):
             if host not in allowed_nonloop:
                 continue  # not registry-named or the configured bridge
@@ -1098,6 +1161,9 @@ def resolve_memory_endpoints(
                 port,
                 source,
                 priority,
+                endpoint_kind="naive"
+                if (scheme, host, port) in naive_keys
+                else "writer",
                 tls_server_name=(
                     manifest_sni_by_key.get((scheme, host, port))
                     if source == "manifest"
