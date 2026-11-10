@@ -554,3 +554,96 @@ def test_saved_setup_unknown_ranges_are_not_adjustable(lua, tmp_path) -> None:
     assert ack["ok"] is False
     assert "range unavailable" in ack["error"]
     assert setup_path.read_text(encoding="utf-8") == "[FRONT_BIAS]\nVALUE=68\n"
+
+
+def test_setup_capability_and_load_accept_csp_callable_non_functions(lua, tmp_path) -> None:
+    """CSP 0.3+ binds ac.isCarResetAllowed via LuaJIT FFI cdata rather than a Lua closure (#86)."""
+    root = tmp_path / "setups"
+    car_dir = root / "ks_porsche_911_gt3_r_2016" / "spa"
+    car_dir.mkdir(parents=True)
+    setup_file = car_dir / "pit_baseline.ini"
+    setup_file.write_text("[FRONT_BIAS]\nVALUE=64\n", encoding="utf-8")
+
+    result = lua.execute(
+        f"""
+      local allowed = true
+      local loaded_paths = {{}}
+      local function make_callable(fn)
+        return setmetatable({{}}, {{
+          __call = function(_, ...)
+            return fn(...)
+          end
+        }})
+      end
+      local ok_ffi, ffi = pcall(require, "ffi")
+      local reset_binding = make_callable(function() return allowed end)
+      local bad_cdata = nil
+      if ok_ffi and ffi and ffi.cast then
+        local cb = ffi.cast("bool (*)(void)", function() return allowed end)
+        reset_binding = cb
+        bad_cdata = ffi.new("int[1]", 1)
+      end
+      ac = {{
+        FolderID = {{ UserSetups = 1 }},
+        getFolder = make_callable(function() return {str(root)!r} end),
+        getCarID = function() return "ks_porsche_911_gt3_r_2016" end,
+        getTrackID = function() return "spa" end,
+        getTrackLayout = function() return "" end,
+        isCarResetAllowed = reset_binding,
+        loadSetup = make_callable(function(p)
+          loaded_paths[#loaded_paths + 1] = p
+          return true
+        end),
+        getSetupSpinners = make_callable(function()
+          return {{ {{ name = "ABS", value = 4, min = 0, max = 12, step = 1 }} }}
+        end),
+      }}
+      io.scanDir = make_callable(function(dir, pattern)
+        if dir == {str(car_dir)!r} and pattern == "*.ini" then
+          return {{ "pit_baseline.ini" }}
+        end
+        return {{}}
+      end)
+      local m = require("setup_library")
+      local in_pits = m.listSpinners({{}})
+      local load_ack = m.loadByName({{ name = "pit_baseline", path = {str(setup_file)!r} }})
+      allowed = false
+      local on_track = m.capability()
+      local bad_cap = nil
+      if bad_cdata ~= nil then
+        ac.isCarResetAllowed = bad_cdata
+        bad_cap = m.capability()
+      end
+      return {{
+        binding_type = type(reset_binding),
+        in_pits = in_pits,
+        load_ack = load_ack,
+        loaded_count = #loaded_paths,
+        on_track = on_track,
+        bad_cap = bad_cap,
+      }}
+    """
+    )
+    assert result["binding_type"] in ("cdata", "table")
+    assert result["in_pits"]["reset_allowed"] is True
+    assert result["in_pits"]["lock_reason"] == ""
+    assert result["load_ack"]["ok"] is True
+    assert result["loaded_count"] == 1
+    assert result["on_track"]["reset_allowed"] is False
+    if result["bad_cap"] is not None:
+        assert result["bad_cap"]["reset_allowed"] is False
+        assert result["bad_cap"]["lock_reason"] == "Reset capability unavailable"
+
+
+def test_trainer_entry_delegates_reset_gate_to_setup_library_capability() -> None:
+    """ac_copilot_trainer.lua must delegate reset checks to setupLibrary.capability() (#86)."""
+    from pathlib import Path
+
+    entry_lua = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "ac_copilot_trainer"
+        / "ac_copilot_trainer.lua"
+    ).read_text(encoding="utf-8")
+    assert "type(ac.isCarResetAllowed)" not in entry_lua
+    assert entry_lua.count("setupLibrary.capability()") >= 3

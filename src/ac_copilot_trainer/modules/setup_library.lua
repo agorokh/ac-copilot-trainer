@@ -42,10 +42,29 @@ local function invalidateListCache()
   _listCacheKey = nil
 end
 
+-- CSP 0.3+ binds several `ac.*` symbols (including `ac.isCarResetAllowed`) via
+-- LuaJIT FFI `cdata` (`type(fn) == "cdata"`) rather than Lua closures. Accept
+-- functions, cdata, and callable tables/userdata; every invocation still runs
+-- under `pcall(...)` so non-callable cdata or runtime errors fail closed (#86).
+local function isCallable(fn)
+  local t = type(fn)
+  if t == "function" or t == "cdata" then
+    return true
+  end
+  if t == "table" or t == "userdata" then
+    local ok, mt = pcall(getmetatable, fn)
+    if (not ok or type(mt) ~= "table") and type(debug) == "table" and type(debug.getmetatable) == "function" then
+      ok, mt = pcall(debug.getmetatable, fn)
+    end
+    return ok and type(mt) == "table" and mt.__call ~= nil
+  end
+  return false
+end
+
 local function installRefreshHookOnce()
   if _hookInstalled then return end
   _hookInstalled = true
-  if ac and type(ac.onSetupsListRefresh) == "function" then
+  if ac and isCallable(ac.onSetupsListRefresh) then
     pcall(function()
       ac.onSetupsListRefresh(function()
         invalidateListCache()
@@ -59,7 +78,7 @@ end
 -- maps to `Documents/Assetto Corsa/setups/` on every CSP build we care
 -- about (verified in csp-app-pocket-tech-setup-exchange-2026-04-21).
 local function userSetupsRoot()
-  if not (ac and type(ac.getFolder) == "function") then return nil end
+  if not (ac and isCallable(ac.getFolder)) then return nil end
   if not (ac.FolderID and ac.FolderID.UserSetups) then return nil end
   local ok, p = pcall(ac.getFolder, ac.FolderID.UserSetups)
   if not ok or type(p) ~= "string" or p == "" then return nil end
@@ -120,7 +139,7 @@ function M.list()
   local carId = activeCarId()
   if not carId or carId == "unknown" then return out end
   local carDir = root .. "/" .. carId
-  if not (io and type(io.scanDir) == "function") then return out end
+  if not (io and isCallable(io.scanDir)) then return out end
   local trackId = activeTrackId()
   local hasTrack = trackId and trackId ~= "" and trackId ~= "unknown"
 
@@ -129,7 +148,7 @@ function M.list()
     if not baseName:lower():match("%.ini$") then return end
     local stem = baseName:sub(1, -5)  -- strip .ini
     local mtime
-    if type(io.fileModified) == "function" then
+    if isCallable(io.fileModified) then
       local okMt, m = pcall(io.fileModified, filePath)
       if okMt then mtime = tonumber(m) end
     end
@@ -203,7 +222,7 @@ local function metadataIndexPath()
 end
 
 local function archiveSize(path)
-  if io and type(io.fileSize) == "function" then
+  if io and isCallable(io.fileSize) then
     local ok, size = pcall(io.fileSize, path)
     if ok and type(size) == "number" and size >= 0 then return size end
   end
@@ -274,7 +293,7 @@ end
 
 local function lapRecords()
   local out = {}
-  if not (io and type(io.scanDir) == "function") then return out end
+  if not (io and isCallable(io.scanDir)) then return out end
   local dir = persistence.dataDir() .. "/journal/laps"
   local ok, files = pcall(io.scanDir, dir, "lap_*.json")
   if not ok or type(files) ~= "table" then return out end
@@ -437,7 +456,7 @@ function M.loadByName(nameOrOpts)
 
   local resolvedName = match.name
 
-  if not (ac and type(ac.loadSetup) == "function") then
+  if not (ac and isCallable(ac.loadSetup)) then
     return { ok = false, name = resolvedName, error = "ac.loadSetup unavailable" }
   end
 
@@ -553,7 +572,7 @@ end
 --- The setup/reset gate is independent of speed: stationary on track stays
 --- locked. Query every sample/request, not once when a display opens.
 function M.capability()
-  if not (ac and type(ac.isCarResetAllowed) == "function") then
+  if not (ac and isCallable(ac.isCarResetAllowed)) then
     return { reset_allowed = false, lock_reason = "Reset capability unavailable" }
   end
   local ok, allowed = pcall(ac.isCarResetAllowed)
@@ -612,11 +631,11 @@ end
 
 local function activeSetupPath()
   local car, sim
-  if ac and type(ac.getCar) == "function" then
+  if ac and isCallable(ac.getCar) then
     local okCar, c = pcall(ac.getCar, 0)
     if okCar then car = c end
   end
-  if ac and type(ac.getSim) == "function" then
+  if ac and isCallable(ac.getSim) then
     local okSim, s = pcall(ac.getSim)
     if okSim then sim = s end
   end
@@ -876,7 +895,7 @@ local function normalizeCspSpinner(raw)
 end
 
 local function cspSpinnerList()
-  if not (ac and type(ac.getSetupSpinners) == "function") then
+  if not (ac and isCallable(ac.getSetupSpinners)) then
     return nil
   end
   local ok, rows = pcall(ac.getSetupSpinners)
@@ -914,7 +933,7 @@ local function cspSpinnerByName(name)
 end
 
 local function setCspSpinner(section, value)
-  if not (ac and type(ac.setSetupSpinnerValue) == "function") then
+  if not (ac and isCallable(ac.setSetupSpinnerValue)) then
     return nil, false
   end
   local spinner, hadList = cspSpinnerByName(section)
@@ -1074,7 +1093,7 @@ function M.setSpinner(payload)
   if not okWrite then
     return { ok = false, path = path, section = section, value = appliedValue, error = writeErr }
   end
-  if not (ac and type(ac.loadSetup) == "function") then
+  if not (ac and isCallable(ac.loadSetup)) then
     writeTextFile(path, text)
     return { ok = false, path = path, section = section, value = appliedValue, error = "ac.loadSetup unavailable" }
   end
