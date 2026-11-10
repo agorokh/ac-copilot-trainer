@@ -1,6 +1,7 @@
 // Toast singleton — issue #86 Part D6.
 
 #include "ui/toast.h"
+#include "ui/ascii_fold.h"
 #include "ui/tokens.h"
 
 #include <Arduino.h>
@@ -74,8 +75,10 @@ extern "C" void ui_toast_show(const char* text, uint32_t ms_visible) {
     // scrollable (Pocket Technician's setup list).
     lv_obj_move_foreground(toast);
 
+    char safe[160];
+    ui_ascii_fold(safe, sizeof(safe), text);
     lv_obj_t* lbl = lv_label_create(toast);
-    lv_label_set_text(lbl, text);
+    lv_label_set_text(lbl, safe);
     lv_obj_set_style_text_font(lbl, UI_FONT_LABEL_SM, LV_PART_MAIN);
     lv_obj_set_style_text_color(lbl, UI_TX_PRIMARY, LV_PART_MAIN);
     lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);

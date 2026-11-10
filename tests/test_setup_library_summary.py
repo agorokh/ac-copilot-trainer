@@ -195,6 +195,43 @@ def test_spinner_list_prefers_csp_api(lua) -> None:
     assert result["spinners"][2]["section"] == "ABS"
 
 
+def test_spinner_list_disambiguates_per_corner_csp_labels(lua) -> None:
+    """#86: CSP per-corner damper/packer spinners repeat 'Bump' across LF/RF/LR/RR."""
+    lua.execute(
+        """
+        ac = {
+          getSetupSpinners = function()
+            return {
+              { name = "DAMP_BUMP_LF", label = "Bump", value = 8, min = 0, max = 20, step = 1 },
+              { name = "DAMP_FAST_REBOUND_RR", label = "Fast rebound",
+                value = 5, min = 0, max = 20, step = 1 },
+              { name = "CAMBER_LF", label = "Camber LF",
+                value = -32, min = -50, max = 0, step = 1 },
+            }
+          end,
+        }
+        """
+    )
+
+    result = lua.execute(
+        """
+        local setupLibrary = require("setup_library")
+        return setupLibrary.listSpinners({})
+        """
+    )
+
+    assert result["ok"] is True
+    by_section = {}
+    i = 1
+    while result["spinners"][i] is not None:
+        row = result["spinners"][i]
+        by_section[row["section"]] = row
+        i += 1
+    assert by_section["DAMP_BUMP_LF"]["label"] == "Bump LF"
+    assert by_section["DAMP_FAST_REBOUND_RR"]["label"] == "Fast rebound RR"
+    assert by_section["CAMBER_LF"]["label"] == "Camber LF"
+
+
 def test_spinner_list_forwards_item_names_when_clean(lua) -> None:
     """#531 Part B: engine-map spinners name their positions (e.g. "QUALI") — a clean array
     of strings is forwarded as `items` so the dashboard renders `MAP 3/8 · QUALI`; any other

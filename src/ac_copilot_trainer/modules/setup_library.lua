@@ -856,6 +856,13 @@ local function normalizeCspSpinner(raw)
   local label = safeField(raw, "label") or safeField(raw, "displayName") or safeField(raw, "uiName")
   if type(label) ~= "string" or label == "" then
     label = labelForSection(name)
+  else
+    -- Disambiguate per-corner CSP spinners whose tab-scoped UI label omits the wheel
+    -- corner (e.g. DAMP_BUMP_LF -> "Bump LF"), without duplicating "Camber LF".
+    local corner = name:upper():match("_([LR][FR])$")
+    if corner and not label:upper():find("%f[%a]" .. corner .. "%f[%A]") then
+      label = label .. " " .. corner
+    end
   end
   local unit = safeField(raw, "units") or safeField(raw, "unit")
   if type(unit) ~= "string" then unit = def.unit or "" end

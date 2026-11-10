@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -44,8 +45,61 @@ def request_fields(data: dict[str, Any], operation: str) -> dict[str, Any]:
     return fields
 
 
+_UNICODE_ASCII_MAP = str.maketrans(
+    {
+        "\u00a0": " ",
+        "\u2009": " ",
+        "\u202f": " ",
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201a": "'",
+        "\u201b": "'",
+        "\u02bc": "'",
+        "\u00b4": "'",
+        "\u2032": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u201e": '"',
+        "\u201f": '"',
+        "\u00ab": '"',
+        "\u00bb": '"',
+        "\u2033": '"',
+        "\u2010": "-",
+        "\u2011": "-",
+        "\u2012": "-",
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2015": "-",
+        "\u2212": "-",
+        "\u00b7": "-",
+        "\u2022": "-",
+        "\u2026": "...",
+        "\u00b0": "deg",
+        "\u00df": "ss",
+        "\u00c6": "AE",
+        "\u00e6": "ae",
+        "\u0152": "OE",
+        "\u0153": "oe",
+        "\u00d8": "O",
+        "\u00f8": "o",
+        "\u0141": "L",
+        "\u0142": "l",
+    }
+)
+
+
 def _screen_text(value: Any, limit: int) -> str:
-    return "".join(c for c in str(value) if c.isprintable())[:limit]
+    """Fold community UTF-8 text into printable ASCII (0x20..0x7E) for the rig screen fonts."""
+    decomposed = unicodedata.normalize("NFKD", str(value).translate(_UNICODE_ASCII_MAP))
+    out: list[str] = []
+    for ch in decomposed:
+        if unicodedata.combining(ch):
+            continue
+        if " " <= ch <= "~":
+            out.append(ch)
+        elif ch.isprintable():
+            out.append("?")
+    return "".join(out)[:limit]
 
 
 def search_response(data: dict[str, Any], frame: dict[str, Any]) -> dict[str, Any]:

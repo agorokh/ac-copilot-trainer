@@ -71,6 +71,31 @@ lv_obj_t* find_label(lv_obj_t* root, const char* text, bool prefix = false) {
 
 bool has_label(const char* text) { return find_label(lv_scr_act(), text) != nullptr; }
 
+void assert_no_missing_glyphs(lv_obj_t* root) {
+    if (!root) return;
+    if (lv_obj_check_type(root, &lv_label_class)) {
+        const char* rendered = lv_label_get_text(root);
+        const lv_font_t* font = lv_obj_get_style_text_font(root, LV_PART_MAIN);
+        require(font != nullptr, "every label has a bound LVGL font");
+        uint32_t idx = 0;
+        while (rendered && rendered[idx] != '\0') {
+            uint32_t cp = _lv_txt_encoded_next(rendered, &idx);
+            if (cp == 0 || cp == '\n' || cp == '\r' || cp == '\t') continue;
+            uint32_t next_idx = idx;
+            uint32_t cp_next = _lv_txt_encoded_next(rendered, &next_idx);
+            lv_font_glyph_dsc_t dsc{};
+            if (!lv_font_get_glyph_dsc(font, &dsc, cp, cp_next)) {
+                throw std::runtime_error(
+                    std::string("missing glyph U+") + std::to_string(cp) +
+                    " in label: " + rendered);
+            }
+        }
+    }
+    for (uint32_t i = 0; i < lv_obj_get_child_cnt(root); ++i) {
+        assert_no_missing_glyphs(lv_obj_get_child(root, i));
+    }
+}
+
 void tap(const char* text) {
     tick();
     auto* label = find_label(lv_scr_act(), text);
@@ -89,6 +114,8 @@ void tap(const char* text) {
 
 void capture(const char* name) {
     tick();
+    assert_no_missing_glyphs(lv_scr_act());
+    assert_no_missing_glyphs(lv_layer_top());
     std::string filename = std::string(name) + ".ppm";
     std::ofstream image(output / filename, std::ios::binary);
     image.exceptions(std::ios::failbit | std::ios::badbit);
@@ -443,6 +470,150 @@ void pocket_technician_operator_setups() {
     back();
 }
 
+// #86: Live Spa pit verification exposed two real-rig regressions:
+// 1. `se.acstuff.club` community setup `PORSCHE GT3 ’16 Hotlap V1` (U+2019) rendered a missing-glyph
+//    tofu box against the ASCII-subsetted LVGL fonts, while Pocket Technician must still preserve
+//    the unfolded wire/filesystem name for `setup.load` <-> `setup.load.ack` correlation.
+// 2. Live CSP spinners (`SETUP VALUES`, per-corner `Bump LF`, degree units) must render cleanly and
+//    update immediately on confirmed `setup.spinner.set.ack`.
+void pocket_technician_spinners_and_utf8() {
+    constexpr const char* utf8_name = "PORSCHE GT3 \xe2\x80\x99" "16 Hotlap V1";
+    constexpr const char* utf8_path = "C:/setups/spa/PORSCHE GT3 \xe2\x80\x99" "16 Hotlap V1.ini";
+    screen_pocket_technician_set_sidecar_link_up(1);
+    screen_pocket_technician_set_identity(
+        "ks_porsche_911_gt3_r_2016",
+        "Porsche 911 GT3 R \xe2\x80\x99" "16",
+        "Porsche",
+        "spa",
+        "Circuit de Spa-Francorchamps \xe2\x80\x93 GP");
+    screen_pocket_technician_set_setup_capability(true, "", "csp");
+    tap("POCKET TECHNICIAN");
+    require(ui_nav_depth() == 2, "Pocket Technician opens for live spinners and UTF-8 titles");
+    screen_pocket_technician_clear_spinners();
+    screen_pocket_technician_add_spinner("FRONT_BIAS", "Brake Bias", 68.0f, 50.0f, 80.0f, 1.0f, "%", true, 1.0f);
+    screen_pocket_technician_add_spinner("DAMP_BUMP_LF", "Bump LF", 8.0f, 0.0f, 20.0f, 1.0f, "", true, 1.0f);
+    screen_pocket_technician_add_spinner("CAMBER_LF", "Camber LF", -3.2f, -5.0f, 0.0f, 0.1f, "\xc2\xb0", true, 1.0f);
+    screen_pocket_technician_finish_spinner_list();
+    screen_pocket_technician_clear_setups();
+    pt_setup_summary_t summary{68, 8, 3, 1, 20};
+    screen_pocket_technician_add_setup(utf8_name, "2026-11-10", -1, utf8_path, &summary);
+    screen_pocket_technician_finish_setup_list();
+    screen_pocket_technician_apply_live_electronics(68.0f, 3, 12, 8, 12, true, "");
+    tick();
+    require(has_label("SETUP VALUES"), "Pocket Technician renders live SETUP VALUES heading");
+    require(has_label("Brake Bias") && has_label("68%"), "Brake Bias spinner renders value and unit");
+    require(has_label("Bump LF"), "disambiguated per-corner spinner label renders");
+    lv_obj_t* camber_val = find_label(lv_scr_act(), "-3.2deg");
+    require(camber_val != nullptr, "UTF-8 degree symbol folds cleanly to ASCII deg");
+    const lv_font_t* camber_font = lv_obj_get_style_text_font(camber_val, LV_PART_MAIN);
+    lv_area_t camber_area;
+    lv_obj_get_coords(camber_val, &camber_area);
+    require(lv_area_get_height(&camber_area) <= lv_font_get_line_height(camber_font),
+            "multi-char spinner value+unit stays on one line without vertical wrap");
+    require(lv_txt_get_width("-3.2deg", 7, camber_font, 0, LV_TEXT_FLAG_NONE) <= lv_obj_get_width(camber_val),
+            "multi-char spinner value+unit fits inside its value slot width");
+    require(find_label(lv_scr_act(), "TRACK: Circuit de Spa-Francorchamps - GP", true) != nullptr,
+            "UTF-8 en-dash in track name folds cleanly to ASCII hyphen");
+    require(has_label("911 GT3 R '16"), "UTF-8 apostrophe in car model folds cleanly to ASCII");
+    capture("06e-pocket-technician-spinners-utf8");
+
+    while (screen_pocket_technician_pop_request().kind != PT_REQ_NONE) {}
+    lv_obj_t* bias_lbl = find_label(lv_scr_act(), "Brake Bias");
+    require(bias_lbl != nullptr, "Brake Bias row is present");
+    lv_obj_t* bias_row = lv_obj_get_parent(bias_lbl);
+    lv_obj_t* plus_lbl = find_label(bias_row, "+");
+    require(plus_lbl != nullptr, "Brake Bias row has + button");
+    lv_area_t plus_bounds;
+    lv_obj_get_coords(plus_lbl, &plus_bounds);
+    pointer_position.x = (plus_bounds.x1 + plus_bounds.x2) / 2;
+    pointer_position.y = (plus_bounds.y1 + plus_bounds.y2) / 2;
+    pointer_pressed = true;
+    tick(60);
+    pointer_pressed = false;
+    tick(140);
+    bool spinner_set = false;
+    for (int i = 0; i < 12; ++i) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_SPINNER_SET &&
+            strcmp(request.section, "FRONT_BIAS") == 0 &&
+            request.value == 69.0f) {
+            spinner_set = true;
+        }
+    }
+    require(spinner_set, "tapping + on Brake Bias queues setup.spinner.set for 69");
+    screen_pocket_technician_apply_spinner_ack(true, true, "FRONT_BIAS", 69.0f, nullptr);
+    tick();
+    require(has_label("69%"), "confirmed spinner ack updates displayed value immediately");
+
+    while (screen_pocket_technician_pop_request().kind != PT_REQ_NONE) {}
+    tap_prefix("PORSCHE GT3 '16 Hotlap V1");
+    bool exact_utf8_load = false;
+    for (int i = 0; i < 12; ++i) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_LOAD &&
+            strcmp(request.name, utf8_name) == 0 &&
+            strcmp(request.path, utf8_path) == 0) {
+            exact_utf8_load = true;
+        }
+    }
+    require(exact_utf8_load, "UTF-8 setup displays folded ASCII while preserving exact wire name/path");
+    screen_pocket_technician_apply_load_ack(true, utf8_name, utf8_path, nullptr);
+    tick();
+    require(has_label("ACTIVE: PORSCHE GT3 '16 Hotlap V1"),
+            "loaded UTF-8 setup displays folded ASCII in ACTIVE banner");
+    screen_pocket_technician_clear_spinners();
+    screen_pocket_technician_finish_spinner_list();
+    back();
+}
+
+void setup_exchange_utf8_community_titles() {
+    screen_setup_exchange_set_sidecar_link_up(1);
+    screen_setup_exchange_set_context(
+        "ks_porsche_911_gt3_r_2016",
+        "Porsche 911 GT3 R \xe2\x80\x99" "16",
+        "nurburgring",
+        "N\xc3\xbcrburgring \xe2\x80\x93 GP");
+    tap("SETUP EXCHANGE");
+    require(ui_nav_depth() == 2, "Setup Exchange opens for UTF-8 community titles");
+    screen_setup_exchange_clear_results();
+    screen_setup_exchange_add_result(
+        991,
+        "PORSCHE GT3 \xe2\x80\x99" "16 Hotlap V1",
+        "Caf\xc3\xa9 \xe2\x80\x9cPro\xe2\x80\x9d",
+        108,
+        "ks_porsche_911_gt3_r_2016",
+        "nurburgring");
+    screen_setup_exchange_finish_results();
+    tick();
+    require(has_label("TRACK: Nurburgring - GP"), "Setup Exchange folds UTF-8 track name");
+    require(has_label("PORSCHE GT3 '16 Hotlap V1"),
+            "Setup Exchange folds U+2019 apostrophe cleanly without tofu");
+    require(has_label("BY Cafe \"Pro\""), "Setup Exchange folds accented and curly-quoted author");
+    capture("08c-setup-exchange-utf8");
+    while (screen_setup_exchange_pop_request().kind != SE_REQ_NONE) {}
+    tap("PORSCHE GT3 '16 Hotlap V1");
+    bool utf8_download = false;
+    for (int i = 0; i < 12; ++i) {
+        auto request = screen_setup_exchange_pop_request();
+        if (request.kind == SE_REQ_NONE) break;
+        if (request.kind == SE_REQ_DOWNLOAD && request.setup_id == 991) utf8_download = true;
+    }
+    require(utf8_download, "tapping folded UTF-8 Setup Exchange row downloads setup_id 991");
+    screen_setup_exchange_apply_download_ack(
+        true,
+        991,
+        "PORSCHE GT3 \xe2\x80\x99" "16 Hotlap V1.ini",
+        "C:/simulator/PORSCHE GT3 16 Hotlap V1.ini",
+        nullptr);
+    tick();
+    require(find_label(lv_scr_act(), "Installed: PORSCHE GT3 '16", true) != nullptr,
+            "Setup Exchange install status folds UTF-8 filename cleanly");
+    capture("08d-setup-exchange-utf8-installed");
+    back();
+}
+
 // #86: Magione + 911 GT3 R has zero community setups (measured: service total=0). Say what
 // was searched instead of a bare "No setups found".
 void setup_exchange_empty_for_track() {
@@ -487,7 +658,9 @@ int main(int argc, char** argv) {
         copilot();
         pocket_technician();
         pocket_technician_operator_setups();
+        pocket_technician_spinners_and_utf8();
         setup_exchange();
+        setup_exchange_utf8_community_titles();
         setup_exchange_empty_for_track();
         app_state_set(APP_DISCONNECTED);
         tick(600);

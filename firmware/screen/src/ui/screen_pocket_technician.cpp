@@ -23,6 +23,7 @@
 
 #include <math.h>
 
+#include "ui/ascii_fold.h"
 #include "ui/nav.h"
 #include "ui/persist.h"
 #include "ui/toast.h"
@@ -53,6 +54,7 @@ float g_live_bias = NAN;
 int g_live_tc = -1, g_live_tc_modes = -1, g_live_abs = -1, g_live_abs_modes = -1;
 lv_obj_t* g_minus_buttons[PT_MAX_SPINNERS] = {};
 lv_obj_t* g_plus_buttons[PT_MAX_SPINNERS] = {};
+lv_obj_t* g_spinner_value_labels[PT_MAX_SPINNERS] = {};
 // Effective capacity of a one-slot-wasted ring is N-1, so we size the array
 // at 5 to honor the documented depth of 4 in-flight requests (CodeRabbit on
 // PR #91). On creation we already enqueue PT_REQ_LIST once, so a user who
@@ -386,12 +388,13 @@ void refresh_chip_label(int idx) {
         g_row_chip_labels[idx] = nullptr;
         return;
     }
-    char chip_buf[64];
+    char chip_buf[64], safe_chips[64];
     format_setup_chips(g_setups[idx], chip_buf, sizeof(chip_buf));
+    ui_ascii_fold(safe_chips, sizeof(safe_chips), chip_buf);
     // Clear-then-set avoids LVGL skipping a repaint when only the BB digits
     // change but the overall label width stays similar (issue #93).
     lv_label_set_text(chips, "");
-    lv_label_set_text(chips, chip_buf);
+    lv_label_set_text(chips, safe_chips);
     lv_obj_invalidate(chips);
 }
 
@@ -470,7 +473,9 @@ void refresh_controls() {
     if (g_active_ctx && g_active_ctx->meta_lock) {
         const char* reason = g_pending_spinner[0] ? "Awaiting confirmed setup state"
             : (g_setup_allowed ? "Setup controls: pits/reset allowed" : g_lock_reason);
-        lv_label_set_text(g_active_ctx->meta_lock, reason);
+        char safe_reason[80];
+        ui_ascii_fold(safe_reason, sizeof(safe_reason), reason);
+        lv_label_set_text(g_active_ctx->meta_lock, safe_reason);
     }
     for (int i = 0; i < g_spinner_count; ++i) {
         bool enabled = g_setup_allowed && g_pt_sidecar_link_up && g_spinners[i].adjustable
@@ -535,6 +540,34 @@ void start_gold_pulse(pt_ctx_t* ctx) {
     ctx->pulse_timer = lv_timer_create(pulse_step_cb, 80, ctx);
 }
 
+void set_spinner_value_label(lv_obj_t* value_lbl, const char* safe_value) {
+    if (!value_lbl) return;
+    constexpr lv_coord_t VALUE_W = 68;
+    const lv_font_t* candidates[] = {
+        UI_FONT_COMMAND_SM,
+        UI_FONT_LABEL_MD,
+        UI_FONT_MONO_MD,
+        UI_FONT_MONO_SM,
+    };
+    const char* txt = safe_value ? safe_value : "";
+    const size_t len = strlen(txt);
+    const lv_font_t* chosen = candidates[3];
+    for (const lv_font_t* font : candidates) {
+        if (lv_txt_get_width(txt, static_cast<uint32_t>(len), font, 0, LV_TEXT_FLAG_NONE) <= VALUE_W) {
+            chosen = font;
+            break;
+        }
+    }
+    lv_obj_set_style_text_font(value_lbl, chosen, LV_PART_MAIN);
+    lv_obj_set_style_text_align(value_lbl, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_size(value_lbl, VALUE_W, lv_font_get_line_height(chosen));
+    lv_label_set_long_mode(value_lbl, LV_LABEL_LONG_DOT);
+    lv_label_set_text(value_lbl, "");
+    lv_label_set_text(value_lbl, txt);
+    lv_obj_align(value_lbl, LV_ALIGN_RIGHT_MID, -41, 0);
+    lv_obj_invalidate(value_lbl);
+}
+
 lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
     lv_obj_t* row = lv_obj_create(parent);
     lv_obj_set_size(row, lv_pct(100), SPINNER_ROW_H);
@@ -547,8 +580,10 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
     lv_obj_set_style_pad_all(row, 6, LV_PART_MAIN);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
+    char safe_label[32];
+    ui_ascii_fold(safe_label, sizeof(safe_label), s.label);
     lv_obj_t* name_lbl = lv_label_create(row);
-    lv_label_set_text(name_lbl, s.label);
+    lv_label_set_text(name_lbl, safe_label[0] ? safe_label : s.section);
     lv_obj_set_style_text_font(name_lbl, UI_FONT_LABEL_SM, LV_PART_MAIN);
     lv_obj_set_style_text_color(name_lbl, UI_TX_PRIMARY, LV_PART_MAIN);
     // One fixed line: LONG_DOT only truncates when the height is bounded (#86).
@@ -571,18 +606,18 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
     lv_obj_set_style_text_color(minus_lbl, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_center(minus_lbl);
 
-    char value_buf[28];
+    char value_buf[28], safe_value[28];
     format_spinner_value(s, value_buf, sizeof(value_buf));
+    ui_ascii_fold(safe_value, sizeof(safe_value), value_buf);
     lv_obj_t* value_lbl = lv_label_create(row);
-    lv_label_set_text(value_lbl, value_buf);
+    if (idx >= 0 && idx < PT_MAX_SPINNERS) {
+        g_spinner_value_labels[idx] = value_lbl;
+    }
     // Spinner values carry an arbitrary unit suffix from the host (e.g.
-    // "26.6psi", "3clicks"). The Saira Bold readout faces are subset to
-    // digits/symbols only, so use the full-ASCII command face to avoid tofu.
-    lv_obj_set_style_text_font(value_lbl, UI_FONT_COMMAND_SM, LV_PART_MAIN);
+    // "26.6psi", "3clicks", "-3.2deg"). Fit across full-ASCII faces with a
+    // bounded single-line height so values never wrap or clip vertically.
     lv_obj_set_style_text_color(value_lbl, UI_ACCENT_GOLD, LV_PART_MAIN);
-    lv_obj_set_width(value_lbl, 58);
-    lv_label_set_long_mode(value_lbl, LV_LABEL_LONG_DOT);
-    lv_obj_align(value_lbl, LV_ALIGN_RIGHT_MID, -50, 0);
+    set_spinner_value_label(value_lbl, safe_value);
 
     lv_obj_t* plus = lv_btn_create(row);
     g_plus_buttons[idx] = plus;
@@ -603,6 +638,9 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
 }
 
 lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
+    char display_name[PT_SETUP_NAME_MAX];
+    ui_ascii_fold(display_name, sizeof(display_name), s.name);
+    if (!display_name[0]) snprintf(display_name, sizeof(display_name), "setup");
     // Measure the name first so the row can grow for a two-line name instead of letting the
     // label overflow onto the chip line (operator report, #86).
     const lv_font_t* name_font = UI_FONT_LABEL_SM;
@@ -611,7 +649,7 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
     const lv_coord_t name_w = row_content_w - NAME_RIGHT_RESERVE;
     const lv_coord_t name_line_h = lv_font_get_line_height(name_font);
     lv_point_t name_size;
-    lv_txt_get_size(&name_size, s.name, name_font, 0, 0, name_w, LV_TEXT_FLAG_NONE);
+    lv_txt_get_size(&name_size, display_name, name_font, 0, 0, name_w, LV_TEXT_FLAG_NONE);
     const lv_coord_t name_h =
         LV_MAX(name_line_h, LV_MIN(name_size.y, NAME_MAX_LINES * name_line_h));
     const lv_coord_t chips_y = LV_MAX(CHIPS_MIN_Y, name_h + NAME_TO_CHIPS_GAP);
@@ -636,7 +674,7 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
     // Row 1: name (left, up to two lines) + BEST lap (right). A fixed height is what makes
     // LONG_DOT truncate: with an automatic height the label just wraps downward.
     lv_obj_t* name_lbl = lv_label_create(row);
-    lv_label_set_text(name_lbl, s.name);
+    lv_label_set_text(name_lbl, display_name);
     lv_obj_set_style_text_font(name_lbl, name_font, LV_PART_MAIN);
     lv_obj_set_style_text_color(name_lbl, UI_TX_PRIMARY, LV_PART_MAIN);
     lv_obj_set_size(name_lbl, name_w, name_h);
@@ -652,10 +690,11 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
     lv_obj_align(best_val, LV_ALIGN_TOP_RIGHT, -16, 0);
 
     // Row 2: setup summary chips (left) -- BB / ABS / TC / Wings front-rear.
-    char chip_buf[64];
+    char chip_buf[64], safe_chips[64];
     format_setup_chips(s, chip_buf, sizeof(chip_buf));
+    ui_ascii_fold(safe_chips, sizeof(safe_chips), chip_buf);
     lv_obj_t* chips = lv_label_create(row);
-    lv_label_set_text(chips, chip_buf);
+    lv_label_set_text(chips, safe_chips);
     lv_obj_set_style_text_font(chips, chip_font, LV_PART_MAIN);
     lv_obj_set_style_text_color(chips, UI_TX_MUTED, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(chips, 1, LV_PART_MAIN);
@@ -681,6 +720,7 @@ void rebuild_list_widgets(pt_ctx_t* ctx) {
     for (int i = 0; i < PT_MAX_SPINNERS; ++i) {
         g_minus_buttons[i] = nullptr;
         g_plus_buttons[i] = nullptr;
+        g_spinner_value_labels[i] = nullptr;
     }
     for (int i = 0; i < PT_MAX_SETUPS; ++i) {
         g_row_chip_labels[i] = nullptr;
@@ -739,17 +779,21 @@ static const char* model_after_brand(const char* full, const char* brand) {
 void update_meta(pt_ctx_t* ctx) {
     if (!ctx) return;
     char buf[96];
+    char safe_brand[32];
+    ui_ascii_fold(safe_brand, sizeof(safe_brand), g_car_brand);
     if (ctx->meta_track) {
         const char* t = g_track_name[0] ? g_track_name : (g_track_id[0] ? g_track_id : "-");
-        snprintf(buf, sizeof(buf), "TRACK: %s", t);
+        char safe_track[48];
+        ui_ascii_fold(safe_track, sizeof(safe_track), t);
+        snprintf(buf, sizeof(buf), "TRACK: %s", safe_track[0] ? safe_track : "-");
         lv_label_set_text(ctx->meta_track, buf);
     }
     if (ctx->meta_brand) {
-        if (g_car_brand[0]) {
+        if (safe_brand[0]) {
             char up[32];
             size_t i = 0;
-            for (; g_car_brand[i] && i < sizeof(up) - 1; ++i) {
-                char c = g_car_brand[i];
+            for (; safe_brand[i] && i < sizeof(up) - 1; ++i) {
+                char c = safe_brand[i];
                 up[i] = (c >= 0x61 && c <= 0x7a) ? (char)(c - 32) : c;
             }
             up[i] = 0;
@@ -760,13 +804,18 @@ void update_meta(pt_ctx_t* ctx) {
         }
     }
     if (ctx->meta_car) {
-        const char* full = g_car_name[0] ? g_car_name : (g_car_id[0] ? g_car_id : "-");
-        const char* model = g_car_brand[0] ? model_after_brand(full, g_car_brand) : full;
+        const char* full_raw = g_car_name[0] ? g_car_name : (g_car_id[0] ? g_car_id : "-");
+        char safe_full[64];
+        ui_ascii_fold(safe_full, sizeof(safe_full), full_raw);
+        const char* full = safe_full[0] ? safe_full : "-";
+        const char* model = safe_brand[0] ? model_after_brand(full, safe_brand) : full;
         lv_label_set_text(ctx->meta_car, model);
     }
     if (ctx->meta_active) {
         if (g_active_name[0]) {
-            snprintf(buf, sizeof(buf), "ACTIVE: %s", g_active_name);
+            char safe_active[PT_SETUP_NAME_MAX];
+            ui_ascii_fold(safe_active, sizeof(safe_active), g_active_name);
+            snprintf(buf, sizeof(buf), "ACTIVE: %s", safe_active[0] ? safe_active : "setup");
             lv_label_set_text(ctx->meta_active, buf);
             lv_obj_clear_flag(ctx->meta_active, LV_OBJ_FLAG_HIDDEN);
         } else {
@@ -790,6 +839,11 @@ void on_screen_delete(lv_event_t* e) {
     g_req_head = 0;
     g_req_tail = 0;
     g_pending_spinner[0] = 0;
+    for (int i = 0; i < PT_MAX_SPINNERS; ++i) {
+        g_minus_buttons[i] = nullptr;
+        g_plus_buttons[i] = nullptr;
+        g_spinner_value_labels[i] = nullptr;
+    }
     for (int i = 0; i < PT_MAX_SETUPS; ++i) {
         g_row_chip_labels[i] = nullptr;
     }
@@ -1068,6 +1122,7 @@ extern "C" void screen_pocket_technician_add_setup(const char* name,
             g_active_ctx->placeholder_lbl = nullptr;
             lv_obj_t* heading = lv_label_create(g_active_ctx->list_col);
             lv_label_set_text(heading, "SAVED");
+            lv_obj_set_style_text_font(heading, UI_FONT_LABEL_XS, LV_PART_MAIN);
             lv_obj_set_style_text_color(heading, UI_TX_MUTED, LV_PART_MAIN);
             lv_obj_set_style_text_letter_space(heading, 2, LV_PART_MAIN);
         }
@@ -1134,6 +1189,12 @@ extern "C" void screen_pocket_technician_apply_spinner_ack(bool ok,
         for (int i = 0; i < g_spinner_count; ++i) {
             if (strcmp(g_spinners[i].section, section) == 0) {
                 g_spinners[i].value = value;
+                if (g_spinner_value_labels[i] && lv_obj_is_valid(g_spinner_value_labels[i])) {
+                    char value_buf[28], safe_value[28];
+                    format_spinner_value(g_spinners[i], value_buf, sizeof(value_buf));
+                    ui_ascii_fold(safe_value, sizeof(safe_value), value_buf);
+                    set_spinner_value_label(g_spinner_value_labels[i], safe_value);
+                }
                 break;
             }
         }
