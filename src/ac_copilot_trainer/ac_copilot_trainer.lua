@@ -791,13 +791,10 @@ if wsBridge.registerRequestHandler then
     end
     -- Fail closed: only allow when CSP explicitly reports reset is allowed.
     -- Missing API / pcall failure must NOT bypass the pits gate (Cursor +
-    -- CodeRabbit on PR #91).
-    local resetOk = false
-    if ac and type(ac.isCarResetAllowed) == "function" then
-      local okCall, allowed = pcall(ac.isCarResetAllowed)
-      resetOk = okCall and (allowed == true)
-    end
-    if not resetOk then
+    -- CodeRabbit on PR #91). Delegate to setupLibrary.capability() so Lua C
+    -- closures and CSP 0.3+ LuaJIT FFI cdata bindings share one gate (#86).
+    local capability = setupLibrary.capability()
+    if not (type(capability) == "table" and capability.reset_allowed == true) then
       return { ok = false, name = name, error = "must be in pits" }
     end
     -- Pass both name and path so the library can disambiguate same-basename
@@ -936,12 +933,8 @@ if wsBridge.registerRequestHandler then
     if section == "" then
       return { ok = false, error = "missing section" }
     end
-    local resetOk = false
-    if ac and type(ac.isCarResetAllowed) == "function" then
-      local okCall, allowed = pcall(ac.isCarResetAllowed)
-      resetOk = okCall and (allowed == true)
-    end
-    if not resetOk then
+    local capability = setupLibrary.capability()
+    if not (type(capability) == "table" and capability.reset_allowed == true) then
       return { ok = false, section = section, reset_allowed = false,
         error = "Setup changes require pits/reset permission" }
     end
@@ -952,7 +945,7 @@ if wsBridge.registerRequestHandler then
       ack.ok = false
       if ack.error == nil then ack.error = "library returned malformed ack" end
     end
-    local capability = setupLibrary.capability()
+    capability = setupLibrary.capability()
     ack.reset_allowed = capability.reset_allowed
     ack.lock_reason = capability.lock_reason
     if ack.ok and wsBridge.publishTopic then

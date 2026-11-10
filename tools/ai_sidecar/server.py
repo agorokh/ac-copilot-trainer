@@ -60,6 +60,7 @@ from tools.ai_sidecar.external_protocol import (
     HAPTIC_CLIENT_CLASSES,
     IDENTITY_REPLAY_TOPICS,
     LUA_CLIENT_ID,
+    SCREEN_TOUCH_CLIENT_ID,
     SESSION_START_CLIENT_ID,
     SIDECAR_PRODUCED_TOPICS,
     TELEMETRY_TICK_CLIENT_CLASSES,
@@ -77,6 +78,8 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_KEY,
     TYPE_SCREEN_CAPTURE,
     TYPE_SCREEN_CAPTURE_CHUNK,
+    TYPE_SCREEN_TOUCH,
+    TYPE_SCREEN_TOUCH_ACK,
     TYPE_SESSION_REVIEW_GENERATE,
     TYPE_SESSION_REVIEW_RESULT,
     TYPE_SESSION_START,
@@ -189,6 +192,10 @@ _external_peers: set[Any] = set()
 # Browser WebSocket APIs cannot set that header; peer IP alone is insufficient because adb
 # reverse presents tablet traffic as loopback (#726).
 _session_start_authorized_peers: set[Any] = set()
+# `screen.touch` injects LVGL taps/drags on the physical rig screen (#86). Same HTTP-Upgrade
+# loopback + client-header + token gate as `session.start` so a browser over `adb reverse` or a
+# LAN peer can never synthesize touches that trigger setup loads/downloads.
+_screen_touch_authorized_peers: set[Any] = set()
 # CSP Lua peers earn their class from a dedicated loopback upgrade header. A browser can claim
 # `client_class="lua"` in JSON, but browser WebSocket APIs cannot set this header (#726).
 _lua_authorized_peers: set[Any] = set()
@@ -205,6 +212,8 @@ _external_peer_classes: dict[Any, str] = {}
 # live session stays admitted; only a capture with no chunk for SCREEN_CAPTURE_STALE_S expires.
 _screen_capture_requesters: dict[str, tuple[Any, float]] = {}
 SCREEN_CAPTURE_STALE_S = 60.0
+_screen_touch_requesters: dict[str, tuple[Any, float]] = {}
+SCREEN_TOUCH_STALE_S = 10.0
 _sidecar_state_cache: dict[str, dict[str, Any]] = {}
 # #531 Part B: which peer produced each cached IDENTITY_REPLAY_TOPICS snapshot — the cache
 # entry is dropped when that peer disconnects (its identity dies with it).
@@ -581,9 +590,11 @@ def _reset_external_state() -> None:
     _setup_exchange_broker.reset()
     _external_peers.clear()
     _session_start_authorized_peers.clear()
+    _screen_touch_authorized_peers.clear()
     _lua_authorized_peers.clear()
     _external_peer_classes.clear()
     _screen_capture_requesters.clear()
+    _screen_touch_requesters.clear()
     _sidecar_state_cache.clear()
     _identity_cache_producers.clear()
     _identity_cache_observed_monotonic.clear()
@@ -1642,6 +1653,14 @@ def make_process_request(token: str | None):
             _session_start_authorized_peers.add(connection)
         else:
             _session_start_authorized_peers.discard(connection)
+        if (
+            _is_loopback_peer(connection)
+            and client_id == SCREEN_TOUCH_CLIENT_ID
+            and token_authorized
+        ):
+            _screen_touch_authorized_peers.add(connection)
+        else:
+            _screen_touch_authorized_peers.discard(connection)
         if _is_loopback_peer(connection) and client_id == LUA_CLIENT_ID:
             _lua_authorized_peers.add(connection)
         else:
@@ -1658,6 +1677,57 @@ def _drop_screen_captures_for(peer: Any) -> None:
     for capture_id, (requester, _) in list(_screen_capture_requesters.items()):
         if requester is peer:
             _screen_capture_requesters.pop(capture_id, None)
+
+
+def _drop_screen_touches_for(peer: Any) -> None:
+    """Drop in-flight touch correlation if the requesting CLI disconnects early."""
+    for touch_id, (requester, _) in list(_screen_touch_requesters.items()):
+        if requester is peer:
+            _screen_touch_requesters.pop(touch_id, None)
+
+
+async def _route_screen_touch(websocket: Any, data: dict[str, Any]) -> None:
+    """#86: forward authenticated loopback touch requests to screens; return acks to requester."""
+    t = data[TYPE_KEY]
+    touch_id = data["touch_id"]
+    if t == TYPE_SCREEN_TOUCH:
+        if (
+            websocket not in _screen_touch_authorized_peers
+            or not _is_loopback_peer(websocket)
+            or _peer_class(websocket) == CLIENT_CLASS_BROWSER
+        ):
+            await _safe_send(
+                websocket,
+                make_error(
+                    "screen.touch requires the authenticated screen-touch loopback client",
+                    ref_type=t,
+                ),
+            )
+            return
+        screens = _targets_for_classes(exclude=websocket, classes=frozenset({CLIENT_CLASS_SCREEN}))
+        if not screens:
+            await _safe_send(websocket, make_error("no rig screen connected", ref_type=t))
+            return
+        now = time.monotonic()
+        for active_id, (_, started_at) in list(_screen_touch_requesters.items()):
+            if now - started_at > SCREEN_TOUCH_STALE_S:
+                _screen_touch_requesters.pop(active_id, None)
+        if _screen_touch_requesters:
+            await _safe_send(
+                websocket, make_error("a screen touch is already in progress", ref_type=t)
+            )
+            return
+        _screen_touch_requesters[touch_id] = (websocket, now)
+        await _broadcast_targets(data, targets=screens)
+        return
+    if _peer_class(websocket) != CLIENT_CLASS_SCREEN:
+        await _safe_send(
+            websocket, make_error(f"{t} is accepted only from rig screens", ref_type=t)
+        )
+        return
+    active = _screen_touch_requesters.pop(touch_id, None)
+    if active is not None and active[0] in _external_peers:
+        await _broadcast_targets(data, targets=[active[0]])
 
 
 async def _route_screen_capture(websocket: Any, data: dict[str, Any]) -> None:
@@ -1761,9 +1831,11 @@ def _drop_external_peer(peer: Any) -> None:
     _drop_setup_exchange_peer(peer)
     _external_peers.discard(peer)
     _session_start_authorized_peers.discard(peer)
+    _screen_touch_authorized_peers.discard(peer)
     _lua_authorized_peers.discard(peer)
     _external_peer_classes.pop(peer, None)
     _drop_screen_captures_for(peer)
+    _drop_screen_touches_for(peer)
     _voice_mic_subscribers.discard(peer)
     _voice_mic_streams.pop(peer, None)
     _release_observer_feed(peer)
@@ -3049,6 +3121,9 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     if t in (TYPE_SCREEN_CAPTURE, TYPE_SCREEN_CAPTURE_CHUNK):
         await _route_screen_capture(websocket, data)
         return
+    if t in (TYPE_SCREEN_TOUCH, TYPE_SCREEN_TOUCH_ACK):
+        await _route_screen_touch(websocket, data)
+        return
     if t == TYPE_VOICE_DEMO:
         # Issue #511 Part D / #381: loopback-only synthetic advisory through the REAL voice
         # path (scheduler arbitration → dispatch tap → coaching.voice broadcast). Bench
@@ -3484,9 +3559,11 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                 targets=[p for p in _voice_mic_subscribers if p in _external_peers],
             )
         _session_start_authorized_peers.discard(websocket)
+        _screen_touch_authorized_peers.discard(websocket)
         _lua_authorized_peers.discard(websocket)
         _external_peer_classes.pop(websocket, None)
         _drop_screen_captures_for(websocket)
+        _drop_screen_touches_for(websocket)
         # Identity snapshots cached for late-subscriber replay die with their producer:
         # replaying a disconnected trainer's setup/session to a fresh tablet would render
         # a dead session as current (Codex on PR #547).

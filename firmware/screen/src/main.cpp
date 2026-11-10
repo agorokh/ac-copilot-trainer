@@ -344,6 +344,50 @@ static void lv_flush_cb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* c
   lv_disp_flush_ready(drv);
 }
 
+// Synthetic LVGL pointer tap/drag state for loopback `screen.touch` (#86).
+// Real panel touches always preempt synthetic input so a driver at the rig is
+// never fighting automation.
+static constexpr int32_t TOUCH_HOLD_MIN_MS     = 20;
+static constexpr int32_t TOUCH_HOLD_MAX_MS     = 1000;
+static constexpr int32_t TOUCH_HOLD_DEFAULT_MS = 80;
+static bool       synthetic_touch_active       = false;
+static bool       synthetic_touch_seen_press   = false;
+static bool       synthetic_touch_seen_end     = true;
+static lv_coord_t synthetic_touch_x0           = 0;
+static lv_coord_t synthetic_touch_y0           = 0;
+static lv_coord_t synthetic_touch_x1           = 0;
+static lv_coord_t synthetic_touch_y1           = 0;
+static uint32_t   synthetic_touch_hold_ms      = TOUCH_HOLD_DEFAULT_MS;
+static uint32_t   synthetic_touch_armed_ms     = 0;
+static uint32_t   synthetic_touch_first_pr_ms  = 0;
+static char       synthetic_touch_id[65]       = {0};
+static String     touch_ack_notice;
+
+static void screen_touch_queue_ack(const char* id, bool ok, int32_t x, int32_t y,
+                                   int32_t to_x, int32_t to_y, int32_t hold_ms,
+                                   const char* error) {
+  JsonDocument doc;
+  doc["v"]        = 1;
+  doc["type"]     = "screen.touch.ack";
+  doc["touch_id"] = id ? id : "";
+  doc["ok"]       = ok;
+  if (ok) {
+    doc["x"]       = x;
+    doc["y"]       = y;
+    if (to_x != x || to_y != y) {
+      doc["to_x"] = to_x;
+      doc["to_y"] = to_y;
+    }
+    doc["hold_ms"] = hold_ms;
+  } else if (error && *error) {
+    doc["error"] = error;
+  } else {
+    doc["error"] = "touch failed";
+  }
+  touch_ack_notice = "";
+  serializeJson(doc, touch_ack_notice);
+}
+
 static void lv_indev_read_cb(lv_indev_drv_t* /*drv*/, lv_indev_data_t* data) {
   uint16_t x = 0, y = 0;
   // LVGL 8.3 pre-fills `data->point` from the last raw POINTER point in
@@ -353,9 +397,56 @@ static void lv_indev_read_cb(lv_indev_drv_t* /*drv*/, lv_indev_data_t* data) {
   // and is self-documenting. (CodeRabbit nit on PR #91.)
   static lv_coord_t last_x = 0, last_y = 0;
   if (jc_touch_read(&x, &y)) {
+    if (synthetic_touch_active) {
+      synthetic_touch_active = false;
+      screen_touch_queue_ack(
+          synthetic_touch_id, false,
+          synthetic_touch_x0, synthetic_touch_y0,
+          synthetic_touch_x1, synthetic_touch_y1,
+          static_cast<int32_t>(synthetic_touch_hold_ms),
+          "preempted by hardware touch");
+    }
     last_x = x;
     last_y = y;
     data->state = LV_INDEV_STATE_PR;
+  } else if (synthetic_touch_active) {
+    const uint32_t now = millis();
+    if (!synthetic_touch_seen_press) {
+      synthetic_touch_seen_press = true;
+      synthetic_touch_first_pr_ms = now;
+      last_x = synthetic_touch_x0;
+      last_y = synthetic_touch_y0;
+      data->state = LV_INDEV_STATE_PR;
+    } else {
+      const uint32_t elapsed = now - synthetic_touch_first_pr_ms;
+      if (elapsed < synthetic_touch_hold_ms) {
+        const int32_t dx = static_cast<int32_t>(synthetic_touch_x1) - synthetic_touch_x0;
+        const int32_t dy = static_cast<int32_t>(synthetic_touch_y1) - synthetic_touch_y0;
+        last_x = static_cast<lv_coord_t>(
+            synthetic_touch_x0 +
+            (dx * static_cast<int32_t>(elapsed)) / static_cast<int32_t>(synthetic_touch_hold_ms));
+        last_y = static_cast<lv_coord_t>(
+            synthetic_touch_y0 +
+            (dy * static_cast<int32_t>(elapsed)) / static_cast<int32_t>(synthetic_touch_hold_ms));
+        data->state = LV_INDEV_STATE_PR;
+      } else if (!synthetic_touch_seen_end) {
+        synthetic_touch_seen_end = true;
+        last_x = synthetic_touch_x1;
+        last_y = synthetic_touch_y1;
+        data->state = LV_INDEV_STATE_PR;
+      } else {
+        last_x = synthetic_touch_x1;
+        last_y = synthetic_touch_y1;
+        data->state = LV_INDEV_STATE_REL;
+        synthetic_touch_active = false;
+        screen_touch_queue_ack(
+            synthetic_touch_id, true,
+            synthetic_touch_x0, synthetic_touch_y0,
+            synthetic_touch_x1, synthetic_touch_y1,
+            static_cast<int32_t>(synthetic_touch_hold_ms),
+            nullptr);
+      }
+    }
   } else {
     data->state = LV_INDEV_STATE_REL;
   }
@@ -742,7 +833,51 @@ static void screen_capture_begin(const char* id) {
   capture_progress_ms = millis();
 }
 
+static void screen_touch_begin(const char* id, int32_t x, int32_t y,
+                               int32_t to_x, int32_t to_y, int32_t hold_ms) {
+  if (!id || !id[0]) {
+    screen_touch_queue_ack("", false, 0, 0, 0, 0, 0, "missing touch_id");
+    return;
+  }
+  if (x < 0 || x >= SCREEN_W || y < 0 || y >= SCREEN_H ||
+      to_x < 0 || to_x >= SCREEN_W || to_y < 0 || to_y >= SCREEN_H) {
+    screen_touch_queue_ack(id, false, 0, 0, 0, 0, 0, "touch coordinates out of bounds");
+    return;
+  }
+  if (hold_ms < TOUCH_HOLD_MIN_MS || hold_ms > TOUCH_HOLD_MAX_MS) {
+    screen_touch_queue_ack(id, false, 0, 0, 0, 0, 0, "touch hold_ms out of bounds");
+    return;
+  }
+  if (synthetic_touch_active) {
+    screen_touch_queue_ack(id, false, 0, 0, 0, 0, 0, "screen touch already active");
+    return;
+  }
+  strncpy(synthetic_touch_id, id, sizeof(synthetic_touch_id) - 1);
+  synthetic_touch_id[sizeof(synthetic_touch_id) - 1] = 0;
+  synthetic_touch_x0          = static_cast<lv_coord_t>(x);
+  synthetic_touch_y0          = static_cast<lv_coord_t>(y);
+  synthetic_touch_x1          = static_cast<lv_coord_t>(to_x);
+  synthetic_touch_y1          = static_cast<lv_coord_t>(to_y);
+  synthetic_touch_hold_ms     = static_cast<uint32_t>(hold_ms);
+  synthetic_touch_armed_ms    = millis();
+  synthetic_touch_first_pr_ms = 0;
+  synthetic_touch_seen_press  = false;
+  synthetic_touch_seen_end    = (x == to_x && y == to_y);
+  synthetic_touch_active      = true;
+}
+
 static void screen_capture_tick() {
+  if (synthetic_touch_active &&
+      millis() - synthetic_touch_armed_ms > synthetic_touch_hold_ms + 2000) {
+    synthetic_touch_active = false;
+    screen_touch_queue_ack(
+        synthetic_touch_id, false,
+        synthetic_touch_x0, synthetic_touch_y0,
+        synthetic_touch_x1, synthetic_touch_y1,
+        static_cast<int32_t>(synthetic_touch_hold_ms),
+        "touch LVGL timeout");
+  }
+  if (touch_ack_notice.length() > 0 && capture_try_send(touch_ack_notice)) touch_ack_notice = "";
   if (capture_notice.length() > 0 && capture_try_send(capture_notice)) capture_notice = "";
   if (!capture_buf) return;
   if (capture_frame.length() == 0) {
@@ -809,6 +944,29 @@ static void dispatch_phase2_message(const String& body) {
 
   if (strcmp(type, "screen.capture") == 0) {
     screen_capture_begin(doc["capture_id"] | "");
+    return;
+  }
+  if (strcmp(type, "screen.touch") == 0) {
+    const char* id = doc["touch_id"] | "";
+    int32_t x = -1, y = -1;
+    if (!phase2_json_try_int32(doc["x"], &x) || !phase2_json_try_int32(doc["y"], &y)) {
+      screen_touch_queue_ack(id, false, 0, 0, 0, 0, 0, "invalid touch coordinates");
+      return;
+    }
+    int32_t to_x = x, to_y = y;
+    if (!doc["to_x"].isNull() || !doc["to_y"].isNull()) {
+      if (!phase2_json_try_int32(doc["to_x"], &to_x) ||
+          !phase2_json_try_int32(doc["to_y"], &to_y)) {
+        screen_touch_queue_ack(id, false, 0, 0, 0, 0, 0, "invalid drag coordinates");
+        return;
+      }
+    }
+    int32_t hold_ms = TOUCH_HOLD_DEFAULT_MS;
+    if (!doc["hold_ms"].isNull() && !phase2_json_try_int32(doc["hold_ms"], &hold_ms)) {
+      screen_touch_queue_ack(id, false, 0, 0, 0, 0, 0, "invalid hold_ms");
+      return;
+    }
+    screen_touch_begin(id, x, y, to_x, to_y, hold_ms);
     return;
   }
   if (strcmp(type, "state.snapshot") == 0) {

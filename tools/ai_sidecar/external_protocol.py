@@ -117,6 +117,19 @@ TYPE_SCREEN_CAPTURE_CHUNK = "screen.capture.chunk"
 SCREEN_CAPTURE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MAX_SCREEN_CAPTURE_BYTES = 4 * 1024 * 1024
 MAX_SCREEN_CAPTURE_CHUNK_CHARS = 8192
+# Issue #86 device automation: synthetic LVGL pointer tap/drag injected on the rig screen.
+# Unlike read-only `screen.capture`, a tap can trigger `setup.load` or `se.download`, so the
+# sidecar admits `screen.touch` ONLY from a loopback peer carrying `SCREEN_TOUCH_CLIENT_ID` on
+# its HTTP Upgrade (plus `X-AC-Copilot-Token` when configured) and never from `browser` peers.
+TYPE_SCREEN_TOUCH = "screen.touch"
+TYPE_SCREEN_TOUCH_ACK = "screen.touch.ack"
+SCREEN_TOUCH_CLIENT_ID = "screen-touch"
+SCREEN_TOUCH_MAX_X = 319
+SCREEN_TOUCH_MAX_Y = 479
+SCREEN_TOUCH_MIN_HOLD_MS = 20
+SCREEN_TOUCH_MAX_HOLD_MS = 1000
+SCREEN_TOUCH_DEFAULT_HOLD_MS = 80
+SCREEN_TOUCH_DEFAULT_DRAG_HOLD_MS = 260
 # Issue #726: resilient-launch harness → trainer Lua request that presses CSP's supported
 # in-sim Start control while AC is rendering at the pre-drive menu but Car0 does not exist yet.
 TYPE_SESSION_START = "session.start"
@@ -722,6 +735,82 @@ def _validate_screen_capture_chunk(frame: dict[str, Any]) -> str | None:
     return None
 
 
+def _validate_screen_touch_coords(
+    frame: dict[str, Any], x_key: str, y_key: str, *, label: str
+) -> str | None:
+    x = _strict_int(frame.get(x_key))
+    if x is None or not 0 <= x <= SCREEN_TOUCH_MAX_X:
+        return f"{label} requires integer '{x_key}' in 0-{SCREEN_TOUCH_MAX_X}"
+    y = _strict_int(frame.get(y_key))
+    if y is None or not 0 <= y <= SCREEN_TOUCH_MAX_Y:
+        return f"{label} requires integer '{y_key}' in 0-{SCREEN_TOUCH_MAX_Y}"
+    return None
+
+
+def _validate_screen_touch(frame: dict[str, Any]) -> str | None:
+    allowed = {"v", "type", "touch_id", "x", "y", "to_x", "to_y", "hold_ms"}
+    if frame.keys() - allowed:
+        return "screen.touch contains unsupported fields"
+    touch_id = frame.get("touch_id")
+    if not isinstance(touch_id, str) or not SCREEN_CAPTURE_ID_RE.fullmatch(touch_id):
+        return "screen.touch requires 'touch_id' of 1-64 letters/digits/underscore/hyphen"
+    err = _validate_screen_touch_coords(frame, "x", "y", label="screen.touch")
+    if err is not None:
+        return err
+    if ("to_x" in frame) != ("to_y" in frame):
+        return "screen.touch requires both 'to_x' and 'to_y' when dragging"
+    if "to_x" in frame:
+        err = _validate_screen_touch_coords(frame, "to_x", "to_y", label="screen.touch")
+        if err is not None:
+            return err
+    if "hold_ms" in frame:
+        hold_ms = _strict_int(frame.get("hold_ms"))
+        if hold_ms is None or not SCREEN_TOUCH_MIN_HOLD_MS <= hold_ms <= SCREEN_TOUCH_MAX_HOLD_MS:
+            return (
+                "screen.touch optional 'hold_ms' must be an integer in "
+                f"{SCREEN_TOUCH_MIN_HOLD_MS}-{SCREEN_TOUCH_MAX_HOLD_MS}"
+            )
+    return None
+
+
+def _validate_screen_touch_ack(frame: dict[str, Any]) -> str | None:
+    allowed = {"v", "type", "touch_id", "ok", "x", "y", "to_x", "to_y", "hold_ms", "error"}
+    if frame.keys() - allowed:
+        return "screen.touch.ack contains unsupported fields"
+    touch_id = frame.get("touch_id")
+    if not isinstance(touch_id, str) or not SCREEN_CAPTURE_ID_RE.fullmatch(touch_id):
+        return "screen.touch.ack requires a valid 'touch_id'"
+    ok = frame.get("ok")
+    if not isinstance(ok, bool):
+        return "screen.touch.ack requires boolean 'ok'"
+    if ok or "x" in frame or "y" in frame:
+        err = _validate_screen_touch_coords(frame, "x", "y", label="screen.touch.ack")
+        if err is not None:
+            return err
+    if ("to_x" in frame) != ("to_y" in frame):
+        return "screen.touch.ack requires both 'to_x' and 'to_y' when present"
+    if "to_x" in frame:
+        err = _validate_screen_touch_coords(frame, "to_x", "to_y", label="screen.touch.ack")
+        if err is not None:
+            return err
+    if "hold_ms" in frame:
+        hold_ms = _strict_int(frame.get("hold_ms"))
+        if hold_ms is None or not SCREEN_TOUCH_MIN_HOLD_MS <= hold_ms <= SCREEN_TOUCH_MAX_HOLD_MS:
+            return "screen.touch.ack optional 'hold_ms' is out of range"
+    error = frame.get("error")
+    if ok:
+        if error is not None:
+            return "screen.touch.ack must omit 'error' when ok is true"
+    elif (
+        not isinstance(error, str)
+        or not error.strip()
+        or len(error) > 200
+        or any(ord(ch) < 32 for ch in error)
+    ):
+        return "screen.touch.ack requires a bounded single-line 'error' when ok is false"
+    return None
+
+
 def validate_inbound(frame: dict[str, Any]) -> str | None:
     """Return ``None`` if ``frame`` is structurally valid, else an error string."""
     version = frame.get(ENVELOPE_KEY)
@@ -1063,6 +1152,10 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         return None
     if t == TYPE_SCREEN_CAPTURE_CHUNK:
         return _validate_screen_capture_chunk(frame)
+    if t == TYPE_SCREEN_TOUCH:
+        return _validate_screen_touch(frame)
+    if t == TYPE_SCREEN_TOUCH_ACK:
+        return _validate_screen_touch_ack(frame)
     # Server→client types may legitimately appear when the Lua client forwards
     # a reply for the sidecar to fan out — accept silently.
     if t in (
