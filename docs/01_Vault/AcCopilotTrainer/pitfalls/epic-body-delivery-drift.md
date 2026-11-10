@@ -2,7 +2,7 @@
 type: pitfall
 status: active
 created: 2026-06-22
-updated: 2026-10-18
+updated: 2026-11-10
 severity: maintainability
 origin: human-curated
 domains: [process, backlog]
@@ -95,6 +95,23 @@ Two smaller rakes of the same family, caught in the 2026-10-18 sweep (ledger sna
   canonical brief is wrong about the fix. **Rule:** a root-cause claim on a "start here" issue is
   posted only after the real user path (here, the Stable AC button) is re-exercised on the fixed
   build; otherwise label it a hypothesis.
+
+## Variant: checkbox-vs-prose split-brain and prose-only Part stranding (steward sweep 2026-11-10)
+
+Caught in the 2026-11-10 sweep (ledger snapshot `2026-11-10-185600Z-…-c4a91e`):
+
+- **Checkbox ticked `[x]` while adjacent prose still claims the step is unverified.** On `#534`,
+  PR #916 ticked the final Part B SimHub verification checkbox `[x]` on 2026-10-22 after live NCalc
+  readback, and the operator removed `not-this-cycle` the same day — yet the top reconciliation
+  banner still asserts `not-this-cycle` and Part B's bullet prose 20 lines above the checkbox still
+  says operator SimHub verification is pending. On `#815`, all 18/18 checkboxes were ticked by
+  2026-10-27 while the bottom sequencing section still calls `#529` parked and `#804/#531` open.
+- **Closing on `100% [x]` checkboxes strands prose-only Parts as Done-ghosts.** `#534`'s checkboxes
+  covered only Parts A+B (`3/3 [x]`), while Parts C (`#117` wind-sim), D (pedal haptics), and E
+  (optional ShakeIt experiment) lived in prose bullets without checkboxes. **Rule:** when ticking a
+  checkbox in an EPIC body, update the surrounding status prose in the same edit, and never propose
+  closing an EPIC on `all checkboxes [x]` until every un-checkboxed Part has an explicit ownership
+  or drop/defer disposition recorded.
 
 ## Upstream candidate
 
