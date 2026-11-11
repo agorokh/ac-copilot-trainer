@@ -382,6 +382,7 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
   return {
     schema_version = SCHEMA_VERSION,
     source = "in_game",
+    traffic = opts.traffic,
     import_format = nil,
     lap_uuid = shortUuid(),
     session_uuid = tostring(opts.session_uuid or shortUuid()),
@@ -744,12 +745,28 @@ function M.createWriteJob(opts, capMB)
   end
 
   function job:_finish()
-    local ok, err = self:_write("]}")
-    if not ok then return self:_fail(err) end
-    ok, err = self:_writeField("corners", self._rec.corners)
-    if not ok then return self:_fail(err) end
-    ok, err = self:_writeField("coaching", self._rec.coaching)
-    if not ok then return self:_fail(err) end
+    local ok, err
+    if not self._tailStarted then
+      self._tailStarted = true
+      ok, err = self:_write("]}")
+      if not ok then return self:_fail(err) end
+      ok, err = self:_writeField("corners", self._rec.corners)
+      if not ok then return self:_fail(err) end
+      ok, err = self:_writeField("coaching", self._rec.coaching)
+      if not ok then return self:_fail(err) end
+      if type(self._rec.traffic) == "table" then
+        local t = self._rec.traffic
+        local header, encErr = jsonValue({ schema_version = t.schema_version,
+          started_at_s = t.started_at_s, ended_at_s = t.ended_at_s,
+          complete = t.complete }, "traffic.header")
+        if not header then return self:_fail(encErr) end
+        ok, err = self:_write(',"traffic":' .. header:sub(1, -2) .. ',"frames":[')
+        if not ok then return self:_fail(err) end
+        self._trafficIndex = 1
+        self._state = "traffic"
+        return false, nil, nil
+      end
+    end
     ok, err = self:_write("}")
     if not ok then return self:_fail(err) end
 
@@ -804,6 +821,26 @@ function M.createWriteJob(opts, capMB)
         if not ok then return self:_fail(err) end
         return false, nil, nil
       end
+      self._state = "finish"
+    end
+    if self._state == "traffic" then
+      local frames = self._rec.traffic.frames or {}
+      -- One roster contains up to 128 cars: never encode a whole lap's traffic
+      -- inside a single JSON header / render frame. Keep the existing job pump.
+      local limit = math.max(1, math.floor(rowsBudget / 20))
+      local processed = 0
+      while self._trafficIndex <= #frames and processed < limit do
+        local raw, encErr = jsonValue(frames[self._trafficIndex], "traffic.frame")
+        if not raw then return self:_fail(encErr) end
+        local prefix = self._trafficIndex > 1 and "," or ""
+        local ok, err = self:_write(prefix .. raw)
+        if not ok then return self:_fail(err) end
+        self._trafficIndex = self._trafficIndex + 1
+        processed = processed + 1
+      end
+      if self._trafficIndex <= #frames then return false, nil, nil end
+      local ok, err = self:_write("]}")
+      if not ok then return self:_fail(err) end
       self._state = "finish"
     end
     if self._state == "finish" then

@@ -28,6 +28,7 @@ local lapArchive = require("lap_archive")
 local coachingOverlay = require("coaching_overlay")
 local wsBridge = require("ws_bridge")
 wsBridge.performanceCapture = require("performance_capture").new()
+wsBridge.trafficShadow = require("traffic_context").new(20)
 -- Logs any frame gap >= 0.25 s with the trainer's own share of it, by section.
 local frameHitch = require("frame_hitch").new({
   clock = os.preciseClock,
@@ -143,6 +144,8 @@ local CONFIG_DEFAULTS = {
   --- Includes full per-sample trace (2000 samples), corner features, active
   --- car setup snapshot, coaching context. Append-only with disk cap.
   lapArchiveEnabled = true,
+  --- #955 bounded experiment. Session-only config.set opt-in; never activates live cue gating.
+  trafficShadowEnabled = false,
   --- Hard cap on archive disk usage in MB. Oldest files deleted first.
   lapArchiveMaxMB = 500,
   --- Issue #79: imported MoTeC laps are reference candidates only when explicitly enabled.
@@ -984,6 +987,12 @@ local function applyExternalConfigSet(key, value)
     setLapArchiveEnabledAndPersist(value)
     return true, nil
   end
+  if key == "trafficShadowEnabled" then
+    if type(value) ~= "boolean" then return false, "value must be boolean" end
+    config.trafficShadowEnabled = value
+    wsBridge.trafficShadow:reset()
+    return true, nil
+  end
   if key == "lapArchiveMaxMB" then
     local n = tonumber(value)
     if n == nil then return false, "value must be numeric" end
@@ -1774,6 +1783,7 @@ local function resetRuntimeAfterLeavingTrack()
   lifecyclePublisher.reset()  -- #180: re-emit `session` after a reset (else stale key suppresses it)
   setupReader.resetRaceIniCache()  -- #466 B1: a fresh session may bake a different setup into race.ini
   telemetryPublisher.reset()  -- #180: reset delta/tire_temps rate-limiters
+  wsBridge.trafficShadow:reset()
   state.realtimeActiveHint = nil
   state._cachedRealtimeView = nil
   hud.reset()
@@ -1815,6 +1825,7 @@ local function resetRollingDrivingState()
   lifecyclePublisher.reset()  -- #180: same-session/stint restart must re-emit `session`
   setupReader.resetRaceIniCache()  -- #466 B1: a stint restart may re-bake a different setup into race.ini
   telemetryPublisher.reset()  -- #180: reset delta/tire_temps rate-limiters
+  wsBridge.trafficShadow:reset()
   state.deltaRefStale = true  -- #180/#185: clock reset; delta silent until the next clean lap boundary
   state.pendingWrapResetLapCount = nil
   state.pendingWrapResetFrames = 0
@@ -2719,6 +2730,11 @@ function script.update(dt)
   -- Keep the always-on tyre/tick streams independent from the optional reference-delta path
   -- above. A malformed or stale reference trace must never abort this block before tyre state is
   -- published: the harness, rig screen and thermal plant-ID gate all rely on these live samples.
+  if config.trafficShadowEnabled == true then
+    pcall(function()
+      wsBridge.trafficShadow:update(os.preciseClock(), sim, function(i) return ac.getCar(i) end)
+    end)
+  end
   pcall(function()
     local currentTireTemps = tires:currentTemps(car)
     telemetryPublisher.publishTireTempsIfDue({
@@ -2743,6 +2759,8 @@ function script.update(dt)
       -- sidecar's shift observer cues from the same model the in-game HUD teaches.
       shiftProfile = state.shiftProfile,
       sessionLapsTotal = readSessionLapsTotal(),
+      traffic = config.trafficShadowEnabled == true and wsBridge.trafficShadow.snapshot or nil,
+      trafficNowS = config.trafficShadowEnabled == true and os.preciseClock() or nil,
     })
   end)
   frameHitch:mark("u:telemetryPub")
@@ -2810,6 +2828,10 @@ function script.update(dt)
       state.lapInvalidatedThisLap = true
     end
     local completedTrace = tel:finalizeLapTrace()
+    -- The first partial lap after arming/reset is explicitly incomplete. Store raw
+    -- scalar observations, not a permissive verdict; archive readers re-evaluate them.
+    local completedTraffic = config.trafficShadowEnabled == true
+        and wsBridge.trafficShadow:finishLap(os.preciseClock()) or nil
     tel:beginLapClock(ch.simSeconds(sim))
     resetDeltaSmoother()
     state.deltaRefStale = false  -- clean lap clock re-armed at the s/f line: delta valid again (#185)
@@ -3045,6 +3067,7 @@ function script.update(dt)
         is_pb = isPbThisLap,
         is_valid = not state.lapInvalidatedThisLap,
         trace = completedTrace,
+        traffic = completedTraffic,
         corners = feats,
         setup_snap = state.lastSetupSnap,
         setup_ini_path = setupReader.activeSetupIniPath(car, sim),

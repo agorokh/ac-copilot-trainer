@@ -64,6 +64,35 @@ def _step(rt: lupa.LuaRuntime, rows: int) -> dict[str, Any]:
     return _lua_to_py(result)
 
 
+def test_async_archive_retains_traffic_through_bounded_writer(tmp_path):
+    rt = _runtime(tmp_path)
+    path = rt.execute("""
+      local archive = require('lap_archive')
+      local frames = {}
+      for i=1,7 do frames[i] = {sampled_at_s=i/10,cars_count=20} end
+      _job = assert(archive.createWriteJob({session_uuid='traffic',lap_n=1,lap_ms=1000,
+        car={},sim={},trace={{spline=0,speed=100},{spline=1,speed=100}},
+        traffic={schema_version=1,complete=false,started_at_s=0,ended_at_s=1,
+          frames=frames}},50))
+      local trafficSteps = 0
+      for i=1,20 do
+        local wasTraffic = _job._state == 'traffic'
+        local done,ok,path = _job:step(2)
+        if wasTraffic then trafficSteps=trafficSteps+1 end
+        if done then
+          assert(ok,path)
+          assert(trafficSteps == 7, 'traffic must be streamed one roster per bounded step')
+          return path
+        end
+      end
+      error('archive did not finish')
+    """)
+    record = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    assert record["traffic"]["complete"] is False
+    assert len(record["traffic"]["frames"]) == 7
+    assert record["traffic"]["frames"][-1]["sampled_at_s"] == 0.7
+
+
 def test_archive_car_identity_prefers_stable_global_over_callable_state_field(
     tmp_path: pathlib.Path,
 ) -> None:

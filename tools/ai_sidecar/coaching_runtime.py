@@ -70,6 +70,7 @@ from tools.ai_sidecar.track_reference import (
     build_references,
     sustained_brake_onsets,
 )
+from tools.ai_sidecar.traffic_eligibility import TrafficEligibility, traffic_eligibility
 from tools.ai_sidecar.tyre_model import analyze_tyres
 from tools.lap_qualification import qualify_archive
 
@@ -130,6 +131,7 @@ class _PassState:
     has_grip_evidence: bool = False
     has_thermal_evidence: bool = False
     ineligible_reason: str = ""
+    traffic_reason: str = ""
 
     def reset(self) -> None:
         self.__init__()  # type: ignore[misc]
@@ -196,6 +198,12 @@ class CoachRuntime:
     reference_lap_ms: float | None = None
     ggv_model: GGVModel = field(default_factory=_default_ggv_model)
     capability_gate_mode: str = "condition_indexed"
+    # Replay-only enforcement is deliberately not an environment/launcher switch.
+    # Producer clock age does not certify transport freshness for live activation.
+    traffic_gate_mode: str = "shadow"
+    last_traffic_eligibility: TrafficEligibility = field(
+        default_factory=lambda: TrafficEligibility("unknown", "traffic_context_missing_or_invalid")
+    )
     reference_compound: str | None = None
     reference_optimal_temp_c: float | None = None
     last_pass_capability: dict[int, dict[str, Any]] = field(default_factory=dict)
@@ -228,6 +236,8 @@ class CoachRuntime:
     _pending_pre_lap: float | None = None
 
     def __post_init__(self) -> None:
+        if self.traffic_gate_mode not in {"shadow", "replay"}:
+            raise ValueError("traffic_gate_mode must be shadow or replay")
         if self.capability_gate_mode not in _CAPABILITY_GATE_MODES:
             raise ValueError(
                 f"capability_gate_mode must be one of {sorted(_CAPABILITY_GATE_MODES)}, "
@@ -268,6 +278,9 @@ class CoachRuntime:
         )
         self._pass = {r.index: _PassState() for r in self.refs}
         self.last_pass_capability.clear()
+        self.last_traffic_eligibility = TrafficEligibility(
+            "unknown", "traffic_context_missing_or_invalid"
+        )
         self._active_cond_reason = ""
         self._active_brake_reason = ""
         self._active_tyre_reason = ""
@@ -394,6 +407,10 @@ class CoachRuntime:
         self.ledger.begin_lap(self._lap)
 
     def observe(self, frame: dict[str, Any]) -> list[Advisory]:
+        payload = frame.get("payload") if isinstance(frame.get("payload"), Mapping) else frame
+        self.last_traffic_eligibility = traffic_eligibility(
+            payload.get("traffic"), now_s=payload.get("traffic_now_s")
+        )
         spline, speed, brake, throttle, steer, lap, grip = _normalize(
             frame,
             ggv_model=self.ggv_model,
@@ -489,6 +506,11 @@ class CoachRuntime:
                     and root in _GRIP_GATED_ROOTS
                     and bool(ineligible_reason)
                 )
+                if self.traffic_gate_mode == "replay" and (
+                    not self.last_traffic_eligibility.eligible or st.traffic_reason
+                ):
+                    prime_gated = True
+                    ineligible_reason = st.traffic_reason or self.last_traffic_eligibility.reason
                 if prime_gated:
                     self._set_suppress_reason(ineligible_reason)
                 else:
@@ -510,6 +532,10 @@ class CoachRuntime:
             elif (anc.brake - 0.04) <= spline <= r.spline_hi:
                 self._accumulate(st, r, spline, speed, brake, throttle, steer, out)
                 if st.active:
+                    if not self.last_traffic_eligibility.eligible:
+                        st.traffic_reason = (
+                            st.traffic_reason or self.last_traffic_eligibility.reason
+                        )
                     if cap.lat_util is not None:
                         st.has_grip_evidence = True
                         st.max_lat_grip_used = max(st.max_lat_grip_used, cap.lat_util)
@@ -581,6 +607,7 @@ class CoachRuntime:
             "max_lat_grip_used": round(st.max_lat_grip_used, 3),
             "max_entry_grip_used": round(st.max_entry_grip_used, 3),
             "ineligible_reason": st.ineligible_reason,
+            "traffic_reason": st.traffic_reason,
         }
         # CONDITION-INDEXED CAPABILITY & THERMAL GATE (#938 / P3):
         # 1. Thermal/condition eligibility: when tyres/brakes are out of window or regime is wet,
@@ -631,6 +658,8 @@ class CoachRuntime:
         # let it poison the ledger. Likewise, capability/thermal abstention holds existing ledger
         # state unchanged (valid=False) rather than recording a false clean pass ('Good.').
         valid = st.entry_count > 0 and st.min_speed_kmh < 1e9 and not gated_abstain
+        if self.traffic_gate_mode == "replay" and st.traffic_reason:
+            valid = False
         events = self.ledger.record_pass(r.index, diag, time_lost_s=time_lost, valid=valid)
         st.reset()
         return [_confirm(r) for e in events if e.kind == "confirm"]
@@ -1195,6 +1224,7 @@ def build_coach_runtime(
     use_environment: bool = True,
     ggv_model: GGVModel | None = None,
     capability_gate_mode: str = "condition_indexed",
+    traffic_gate_mode: str = "shadow",
 ) -> CoachRuntime | None:
     """Build a :class:`CoachRuntime` from a reference archive (same input as the observer).
 
@@ -1408,6 +1438,7 @@ def build_coach_runtime(
         reference_lap_ms=reference_lap_ms,
         ggv_model=resolved_ggv,
         capability_gate_mode=capability_gate_mode,
+        traffic_gate_mode=traffic_gate_mode,
         reference_compound=ref_compound,
         reference_optimal_temp_c=ref_opt_temp,
     )

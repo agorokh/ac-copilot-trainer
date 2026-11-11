@@ -37,6 +37,7 @@ local CAR_CANDIDATES = {
   -- neighbors worth recording if present (do not add to the gated set without
   -- a corresponding module read; recording is harmless, gating is not)
   "rpm", "drivetrainSpeed", "acceleration", "angularVelocity",
+  "index", "isConnected", "isInPitlane",
 }
 
 local SIM_CANDIDATES = {
