@@ -41,8 +41,7 @@ namespace {
 
 // ---- Module-static cache -------------------------------------------------
 
-constexpr int  PT_MAX_SETUPS    = 64;     // bounded list cache
-constexpr int  PT_MAX_SPINNERS  = 12;     // bounded active-setup controls
+constexpr int  PT_MAX_SETUPS    = 64;     // bounded list cache (PT_MAX_SPINNERS lives in screen_pocket_technician.h)
 bool g_setup_allowed = false;
 char g_lock_reason[80] = "Awaiting setup capability";
 char g_spinner_source[24] = "unknown";

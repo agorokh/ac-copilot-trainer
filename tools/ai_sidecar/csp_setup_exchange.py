@@ -101,11 +101,18 @@ def _screen_text(value: Any, limit: int) -> str:
     return "".join(out)[:limit]
 
 
+def _wire_id_text(value: Any, limit: int) -> str:
+    """Sanitize content IDs as lossless printable text so install_response identity checks match."""
+    return "".join(ch for ch in str(value) if ch.isprintable())[:limit]
+
+
 def search_response(data: dict[str, Any], frame: dict[str, Any]) -> dict[str, Any]:
     rows = _normalize_setup_rows(frame.get("response"))[: data.get("limit", 20)]
     for row in rows:
-        for key, limit in (("name", 96), ("author", 64), ("car_id", 96), ("track_id", 96)):
+        for key, limit in (("name", 96), ("author", 64)):
             row[key] = _screen_text(row[key], limit)
+        for key, limit in (("car_id", 96), ("track_id", 96)):
+            row[key] = _wire_id_text(row[key], limit)
         row["created_at"] = _screen_text(row["created_at"], 40)
     total = frame.get("total_count")
     if isinstance(total, bool) or not isinstance(total, int) or total < 0:

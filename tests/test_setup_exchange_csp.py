@@ -409,8 +409,8 @@ def test_search_response_folds_unicode_punctuation_and_diacritics_to_ascii():
                     "setupID": 991,
                     "name": "PORSCHE GT3 \u201916 Hotlap V1 \u2013 25\u00b0\u2026",
                     "userName": "Caf\u00e9 \u201cPro\u201d \u0141ukasz \u00df\u0153",
-                    "carID": CAR,
-                    "trackID": TRACK,
+                    "carID": "mod_coup\u00e9_gt3",
+                    "trackID": "n\u00fcrburgring_gp",
                     "statDownloads": 108,
                 }
             ],
@@ -421,6 +421,9 @@ def test_search_response_folds_unicode_punctuation_and_diacritics_to_ascii():
     assert row["name"] == "PORSCHE GT3 '16 Hotlap V1 - 25deg..."
     assert row["author"] == 'Cafe "Pro" Lukasz ssoe'
     assert all(" " <= ch <= "~" for ch in row["name"] + row["author"])
+    # Wire content IDs stay lossless so install_response identity verification matches.
+    assert row["car_id"] == "mod_coup\u00e9_gt3"
+    assert row["track_id"] == "n\u00fcrburgring_gp"
 
 
 @pytest.mark.parametrize(

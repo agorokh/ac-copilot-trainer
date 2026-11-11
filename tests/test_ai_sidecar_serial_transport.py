@@ -24,6 +24,7 @@ import json
 import logging
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -481,3 +482,13 @@ def test_serial_bounds_oversized_spinner_and_setup_lists_while_non_screen_gets_f
     assert serial_setups["count"] == len(serial_setups["setups"]) < 60
     assert any(s["name"] == "Active_Tail" for s in serial_setups["setups"])
     assert len(browser_sent[1]["setups"]) == 60
+
+    header = (
+        Path(__file__).resolve().parents[1]
+        / "firmware"
+        / "screen"
+        / "include"
+        / "ui"
+        / "screen_pocket_technician.h"
+    ).read_text(encoding="utf-8")
+    assert f"#define PT_MAX_SPINNERS {srv.SCREEN_PEER_MAX_SPINNERS}" in header

@@ -1466,6 +1466,10 @@ static void serial_transport_tick() {
       if (serial_rx_overflowing) {
         serial_rx_overflowing = false;
         serial_rx_line = "";
+        serial_last_rx_ms = millis();  // inbound USB activity seen; prevent false rx-timeout link-down
+        if (serial_link_up) {
+          link_stats_note_rx();
+        }
         continue;
       }
       serial_rx_line.trim();  // strip trailing \r / whitespace

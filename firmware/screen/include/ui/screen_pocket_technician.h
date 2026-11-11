@@ -117,6 +117,12 @@ typedef enum {
 // the trainer scientist's 51-character names were silently cut on screen and no longer matched
 // the trainer's acknowledgement when the ACTIVE row was resolved.
 #define PT_SETUP_NAME_MAX 96
+// Bounded active-setup spinner cache (#86): `screen_pocket_technician_add_spinner` keeps the top
+// 12 priority controls (`SPINNER_DEFS` order first) so 7-widget spinner rows + up to 64 setup
+// cards stay comfortably inside LVGL's 64 KiB `LV_MEM_SIZE` pool (`LV_USE_ASSERT_MALLOC=1`) and
+// `SAVED` setups remain ~1.5 swipes down on the 320x480 panel. `tools/ai_sidecar/server.py`
+// (`SCREEN_PEER_MAX_SPINNERS`) mirrors this exact constant.
+#define PT_MAX_SPINNERS 12
 
 typedef struct {
     pt_request_kind_t kind;

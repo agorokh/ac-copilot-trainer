@@ -1841,7 +1841,17 @@ def _drop_external_peer(peer: Any) -> None:
     _release_observer_feed(peer)
 
 
+# Per-frame ceiling matches `csp_setup_exchange.fit_screen_response` (7600 B): Pocket Technician
+# opens by requesting `setup.list` AND `setup.spinner.list` back-to-back in the same tick
+# (`screen_pocket_technician.cpp:1064-1065`), so keeping each individual list response <= 7600 B
+# ensures `setup.list.result` + `setup.spinner.list.result` + concurrent 10 Hz `coaching.snapshot`
+# bursts fit simultaneously inside `SERIAL_RX_RING_BYTES` (16384 B in
+# `firmware/screen/src/main.cpp`, and <= 8192 B on un-reflashed boards).
 SCREEN_PEER_MAX_LINE_BYTES = 7600
+# Mirrors `PT_MAX_SPINNERS = 12` in `firmware/screen/include/ui/screen_pocket_technician.h`:
+# `screen_pocket_technician_add_spinner` drops entries >= 12 (`SPINNER_DEFS` priority controls sort
+# first in `setup_library.lua`), keeping 7-widget spinner rows + 64 setup cards within LVGL's
+# 64 KiB `LV_MEM_SIZE` pool (`LV_USE_ASSERT_MALLOC=1`) and `SAVED` setups ~1.5 swipes down.
 SCREEN_PEER_MAX_SPINNERS = 12
 
 
