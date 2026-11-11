@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import subprocess
@@ -135,7 +136,9 @@ def _capture(*, constrained=False):
     }
 
 
-@pytest.mark.parametrize("use", ["human_progression", "live_reference", "plant_fit"])
+@pytest.mark.parametrize(
+    "use", ["human_progression", "live_reference", "reference_comparison", "plant_fit"]
+)
 @pytest.mark.parametrize("kind", ["constrained", "unknown"])
 def test_archive_quarantine_precedes_legacy_policy_and_preserves_analysis(use, kind):
     record = {
@@ -147,7 +150,8 @@ def test_archive_quarantine_precedes_legacy_policy_and_preserves_analysis(use, k
     if kind == "unknown":
         record["traffic"]["complete"] = False
     before = copy.deepcopy(record)
-    assert not qualify_archive(record, use=use).allowed
+    denied = qualify_archive(record, use=use)
+    assert denied.managed and not denied.allowed
     assert qualify_archive(record, use="analysis").allowed
     assert record == before
 
@@ -158,6 +162,99 @@ def test_clean_archive_retains_legacy_provenance_verdict_not_human_certification
         verdict = qualify_archive(record, use=use)
         assert verdict.allowed and verdict.authority == "legacy_unknown"
     assert archive_traffic_eligibility({}) is None
+
+
+def test_managed_consumers_respect_traffic_denial_without_attribution(monkeypatch):
+    from tools.ai_sidecar import protocol
+    from tools.session_review.report import _reference_kind
+
+    record = {
+        "source": "in_game",
+        "lap": {"lap_ms": 1000},
+        "traffic": _capture(constrained=True),
+        "trace": {"samples": [[0, 100], [1, 100]], "fields": ["spline", "speed"]},
+    }
+    assert _reference_kind(record) != "your-best"
+    monkeypatch.setattr(protocol, "resolve_lap_archive", lambda _: record)
+    assert protocol.build_brain_followup(record) is None
+
+
+def _traffic_tick(observed):
+    from tools.ai_sidecar.external_protocol import make_telemetry_tick
+
+    return make_telemetry_tick(
+        {
+            "speed_kmh": 120,
+            "rpm": 6000,
+            "throttle": 0.5,
+            "brake": 0,
+            "steer": 0,
+            "gear": 3,
+            "lat_g": 0,
+            "long_g": 0,
+            "traffic": observed,
+            "traffic_now_s": 1.0,
+            "setup_reset_allowed": False,
+        }
+    )
+
+
+def test_traffic_wire_accepts_bounded_rosters_and_sampling_failure():
+    from tools.ai_sidecar.external_protocol import validate_inbound
+
+    assert validate_inbound(_traffic_tick(context(count=128))) is None
+    failed = {"schema_version": 1, "cars": [], "error": "traffic_clock_invalid"}
+    assert validate_inbound(_traffic_tick(failed)) is None
+    pit = context()
+    pit["cars"][0]["is_in_pitlane"] = True
+    assert validate_inbound(_traffic_tick(pit)) is None
+
+
+@pytest.mark.parametrize("kind", ["oversize", "nested", "missing", "index", "clock", "error"])
+def test_traffic_wire_rejects_unbounded_or_malformed_payloads(kind):
+    from tools.ai_sidecar.external_protocol import validate_inbound
+
+    frame = _traffic_tick(context())
+    observed = frame["payload"]["traffic"]
+    if kind == "oversize":
+        observed["cars"] = observed["cars"] * 65
+    elif kind == "nested":
+        observed["cars"][0]["extra"] = {"unbounded": "x" * 20000}
+    elif kind == "missing":
+        observed["cars"][0].pop("position")
+    elif kind == "index":
+        observed["cars"][1]["index"] = True
+    elif kind == "clock":
+        frame["payload"]["traffic_now_s"] = float("nan")
+    else:
+        observed["error"] = "x" * 129
+    assert validate_inbound(frame) is not None
+
+
+def test_raw_traffic_only_reaches_observers_and_preserves_peripheral_status(monkeypatch):
+    from tools.ai_sidecar import server
+
+    class Peer:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, payload):
+            self.sent.append(json.loads(payload))
+
+    classes = ("screen", "haptics", "physical", "browser", "observer")
+    peers = {kind: Peer() for kind in classes}
+    monkeypatch.setattr(server, "_external_peer_classes", {p: kind for kind, p in peers.items()})
+    frame = _traffic_tick(context(count=128))
+    original = copy.deepcopy(frame)
+    asyncio.run(server._broadcast_targets(frame, targets=list(peers.values())))
+    for kind, peer in peers.items():
+        received = peer.sent[0]["payload"]
+        assert received["setup_reset_allowed"] is False
+        assert ("traffic" in received) == (kind == "observer")
+        assert ("traffic_now_s" in received) == (kind == "observer")
+        if kind != "observer":
+            assert len(json.dumps(peer.sent[0])) < 1024
+    assert frame == original
 
 
 def test_raw_capture_is_recomputed_and_missing_coverage_cannot_be_promoted():

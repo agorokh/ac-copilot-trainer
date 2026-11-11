@@ -823,6 +823,12 @@ function M.createWriteJob(opts, capMB)
       end
       self._state = "finish"
     end
+    if self._state == "finish" then
+      local done, ok, res = self:_finish()
+      if done then return done, ok, res end
+      -- _finish can open the traffic stream. Drain it within this same step,
+      -- including the session-end flush's single large-budget call (#305).
+    end
     if self._state == "traffic" then
       local frames = self._rec.traffic.frames or {}
       -- One roster contains up to 128 cars: never encode a whole lap's traffic

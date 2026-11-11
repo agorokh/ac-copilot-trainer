@@ -17,6 +17,7 @@ import re
 from typing import Any
 
 from tools.ai_sidecar.microphone import MIC_CHUNK, MIC_END, MIC_SUBSCRIBE, decode_chunk
+from tools.ai_sidecar.traffic_eligibility import MAX_CARS, traffic_eligibility
 
 # Envelope key that identifies a v1 external-client frame.
 ENVELOPE_KEY = "v"
@@ -574,6 +575,58 @@ def _validate_corner_number_map(payload: dict[str, Any], key: str) -> str | None
     return None
 
 
+def _validate_traffic_wire(payload: dict[str, Any]) -> str | None:
+    """Bound the optional observer roster, including partial sampling failures."""
+    if "traffic" not in payload and "traffic_now_s" not in payload:
+        return None
+    err = _validate_number(payload, "traffic_now_s", min_value=0)
+    if err:
+        return err
+    context = payload.get("traffic")
+    keys = {"schema_version", "sampled_at_s", "cars_count", "track_length_m", "cars", "error"}
+    if not isinstance(context, dict) or set(context) - keys:
+        return "traffic requires a bounded scalar observation"
+    if type(context.get("schema_version")) is not int or context["schema_version"] != 1:
+        return "traffic schema_version must be 1"
+    error = context.get("error")
+    if "error" in context and (not isinstance(error, str) or not 0 < len(error) <= 128):
+        return "traffic error requires a bounded reason string"
+    for key, minimum in (("sampled_at_s", 0), ("track_length_m", 0)):
+        if key in context and _validate_number(context, key, min_value=minimum):
+            return f"traffic {key} requires a finite nonnegative number"
+    if "cars_count" in context and (
+        type(context["cars_count"]) is not int or not 1 <= context["cars_count"] <= MAX_CARS
+    ):
+        return "traffic cars_count out of bounds"
+    cars = context.get("cars")
+    if not isinstance(cars, list) or len(cars) > MAX_CARS:
+        return "traffic cars requires a bounded roster"
+    car_keys = {"index", "position", "spline", "speed_kmh", "is_connected", "is_in_pitlane"}
+    for index, car in enumerate(cars):
+        if not isinstance(car, dict) or set(car) != car_keys:
+            return "traffic car requires exactly the scalar schema fields"
+        if type(car["index"]) is not int or car["index"] != index:
+            return "traffic car index invalid"
+        position = car["position"]
+        if (
+            not isinstance(position, list)
+            or len(position) != 3
+            or not all(_is_finite_number(v) for v in position)
+            or not _is_finite_number(car["spline"])
+            or not 0 <= car["spline"] < 1
+            or not _is_finite_number(car["speed_kmh"])
+            or car["speed_kmh"] < 0
+            or type(car["is_connected"]) is not bool
+            or type(car["is_in_pitlane"]) is not bool
+        ):
+            return "traffic car fields invalid"
+    if not error:
+        verdict = traffic_eligibility(context, now_s=context.get("sampled_at_s"))
+        if verdict.status == "unknown" and verdict.reason != "traffic_player_unavailable":
+            return f"traffic invalid: {verdict.reason}"
+    return None
+
+
 def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
     err = _validate_optional_number(frame, "ts_sim", min_value=0)
     if err is not None:
@@ -584,6 +637,9 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
     payload = frame.get("payload")
     if not isinstance(payload, dict):
         return "telemetry_tick requires object 'payload'"
+    traffic_error = _validate_traffic_wire(payload)
+    if traffic_error:
+        return traffic_error
     required_ranges = {
         "speed_kmh": (0, None),
         "rpm": (0, None),

@@ -15,6 +15,9 @@ car roster, `cars_count`, `track_length_m`, and `sampled_at_s`. Each car has
 and boolean connected/pit-lane flags. No opponent wheels are read or serialized.
 `traffic_now_s` is sampled on the SAME script clock at publication. This measures
 producer-local sampling age; it does not certify network residence time.
+The sidecar validates the bounded scalar roster at ingress. Only observer peers
+receive the raw roster; screen, browser, haptics and physical peers receive their
+existing scalar tick without traffic fields, preserving peripheral buffer limits.
 
 New captures also retain these raw observations in the native lap archive's
 `traffic.frames`, streamed through the existing asynchronous archive writer.
@@ -22,7 +25,9 @@ The first partial lap after arming is incomplete. Collection is bounded at 12,00
 snapshots per lap; overflow marks the lap incomplete. Raw archives are not edited.
 Readers recompute occupancy and check monotonic coverage, <=250 ms gaps, and lap
 duration. Known constrained, unknown, malformed, or incomplete captures cannot
-enter human progression, live reference, or plant fitting. Analysis stays readable.
+enter human progression, live reference, reference comparison, or plant fitting.
+Explicit traffic denials are managed restrictions even without an attribution
+envelope, so existing managed-only consumers enforce them. Analysis stays readable.
 Old archives without traffic remain unassessed under the existing provenance
 policy; this experiment does not certify them as traffic-clean or human-driven.
 

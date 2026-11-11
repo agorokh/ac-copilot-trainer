@@ -14,7 +14,7 @@ from typing import Any
 
 MAX_AGE_S = 0.250
 MAX_CARS = 128
-CLEAN_USES = frozenset({"human_progression", "live_reference", "plant_fit"})
+CLEAN_USES = frozenset({"human_progression", "live_reference", "reference_comparison", "plant_fit"})
 
 
 @dataclass(frozen=True)

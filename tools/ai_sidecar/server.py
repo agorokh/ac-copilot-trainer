@@ -52,6 +52,7 @@ from tools.ai_sidecar.external_protocol import (
     CLIENT_CLASS_EXTERNAL,
     CLIENT_CLASS_KEY,
     CLIENT_CLASS_LUA,
+    CLIENT_CLASS_OBSERVER,
     CLIENT_CLASS_SCREEN,
     CLIENT_CLASS_VOICE,
     CLIENT_HEADER,
@@ -1911,15 +1912,35 @@ async def _broadcast_targets(frame: dict[str, Any], *, targets: list[Any]) -> No
     if not targets:
         return
     payload = json.dumps(frame, separators=(",", ":"))
+    peripheral_frame = frame
+    peripheral_payload = payload
+    tick_payload = frame.get("payload")
+    if frame.get("type") == TYPE_TELEMETRY_TICK and isinstance(tick_payload, dict):
+        if "traffic" in tick_payload or "traffic_now_s" in tick_payload:
+            # The raw shadow roster is for observation only. Keep peripheral
+            # serial buffers and scalar electronics/status updates unchanged.
+            peripheral_frame = {
+                **frame,
+                "payload": {
+                    key: value
+                    for key, value in tick_payload.items()
+                    if key not in {"traffic", "traffic_now_s"}
+                },
+            }
+            peripheral_payload = json.dumps(peripheral_frame, separators=(",", ":"))
     screen_payload: str | None = None
     coros = []
     for p in targets:
         if _is_screen_or_serial_peer(p):
             if screen_payload is None:
-                screen_payload = _fit_screen_peer_payload(frame, payload)
+                screen_payload = _fit_screen_peer_payload(peripheral_frame, peripheral_payload)
             coros.append(_safe_send_raw(p, screen_payload))
         else:
-            coros.append(_safe_send_raw(p, payload))
+            coros.append(
+                _safe_send_raw(
+                    p, payload if _peer_class(p) == CLIENT_CLASS_OBSERVER else peripheral_payload
+                )
+            )
     results = await asyncio.gather(*coros)
     for p, err in zip(targets, results, strict=True):
         if err is not None:

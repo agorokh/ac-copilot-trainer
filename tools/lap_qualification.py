@@ -555,7 +555,10 @@ class ArchiveQualificationSnapshot:
                 return _decision(
                     False,
                     [traffic.reason],
-                    managed=managed,
+                    # An explicit traffic restriction is managed policy even
+                    # without a control-attribution envelope. Existing consumers
+                    # check this flag before enforcing a denied use.
+                    managed=True,
                     authority=str(_map(envelope).get("authority") or "legacy_unknown"),
                 )
         if (
