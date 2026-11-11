@@ -2,6 +2,7 @@
 
 #include "ui/screen_setup_exchange.h"
 
+#include "ui/ascii_fold.h"
 #include "ui/nav.h"
 #include "ui/persist.h"
 #include "ui/toast.h"
@@ -483,7 +484,7 @@ extern "C" void screen_setup_exchange_set_context(const char* car_id, const char
         g_car_id[0] = 0;
     }
     if (car_name) {
-        copy_text(g_car_name, sizeof(g_car_name), car_name);
+        ui_ascii_fold(g_car_name, sizeof(g_car_name), car_name);
     } else {
         g_car_name[0] = 0;
     }
@@ -493,7 +494,7 @@ extern "C" void screen_setup_exchange_set_context(const char* car_id, const char
         g_track_id[0] = 0;
     }
     if (track_name) {
-        copy_text(g_track_name, sizeof(g_track_name), track_name);
+        ui_ascii_fold(g_track_name, sizeof(g_track_name), track_name);
     } else {
         g_track_name[0] = 0;
     }
@@ -517,8 +518,11 @@ extern "C" void screen_setup_exchange_add_result(int32_t setup_id,
     *row = se_result_t{};
     row->setup_id = setup_id;
     row->downloads = downloads;
-    copy_text(row->name, sizeof(row->name), name);
-    copy_text(row->author, sizeof(row->author), author);
+    ui_ascii_fold(row->name, sizeof(row->name), name);
+    if (!row->name[0]) {
+        snprintf(row->name, sizeof(row->name), "setup-%ld", static_cast<long>(setup_id));
+    }
+    ui_ascii_fold(row->author, sizeof(row->author), author);
     copy_text(row->car_id, sizeof(row->car_id), car_id);
     copy_text(row->track_id, sizeof(row->track_id), track_id);
 }
@@ -535,8 +539,10 @@ extern "C" void screen_setup_exchange_apply_search_error(const char* error) {
     g_loading = false;
     set_status("Search failed", UI_ALERT_RED);
     if (g_active_ctx) rebuild_list(g_active_ctx);
+    char safe_err[80];
+    ui_ascii_fold(safe_err, sizeof(safe_err), error);
     char msg[96];
-    snprintf(msg, sizeof(msg), "Search failed: %s", error && *error ? error : "unknown");
+    snprintf(msg, sizeof(msg), "Search failed: %s", safe_err[0] ? safe_err : "unknown");
     ui_toast_error(msg);
 }
 
@@ -553,8 +559,10 @@ extern "C" void screen_setup_exchange_apply_download_ack(bool ok,
             lv_obj_set_style_border_opa(row, LV_OPA_COVER, LV_PART_MAIN);
             g_active_ctx->active_row = nullptr;
         }
+        char safe_name[80];
+        ui_ascii_fold(safe_name, sizeof(safe_name), name);
         char msg[96];
-        snprintf(msg, sizeof(msg), "Installed: %s", name && *name ? name : "setup");
+        snprintf(msg, sizeof(msg), "Installed: %s", safe_name[0] ? safe_name : "setup");
         set_status(msg, UI_OK_GREEN);
         (void)path;
     } else {
@@ -566,8 +574,10 @@ extern "C" void screen_setup_exchange_apply_download_ack(bool ok,
             g_active_ctx->active_row = nullptr;
         }
         set_status("Download failed", UI_ALERT_RED);
+        char safe_err[80];
+        ui_ascii_fold(safe_err, sizeof(safe_err), error);
         char msg[96];
-        snprintf(msg, sizeof(msg), "Download failed: %s", error && *error ? error : "unknown");
+        snprintf(msg, sizeof(msg), "Download failed: %s", safe_err[0] ? safe_err : "unknown");
         ui_toast_error(msg);
     }
 }

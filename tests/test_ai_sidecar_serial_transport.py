@@ -24,6 +24,7 @@ import json
 import logging
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -358,3 +359,134 @@ def test_serial_disconnect_evicts_peer() -> None:
     before, after = asyncio.run(_run())
     assert before == 1
     assert after == 0
+
+
+def test_serial_bounds_oversized_spinner_and_setup_lists_while_non_screen_gets_full_payload() -> (
+    None
+):
+    """#86: 59-spinner GT3 setup.spinner.list.result (~12.8 KB) must fit serial/screen ring while
+    full frames still reach browser/WebSocket external peers."""
+
+    class _BrowserPeer:
+        remote_address = ("192.168.1.50", 54321)
+
+        def __init__(self) -> None:
+            self.sent: list[dict] = []
+
+        async def send(self, payload: str) -> None:
+            self.sent.append(json.loads(payload))
+
+    async def _run() -> tuple[dict, dict, list[dict]]:
+        srv._reset_external_state()
+        fake = _FakeSerial()
+        browser = _BrowserPeer()
+        task = asyncio.create_task(
+            run_serial_transport(
+                port="COM_TEST",
+                baud=115200,
+                handle_frame=srv._handle_external_frame,
+                on_peer_gone=srv._drop_external_peer,
+                serial_factory=lambda _p, _b: fake,
+                reconnect_delay=0.01,
+            )
+        )
+        try:
+            fake.feed(
+                json.dumps(
+                    {"v": 1, "type": "hello", "client": "screen", "client_class": "screen"}
+                ).encode()
+                + b"\n"
+            )
+            buf = bytearray()
+            await _next_frame(fake, buf)  # hello_ack
+            await _wait_for(lambda: srv._peer_counts() == (1, 1))
+            await srv._handle_external_frame(
+                browser,
+                {"v": 1, "type": "hello", "client": "tablet-dash", "client_class": "browser"},
+            )
+            browser.sent.clear()
+
+            spinners_frame = {
+                "v": 1,
+                "type": "setup.spinner.list.result",
+                "ok": True,
+                "source": "csp",
+                "reset_allowed": True,
+                "lock_reason": "",
+                "spinners": [
+                    {
+                        "section": f"SPINNER_{i:02d}",
+                        "label": f"Damper Spinner {i:02d}",
+                        "value": i,
+                        "min": 0,
+                        "max": 40,
+                        "step": 1,
+                        "unit": "clicks",
+                        "range_known": True,
+                        "adjustable": True,
+                        "display_multiplier": 1,
+                    }
+                    for i in range(59)
+                ],
+            }
+            assert len(json.dumps(spinners_frame, separators=(",", ":")).encode()) > 9000
+            await srv._broadcast_external(spinners_frame, exclude=None)
+            serial_spinners = await _next_frame(fake, buf)
+
+            active_path = "C:/Users/driver/Documents/Assetto Corsa/setups/car/spa/Active_Tail.ini"
+            setups_frame = {
+                "v": 1,
+                "type": "setup.list.result",
+                "car_id": "ks_porsche_911_gt3_r_2016",
+                "track_id": "spa",
+                "active": "Active_Tail",
+                "active_path": active_path,
+                "count": 60,
+                "setups": [
+                    {
+                        "name": "Active_Tail" if i == 59 else f"Setup_{i:02d}_long_scientist_name",
+                        "path": active_path
+                        if i == 59
+                        else (
+                            "C:/Users/driver/Documents/Assetto Corsa/setups/"
+                            f"car/spa/Setup_{i:02d}_long_scientist_name.ini"
+                        ),
+                        "mtime_iso": "2026-11-10T12:00:00Z",
+                        "summary": {"brake_bias": 64, "abs": 8, "tc": 3, "wing_f": 1, "wing_r": 20},
+                    }
+                    for i in range(60)
+                ],
+            }
+            assert len(json.dumps(setups_frame, separators=(",", ":")).encode()) > 10000
+            await srv._broadcast_external(setups_frame, exclude=None)
+            serial_setups = await _next_frame(fake, buf)
+            return serial_spinners, serial_setups, browser.sent
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            srv._reset_external_state()
+
+    serial_spinners, serial_setups, browser_sent = asyncio.run(_run())
+    assert len(serial_spinners["spinners"]) == srv.SCREEN_PEER_MAX_SPINNERS == 12
+    spinners_bytes = len(json.dumps(serial_spinners, separators=(",", ":")).encode())
+    setups_bytes = len(json.dumps(serial_setups, separators=(",", ":")).encode())
+    assert spinners_bytes <= srv.SCREEN_PEER_MAX_SPINNER_LIST_BYTES
+    assert len(browser_sent[0]["spinners"]) == 59
+
+    assert setups_bytes <= srv.SCREEN_PEER_MAX_LINE_BYTES
+    # Combined dual-list burst + 10 Hz coaching.snapshot headroom fits even legacy 8192 B rings.
+    assert spinners_bytes + setups_bytes + 512 <= 8192
+    assert serial_setups["count"] == len(serial_setups["setups"]) < 60
+    assert any(s["name"] == "Active_Tail" for s in serial_setups["setups"])
+    assert len(browser_sent[1]["setups"]) == 60
+
+    header = (
+        Path(__file__).resolve().parents[1]
+        / "firmware"
+        / "screen"
+        / "include"
+        / "ui"
+        / "screen_pocket_technician.h"
+    ).read_text(encoding="utf-8")
+    assert f"#define PT_MAX_SPINNERS {srv.SCREEN_PEER_MAX_SPINNERS}" in header

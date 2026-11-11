@@ -7,6 +7,7 @@
 
 #include "ui/screen_ac_copilot.h"
 
+#include "ui/ascii_fold.h"
 #include "ui/nav.h"
 #include "ui/persist.h"
 #include "ui/tokens.h"
@@ -64,16 +65,11 @@ ac_copilot_ctx_t* g_active_ctx = nullptr;
 
 void uppercase_copy(const char* src, char* dst, size_t n) {
     if (!dst || n == 0) return;
-    if (!src) {
-        dst[0] = 0;
-        return;
-    }
-    size_t i = 0;
-    for (; src[i] && i < n - 1; ++i) {
-        unsigned char c = static_cast<unsigned char>(src[i]);
+    ui_ascii_fold(dst, n, src);
+    for (size_t i = 0; dst[i]; ++i) {
+        unsigned char c = static_cast<unsigned char>(dst[i]);
         dst[i] = static_cast<char>(toupper(c));
     }
-    dst[i] = 0;
 }
 
 bool snapshot_is_stale() {
@@ -139,7 +135,10 @@ void corner_badge_text(const char* corner, char* out, size_t n) {
 }
 
 void set_label(lv_obj_t* obj, const char* text) {
-    if (obj) lv_label_set_text(obj, text ? text : "");
+    if (!obj) return;
+    char safe[192];
+    ui_ascii_fold(safe, sizeof(safe), text);
+    lv_label_set_text(obj, safe);
 }
 
 // Measure the actual shipped LVGL fonts. Numeric/command labels never wrap;
@@ -150,15 +149,16 @@ void set_fitted_label(lv_obj_t* obj, const char* text, bool command = false) {
     const lv_font_t* number_fonts[] = {UI_FONT_READ_XL, UI_FONT_READ_LG, UI_FONT_READ_MD, UI_FONT_MONO_MD};
     const lv_font_t* command_fonts[] = {UI_FONT_COMMAND_HERO, UI_FONT_COMMAND_MD, UI_FONT_COMMAND_SM, UI_FONT_LABEL_MD};
     const lv_font_t** fonts = command ? command_fonts : number_fonts;
-    const char* value = text ? text : "";
+    char safe[96];
+    ui_ascii_fold(safe, sizeof(safe), text);
     for (int i = 0; i < 4; ++i) {
         lv_point_t size;
-        lv_txt_get_size(&size, value, fonts[i], 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        lv_txt_get_size(&size, safe, fonts[i], 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
         lv_obj_set_style_text_font(obj, fonts[i], LV_PART_MAIN);
         if (size.x <= lv_obj_get_width(obj)) break;
     }
     lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
-    lv_label_set_text(obj, value);
+    lv_label_set_text(obj, safe);
 }
 
 void style_label(lv_obj_t* obj, const lv_font_t* font, lv_color_t color) {

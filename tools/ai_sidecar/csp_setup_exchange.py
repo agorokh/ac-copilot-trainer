@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -44,15 +45,74 @@ def request_fields(data: dict[str, Any], operation: str) -> dict[str, Any]:
     return fields
 
 
+_UNICODE_ASCII_MAP: dict[str, str] = {
+    "\u00a0": " ",
+    "\u2009": " ",
+    "\u202f": " ",
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201a": "'",
+    "\u201b": "'",
+    "\u02bc": "'",
+    "\u00b4": "'",
+    "\u2032": "'",
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u201e": '"',
+    "\u201f": '"',
+    "\u00ab": '"',
+    "\u00bb": '"',
+    "\u2033": '"',
+    "\u2010": "-",
+    "\u2011": "-",
+    "\u2012": "-",
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2015": "-",
+    "\u2212": "-",
+    "\u00b7": "-",
+    "\u2022": "-",
+    "\u2026": "...",
+    "\u00b0": "deg",
+    "\u00df": "ss",
+    "\u00c6": "AE",
+    "\u00e6": "ae",
+    "\u0152": "OE",
+    "\u0153": "oe",
+    "\u00d8": "O",
+    "\u00f8": "o",
+    "\u0141": "L",
+    "\u0142": "l",
+}
+
+
 def _screen_text(value: Any, limit: int) -> str:
-    return "".join(c for c in str(value) if c.isprintable())[:limit]
+    """Fold community UTF-8 text into printable ASCII (0x20..0x7E) for the rig screen fonts."""
+    substituted = "".join(_UNICODE_ASCII_MAP.get(ch, ch) for ch in str(value))
+    decomposed = unicodedata.normalize("NFKD", substituted)
+    out: list[str] = []
+    for ch in decomposed:
+        if unicodedata.combining(ch):
+            continue
+        if " " <= ch <= "~":
+            out.append(ch)
+        elif ch.isprintable():
+            out.append("?")
+    return "".join(out)[:limit]
+
+
+def _wire_id_text(value: Any, limit: int) -> str:
+    """Sanitize content IDs as lossless printable text so install_response identity checks match."""
+    return "".join(ch for ch in str(value) if ch.isprintable())[:limit]
 
 
 def search_response(data: dict[str, Any], frame: dict[str, Any]) -> dict[str, Any]:
     rows = _normalize_setup_rows(frame.get("response"))[: data.get("limit", 20)]
     for row in rows:
-        for key, limit in (("name", 96), ("author", 64), ("car_id", 96), ("track_id", 96)):
+        for key, limit in (("name", 96), ("author", 64)):
             row[key] = _screen_text(row[key], limit)
+        for key, limit in (("car_id", 96), ("track_id", 96)):
+            row[key] = _wire_id_text(row[key], limit)
         row["created_at"] = _screen_text(row["created_at"], 40)
     total = frame.get("total_count")
     if isinstance(total, bool) or not isinstance(total, int) or total < 0:

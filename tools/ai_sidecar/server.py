@@ -1841,12 +1841,86 @@ def _drop_external_peer(peer: Any) -> None:
     _release_observer_feed(peer)
 
 
+# Pocket Technician opens by requesting `setup.list` AND `setup.spinner.list` back-to-back in one
+# tick (`screen_pocket_technician.cpp:1064-1065`). Bounding `setup.list.result` to 4800 B and
+# `setup.spinner.list.result` to 2600 B keeps the combined dual-list burst plus a concurrent 10 Hz
+# `coaching.snapshot` (~400 B) under 7810 B, fitting inside BOTH the legacy 8192 B USB CDC ring on
+# un-reflashed boards AND the 16384 B `SERIAL_RX_RING_BYTES` in `firmware/screen/src/main.cpp`.
+SCREEN_PEER_MAX_LINE_BYTES = 4800
+SCREEN_PEER_MAX_SPINNER_LIST_BYTES = 2600
+# Mirrors `PT_MAX_SPINNERS = 12` in `firmware/screen/include/ui/screen_pocket_technician.h`:
+# `screen_pocket_technician_add_spinner` drops entries >= 12 (`SPINNER_DEFS` priority controls sort
+# first in `setup_library.lua`), keeping 7-widget spinner rows + 64 setup cards within LVGL's
+# 64 KiB `LV_MEM_SIZE` pool (`LV_USE_ASSERT_MALLOC=1`) and `SAVED` setups ~1.5 swipes down.
+SCREEN_PEER_MAX_SPINNERS = 12
+
+
+def _is_screen_or_serial_peer(peer: Any) -> bool:
+    if _peer_class(peer) == CLIENT_CLASS_SCREEN:
+        return True
+    addr = getattr(peer, "remote_address", None)
+    return isinstance(addr, str) and addr.startswith("serial:")
+
+
+def _fit_screen_peer_payload(frame: dict[str, Any], default_payload: str) -> str:
+    """Bound list frames sent to rig-screen peers so USB CDC rings never overflow (#86).
+
+    Full frames still reach browser/WebSocket external peers (e.g. tablet dashboard).
+    """
+    t = frame.get(TYPE_KEY)
+    if t == TYPE_SETUP_SPINNER_LIST_RESULT and isinstance(frame.get("spinners"), list):
+        spinners = list(frame["spinners"][:SCREEN_PEER_MAX_SPINNERS])
+        if len(spinners) == len(frame["spinners"]) and (
+            len(default_payload.encode("utf-8")) <= SCREEN_PEER_MAX_SPINNER_LIST_BYTES
+        ):
+            return default_payload
+        trimmed = {**frame, "spinners": spinners}
+        encoded = json.dumps(trimmed, separators=(",", ":"))
+        while len(encoded.encode("utf-8")) > SCREEN_PEER_MAX_SPINNER_LIST_BYTES and spinners:
+            spinners.pop()
+            encoded = json.dumps(trimmed, separators=(",", ":"))
+        return encoded
+    if (
+        t == TYPE_SETUP_LIST_RESULT
+        and isinstance(frame.get("setups"), list)
+        and len(default_payload.encode("utf-8")) > SCREEN_PEER_MAX_LINE_BYTES
+    ):
+        setups = list(frame["setups"])
+        active_path = frame.get("active_path")
+        active_name = frame.get("active")
+        trimmed = {**frame, "setups": setups}
+        encoded = json.dumps(trimmed, separators=(",", ":"))
+        while len(encoded.encode("utf-8")) > SCREEN_PEER_MAX_LINE_BYTES and setups:
+            drop_idx = len(setups) - 1
+            if len(setups) >= 2 and isinstance(setups[drop_idx], dict):
+                tail = setups[drop_idx]
+                if (active_path and tail.get("path") == active_path) or (
+                    active_name and tail.get("name") == active_name
+                ):
+                    drop_idx = len(setups) - 2
+            setups.pop(drop_idx)
+            if "count" in trimmed:
+                trimmed["count"] = len(setups)
+            encoded = json.dumps(trimmed, separators=(",", ":"))
+        return encoded
+    return default_payload
+
+
 async def _broadcast_targets(frame: dict[str, Any], *, targets: list[Any]) -> None:
     """Forward a v1 frame to an explicit peer list."""
     if not targets:
         return
     payload = json.dumps(frame, separators=(",", ":"))
-    results = await asyncio.gather(*[_safe_send_raw(p, payload) for p in targets])
+    screen_payload: str | None = None
+    coros = []
+    for p in targets:
+        if _is_screen_or_serial_peer(p):
+            if screen_payload is None:
+                screen_payload = _fit_screen_peer_payload(frame, payload)
+            coros.append(_safe_send_raw(p, screen_payload))
+        else:
+            coros.append(_safe_send_raw(p, payload))
+    results = await asyncio.gather(*coros)
     for p, err in zip(targets, results, strict=True):
         if err is not None:
             logger.info(

@@ -1373,6 +1373,7 @@ static void sweep_rotations() {
 // which drives the CONNECTED pill and the pt/se request drains exactly as the
 // WebSocket path does.
 static String   serial_rx_line;
+static bool     serial_rx_overflowing = false;
 static uint32_t serial_hello_next_ms = 0;
 static uint32_t serial_last_rx_ms = 0;
 static bool     serial_link_up = false;
@@ -1380,11 +1381,11 @@ static bool     serial_link_up = false;
 // loop() gap: loop() runs the LVGL render (tens of ms worst case) — longer than
 // the time for a frame to arrive as a USB burst — so a whole frame can land before
 // loop() drains it. The 256 B default therefore dropped the 326 B hello_ack. This
-// is a jitter-absorption size that here must cover a full frame (issue #463).
-static constexpr size_t SERIAL_RX_RING_BYTES = 8192;
+// is a jitter-absorption size that here must cover a full frame (issue #463, #86).
+static constexpr size_t SERIAL_RX_RING_BYTES = 16384;
 static constexpr size_t SERIAL_TX_RING_BYTES = 8192;
 // App-layer overflow guard on one accumulated NDJSON line (independent of the ring).
-static constexpr size_t SERIAL_MAX_LINE_BYTES = 8192;
+static constexpr size_t SERIAL_MAX_LINE_BYTES = 16384;
 // If no frame arrives for this long while linked, treat the link as DOWN. The
 // sidecar answers every heartbeat hello with a hello_ack (~5 s cadence once
 // linked), so this fires only on a real drop (sidecar crash/restart, USB
@@ -1434,6 +1435,7 @@ static void serial_mark_link_down(const char* why) {
 static void serial_transport_begin() {
   ws_state = WsState::Connecting;
   serial_rx_line = "";
+  serial_rx_overflowing = false;
   serial_rx_line.reserve(512);
   serial_last_rx_ms = millis();
   serial_send_hello();               // greet immediately; resent until answered
@@ -1461,6 +1463,15 @@ static void serial_transport_tick() {
     int c = Serial.read();
     if (c < 0) break;
     if (c == '\n') {
+      if (serial_rx_overflowing) {
+        serial_rx_overflowing = false;
+        serial_rx_line = "";
+        serial_last_rx_ms = millis();  // inbound USB activity seen; prevent false rx-timeout link-down
+        if (serial_link_up) {
+          link_stats_note_rx();
+        }
+        continue;
+      }
       serial_rx_line.trim();  // strip trailing \r / whitespace
       if (serial_rx_line.length() > 0) {
         serial_mark_link_up();  // refreshes serial_last_rx_ms + frame counter
@@ -1469,10 +1480,14 @@ static void serial_transport_tick() {
       }
       serial_rx_line = "";
     } else if (c != '\r') {
+      if (serial_rx_overflowing) {
+        continue;
+      }
       if (serial_rx_line.length() < SERIAL_MAX_LINE_BYTES) {
         serial_rx_line += (char)c;
       } else {
-        serial_rx_line = "";  // overflow guard: drop a runaway unterminated line
+        serial_rx_overflowing = true;
+        serial_rx_line = "";  // overflow guard: discard rest of oversized line until '\n'
         link_stats_note_overflow();
         ++drops_this_drain;
       }
