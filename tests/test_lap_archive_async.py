@@ -64,6 +64,93 @@ def _step(rt: lupa.LuaRuntime, rows: int) -> dict[str, Any]:
     return _lua_to_py(result)
 
 
+def test_async_archive_retains_traffic_through_bounded_writer(tmp_path):
+    rt = _runtime(tmp_path)
+    path = rt.execute("""
+      local archive = require('lap_archive')
+      local frames = {}
+      for i=1,7 do frames[i] = {sampled_at_s=i/10,cars_count=20} end
+      _job = assert(archive.createWriteJob({session_uuid='traffic',lap_n=1,lap_ms=1000,
+        car={},sim={},trace={{spline=0,speed=100},{spline=1,speed=100}},
+        traffic={schema_version=1,complete=false,started_at_s=0,ended_at_s=1,
+          frames=frames}},50))
+      for i=1,20 do
+        local before = _job._trafficIndex or 1
+        local done,ok,path = _job:step(2)
+        assert((_job._trafficIndex or 1) - before <= 1,
+          'traffic must be streamed one roster per bounded step')
+        if done then
+          assert(ok,path)
+          return path
+        end
+      end
+      error('archive did not finish')
+    """)
+    record = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    assert record["traffic"]["complete"] is False
+    assert len(record["traffic"]["frames"]) == 7
+    assert record["traffic"]["frames"][-1]["sampled_at_s"] == 0.7
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_session_end_single_step_flush_finishes_traffic_archive(tmp_path, partial):
+    rt = _runtime(tmp_path)
+    rt.execute("""
+      local frames,trace = {},{}
+      for i=1,12000 do frames[i]={sampled_at_s=i/20,cars_count=20} end
+      for i=1,200 do trace[i]={spline=i/200,speed=100,eMs=i*10} end
+      _job=assert(require('lap_archive').createWriteJob({session_uuid='flush-traffic',
+        lap_n=1,lap_ms=600000,car={},sim={},trace=trace,
+        traffic={schema_version=1,complete=true,started_at_s=0,ended_at_s=600,
+          frames=frames}},50))
+    """)
+    if partial:
+        assert not _step(rt, 64)["done"]
+    final = _step(rt, 1_000_000)
+    assert final["done"] and final["ok"]
+    record = json.loads(pathlib.Path(final["res"]).read_text(encoding="utf-8"))
+    assert len(record["trace"]["samples"]) == 200
+    assert len(record["traffic"]["frames"]) == 12000
+    assert not list(tmp_path.rglob("*.tmp"))
+
+
+@pytest.mark.parametrize("fail_flush", [False, True])
+def test_partial_traffic_chunk_flushes_and_propagates_failure(tmp_path, fail_flush):
+    rt = _runtime(tmp_path)
+    rt.globals()["_failFlush"] = fail_flush
+    rt.execute("""
+      local frames = {}
+      for i=1,7 do frames[i]={sampled_at_s=i/10,cars_count=20} end
+      _job=assert(require('lap_archive').createWriteJob({session_uuid='chunk-traffic',
+        lap_n=1,lap_ms=1000,car={},sim={},trace={{spline=0,speed=100}},
+        traffic={schema_version=1,complete=false,started_at_s=0,ended_at_s=1,
+          frames=frames}},50))
+      local originalFlush = _job._flush
+      _trafficFlushes = 0
+      function _job:_flush()
+        if self._state == 'traffic' then
+          _trafficFlushes = _trafficFlushes + 1
+          if _failFlush then return false,'injected traffic chunk flush failure' end
+        end
+        return originalFlush(self)
+      end
+    """)
+    result = _step(rt, 2)
+    assert rt.globals()["_trafficFlushes"] == 1
+    if fail_flush:
+        assert result["done"] and not result["ok"]
+        assert "injected traffic chunk flush failure" in result["res"]
+        assert not list(tmp_path.rglob("*.tmp"))
+        assert not list(tmp_path.rglob("lap_*.json"))
+    else:
+        assert not result["done"]
+        partial = pathlib.Path(rt.eval("_job._tmpPath"))
+        assert '"sampled_at_s":0.1' in partial.read_text()
+        final = _step(rt, 1000000)
+        assert final["done"] and final["ok"]
+        assert len(json.loads(pathlib.Path(final["res"]).read_text())["traffic"]["frames"]) == 7
+
+
 def test_archive_car_identity_prefers_stable_global_over_callable_state_field(
     tmp_path: pathlib.Path,
 ) -> None:

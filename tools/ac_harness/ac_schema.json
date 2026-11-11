@@ -4,6 +4,21 @@
   "_generated_by": "manual code-derivation (bootstrap); refresh via tools/ac_harness/dump_schema.lua on the AC PC",
   "lua_runtime_note": "CSP runs LuaJIT (Lua 5.1); the harness runs lupa (Lua 5.5). See tests/fixtures/csp_luajit_parity.lua.",
   "car": {
+    "index": {
+      "type": "number",
+      "read_by": ["traffic_context.lua"],
+      "note": "Zero-based StateCar index; checked against the requested opponent slot. Installed CSP ac_apps/lib.lua."
+    },
+    "isConnected": {
+      "type": "boolean",
+      "read_by": ["traffic_context.lua"],
+      "note": "False for disconnected online cars. Installed CSP ac_apps/lib.lua."
+    },
+    "isInPitlane": {
+      "type": "boolean",
+      "read_by": ["traffic_context.lua"],
+      "note": "True in pits area. Installed CSP ac_apps/lib.lua."
+    },
     "speedKmh": {
       "type": "number",
       "read_by": ["telemetry.lua", "brake_detection.lua", "entry"],
@@ -112,6 +127,11 @@
     }
   },
   "sim": {
+    "carsCount": {
+      "type": "number",
+      "read_by": ["traffic_context.lua"],
+      "note": "Player plus opponents; an invalid or incomplete roster is unknown. Installed CSP ac_apps/lib.lua."
+    },
     "isInMainMenu": {
       "type": "boolean",
       "read_by": ["telemetry.lua"],

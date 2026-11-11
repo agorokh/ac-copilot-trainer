@@ -8,3 +8,6 @@
 # the conformance check passes on Windows too — a CRLF working-tree copy hashes differently and
 # fails the pin locally even though the LF blob (what CI sees) matches.
 scripts/hook_*.py text eol=lf
+
+# Native Windows experiment fixture: preserve the bytes sealed before predictions.
+tests/fixtures/traffic_shadow_955/frozen_45.json -text whitespace=cr-at-eol

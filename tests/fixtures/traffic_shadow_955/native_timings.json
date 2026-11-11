@@ -1,0 +1,314 @@
+[
+  {
+    "sealed_at_utc": "2026-11-11T19:38:22.839876+00:00",
+    "source_replay": {
+      "path": "AC_240426-132929_R_ks_ferrari_488_gt3_spa_.acreplay",
+      "bytes": 31634045,
+      "sha256": "406c99e84a35009c19920bd536d6e6cd3144f277732c3b692a2abf00f140331e",
+      "version": 16,
+      "recording_interval_ms": 30.0,
+      "weather": "3_clear",
+      "track": "spa",
+      "layout": "",
+      "cars": 11,
+      "recording_index": 8656,
+      "frames": 8656
+    },
+    "capture": "80d96b193a06_capture_1794425599_28.jsonl",
+    "capture_sha256": "80d96b193a062ed1919e0ae381bc787e8c3f36f357ed1c01d49066a39dd3ec3f",
+    "samples": 4534,
+    "source_head": "83ea33a4b70257fb0a5b9f719a6dbd868af1fbd1",
+    "native_csp_version": "0.3.1/4302",
+    "hz": 20,
+    "cars_counts": {
+      "11": 4534
+    },
+    "errors": {
+      "none": 4534
+    },
+    "segments": {
+      "1": 4534
+    },
+    "first_replay_frame": 8,
+    "last_replay_frame": 8654,
+    "p99_sample_cost_ms": 0.35539999998946,
+    "max_sample_cost_ms": 0.82530000000247,
+    "histogram_ms": {
+      "0": 4121,
+      "0.1": 202,
+      "0.25": 205,
+      "0.5": 6,
+      "1": 0,
+      "2": 0
+    },
+    "twenty_car_cost_verified": false
+  },
+  {
+    "sealed_at_utc": "2026-11-11T19:44:04.486858+00:00",
+    "source_replay": {
+      "path": "AC_260426-115842_R_ks_ferrari_488_gt3_spa_.acreplay",
+      "bytes": 30231973,
+      "sha256": "2735cee1db2c07173c96bb853e483f5f33c5e0d88df48c71308e433483bcabfe",
+      "version": 16,
+      "recording_interval_ms": 30.0,
+      "weather": "3_clear",
+      "track": "spa",
+      "layout": "",
+      "cars": 11,
+      "recording_index": 240,
+      "frames": 8689
+    },
+    "capture": "bbac14a8dab0_capture_1794425958_51.jsonl",
+    "capture_sha256": "bbac14a8dab0cad215464ebe8edb50dcc09c0d258da511cf181240e0019f7ea3",
+    "samples": 4301,
+    "source_head": "83ea33a4b70257fb0a5b9f719a6dbd868af1fbd1",
+    "native_csp_version": "0.3.1/4302",
+    "hz": 20,
+    "cars_counts": {
+      "11": 4301
+    },
+    "errors": {
+      "none": 4301
+    },
+    "segments": {
+      "1": 4301
+    },
+    "first_replay_frame": 9,
+    "last_replay_frame": 8687,
+    "p99_sample_cost_ms": 0.37639999999328,
+    "max_sample_cost_ms": 0.71750000000748,
+    "histogram_ms": {
+      "0": 3877,
+      "0.1": 250,
+      "0.25": 166,
+      "0.5": 8,
+      "1": 0,
+      "2": 0
+    },
+    "twenty_car_cost_verified": false,
+    "native_10hz": {
+      "samples": 2151,
+      "p99_ms": 0.35700000000816,
+      "max_ms": 0.93710000000158
+    }
+  },
+  {
+    "sealed_at_utc": "2026-11-11T19:47:17.085311+00:00",
+    "source_replay": {
+      "path": "AC_220526-230936_R_mazda_miata_hell-spec_ks_nordschleife_nordschleife.acreplay",
+      "bytes": 21738125,
+      "sha256": "adbdbd142753551941c11f08a9410e2296c1535f0889fceccb7555d0600ab302",
+      "version": 16,
+      "recording_interval_ms": 30.0,
+      "weather": "3_clear",
+      "track": "ks_nordschleife",
+      "layout": "nordschleife",
+      "cars": 16,
+      "recording_index": 5834,
+      "frames": 5834
+    },
+    "capture": "4d7f8f35ad0f_capture_1794426281_32.jsonl",
+    "capture_sha256": "4d7f8f35ad0f21f5bb25e71b6de4b9e66575471ffd0833f4d151ecfdbff1c50a",
+    "samples": 1939,
+    "source_head": "83ea33a4b70257fb0a5b9f719a6dbd868af1fbd1",
+    "native_csp_version": "0.3.1/4302",
+    "hz": 20,
+    "cars_counts": {
+      "16": 1939
+    },
+    "errors": {
+      "none": 1939
+    },
+    "segments": {
+      "1": 1939
+    },
+    "first_replay_frame": 9,
+    "last_replay_frame": 3955,
+    "native_reported_replay_frames": 3957,
+    "native_frames_match_file_header": false,
+    "p99_sample_cost_ms": 0.54519999999769,
+    "max_sample_cost_ms": 1.9344000000032,
+    "histogram_ms": {
+      "0": 1604,
+      "0.1": 191,
+      "0.25": 113,
+      "0.5": 30,
+      "1": 1,
+      "2": 0
+    },
+    "twenty_car_cost_verified": false,
+    "native_10hz": {
+      "samples": 970,
+      "p99_ms": 0.44459999999447,
+      "max_ms": 0.56150000000343
+    }
+  },
+  {
+    "sealed_at_utc": "2026-11-11T19:54:40.179461+00:00",
+    "source_replay": {
+      "path": "AC_301225-204736_R_bmw_z4_ks_nurburgring_layout_sprint_a.acreplay",
+      "bytes": 38176102,
+      "sha256": "9d04c94a271c363ba2e4f51de0cd4e412f21c2a90ac86ed5d056334ba899bdcd",
+      "version": 16,
+      "recording_interval_ms": 30.0,
+      "weather": "",
+      "track": "ks_nurburgring",
+      "layout": "layout_sprint_a",
+      "cars": 8,
+      "recording_index": 1293,
+      "frames": 11948
+    },
+    "capture": "f0f7c2534d4c_capture_1794426476_50.jsonl",
+    "capture_sha256": "f0f7c2534d4ccece2800ea9cf92dd20439268855bfef276c4a865a48eeb59f3f",
+    "samples": 6230,
+    "source_head": "83ea33a4b70257fb0a5b9f719a6dbd868af1fbd1",
+    "native_csp_version": "0.3.1/4302",
+    "hz": 20,
+    "cars_counts": {
+      "8": 6230
+    },
+    "errors": {
+      "none": 6230
+    },
+    "segments": {
+      "1": 6230
+    },
+    "first_replay_frame": 9,
+    "last_replay_frame": 11946,
+    "native_reported_replay_frames": 11948,
+    "native_frames_match_file_header": true,
+    "p99_sample_cost_ms": 0.26319999999203,
+    "max_sample_cost_ms": 0.42200000001458,
+    "histogram_ms": {
+      "0": 5721,
+      "0.1": 424,
+      "0.25": 85,
+      "0.5": 0,
+      "1": 0,
+      "2": 0
+    },
+    "twenty_car_cost_verified": false,
+    "native_10hz": {
+      "samples": 3116,
+      "p99_ms": 0.22300000000541,
+      "max_ms": 0.60769999998911
+    }
+  },
+  {
+    "sealed_at_utc": "2026-11-11T19:59:19.827653+00:00",
+    "source_replay": {
+      "path": "AC_240426-132409_R_ks_ferrari_488_gt3_spa_.acreplay",
+      "bytes": 7982969,
+      "sha256": "a777e61f06e451336226fa604d3d3f2b14d82e76a8e035ea3dca1c7ab70fa47f",
+      "version": 16,
+      "recording_interval_ms": 30.0,
+      "weather": "3_clear",
+      "track": "spa",
+      "layout": "",
+      "cars": 11,
+      "recording_index": 2179,
+      "frames": 2179
+    },
+    "capture": "c97010a3f829_capture_1794426959_28.jsonl",
+    "capture_sha256": "c97010a3f82946140599e7f7ef20a192116f5673f0395819527bcc0f29ce5ccf",
+    "samples": 1191,
+    "source_head": "83ea33a4b70257fb0a5b9f719a6dbd868af1fbd1",
+    "native_csp_version": "0.3.1/4302",
+    "hz": 20,
+    "cars_counts": {
+      "11": 1191
+    },
+    "errors": {
+      "none": 1191
+    },
+    "segments": {
+      "1": 1191
+    },
+    "first_replay_frame": 8,
+    "last_replay_frame": 2177,
+    "native_reported_replay_frames": 2179,
+    "native_frames_match_file_header": true,
+    "p99_sample_cost_ms": 0.3251000000013,
+    "max_sample_cost_ms": 0.48189999999693,
+    "histogram_ms": {
+      "0": 1070,
+      "0.1": 78,
+      "0.25": 43,
+      "0.5": 0,
+      "1": 0,
+      "2": 0
+    },
+    "twenty_car_cost_verified": false,
+    "native_10hz": {
+      "samples": 596,
+      "p99_ms": 0.27579999999716,
+      "max_ms": 0.3816
+    }
+  },
+  {
+    "sealed_at_utc": "2026-11-11T20:18:55.195667+00:00",
+    "source_replay": {
+      "path": "AC_200821-222611_R_ks_porsche_919_hybrid_2015_lemans_2017_no_lights.acreplay",
+      "bytes": 980138505,
+      "sha256": "83416329fdd97496f33104d1a028dcd7d2eb2c21ef6aafaa4d4d4ed00617ad70",
+      "cars": 54,
+      "frames": 61955,
+      "recording_index": 61955,
+      "version": 16,
+      "recording_interval_ms": 120.0,
+      "weather": "3_clear",
+      "track": "lemans_2017",
+      "layout": "no_lights",
+      "source_url": "https://drive.google.com/file/d/15vQmvo7vbcXBL8kdRIWzu-_WPNWcxQye/view"
+    },
+    "capture": "736e0eeb4554_capture_1794428023_439.jsonl",
+    "capture_sha256": "736e0eeb4554449def296df737645b158cbd0fdbb5b586cc0c2e00ce679f8a6a",
+    "samples": 5311,
+    "source_head": "83ea33a4b70257fb0a5b9f719a6dbd868af1fbd1",
+    "native_csp_version": "0.3.1/4302",
+    "hz": 20,
+    "cars_counts": {
+      "54": 5311
+    },
+    "errors": {
+      "none": 5311
+    },
+    "segments": {
+      "1": 5311
+    },
+    "first_replay_frame": 4,
+    "last_replay_frame": 2530,
+    "native_reported_replay_frames": 61955,
+    "native_frames_match_file_header": true,
+    "p99_sample_cost_ms": 1.9961000000137,
+    "max_sample_cost_ms": 4.470700000013,
+    "histogram_ms": {
+      "0": 0,
+      "0.1": 3798,
+      "0.25": 1085,
+      "0.5": 157,
+      "1": 218,
+      "2": 53
+    },
+    "twenty_car_cost_verified": false,
+    "native_10hz": {
+      "samples": 2656,
+      "p99_ms": 1.4833999999997,
+      "max_ms": 2.7812000000154
+    },
+    "native_20car_subset_cost_20hz_ms": {
+      "samples": 5311,
+      "p99_ms": 0.56290000000558,
+      "max_ms": 1.9283999999971,
+      "timing_only_observed_subset": 20,
+      "actual_grid_cars": 54
+    },
+    "native_20car_subset_cost_10hz_ms": {
+      "samples": 2656,
+      "p99_ms": 0.56770000000483,
+      "max_ms": 0.93279999998686,
+      "timing_only_observed_subset": 20,
+      "actual_grid_cars": 54
+    }
+  }
+]

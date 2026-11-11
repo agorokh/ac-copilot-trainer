@@ -351,6 +351,8 @@ function M.publishTelemetryTickIfDue(opts)
     end
   end
   local payload = {
+    traffic = opts.traffic,
+    traffic_now_s = _finite(opts.trafficNowS),
     speed_kmh = math.max(0, _finite(_field(car, "speedKmh")) or 0),
     rpm = math.max(0, _finite(_field(car, "rpm")) or 0),
     throttle = _clamp(_field(car, "gas") or 0, 0, 1),

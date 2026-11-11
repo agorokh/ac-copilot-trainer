@@ -153,9 +153,13 @@ class TraceReplayHarness:
         ev = det.update(det, car, 0.016)
     """
 
-    def __init__(self, schema: AcSchema | None = None) -> None:
+    def __init__(self, schema: AcSchema | None = None, *, lua_runtime: str = "default") -> None:
         import lupa
 
+        if lua_runtime == "luajit21":
+            from lupa import luajit21 as lupa
+        elif lua_runtime != "default":
+            raise ValueError("lua_runtime must be default or luajit21")
         self._lupa = lupa
         self.schema = schema if schema is not None else load_schema()
         self.lua = lupa.LuaRuntime(unpack_returned_tuples=False)
@@ -301,6 +305,64 @@ class TraceReplayHarness:
             if "SCHEMA-VIOLATION" in str(exc):
                 raise SchemaViolationError(str(exc)) from exc
             raise
+
+
+def benchmark_traffic_sampling(*, hz: int, samples: int = 2000) -> dict[str, Any]:
+    """Measure the real collector under LuaJIT, with schema-gated MOCK C-structs.
+
+    This is a pre-rig stop check, not a CSP render-frame timing claim. Sampling
+    and GC run inside Lua; the timer crossings conservatively add interop cost.
+    """
+    import time
+
+    if hz not in (10, 20) or type(samples) is not int or not 100 <= samples <= 20000:
+        raise ValueError("10/20 Hz and 100..20000 samples required")
+    harness = TraceReplayHarness(lua_runtime="luajit21")
+    module = harness.require("traffic_context")
+    sim = harness.make_sim(carsCount=20, trackLengthM=5000)
+    cars = harness.lua.table()
+    for i in range(20):
+        cars[i] = harness.make_car(
+            index=i,
+            splinePosition=(0.4 + i * 0.01) % 1,
+            speedKmh=180,
+            position=(i * 50, 0, 0),
+            isConnected=True,
+            isInPitlane=False,
+        )
+    harness.lua.globals().traffic_bench_clock = time.perf_counter
+    runner = harness.lua.eval("""function(module,sim,cars,hz,n)
+      local sampler, timings = module.new(hz), {}
+      local getCar = function(i) return cars[i] end
+      for i = 1, n do
+        local t = 10 + i / hz
+        local started = traffic_bench_clock()
+        local snapshot, due = sampler:update(t,sim,getCar)
+        timings[i] = (traffic_bench_clock() - started) * 1000
+        assert(due and snapshot.error == nil and #snapshot.cars == 20)
+      end
+      return timings
+    end""")
+    timings = sorted(runner(module, sim, cars, hz, samples).values())
+    p99 = timings[math.ceil(samples * 0.99) - 1]
+    return {
+        "runtime": str(harness.lua.eval("jit.version")),
+        "source": "schema_gated_mock_fields",
+        "csp_frame_cost_verified": False,
+        "hz": hz,
+        "cars": 20,
+        "samples": samples,
+        "p99_ms": p99,
+        "max_ms": max(timings),
+        "within_1ms": p99 <= 1.0,
+        "histogram_ms": {
+            "0_to_0.1": sum(t <= 0.1 for t in timings),
+            "0.1_to_0.25": sum(0.1 < t <= 0.25 for t in timings),
+            "0.25_to_0.5": sum(0.25 < t <= 0.5 for t in timings),
+            "0.5_to_1.0": sum(0.5 < t <= 1.0 for t in timings),
+            "over_1.0": sum(t > 1.0 for t in timings),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

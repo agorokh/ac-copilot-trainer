@@ -20,6 +20,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
+from tools.ai_sidecar.traffic_eligibility import CLEAN_USES, archive_traffic_eligibility
 from tools.lap_trace_validity import completed_trace_reason, finish_wrap_cut
 
 SCHEMA_VERSION = 1
@@ -548,6 +549,18 @@ class ArchiveQualificationSnapshot:
             "moza_"
         )
         source = record.get("source")
+        if use in CLEAN_USES:
+            traffic = archive_traffic_eligibility(record)
+            if traffic is not None and not traffic.eligible:
+                return _decision(
+                    False,
+                    [traffic.reason],
+                    # An explicit traffic restriction is managed policy even
+                    # without a control-attribution envelope. Existing consumers
+                    # check this flag before enforcing a denied use.
+                    managed=True,
+                    authority=str(_map(envelope).get("authority") or "legacy_unknown"),
+                )
         if (
             use == "human_progression"
             and isinstance(source, str)
