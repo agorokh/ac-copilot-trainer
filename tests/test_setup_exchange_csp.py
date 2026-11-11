@@ -407,8 +407,8 @@ def test_search_response_folds_unicode_punctuation_and_diacritics_to_ascii():
             "response": [
                 {
                     "setupID": 991,
-                    "name": "PORSCHE GT3 \u201916 Hotlap V1 \u2013 Spa\u2026",
-                    "userName": "Caf\u00e9 \u201cPro\u201d \u0141ukasz",
+                    "name": "PORSCHE GT3 \u201916 Hotlap V1 \u2013 25\u00b0\u2026",
+                    "userName": "Caf\u00e9 \u201cPro\u201d \u0141ukasz \u00df\u0153",
                     "carID": CAR,
                     "trackID": TRACK,
                     "statDownloads": 108,
@@ -418,8 +418,8 @@ def test_search_response_folds_unicode_punctuation_and_diacritics_to_ascii():
         },
     )
     row = resp["setups"][0]
-    assert row["name"] == "PORSCHE GT3 '16 Hotlap V1 - Spa..."
-    assert row["author"] == 'Cafe "Pro" Lukasz'
+    assert row["name"] == "PORSCHE GT3 '16 Hotlap V1 - 25deg..."
+    assert row["author"] == 'Cafe "Pro" Lukasz ssoe'
     assert all(" " <= ch <= "~" for ch in row["name"] + row["author"])
 
 
