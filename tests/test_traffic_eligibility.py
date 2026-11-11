@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -192,8 +194,31 @@ def _lua_cars(harness):
     ]
 
 
-def test_real_lua_module_schema_and_rate_limit_without_wheel_reads():
-    harness = TraceReplayHarness()
+@pytest.mark.parametrize("lua_runtime", ["default", "luajit21"])
+def test_real_lua_module_schema_and_rate_limit_without_wheel_reads(lua_runtime):
+    if lua_runtime == "luajit21":
+        # LuaJIT's caught Windows SEH exceptions confuse pytest's in-process
+        # faulthandler. Run the identical assertions in an isolated interpreter;
+        # an actual crash still fails this test through its return code.
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import runpy,sys; "
+                "runpy.run_path(sys.argv[1])['_exercise_traffic_sampler']('luajit21')",
+                str(Path(__file__).resolve()),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+    else:
+        _exercise_traffic_sampler(lua_runtime)
+
+
+def _exercise_traffic_sampler(lua_runtime):
+    harness = TraceReplayHarness(lua_runtime=lua_runtime)
     module = harness.require("traffic_context")
     cars = _lua_cars(harness)
     sim = harness.make_sim(carsCount=20, trackLengthM=5000)
@@ -205,15 +230,17 @@ def test_real_lua_module_schema_and_rate_limit_without_wheel_reads():
         "return car[k] end}) end"
     )
     cars = [trap(car) for car in cars]
+    roster = harness.lua.table_from(dict(enumerate(cars)))
+    get_car = harness.lua.eval("function(cars) return function(i) return cars[i] end end")(roster)
     sampler = module.new(20)
     # Lua helpers unpack multi-returns independently of lupa's runtime setting.
     update = harness.lua.eval(
         "function(s,t,sim,getCar) local snap,due=s:update(t,sim,getCar); "
         "return {snapshot=snap,due=due} end"
     )
-    assert update(sampler, 1.0, sim, lambda i: cars[i])["due"]
-    assert not update(sampler, 1.01, sim, lambda i: cars[i])["due"]
-    assert update(sampler, 1.05, sim, lambda i: cars[i])["due"]
+    assert update(sampler, 1.0, sim, get_car)["due"]
+    assert not update(sampler, 1.01, sim, get_car)["due"]
+    assert update(sampler, 1.05, sim, get_car)["due"]
     observed = _py(sampler.snapshot)
     assert len(observed["cars"]) == 20
     assert traffic_eligibility(observed, now_s=1.05).status == "constrained"
@@ -241,7 +268,8 @@ def test_lua_bad_index_and_nonfinite_cstruct_values_are_unknown():
     assert observed["error"] == "traffic_car_fields_invalid"
 
 
-def test_replay_gate_silences_prime_but_shadow_keeps_existing_cues():
+@pytest.mark.parametrize("traffic_kind", ["constrained", "unknown", "clear"])
+def test_replay_gate_silences_prime_but_shadow_keeps_existing_cues(traffic_kind):
     archive = json.loads(
         (Path(__file__).parent / "fixtures/magione_gt3r_reference.json").read_text()
     )
@@ -262,6 +290,8 @@ def test_replay_gate_silences_prime_but_shadow_keeps_existing_cues():
         runtime.ledger._speak_set = {ref.index}
         anchor = runtime.anchors[ref.index].for_root(root)
         speed = trace["samples"][0][fields["speed"]]
+        traffic = context(gap=600, distance=600) if traffic_kind == "clear" else context()
+        now = 2.0 if traffic_kind == "unknown" else 1.0
         observed = []
         for spline in (anchor - 0.001, anchor + 0.001):
             observed.extend(
@@ -273,11 +303,62 @@ def test_replay_gate_silences_prime_but_shadow_keeps_existing_cues():
                         "throttle": 1,
                         "steer": 0,
                         "lap": 3,
-                        "traffic": context(),
-                        "traffic_now_s": 1.0,
+                        "traffic": traffic,
+                        "traffic_now_s": now,
                     }
                 )
             )
         primes = [a for a in observed if a.detail.get("coach") == "prime"]
-        assert bool(primes) == (mode == "shadow")
-        assert runtime.last_traffic_eligibility.status == "constrained"
+        assert bool(primes) == (mode == "shadow" or traffic_kind == "clear")
+        expected = "eligible" if traffic_kind == "clear" else traffic_kind
+        assert runtime.last_traffic_eligibility.status == expected
+
+
+@pytest.mark.parametrize("traffic_kind", ["constrained", "unknown"])
+def test_contamination_survives_clear_exit_and_resets_for_next_corner_pass(traffic_kind):
+    archive = json.loads(
+        (Path(__file__).parent / "fixtures/magione_gt3r_reference.json").read_text()
+    )
+    runtime = build_coach_runtime(archive, traffic_gate_mode="replay", use_environment=False)
+    runtime.ledger.assess_laps = 0
+    ref = next(r for r in runtime.refs if runtime.anchors[r.index].brake > 0.05)
+    state = CornerState(corner=ref.index, status=Status.PRIMED, root=RootError.EARLY_BRAKE)
+    state.consecutive = 2
+    runtime.ledger._states[ref.index] = state
+    runtime.ledger.begin_lap(3)
+    fields = {name: i for i, name in enumerate(archive["trace"]["fields"])}
+    frames = [
+        {name: row[fields[name]] for name in ("spline", "speed", "brake", "throttle", "steer")}
+        for row in archive["trace"]["samples"]
+    ]
+    contaminated = False
+    for frame in frames:
+        traffic, now = context(gap=600, distance=600), 1.0
+        if not contaminated and ref.spline_lo <= frame["spline"] <= ref.apex_spline:
+            traffic = context()
+            now = 2.0 if traffic_kind == "unknown" else 1.0
+            contaminated = True
+        runtime.observe({**frame, "lap": 3, "traffic": traffic, "traffic_now_s": now})
+    assert contaminated
+    assert runtime.last_pass_capability[ref.index]["traffic_reason"]
+    assert state.clean_streak == 0
+    assert state.root is RootError.EARLY_BRAKE
+    assert state.status is Status.PRIMED
+    for frame in frames:
+        runtime.observe(
+            {**frame, "lap": 4, "traffic": context(gap=600, distance=600), "traffic_now_s": 1.0}
+        )
+    assert runtime.last_pass_capability[ref.index]["traffic_reason"] == ""
+
+
+def test_entry_script_and_module_compile_with_declared_harness_runtimes():
+    # The whole entry uses the established Lua 5.5 harness: stock LuaJIT rejects
+    # both pinned base bc1c935 and entry at its 60-upvalue limit. This does not
+    # certify the CSP host. The new standalone collector also runs under LuaJIT.
+    harness = TraceReplayHarness()
+    source = (
+        Path(__file__).parents[1] / "src/ac_copilot_trainer/ac_copilot_trainer.lua"
+    ).read_text(encoding="utf-8")
+    result = harness.lua.eval("function(s) local f,e=load(s); return e or 'ok' end")(source)
+    assert result == "ok"
+    assert TraceReplayHarness(lua_runtime="luajit21").require("traffic_context") is not None

@@ -622,7 +622,7 @@ def test_setup_capability_and_load_accept_csp_callable_non_functions(lua, tmp_pa
       end
       ac = {{
         FolderID = {{ UserSetups = 1 }},
-        getFolder = make_callable(function() return {str(root)!r} end),
+        getFolder = make_callable(function() return {root.as_posix()!r} end),
         getCarID = function() return "ks_porsche_911_gt3_r_2016" end,
         getTrackID = function() return "spa" end,
         getTrackLayout = function() return "" end,
@@ -636,14 +636,14 @@ def test_setup_capability_and_load_accept_csp_callable_non_functions(lua, tmp_pa
         end),
       }}
       io.scanDir = make_callable(function(dir, pattern)
-        if dir == {str(car_dir)!r} and pattern == "*.ini" then
+        if dir == {car_dir.as_posix()!r} and pattern == "*.ini" then
           return {{ "pit_baseline.ini" }}
         end
         return {{}}
       end)
       local m = require("setup_library")
       local in_pits = m.listSpinners({{}})
-      local load_ack = m.loadByName({{ name = "pit_baseline", path = {str(setup_file)!r} }})
+      local load_ack = m.loadByName({{ name = "pit_baseline", path = {setup_file.as_posix()!r} }})
       allowed = false
       local on_track = m.capability()
       local bad_cap = nil
