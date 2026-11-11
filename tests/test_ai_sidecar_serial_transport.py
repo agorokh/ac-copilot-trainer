@@ -469,16 +469,14 @@ def test_serial_bounds_oversized_spinner_and_setup_lists_while_non_screen_gets_f
 
     serial_spinners, serial_setups, browser_sent = asyncio.run(_run())
     assert len(serial_spinners["spinners"]) == srv.SCREEN_PEER_MAX_SPINNERS == 12
-    assert (
-        len(json.dumps(serial_spinners, separators=(",", ":")).encode())
-        <= srv.SCREEN_PEER_MAX_LINE_BYTES
-    )
+    spinners_bytes = len(json.dumps(serial_spinners, separators=(",", ":")).encode())
+    setups_bytes = len(json.dumps(serial_setups, separators=(",", ":")).encode())
+    assert spinners_bytes <= srv.SCREEN_PEER_MAX_SPINNER_LIST_BYTES
     assert len(browser_sent[0]["spinners"]) == 59
 
-    assert (
-        len(json.dumps(serial_setups, separators=(",", ":")).encode())
-        <= srv.SCREEN_PEER_MAX_LINE_BYTES
-    )
+    assert setups_bytes <= srv.SCREEN_PEER_MAX_LINE_BYTES
+    # Combined dual-list burst + 10 Hz coaching.snapshot headroom fits even legacy 8192 B rings.
+    assert spinners_bytes + setups_bytes + 512 <= 8192
     assert serial_setups["count"] == len(serial_setups["setups"]) < 60
     assert any(s["name"] == "Active_Tail" for s in serial_setups["setups"])
     assert len(browser_sent[1]["setups"]) == 60

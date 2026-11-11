@@ -1841,13 +1841,13 @@ def _drop_external_peer(peer: Any) -> None:
     _release_observer_feed(peer)
 
 
-# Per-frame ceiling matches `csp_setup_exchange.fit_screen_response` (7600 B): Pocket Technician
-# opens by requesting `setup.list` AND `setup.spinner.list` back-to-back in the same tick
-# (`screen_pocket_technician.cpp:1064-1065`), so keeping each individual list response <= 7600 B
-# ensures `setup.list.result` + `setup.spinner.list.result` + concurrent 10 Hz `coaching.snapshot`
-# bursts fit simultaneously inside `SERIAL_RX_RING_BYTES` (16384 B in
-# `firmware/screen/src/main.cpp`, and <= 8192 B on un-reflashed boards).
-SCREEN_PEER_MAX_LINE_BYTES = 7600
+# Pocket Technician opens by requesting `setup.list` AND `setup.spinner.list` back-to-back in one
+# tick (`screen_pocket_technician.cpp:1064-1065`). Bounding `setup.list.result` to 4800 B and
+# `setup.spinner.list.result` to 2600 B keeps the combined dual-list burst plus a concurrent 10 Hz
+# `coaching.snapshot` (~400 B) under 7810 B, fitting inside BOTH the legacy 8192 B USB CDC ring on
+# un-reflashed boards AND the 16384 B `SERIAL_RX_RING_BYTES` in `firmware/screen/src/main.cpp`.
+SCREEN_PEER_MAX_LINE_BYTES = 4800
+SCREEN_PEER_MAX_SPINNER_LIST_BYTES = 2600
 # Mirrors `PT_MAX_SPINNERS = 12` in `firmware/screen/include/ui/screen_pocket_technician.h`:
 # `screen_pocket_technician_add_spinner` drops entries >= 12 (`SPINNER_DEFS` priority controls sort
 # first in `setup_library.lua`), keeping 7-widget spinner rows + 64 setup cards within LVGL's
@@ -1871,12 +1871,12 @@ def _fit_screen_peer_payload(frame: dict[str, Any], default_payload: str) -> str
     if t == TYPE_SETUP_SPINNER_LIST_RESULT and isinstance(frame.get("spinners"), list):
         spinners = list(frame["spinners"][:SCREEN_PEER_MAX_SPINNERS])
         if len(spinners) == len(frame["spinners"]) and (
-            len(default_payload.encode("utf-8")) <= SCREEN_PEER_MAX_LINE_BYTES
+            len(default_payload.encode("utf-8")) <= SCREEN_PEER_MAX_SPINNER_LIST_BYTES
         ):
             return default_payload
         trimmed = {**frame, "spinners": spinners}
         encoded = json.dumps(trimmed, separators=(",", ":"))
-        while len(encoded.encode("utf-8")) > SCREEN_PEER_MAX_LINE_BYTES and spinners:
+        while len(encoded.encode("utf-8")) > SCREEN_PEER_MAX_SPINNER_LIST_BYTES and spinners:
             spinners.pop()
             encoded = json.dumps(trimmed, separators=(",", ":"))
         return encoded
