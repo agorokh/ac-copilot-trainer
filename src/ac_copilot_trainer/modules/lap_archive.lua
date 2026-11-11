@@ -844,7 +844,11 @@ function M.createWriteJob(opts, capMB)
         self._trafficIndex = self._trafficIndex + 1
         processed = processed + 1
       end
-      if self._trafficIndex <= #frames then return false, nil, nil end
+      if self._trafficIndex <= #frames then
+        local ok, err = self:_flush()
+        if not ok then return self:_fail(err) end
+        return false, nil, nil
+      end
       local ok, err = self:_write("]}")
       if not ok then return self:_fail(err) end
       self._state = "finish"

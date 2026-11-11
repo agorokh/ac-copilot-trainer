@@ -268,6 +268,19 @@ def test_raw_capture_is_recomputed_and_missing_coverage_cannot_be_promoted():
     assert archive_traffic_eligibility(record).status == "unknown"
 
 
+@pytest.mark.parametrize("lap_ms", [500, 1500, 10000])
+def test_archive_coverage_keeps_observation_and_simulation_clocks_separate(lap_ms):
+    record = {"lap": {"lap_ms": lap_ms}, "traffic": _capture()}
+    assert archive_traffic_eligibility(record).status == "eligible"
+    assert qualify_archive(record, use="human_progression").allowed
+    # Removing cross-clock equality does not permit missing observation coverage.
+    record["traffic"]["frames"] = record["traffic"]["frames"][4:]
+    assert archive_traffic_eligibility(record).status == "unknown"
+    record["traffic"] = _capture()
+    record["traffic"]["complete"] = False
+    assert archive_traffic_eligibility(record).status == "unknown"
+
+
 def _py(table):
     if not hasattr(table, "items"):
         return table

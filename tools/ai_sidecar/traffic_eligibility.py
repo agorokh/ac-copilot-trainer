@@ -128,9 +128,12 @@ def archive_traffic_eligibility(record: Mapping[str, Any]) -> TrafficEligibility
         or start < 0
         or not _finite(lap_ms)
         or lap_ms <= 0
-        or abs((end - start) * 1000 - lap_ms) > MAX_AGE_S * 1000
+        or end < start
     ):
         return _unknown("traffic_archive_coverage_invalid")
+    # start/end and samples use the producer's observation clock. lap_ms uses
+    # AC simulation time: playback speed/drift can differ, so never compare
+    # their durations. Completeness and same-clock coverage remain mandatory.
     previous = start
     aggregate = TrafficEligibility("eligible", "traffic_clear")
     for index, frame in enumerate(frames):

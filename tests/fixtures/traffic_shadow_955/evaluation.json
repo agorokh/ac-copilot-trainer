@@ -1,0 +1,1252 @@
+{
+  "fixture_sha256": "c3ee67ae90a85f3bcff53c05bf6120c1635fae7cb77dd349d7ff1fa3dcd4869c",
+  "candidate_head": "cf93d9681ab93f7fe3336d395822537877e21982",
+  "counts": {
+    "constrained": {
+      "n": 20,
+      "correct": 18
+    },
+    "clear": {
+      "n": 20,
+      "correct": 20
+    },
+    "adversarial": {
+      "n": 5,
+      "correct": 5
+    }
+  },
+  "accuracy_pass": false,
+  "solo_comparator": {
+    "constrained_suppressed": 0,
+    "clear_retained": 20,
+    "controls_retained": 5
+  },
+  "blanket_comparator": {
+    "constrained_suppressed": 20,
+    "clear_retained": 0,
+    "controls_retained": 0
+  },
+  "perturbations": {
+    "total": 135,
+    "unknown": 135,
+    "results": [
+      {
+        "id": "A001",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A001",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A001",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A002",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A002",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A002",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A003",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A003",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A003",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A004",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A004",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A004",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A005",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A005",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A005",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A006",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A006",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A006",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A007",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A007",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A007",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A008",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A008",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A008",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A009",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A009",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A009",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A010",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A010",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A010",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A011",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A011",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A011",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A012",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A012",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A012",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A013",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A013",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A013",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A014",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A014",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A014",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A015",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A015",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A015",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A016",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A016",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A016",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A018",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A018",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A018",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A019",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A019",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A019",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A020",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A020",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A020",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A023",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A023",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A023",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A024",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A024",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A024",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A025",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A025",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A025",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A026",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A026",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A026",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A027",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A027",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A027",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A028",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A028",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A028",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A029",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A029",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A029",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A030",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A030",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A030",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A031",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A031",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A031",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A032",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A032",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A032",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A033",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A033",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A033",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A034",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A034",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A034",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A035",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A035",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A035",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A036",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A036",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A036",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A037",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A037",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A037",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A038",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A038",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A038",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A039",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A039",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A039",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A040",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A040",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A040",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A041",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A041",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A041",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A042",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A042",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A042",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A043",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A043",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A043",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A044",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A044",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A044",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A045",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A045",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A045",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A046",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A046",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A046",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A047",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A047",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A047",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      },
+      {
+        "id": "A048",
+        "perturbation": "stale",
+        "status": "unknown",
+        "reason": "traffic_observation_stale_or_future"
+      },
+      {
+        "id": "A048",
+        "perturbation": "missing_scalar",
+        "status": "unknown",
+        "reason": "traffic_car_fields_invalid"
+      },
+      {
+        "id": "A048",
+        "perturbation": "invalid_index",
+        "status": "unknown",
+        "reason": "traffic_car_index_invalid"
+      }
+    ]
+  },
+  "approaches": [
+    {
+      "id": "A001",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 1,
+      "correct": true
+    },
+    {
+      "id": "A002",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 2,
+      "correct": true
+    },
+    {
+      "id": "A003",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 2,
+      "correct": true
+    },
+    {
+      "id": "A004",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 2,
+      "correct": true
+    },
+    {
+      "id": "A005",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 2,
+      "correct": true
+    },
+    {
+      "id": "A006",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 2,
+      "correct": true
+    },
+    {
+      "id": "A007",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 2,
+      "correct": true
+    },
+    {
+      "id": "A008",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 2,
+      "correct": true
+    },
+    {
+      "id": "A009",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 2,
+      "correct": true
+    },
+    {
+      "id": "A010",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 2,
+      "correct": true
+    },
+    {
+      "id": "A011",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": false
+    },
+    {
+      "id": "A012",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": false
+    },
+    {
+      "id": "A013",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 1,
+      "correct": true
+    },
+    {
+      "id": "A014",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 1,
+      "correct": true
+    },
+    {
+      "id": "A015",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 1,
+      "correct": true
+    },
+    {
+      "id": "A016",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 1,
+      "correct": true
+    },
+    {
+      "id": "A018",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A019",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A020",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A023",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A024",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A025",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A026",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A027",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A028",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A029",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A030",
+      "cohort": "adversarial",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A031",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A032",
+      "cohort": "adversarial",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A033",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A034",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A035",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A036",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A037",
+      "cohort": "adversarial",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A038",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A039",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A040",
+      "cohort": "adversarial",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A041",
+      "cohort": "adversarial",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A042",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A043",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A044",
+      "cohort": "clear",
+      "label": "eligible",
+      "status": "eligible",
+      "reason": "traffic_clear",
+      "car_index": null,
+      "correct": true
+    },
+    {
+      "id": "A045",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 2,
+      "correct": true
+    },
+    {
+      "id": "A046",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 2,
+      "correct": true
+    },
+    {
+      "id": "A047",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 3,
+      "correct": true
+    },
+    {
+      "id": "A048",
+      "cohort": "constrained",
+      "label": "constrained",
+      "status": "constrained",
+      "reason": "traffic_occupied_approach",
+      "car_index": 3,
+      "correct": true
+    }
+  ]
+}

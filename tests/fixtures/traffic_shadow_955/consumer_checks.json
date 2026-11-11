@@ -1,0 +1,1288 @@
+{
+  "archive_method": "Two native wrap-to-wrap traffic intervals passed through the real Lua async archive writer with a minimal derived player trace. Not a native trainer-app lap capture or human-source certification.",
+  "cue_method": "Unmodified native context at a canonical reference PRIME trigger in explicit offline replay mode; no live voice or driving actuation.",
+  "archives": [
+    {
+      "kind": "continuous_interval",
+      "interval": 1,
+      "status": "constrained",
+      "frames": 2138,
+      "simulation_interval_ms": 122700,
+      "observation_interval_ms": 122703.4626,
+      "first_sequence": 1895,
+      "last_sequence": 4032,
+      "source_capture_sha256": "f0f7c2534d4ccece2800ea9cf92dd20439268855bfef276c4a865a48eeb59f3f",
+      "output_sha256": "24cec11140b65253eaf97e5eb0fbf8bcd427319984f4f456994dfa4f1c278899",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        }
+      }
+    },
+    {
+      "kind": "incomplete_perturbation",
+      "interval": 1,
+      "status": "unknown",
+      "frames": 2138,
+      "simulation_interval_ms": 122700,
+      "observation_interval_ms": 122703.4626,
+      "first_sequence": 1895,
+      "last_sequence": 4032,
+      "source_capture_sha256": "f0f7c2534d4ccece2800ea9cf92dd20439268855bfef276c4a865a48eeb59f3f",
+      "output_sha256": "24cec11140b65253eaf97e5eb0fbf8bcd427319984f4f456994dfa4f1c278899",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        }
+      }
+    },
+    {
+      "kind": "continuous_interval",
+      "interval": 2,
+      "status": "eligible",
+      "frames": 2019,
+      "simulation_interval_ms": 116280,
+      "observation_interval_ms": 116270.73229999999,
+      "first_sequence": 4032,
+      "last_sequence": 6050,
+      "source_capture_sha256": "f0f7c2534d4ccece2800ea9cf92dd20439268855bfef276c4a865a48eeb59f3f",
+      "output_sha256": "f00d54fd2d0c801c192ecfe15db22ca488bab5f80c5513ccc0654af7db9cf54e",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        }
+      }
+    },
+    {
+      "kind": "incomplete_perturbation",
+      "interval": 2,
+      "status": "unknown",
+      "frames": 2019,
+      "simulation_interval_ms": 116280,
+      "observation_interval_ms": 116270.73229999999,
+      "first_sequence": 4032,
+      "last_sequence": 6050,
+      "source_capture_sha256": "f0f7c2534d4ccece2800ea9cf92dd20439268855bfef276c4a865a48eeb59f3f",
+      "output_sha256": "f00d54fd2d0c801c192ecfe15db22ca488bab5f80c5513ccc0654af7db9cf54e",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        }
+      }
+    }
+  ],
+  "cues": [
+    {
+      "id": "A001",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A001",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A001",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A001",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A002",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A002",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A002",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A002",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A003",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A003",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A003",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A003",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A004",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A004",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A004",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A004",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A005",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A005",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A005",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A005",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A006",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A006",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A006",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A006",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A007",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A007",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A007",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A007",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A008",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A008",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A008",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A008",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A009",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A009",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A009",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A009",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A010",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A010",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A010",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A010",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A011",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A011",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A011",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A011",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A012",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A012",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A012",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A012",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A013",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A013",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A013",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A013",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A014",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A014",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A014",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A014",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A015",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A015",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A015",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A015",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A016",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A016",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A016",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A016",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A018",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A018",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A018",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A018",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A019",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A019",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A019",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A019",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A020",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A020",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A020",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A020",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A023",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A023",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A023",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A023",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A024",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A024",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A024",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A024",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A025",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A025",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A025",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A025",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A026",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A026",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A026",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A026",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A027",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A027",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A027",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A027",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A028",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A028",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A028",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A028",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A029",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A029",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A029",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A029",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A030",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A030",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A030",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A030",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A031",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A031",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A031",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A031",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A032",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A032",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A032",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A032",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A033",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A033",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A033",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A033",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A034",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A034",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A034",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A034",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A035",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A035",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A035",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A035",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A036",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A036",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A036",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A036",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A037",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A037",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A037",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A037",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A038",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A038",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A038",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A038",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A039",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A039",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A039",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A039",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A040",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A040",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A040",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A040",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A041",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A041",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A041",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A041",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A042",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A042",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A042",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A042",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A043",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A043",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A043",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A043",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A044",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "A044",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A044",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A044",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A045",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A045",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A045",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A045",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A046",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A046",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A046",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A046",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A047",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A047",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A047",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A047",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A048",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "A048",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A048",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "A048",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    }
+  ]
+}
