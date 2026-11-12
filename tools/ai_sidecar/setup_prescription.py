@@ -52,6 +52,17 @@ def _hash(value: Any) -> str:
     ).hexdigest()
 
 
+def _peak_window(target: dict[str, Any], optimal: float) -> tuple[float, float]:
+    # Pure callers may supply the original scalar contract. Production always
+    # supplies both keys, including None when the authored curve is unverified.
+    if "peak_temp_min_c" not in target and "peak_temp_max_c" not in target:
+        return optimal, optimal
+    lo, hi = (_number(target.get(key)) for key in ("peak_temp_min_c", "peak_temp_max_c"))
+    if lo is None or hi is None or lo <= 0 or not lo <= optimal <= hi:
+        raise ValueError("Car thermal peak window unavailable")
+    return lo, hi
+
+
 def _trace_summary(archive: dict[str, Any], wheel: str) -> tuple[float, float]:
     """Require complete, moving, thermally stable observations, including traps."""
     trace = archive.get("trace", {})
@@ -210,9 +221,10 @@ def build_prescription(
                 )
                 if ideal is None or optimal is None or ideal <= 0 or optimal <= 0:
                     raise ValueError("Compound-specific axle target unavailable")
+                peak_lo, peak_hi = _peak_window(target, optimal)
                 if wheel == "fl":
                     historical = _number(archive.get("tyres", {}).get("optimalTempC"))
-                    if historical is None or abs(historical - optimal) > 1:
+                    if historical is None or not peak_lo - 1 <= historical <= peak_hi + 1:
                         raise ValueError("Car thermal target changed or is unverified")
                 if cold is None or old is None or abs(cold - old) > 0.001:
                     raise ValueError("Cold setup changed since the measured stint")
@@ -277,6 +289,9 @@ def build_prescription(
             }
             for wheel in WHEELS
         }
+        for wheel in WHEELS:
+            lo, hi = _peak_window(targets[wheel], targets[wheel]["optimal_temp_c"])
+            card["targets"][wheel].update(peak_temp_min_c=lo, peak_temp_max_c=hi)
         card["evidence"] = f"Laps {numbers[0]}-{numbers[1]} measured; " + "; ".join(observations)
         if changes:
             card.update(

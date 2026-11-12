@@ -35,6 +35,12 @@ local SPINNER_DEFS = {
   TRACTION_CONTROL = { label = "TC", unit = "", min = 0, max = 12, step = 1, order = 30 },
   WING_1 = { label = "Front wing", unit = "", min = 0, max = 40, step = 1, order = 40 },
   WING_2 = { label = "Rear wing", unit = "", min = 0, max = 40, step = 1, order = 50 },
+  -- Keep the manual pressure comparator inside the screen's 12-control budget.
+  -- Only label/order: units, limits and steps must still come from actual CSP.
+  PRESSURE_LF = { label = "Pressure LF", order = 60 },
+  PRESSURE_RF = { label = "Pressure RF", order = 70 },
+  PRESSURE_LR = { label = "Pressure LR", order = 80 },
+  PRESSURE_RR = { label = "Pressure RR", order = 90 },
 }
 
 local function invalidateListCache()

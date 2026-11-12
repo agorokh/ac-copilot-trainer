@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,43 @@ def test_context_reports_actual_pit_not_broad_reset_permission(lua):
     lua.execute("pit=false; ctx=rpc.handle({request_id='new',operation='context'},'session')")
     assert lua.globals().ctx["is_in_pit"] is False
     assert lua.globals().ctx["reset_allowed"] is True
+
+
+def test_manual_pressure_comparator_survives_actual_screen_payload_budget(lua):
+    from tools.ai_sidecar.server import _fit_screen_peer_payload
+
+    lua.execute("""
+      ac.getSetupSpinners = function()
+        local rows = {}
+        for i=1,40 do
+          rows[#rows+1]={name='DAMP_BUMP_'..i,value=7,min=0,max=20,step=1,units=''}
+        end
+        for _,name in ipairs({'FRONT_BIAS','ABS','TRACTION_CONTROL','WING_1','WING_2'}) do
+          rows[#rows+1]={name=name,value=5,min=0,max=70,step=1,units=''}
+        end
+        for _,corner in ipairs({'LF','RF','LR','RR'}) do
+          rows[#rows+1]={name='PRESSURE_'..corner,value=17,min=12,max=40,step=1,units='psi'}
+        end
+        return rows
+      end
+      comparator = require('setup_library').listSpinners()
+    """)
+    result = lua.globals().comparator
+    rows = [dict(row.items()) for row in result["spinners"].values()]
+    frame = {"v": 1, "type": "setup.spinner.list.result", "ok": True, "spinners": rows}
+    payload = _fit_screen_peer_payload(frame, json.dumps(frame))
+    visible = json.loads(payload)["spinners"]
+    pressures = [r for r in visible if r["section"].startswith("PRESSURE_")]
+    assert len(payload.encode()) <= 2600
+    assert len(visible) <= 12
+    assert [r["section"] for r in pressures] == [
+        "PRESSURE_LF",
+        "PRESSURE_RF",
+        "PRESSURE_LR",
+        "PRESSURE_RR",
+    ]
+    assert all(r["range_known"] and r["unit"] == "psi" and r["min"] == 12 for r in pressures)
+    assert lua.globals().writes == 0
 
 
 def test_exit_before_accept_performs_zero_writes_and_retry_stays_zero(lua):
