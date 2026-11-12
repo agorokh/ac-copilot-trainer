@@ -248,7 +248,9 @@ def _optimal_temp_from_curve(
 # --------------------------------------------------------------------------------------------------
 
 
-def read_tyre_specs(car_dir: str | Path, compound_index: int) -> TyreSpec | None:
+def read_tyre_specs(
+    car_dir: str | Path, compound_index: int, *, axle: str | None = None
+) -> TyreSpec | None:
     """Resolve ``tyres.ini`` for ``car_dir``; return the :class:`TyreSpec` for ``compound_index``.
 
     Source preference matches AC: packed ``data.acd`` when present, otherwise unpacked
@@ -256,9 +258,14 @@ def read_tyre_specs(car_dir: str | Path, compound_index: int) -> TyreSpec | None
     ``[REAR_<N>]`` for any key the front section omits. Optimal core temp is the peak of the
     matching ``[THERMAL_FRONT_<N>]`` (or ``[THERMAL_REAR_<N>]``) ``PERFORMANCE_CURVE``.
 
+    ``axle='front'`` / ``'rear'`` selects that axle strictly, without borrowing a
+    missing target from the other axle. The default retains the legacy fallback.
+
     Returns ``None`` if neither source is readable / has no ``tyres.ini``. Never raises on a
     malformed car — unreadable individual fields degrade to ``None``.
     """
+    if axle not in (None, "front", "rear"):
+        return None
     try:
         car_path = Path(car_dir)
     except (TypeError, ValueError):
@@ -277,6 +284,10 @@ def read_tyre_specs(car_dir: str | Path, compound_index: int) -> TyreSpec | None
 
         front = _section_for(sections, "FRONT", compound_index)
         rear = _section_for(sections, "REAR", compound_index)
+        if axle == "front":
+            rear = None
+        elif axle == "rear":
+            front, rear = rear, None
         if front is None and rear is None:
             # Compound index out of range for this car.
             return None
@@ -291,6 +302,10 @@ def read_tyre_specs(car_dir: str | Path, compound_index: int) -> TyreSpec | None
 
         thermal_front = _section_for(sections, "THERMAL_FRONT", compound_index)
         thermal_rear = _section_for(sections, "THERMAL_REAR", compound_index)
+        if axle == "front":
+            thermal_rear = None
+        elif axle == "rear":
+            thermal_front, thermal_rear = thermal_rear, None
         perf_curve = _get(thermal_front, "PERFORMANCE_CURVE")
         if perf_curve is None:
             perf_curve = _get(thermal_rear, "PERFORMANCE_CURVE")

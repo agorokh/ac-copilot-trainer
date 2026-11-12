@@ -99,6 +99,11 @@ TYPE_SETUP_EXPERIMENT_RECORD = "setup.experiment.record"
 TYPE_SETUP_COMPARE = "setup.compare"
 TYPE_SETUP_SUGGEST = "setup.suggest"
 TYPE_SETUP_ADVICE = "setup.advice"
+TYPE_SETUP_PRESCRIPTION_GET = "setup.prescription.get"
+TYPE_SETUP_PRESCRIPTION_DECIDE = "setup.prescription.decide"
+TYPE_SETUP_PRESCRIPTION_RPC = "setup.prescription.rpc"
+TYPE_SETUP_PRESCRIPTION_RPC_RESULT = "setup.prescription.rpc.result"
+TYPE_SETUP_PRESCRIPTION_CARD = "setup.prescription.card"
 TYPE_SETUP_DIFF = "setup.diff"
 TYPE_SETUP_CLOSED_LOOP = "setup.closed_loop"
 TYPE_SETUP_EXCHANGE_SEARCH = "se.search"
@@ -234,6 +239,8 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_SETUP_COMPARE,
     TYPE_SETUP_SUGGEST,
     TYPE_SETUP_ADVICE,
+    TYPE_SETUP_PRESCRIPTION_GET,
+    TYPE_SETUP_PRESCRIPTION_DECIDE,
     TYPE_SETUP_DIFF,
     TYPE_SETUP_CLOSED_LOOP,
     TYPE_SETUP_EXCHANGE_SEARCH,
@@ -904,6 +911,38 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         # No required fields — empty payload is valid (lists all setups for
         # the active car). The Lua handler reads ac.getCarID(0) directly.
         return None
+    if t in (TYPE_SETUP_PRESCRIPTION_GET, TYPE_SETUP_PRESCRIPTION_DECIDE):
+        allowed = {"v", "type", "request_id"}
+        if t == TYPE_SETUP_PRESCRIPTION_DECIDE:
+            allowed |= {"prescription_id", "decision"}
+            pid = frame.get("prescription_id")
+            if not isinstance(pid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", pid):
+                return "prescription decision requires bounded prescription_id"
+            if frame.get("decision") not in ("accept", "reject"):
+                return "prescription decision must be accept or reject"
+        if set(frame) - allowed:
+            return "prescription requests do not accept client evidence or setup values"
+        request_id = frame.get("request_id")
+        if request_id is not None and (
+            not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", request_id)
+        ):
+            return "prescription request_id must be a bounded token"
+        return None
+    if t == TYPE_SETUP_PRESCRIPTION_RPC_RESULT:
+        if not isinstance(frame.get("request_id"), str) or not re.fullmatch(
+            r"[a-f0-9]{32}", frame["request_id"]
+        ):
+            return "prescription RPC result requires request_id"
+        if frame.get("operation") not in ("context", "apply", "readback"):
+            return "prescription RPC result requires known operation"
+        if type(frame.get("ok")) is not bool:
+            return "prescription RPC result requires boolean ok"
+        if len(json.dumps(frame).encode("utf-8")) > 32000:
+            return "prescription RPC result exceeds limit"
+        return None
+    if t in (TYPE_SETUP_PRESCRIPTION_RPC, TYPE_SETUP_PRESCRIPTION_CARD):
+        # No peer may synthesize the server's actuation requests or display claims.
+        return "prescription requests and cards are sidecar-originated"
     if t == TYPE_SETUP_LOAD:
         name = frame.get("name")
         path = frame.get("path")

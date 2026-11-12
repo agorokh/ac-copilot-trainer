@@ -15,6 +15,32 @@ import pytest
 from tools.ac_content import acd_key
 from tools.ai_sidecar.tyre_specs import TyreSpec, read_tyre_specs
 
+
+def test_axle_target_is_strict_and_preserves_legacy_fallback(tmp_path: Path) -> None:
+    car = tmp_path / "axle_targets"
+    data = car / "data"
+    data.mkdir(parents=True)
+    (data / "tyres.ini").write_text(
+        "[FRONT]\nPRESSURE_IDEAL=27\n[REAR]\nPRESSURE_IDEAL=29\n"
+        "[THERMAL_FRONT]\nPERFORMANCE_CURVE=front.lut\n"
+        "[THERMAL_REAR]\nPERFORMANCE_CURVE=rear.lut\n"
+        "[FRONT_1]\nPRESSURE_STATIC=22\n[REAR_1]\nPRESSURE_IDEAL=30\n",
+        encoding="utf-8",
+    )
+    (data / "front.lut").write_text("70|0.9\n80|1\n", encoding="utf-8")
+    (data / "rear.lut").write_text("80|0.9\n90|1\n", encoding="utf-8")
+    front = read_tyre_specs(car, 0, axle="front")
+    rear = read_tyre_specs(car, 0, axle="rear")
+    assert front is not None and rear is not None
+    assert (front.pressure_ideal_psi, front.optimal_temp_c) == (27, 80)
+    assert (rear.pressure_ideal_psi, rear.optimal_temp_c) == (29, 90)
+    strict = read_tyre_specs(car, 1, axle="front")
+    legacy = read_tyre_specs(car, 1)
+    assert strict is not None and strict.pressure_ideal_psi is None
+    assert legacy is not None and legacy.pressure_ideal_psi == 30
+    assert read_tyre_specs(car, 0, axle="unknown") is None
+
+
 # --------------------------------------------------------------------------------------------------
 # Synthetic ACD encoder (mirror-image of the reader's decrypt path)
 # --------------------------------------------------------------------------------------------------

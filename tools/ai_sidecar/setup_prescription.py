@@ -17,7 +17,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
-from tools.ai_sidecar.setup_optimizer import STORE_LOCK, load_records, save_records
+from tools.ai_sidecar.setup_optimizer import load_records, save_records, store_transaction
 from tools.lap_qualification import qualify_archive
 
 WHEELS = {"fl": "PRESSURE_LF", "fr": "PRESSURE_RF", "rl": "PRESSURE_LR", "rr": "PRESSURE_RR"}
@@ -167,7 +167,10 @@ def build_prescription(
                     identity.get("layout_id") or None,
                 ),
             )
-            if not qualification.allowed or qualification.authority != "human":
+            # Honor the canonical policy's legacy-driver allowance. Its ledger
+            # can restrict AI/shared records but cannot certify a new human
+            # session; experiment adjudication needs its own observed evidence.
+            if not qualification.allowed:
                 raise ValueError("Archive is not eligible driver telemetry")
             lap = archive.get("lap", {})
             number = _number(lap.get("lap_n"))
@@ -236,6 +239,7 @@ def build_prescription(
                 row.get("range_known") is not True
                 or row.get("read_only") is True
                 or row.get("unit", "").strip().lower() != "psi"
+                or _number(row.get("display_multiplier", 1)) != 1
                 or value is None
                 or lo is None
                 or hi is None
@@ -267,6 +271,12 @@ def build_prescription(
                 }
             )
         card["lap_window"] = numbers
+        card["targets"] = {
+            wheel: {
+                key: float(targets[wheel][key]) for key in ("pressure_ideal_psi", "optimal_temp_c")
+            }
+            for wheel in WHEELS
+        }
         card["evidence"] = f"Laps {numbers[0]}-{numbers[1]} measured; " + "; ".join(observations)
         if changes:
             card.update(
@@ -277,12 +287,14 @@ def build_prescription(
     except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
         card["reason"] = str(exc)
     # Invalid/nonfinite archives still abstain with a stable, JSON-safe identity.
+    card["archive_hashes"] = evidence_hashes
     card["prescription_id"] = _hash(
         {
             "policy": 1,
             "identity": identity,
             "laps": evidence_hashes,
             "changes": card["changes"],
+            "targets": card.get("targets", {}),
             "reason": card["reason"],
         }
     )[:32]
@@ -292,8 +304,8 @@ def build_prescription(
 class PrescriptionJournal:
     """One durable row per card in the existing experiments.jsonl authority.
 
-    The sidecar is the single writer process. STORE_LOCK serializes its worker
-    threads with optimizer ingest/rebuild. A decision is committed before RPC;
+    OS locks serialize sidecar worker threads and CLI optimizer rebuilds.
+    A decision is committed before RPC;
     an interrupted apply is never replayed by a reconnect or process restart.
     """
 
@@ -301,7 +313,7 @@ class PrescriptionJournal:
         self.path = Path(path)
 
     def get(self, prescription_id: str) -> dict[str, Any] | None:
-        with STORE_LOCK:
+        with store_transaction(self.path):
             for row in load_records(self.path):
                 if (
                     row.get("record_type") == RECORD_TYPE
@@ -317,7 +329,7 @@ class PrescriptionJournal:
         return copy.deepcopy(record)
 
     def remember(self, card: dict[str, Any]) -> dict[str, Any]:
-        with STORE_LOCK:
+        with store_transaction(self.path):
             existing = self.get(card["prescription_id"])
             if existing is not None:
                 return existing
@@ -330,7 +342,7 @@ class PrescriptionJournal:
     def decide(self, prescription_id: str, decision: str) -> dict[str, Any]:
         if decision not in {"accept", "reject"}:
             raise ValueError("Unknown prescription decision")
-        with STORE_LOCK:
+        with store_transaction(self.path):
             row = self.get(prescription_id)
             if row is None:
                 raise ValueError("Unknown prescription")
@@ -351,7 +363,7 @@ class PrescriptionJournal:
             return {**result, "new_decision": True}
 
     def verify(self, prescription_id: str, readback: dict[str, Any]) -> dict[str, Any]:
-        with STORE_LOCK:
+        with store_transaction(self.path):
             row = self.get(prescription_id)
             if row is None:
                 raise ValueError("Unknown prescription")

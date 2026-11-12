@@ -402,6 +402,7 @@ void pocket_technician_operator_setups() {
     require(first != nullptr, "the saved setup list is on screen");
     lv_obj_t* list = lv_obj_get_parent(lv_obj_get_parent(first));
     std::vector<std::string> shown;
+    for (int page = 0; page < 2; ++page) {
     for (uint32_t i = 0; i < lv_obj_get_child_cnt(list); ++i) {
         lv_obj_t* setup_row = lv_obj_get_child(list, i);
         lv_obj_t* chips = child_label_with_prefix(setup_row, "BB:");
@@ -429,6 +430,8 @@ void pocket_technician_operator_setups() {
         require(name_area.y2 < chips_area.y1, "a setup name never overlaps its BB/ABS/TC line");
         shown.emplace_back(lv_label_get_text(name));
     }
+        if (page == 0) tap_prefix("SETUPS >");
+    }
     require(shown.size() == sizeof(rows) / sizeof(rows[0]), "every operator setup is listed");
     // The four scientist setups share a prefix and a suffix; what the driver sees must still
     // tell them apart.
@@ -438,6 +441,7 @@ void pocket_technician_operator_setups() {
         }
     }
     capture("06c-pocket-technician-operator-setups-scrolled");
+    tap_prefix("< SETUPS");
 
     // Loading a long-named setup: the request must carry the FULL name (the row cache used to
     // cut it at 47 characters), and the ACTIVE line must stay on one line above LIVE CAR.
@@ -568,6 +572,326 @@ void pocket_technician_spinners_and_utf8() {
     back();
 }
 
+void pocket_technician_prescriptions() {
+    screen_pocket_technician_set_sidecar_link_up(1);
+    screen_pocket_technician_set_identity("ks_porsche_911_gt3_r_2016", "Porsche 911 GT3 R 2016",
+        "Porsche", "spa", "Spa-Francorchamps");
+    tap("POCKET TECHNICIAN");
+    screen_pocket_technician_clear_spinners();
+    screen_pocket_technician_clear_setups();
+    screen_pocket_technician_finish_setup_list();
+    std::string request_id;
+    for (;;) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_PRESCRIPTION_GET) request_id = request.request_id;
+    }
+    require(!request_id.empty(), "Pocket Technician requests a prescription on open");
+    pt_prescription_change_t changes[4] = {
+        {"PRESSURE_LF", 24, 23, -1}, {"PRESSURE_RF", 24, 23, -1},
+        {"PRESSURE_LR", 24, 25, 1}, {"PRESSURE_RR", 24, 25, 1}};
+    screen_pocket_technician_apply_live_electronics(63, 3, 12, 2, 12, true, "");
+    screen_pocket_technician_apply_prescription(request_id.c_str(), "rx-956-a", "proposed",
+        "LF hot pressure high", "Laps 3-4: LF 29.8 psi; target 27-29", "", changes, 1);
+    capture("06f-pocket-prescription-proposed");
+    require(has_label("COLD PRESSURE"), "pit prescription card renders");
+    require(has_label("LF 24.0 -> 23.0 psi (-1.0)"), "card shows affected corner and cold psi delta");
+    tap("ACCEPT");
+    tap("ACCEPT");
+    require(has_label("Awaiting decision receipt"), "Accept is pending consent, never applied state");
+    int accepts = 0;
+    for (;;) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_PRESCRIPTION_ACCEPT) {
+            ++accepts;
+            require(strcmp(request.prescription_id, "rx-956-a") == 0 && request.request_id == request_id,
+                "Accept carries prescription and response epoch identifiers");
+        }
+    }
+    require(accepts == 1, "duplicate touch bounce queues exactly one Accept");
+    screen_pocket_technician_apply_prescription(request_id.c_str(), "rx-956-a", "accepted_unverified",
+        "LF hot pressure high", "Laps 3-4: LF 29.8 psi; target 27-29", "", changes, 1);
+    tick();
+    require(has_label("Accepted - awaiting setup readback"), "accepted_unverified remains explicit without readback");
+    require(!has_label("Applied - setup readback verified"), "Accept receipt cannot imply applied setup");
+    capture("06g-pocket-prescription-unverified");
+    screen_pocket_technician_apply_prescription(request_id.c_str(), "rx-956-a", "verified_applied",
+        "LF cold trim applied", "Setup readback: LF 23.0 psi", "", changes, 1);
+    tick();
+    require(has_label("Applied - setup readback verified"), "only verified sidecar response renders applied state");
+
+    auto refresh = [&]() {
+        tap("REFRESH");
+        std::string next_id;
+        for (;;) {
+            auto request = screen_pocket_technician_pop_request();
+            if (request.kind == PT_REQ_NONE) break;
+            if (request.kind == PT_REQ_PRESCRIPTION_GET) next_id = request.request_id;
+        }
+        require(!next_id.empty() && next_id != request_id, "refresh advances response epoch");
+        request_id = next_id;
+    };
+    refresh();
+    screen_pocket_technician_apply_live_electronics(63, 3, 12, 2, 12, true, "");
+    screen_pocket_technician_apply_prescription(request_id.c_str(), "rx-956-b", "proposed",
+        "Stabilized pressure deviations", "Laps 3-4: measured hot psi; known compound", "", changes, 4);
+    capture("06h-pocket-prescription-four-corners");
+    auto* accept_label = find_label(lv_scr_act(), "ACCEPT");
+    lv_area_t accept_bounds;
+    lv_obj_get_coords(accept_label, &accept_bounds);
+    require(accept_bounds.y2 < HEIGHT, "four-corner card keeps Accept visible without scrolling");
+    tap("ACCEPT");
+    screen_pocket_technician_apply_live_electronics(63, 3, 12, 2, 12, false, "Outside pit box");
+    tap("ACCEPT");
+    bool outside_accept = false;
+    for (;;) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_PRESCRIPTION_ACCEPT) outside_accept = true;
+    }
+    require(!outside_accept, "pit exit removes queued Accept and prevents retried Accept");
+    capture("06i-pocket-prescription-pit-exit");
+    tap("REJECT");
+    tap("REJECT");
+    int rejects = 0;
+    for (;;) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_PRESCRIPTION_REJECT) ++rejects;
+        require(request.kind != PT_REQ_SPINNER_SET && request.kind != PT_REQ_PRESCRIPTION_ACCEPT,
+            "Reject never stages a setup mutation");
+    }
+    require(rejects == 1, "Reject remains safe outside pit and deduplicates bounce");
+
+    const std::string old_request = request_id;
+    screen_pocket_technician_invalidate_live_state();
+    screen_pocket_technician_apply_prescription(old_request.c_str(), "rx-956-b", "proposed",
+        "Old session", "Must never restore after session reset", "", changes, 4);
+    tick();
+    require(!has_label("COLD PRESSURE"), "late reply cannot restore prior-session card");
+    for (;;) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_PRESCRIPTION_GET) request_id = request.request_id;
+    }
+    require(request_id != old_request, "session invalidation requests a new prescription epoch");
+    screen_pocket_technician_apply_prescription(request_id.c_str(), "rx-956-trap", "abstained",
+        "Cold out-lap - insufficient stabilized flying-lap observations for a meaningful cold pressure trim",
+        "Laps 1-1: warming tyres; measured pressure is not stabilized. Extra long text must remain bounded inside this card.",
+        "No change: need two stabilized flying laps and a known compound target window. Long reason stays inside the card.",
+        nullptr, 0);
+    tick();
+    require(has_label("Abstained - no setup change"), "trap card makes abstention explicit");
+    tap("ACCEPT");
+    require(screen_pocket_technician_pop_request().kind == PT_REQ_NONE,
+        "abstention Accept cannot stage any decision or setup write");
+    capture("06j-pocket-prescription-abstention-truncation");
+    auto* title = find_label(lv_scr_act(), "COLD PRESSURE");
+    auto* card = lv_obj_get_parent(title);
+    for (uint32_t i = 0; i < lv_obj_get_child_cnt(card); ++i) {
+        auto* child = lv_obj_get_child(card, i);
+        if (!lv_obj_check_type(child, &lv_label_class)) continue;
+        require(lv_obj_get_width(child) <= lv_obj_get_content_width(card),
+            "prescription text width stays inside card bounds");
+        require(lv_label_get_long_mode(child) == LV_LABEL_LONG_DOT,
+            "prescription labels use bounded ellipsis rather than overflow");
+    }
+    screen_pocket_technician_apply_live_electronics(63, 3, 12, 2, 12, true, "");
+    screen_pocket_technician_apply_prescription(request_id.c_str(), "rx-956-malformed", "proposed",
+        "Malformed reply", "Missing pressure changes", "", nullptr, 0);
+    tick();
+    require(has_label("Invalid pressure changes - refresh required"),
+        "malformed proposed card fails closed instead of leaving prior actionable state");
+    tap("ACCEPT");
+    bool malformed_accept = false;
+    for (;;) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_PRESCRIPTION_ACCEPT) malformed_accept = true;
+    }
+    require(!malformed_accept, "malformed card cannot queue Accept");
+
+    screen_pocket_technician_apply_prescription(request_id.c_str(), "rx-956-stale", "proposed",
+        "LF hot pressure high", "Laps 3-4 measured pressure", "", changes, 1);
+    tick(1600);
+    screen_pocket_technician_set_sidecar_link_up(1);
+    tap("ACCEPT");
+    require(screen_pocket_technician_pop_request().kind == PT_REQ_NONE,
+        "stale telemetry cannot authorize a prescription Accept");
+    screen_pocket_technician_set_sidecar_link_up(0);
+    screen_pocket_technician_set_sidecar_link_up(1);
+    std::string reconnect_id;
+    for (;;) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_PRESCRIPTION_GET) reconnect_id = request.request_id;
+    }
+    require(!reconnect_id.empty() && reconnect_id != request_id,
+        "reconnect starts a fresh response epoch");
+    screen_pocket_technician_apply_prescription(request_id.c_str(), "rx-956-stale", "verified_applied",
+        "Old reply after reconnect", "Stale reply must be ignored", "", changes, 1);
+    tick();
+    require(!has_label("Old reply after reconnect"), "reconnect ignores a delayed prior-link reply");
+    back();
+}
+
+void pocket_technician_prescription_capacity() {
+    screen_pocket_technician_set_sidecar_link_up(1);
+    screen_pocket_technician_set_identity("ks_porsche_911_gt3_r_2016", "Porsche 911 GT3 R 2016",
+        "Porsche", "spa", "Spa-Francorchamps");
+    tap("POCKET TECHNICIAN");
+    screen_pocket_technician_clear_setups();
+    screen_pocket_technician_clear_spinners();
+    std::string request_id;
+    for (;;) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_PRESCRIPTION_GET) request_id = request.request_id;
+    }
+    require(!request_id.empty(), "capacity scenario has a fresh prescription response epoch");
+    auto memory = [](const char* stage) {
+        lv_mem_monitor_t monitor{};
+        lv_mem_monitor(&monitor);
+        std::cout << "MEMORY " << stage << ": total=" << monitor.total_size
+            << " free=" << monitor.free_size << " largest=" << monitor.free_biggest_size
+            << " used_pct=" << static_cast<int>(monitor.used_pct)
+            << " frag_pct=" << static_cast<int>(monitor.frag_pct) << std::endl;
+        return monitor;
+    };
+    memory("Pocket Technician empty");
+    for (int i = 0; i < PT_MAX_SPINNERS; ++i) {
+        char section[32], label[32];
+        snprintf(section, sizeof(section), "CAPACITY_%02d", i + 1);
+        snprintf(label, sizeof(label), "Spinner %02d", i + 1);
+        screen_pocket_technician_add_spinner(section, label, 24, 16, 40, 1, "psi", true, 1);
+    }
+    screen_pocket_technician_finish_spinner_list();
+    memory("12 spinner rows");
+    pt_setup_summary_t summary{63, 2, 3, 1, 20};
+    for (int i = 0; i < 64; ++i) {
+        char name[PT_SETUP_NAME_MAX], path[PT_SETUP_PATH_MAX];
+        snprintf(name, sizeof(name), "Capacity setup %02d", i + 1);
+        if (i == 0 || i == 63) snprintf(name, sizeof(name), "Capacity shared");
+        snprintf(path, sizeof(path), "C:/simulator/capacity/setup_%02d.ini", i + 1);
+        screen_pocket_technician_add_setup(name, "2026-11-12", 102183, path, &summary);
+        if ((i + 1) % 16 == 0) memory(name);
+    }
+    screen_pocket_technician_finish_setup_list();
+    tick();
+    require(find_label(lv_scr_act(), "Capacity shared") != nullptr,
+        "maximum cached state renders first saved setup page");
+    require(find_label(lv_scr_act(), "Spinner 01") != nullptr,
+        "maximum cached state renders first spinner page");
+    screen_pocket_technician_apply_live_electronics(63, 3, 12, 2, 12, true, "");
+    pt_prescription_change_t changes[4] = {
+        {"PRESSURE_LF", 24, 23, -1}, {"PRESSURE_RF", 24, 23, -1},
+        {"PRESSURE_LR", 24, 25, 1}, {"PRESSURE_RR", 24, 25, 1}};
+    screen_pocket_technician_apply_prescription(request_id.c_str(), "rx-956-capacity", "proposed",
+        "Stabilized pressure deviations", "Laps 3-4: measured hot psi; known compound", "", changes, 4);
+    tick();
+    auto monitor = memory("64 setups + 12 spinners + four-corner prescription");
+    require(monitor.free_size > 0 && monitor.free_biggest_size > 0,
+        "maximum cached state and card retain usable space in the real 64 KiB LVGL pool");
+    require(find_label(lv_scr_act(), "Capacity shared") != nullptr &&
+            find_label(lv_scr_act(), "Spinner 01") != nullptr && has_label("COLD PRESSURE"),
+        "four-corner card coexists with both maximum-capacity caches");
+    capture("06k-pocket-prescription-maximum-capacity");
+    screen_pocket_technician_apply_live_electronics(63, 3, 12, 2, 12, true, "");
+    while (screen_pocket_technician_pop_request().kind != PT_REQ_NONE) {}
+    tap_prefix("Capacity shared");
+    bool first_setup_request = false;
+    for (;;) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_LOAD && strcmp(request.path, "C:/simulator/capacity/setup_01.ini") == 0)
+            first_setup_request = true;
+    }
+    require(first_setup_request, "first same-name setup stages its exact path before paging");
+    uint32_t minimum_free = monitor.free_size;
+    int setups_seen = 0, spinners_seen = 0;
+    for (int page = 0; page < 16; ++page) {
+        for (int i = 0; i < 4; ++i) {
+            char name[PT_SETUP_NAME_MAX];
+            snprintf(name, sizeof(name), "Capacity setup %02d", page * 4 + i + 1);
+            if ((page == 0 && i == 0) || (page == 15 && i == 3))
+                snprintf(name, sizeof(name), "Capacity shared");
+            require(find_label(lv_scr_act(), name) != nullptr,
+                "every cached saved setup is reachable through bounded pages");
+            ++setups_seen;
+        }
+        auto page_memory = memory("saved-setup page");
+        minimum_free = std::min(minimum_free, page_memory.free_size);
+        if (page < 15) tap_prefix("SETUPS >");
+    }
+    for (int page = 0; page < 3; ++page) {
+        for (int i = 0; i < 4; ++i) {
+            char name[32];
+            snprintf(name, sizeof(name), "Spinner %02d", page * 4 + i + 1);
+            require(find_label(lv_scr_act(), name) != nullptr,
+                "every cached spinner is reachable through bounded pages");
+            ++spinners_seen;
+        }
+        auto page_memory = memory("spinner page");
+        minimum_free = std::min(minimum_free, page_memory.free_size);
+        if (page < 2) tap_prefix("CONTROLS >");
+    }
+    require(setups_seen == 64 && spinners_seen == 12,
+        "pagination preserves access to all64 setups and all12 controls");
+    std::cout << "MEMORY minimum_free_across_maximum_pages=" << minimum_free << std::endl;
+    // LVGL 8.3's max_used omits realloc accounting; report measured TLSF free
+    // space at each page boundary rather than mislabel it a transient peak.
+    memory("after all maximum pages");
+    require(lv_mem_test() == LV_RES_OK, "maximum-capacity page traversal preserves allocator integrity");
+    require(minimum_free >= 8192, "maximum rendered pages retain at least8 KiB for transient LVGL work");
+    auto* last_setup = find_label(lv_scr_act(), "Capacity shared");
+    lv_obj_scroll_to_view_recursive(lv_obj_get_parent(last_setup), LV_ANIM_OFF);
+    tick();
+    capture("06l-pocket-prescription-maximum-last-page");
+    screen_pocket_technician_apply_live_electronics(63, 3, 12, 2, 12, true, "");
+    while (screen_pocket_technician_pop_request().kind != PT_REQ_NONE) {}
+    tap_prefix("Capacity shared");
+    bool last_setup_request = false;
+    for (;;) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_LOAD && strcmp(request.path, "C:/simulator/capacity/setup_64.ini") == 0)
+            last_setup_request = true;
+    }
+    require(last_setup_request, "last-page setup retains its exact load path");
+    tap_prefix("< SETUPS");
+    screen_pocket_technician_apply_load_ack(true, "Capacity shared",
+        "C:/simulator/capacity/not_requested.ini", nullptr);
+    require(screen_pocket_technician_pop_request().kind == PT_REQ_NONE,
+        "unmatched same-name path cannot consume a pending load or trigger refresh");
+    screen_pocket_technician_apply_load_ack(true, "Capacity shared",
+        "C:/simulator/capacity/setup_01.ini", nullptr);
+    bool first_ack_path = false;
+    for (;;) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_SPINNER_LIST && strcmp(request.path, "C:/simulator/capacity/setup_01.ini") == 0)
+            first_ack_path = true;
+    }
+    require(first_ack_path, "first same-name ack correlates its own path after all paging");
+    screen_pocket_technician_apply_load_ack(true, "Capacity shared",
+        "C:/simulator/capacity/setup_64.ini", nullptr);
+    tick();
+    require(find_label(lv_scr_act(), "ACTIVE: Capacity shared") != nullptr,
+        "matching setup ack remains correlated after its row is paged out");
+    bool last_ack_path = false;
+    for (;;) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_SPINNER_LIST && strcmp(request.path, "C:/simulator/capacity/setup_64.ini") == 0)
+            last_ack_path = true;
+    }
+    require(last_ack_path, "last same-name ack preserves independent path correlation after paging");
+    back();
+    screen_pocket_technician_clear_setups();
+    screen_pocket_technician_clear_spinners();
+}
+
 void setup_exchange_utf8_community_titles() {
     screen_setup_exchange_set_sidecar_link_up(1);
     screen_setup_exchange_set_context(
@@ -659,6 +983,8 @@ int main(int argc, char** argv) {
         pocket_technician();
         pocket_technician_operator_setups();
         pocket_technician_spinners_and_utf8();
+        pocket_technician_prescriptions();
+        pocket_technician_prescription_capacity();
         setup_exchange();
         setup_exchange_utf8_community_titles();
         setup_exchange_empty_for_track();

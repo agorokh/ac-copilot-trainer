@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
+import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -133,11 +136,11 @@ def test_measured_stable_deviation_direction_and_supported_step(hot, sign):
         "target",
         "range",
         "unit",
+        "scaled_unit",
         "nan",
         "changed_setup",
         "session",
         "thermal_target",
-        "legacy",
         "partial",
         "opposite_last_lap",
     ],
@@ -167,6 +170,8 @@ def test_abstains_on_traps_and_uncertain_provenance(case):
         spinners[0]["range_known"] = False
     elif case == "unit":
         spinners[0]["unit"] = "kPa"
+    elif case == "scaled_unit":
+        spinners[0]["display_multiplier"] = 100
     elif case == "nan":
         samples[50][fields.index("wheelsPressure_fl")] = float("nan")
     elif case == "changed_setup":
@@ -181,13 +186,27 @@ def test_abstains_on_traps_and_uncertain_provenance(case):
         for row in samples:
             row[fields.index("wheelsPressure_fl")] = 24
     for lap in laps:
-        if case == "legacy":
-            lap.pop("qualification", None)
-        elif case != "nan":
+        if case != "nan":
             bind(lap)
     card = card_for(data)
     assert card["status"] == "abstained", card
     assert card["changes"] == [] and card["reason"]
+
+
+def test_preserves_canonical_legacy_driver_allowance_but_not_managed_ai():
+    data = inputs()
+    for lap in data[0]:
+        lap.pop("qualification")
+    assert card_for(data)["status"] == "proposed"
+    for lap in data[0]:
+        lap["qualification"] = build_qualification(
+            lap,
+            authority="shared",
+            origin="synthetic_test",
+            supported_uses={use: use == "analysis" for use in USES},
+            evidence=[{"kind": "observed_ai_intervention", "sha256": "a" * 64}],
+        )
+    assert card_for(data)["status"] == "abstained"
 
 
 def test_range_cap_cannot_create_micro_nudge_or_reverse_delta():
@@ -247,3 +266,54 @@ def test_concurrent_bounces_only_one_claim_and_optimizer_rebuild_preserves_decis
     assert len(load_records(path)) == 1
     assert journal.get(card["prescription_id"])["decision"] == "accept"
     assert len([json.loads(line) for line in path.read_text().splitlines()]) == 1
+
+
+def test_cli_rebuild_cannot_overwrite_concurrent_accepted_decision(tmp_path):
+    # Recreate the independent review race using a separate interpreter. The
+    # child pauses after loading the old row, while holding the real OS lock.
+    path = tmp_path / "experiments.jsonl"
+    journal = PrescriptionJournal(path)
+    card = journal.remember(card_for(inputs()))
+    (tmp_path / "laps").mkdir()
+    script = tmp_path / "rebuild.py"
+    script.write_text(
+        "import pathlib, sys, time\n"
+        "sys.path.insert(0, sys.argv[2])\n"
+        "from tools.ai_sidecar import setup_optimizer as opt\n"
+        "path=pathlib.Path(sys.argv[1]); original=opt.load_records\n"
+        "def paused_load(p):\n"
+        "    rows=original(p)\n"
+        "    (path.parent/'loaded').write_text('ready')\n"
+        "    deadline=time.monotonic()+10\n"
+        "    while not (path.parent/'release').exists():\n"
+        "        if time.monotonic()>deadline: raise TimeoutError('parent')\n"
+        "        time.sleep(.01)\n"
+        "    return rows\n"
+        "opt.load_records=paused_load\n"
+        "opt.rebuild_experiments(path.parent/'laps', store_path=path)\n",
+        encoding="utf-8",
+    )
+    from pathlib import Path
+
+    with subprocess.Popen(
+        [sys.executable, str(script), str(path), str(Path(__file__).resolve().parents[1])],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ) as child:
+        deadline = time.monotonic() + 10
+        while not (tmp_path / "loaded").exists():
+            assert time.monotonic() < deadline, "CLI never reached the loaded row"
+            time.sleep(0.01)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(journal.decide, card["prescription_id"], "accept")
+            try:
+                time.sleep(0.05)
+                assert not future.done(), "Decision must wait for CLI's complete transaction"
+            finally:
+                (tmp_path / "release").write_text("continue", encoding="utf-8")
+            assert future.result(timeout=10)["new_decision"] is True
+        _, error = child.communicate(timeout=10)
+        assert child.returncode == 0, error
+    assert journal.get(card["prescription_id"])["decision"] == "accept"
+    assert not journal.decide(card["prescription_id"], "accept")["new_decision"]
