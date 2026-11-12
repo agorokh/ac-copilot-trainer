@@ -1,0 +1,796 @@
+{
+  "acceptance_evaluation_performed": false,
+  "adjudicator": "single independent in-run evidence helper; no engine import, card output or prediction inspected",
+  "archive_authority_counts": {
+    "ai": 14,
+    "legacy_unknown": 27,
+    "shared": 142
+  },
+  "attribution_current_file_source_hash_mismatches": 0,
+  "attribution_ledger_sha256": "973ae26f18e2da7cfe021bb3c4fca1a97d2634eb59cf09094a40e2ae27b00b5a",
+  "canonical_source": "CSP ScriptConfig/AC_Copilot_Trainer/ac_copilot_trainer/journal/laps",
+  "current_car_target_observation": {
+    "ks_porsche_911_gt3_r_2016": {
+      "archived_live_optimal_temp_c_for_selected_cases": 95.0,
+      "current_front_pressure_ideal_psi": 26.0,
+      "current_rear_pressure_ideal_psi": 26.0,
+      "current_resolved_front_optimal_temp_c": 80.0,
+      "historical_target_binding": "unverified",
+      "selected_compound_index": 1,
+      "tyres_ini_sha256": "d1d20bc5be2f6b2f6d14a54f57fe1cb1122abef55e77458963c7f21d3f5bd26b"
+    }
+  },
+  "experiment_verdict": "INCONCLUSIVE",
+  "frozen_at_utc": "2026-11-12T15:47:02.896745+00:00",
+  "frozen_before_any_card_predictions": true,
+  "genuine_deviation_acceptance_cases": 0,
+  "illustrations": [
+    {
+      "adjudication": "INELIGIBLE",
+      "case_id": "P01",
+      "expected_action": null,
+      "purpose": "two-lap measured-pressure illustration; not an admissible pit-return snapshot",
+      "reasons": [
+        "historical_cold_pressure_snapshot_missing",
+        "historical_setup_path_and_hash_missing",
+        "pit_return_event_not_recorded",
+        "historical_car_data_version_unbound"
+      ],
+      "sources": [
+        {
+          "archive_name": "lap_20261014-093337_9242e37a_18_141326_6acf4c71c335.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "shared",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 18,
+          "lap_uuid": "6acf4c71c3350a0312",
+          "measured_core_temp_median_c": {
+            "fl": 82.9476,
+            "fr": 80.3398,
+            "rl": 95.24,
+            "rr": 94.1156
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 21.7186,
+            "fr": 21.4544,
+            "rl": 22.9591,
+            "rr": 22.8365
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.1621,
+            "fr": -0.196,
+            "rl": -0.1252,
+            "rr": -0.1392
+          },
+          "resolution_error": null,
+          "session_uuid": "9242e37ae914",
+          "source_sha256": "70655ecba5f18cb5e7c26257c473d75abb13adc054d78d7a7675c3bc3b76ef11",
+          "trace_samples": 2000,
+          "track_id": "spa"
+        },
+        {
+          "archive_name": "lap_20261014-093559_9242e37a_19_141546_6acf4cff8b8c.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "shared",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 19,
+          "lap_uuid": "6acf4cff8b8cae4013",
+          "measured_core_temp_median_c": {
+            "fl": 82.8388,
+            "fr": 80.2003,
+            "rl": 94.6488,
+            "rr": 93.6962
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 21.7071,
+            "fr": 21.4393,
+            "rl": 22.8847,
+            "rr": 22.7942
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.2375,
+            "fr": -0.1849,
+            "rl": -0.1281,
+            "rr": -0.1267
+          },
+          "resolution_error": null,
+          "session_uuid": "9242e37ae914",
+          "source_sha256": "76739cb341af945b186355f79ea41cb086e5eb52d9d40e1f403455584322f3cf",
+          "trace_samples": 2000,
+          "track_id": "spa"
+        }
+      ]
+    },
+    {
+      "adjudication": "INELIGIBLE",
+      "case_id": "P02",
+      "expected_action": null,
+      "purpose": "two-lap measured-pressure illustration; not an admissible pit-return snapshot",
+      "reasons": [
+        "historical_cold_pressure_snapshot_missing",
+        "historical_setup_path_and_hash_missing",
+        "pit_return_event_not_recorded",
+        "historical_car_data_version_unbound"
+      ],
+      "sources": [
+        {
+          "archive_name": "lap_20261014-093820_9242e37a_20_141286_6acf4d8c0fd3.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "shared",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 20,
+          "lap_uuid": "6acf4d8c0fd367dc14",
+          "measured_core_temp_median_c": {
+            "fl": 82.7614,
+            "fr": 80.3121,
+            "rl": 95.3672,
+            "rr": 94.431
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 21.6996,
+            "fr": 21.4501,
+            "rl": 22.9629,
+            "rr": 22.8684
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.2159,
+            "fr": -0.1761,
+            "rl": -0.1479,
+            "rr": -0.1342
+          },
+          "resolution_error": null,
+          "session_uuid": "9242e37ae914",
+          "source_sha256": "a9c4f762c95945841bf44e5f8255efa1df202f62640ef3322a4d85b9f6177fca",
+          "trace_samples": 2000,
+          "track_id": "spa"
+        },
+        {
+          "archive_name": "lap_20261014-094042_9242e37a_21_141967_6acf4e1ab9df.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "shared",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 21,
+          "lap_uuid": "6acf4e1ab9df007e15",
+          "measured_core_temp_median_c": {
+            "fl": 82.8078,
+            "fr": 80.2575,
+            "rl": 95.4878,
+            "rr": 94.5585
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 21.7041,
+            "fr": 21.4454,
+            "rl": 22.9839,
+            "rr": 22.8803
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.1437,
+            "fr": -0.1773,
+            "rl": -0.1234,
+            "rr": -0.1341
+          },
+          "resolution_error": null,
+          "session_uuid": "9242e37ae914",
+          "source_sha256": "ad60df1e7e01d5855406fa2e54615d1e2512382f0ae680c95459fb2ce127c77b",
+          "trace_samples": 2000,
+          "track_id": "spa"
+        }
+      ]
+    },
+    {
+      "adjudication": "INELIGIBLE",
+      "case_id": "P03",
+      "expected_action": null,
+      "purpose": "two-lap measured-pressure illustration; not an admissible pit-return snapshot",
+      "reasons": [
+        "historical_cold_pressure_snapshot_missing",
+        "historical_setup_path_and_hash_missing",
+        "pit_return_event_not_recorded",
+        "historical_car_data_version_unbound"
+      ],
+      "sources": [
+        {
+          "archive_name": "lap_20261014-094304_9242e37a_22_141513_6acf4ea8e502.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "shared",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 22,
+          "lap_uuid": "6acf4ea8e502e9e916",
+          "measured_core_temp_median_c": {
+            "fl": 82.807,
+            "fr": 80.2714,
+            "rl": 95.2839,
+            "rr": 94.3918
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 21.7044,
+            "fr": 21.4469,
+            "rl": 22.9498,
+            "rr": 22.8635
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.2075,
+            "fr": -0.1756,
+            "rl": -0.1229,
+            "rr": -0.1328
+          },
+          "resolution_error": null,
+          "session_uuid": "9242e37ae914",
+          "source_sha256": "5fb35783fd890aebadb971ab87d9076478735e12450da0db559cacaab83e539e",
+          "trace_samples": 2000,
+          "track_id": "spa"
+        },
+        {
+          "archive_name": "lap_20261014-094525_9242e37a_23_141601_6acf4f354cab.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "shared",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 23,
+          "lap_uuid": "6acf4f354cab926517",
+          "measured_core_temp_median_c": {
+            "fl": 82.9986,
+            "fr": 80.2891,
+            "rl": 95.3491,
+            "rr": 94.1529
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 21.724,
+            "fr": 21.4484,
+            "rl": 22.9705,
+            "rr": 22.8407
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.152,
+            "fr": -0.1793,
+            "rl": -0.1282,
+            "rr": -0.1431
+          },
+          "resolution_error": null,
+          "session_uuid": "9242e37ae914",
+          "source_sha256": "4d5666e5d88328289f976dc4e34e43281c5ab375b67a9011c6286042051dd002",
+          "trace_samples": 2000,
+          "track_id": "spa"
+        }
+      ]
+    },
+    {
+      "adjudication": "INELIGIBLE",
+      "case_id": "P04",
+      "expected_action": null,
+      "purpose": "two-lap measured-pressure illustration; not an admissible pit-return snapshot",
+      "reasons": [
+        "historical_cold_pressure_snapshot_missing",
+        "historical_setup_path_and_hash_missing",
+        "pit_return_event_not_recorded",
+        "historical_car_data_version_unbound"
+      ],
+      "sources": [
+        {
+          "archive_name": "lap_20261014-094747_9242e37a_24_141445_6acf4fc3073d.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "shared",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 24,
+          "lap_uuid": "6acf4fc3073d9c5d18",
+          "measured_core_temp_median_c": {
+            "fl": 82.9156,
+            "fr": 80.3666,
+            "rl": 95.5456,
+            "rr": 94.5215
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 21.715,
+            "fr": 21.4564,
+            "rl": 22.9759,
+            "rr": 22.8764
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.2106,
+            "fr": -0.1676,
+            "rl": -0.1535,
+            "rr": -0.1432
+          },
+          "resolution_error": null,
+          "session_uuid": "9242e37ae914",
+          "source_sha256": "26adccb30a7ae8977f579f14db1453b1bc79ebc4995f8320e9c27a5e49dc633a",
+          "trace_samples": 2000,
+          "track_id": "spa"
+        },
+        {
+          "archive_name": "lap_20261014-095008_9242e37a_25_141440_6acf50501a97.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "shared",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 25,
+          "lap_uuid": "6acf50501a97913e19",
+          "measured_core_temp_median_c": {
+            "fl": 82.8467,
+            "fr": 80.3614,
+            "rl": 95.4552,
+            "rr": 94.4767
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 21.7082,
+            "fr": 21.4548,
+            "rl": 22.9811,
+            "rr": 22.8725
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.1501,
+            "fr": -0.1679,
+            "rl": -0.1419,
+            "rr": -0.1346
+          },
+          "resolution_error": null,
+          "session_uuid": "9242e37ae914",
+          "source_sha256": "5a5dd474deecbb0586362c4a7ded84c8429b99c26ea288361c995d6a274494d6",
+          "trace_samples": 2000,
+          "track_id": "spa"
+        }
+      ]
+    },
+    {
+      "adjudication": "INELIGIBLE",
+      "case_id": "P05",
+      "expected_action": null,
+      "purpose": "two-lap measured-pressure illustration; not an admissible pit-return snapshot",
+      "reasons": [
+        "historical_cold_pressure_snapshot_missing",
+        "historical_setup_path_and_hash_missing",
+        "pit_return_event_not_recorded",
+        "historical_car_data_version_unbound"
+      ],
+      "sources": [
+        {
+          "archive_name": "lap_20261014-095229_9242e37a_26_141339_6acf50dd9e1b.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "shared",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 26,
+          "lap_uuid": "6acf50dd9e1baf421a",
+          "measured_core_temp_median_c": {
+            "fl": 82.8069,
+            "fr": 80.4104,
+            "rl": 95.1779,
+            "rr": 94.3008
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 21.7042,
+            "fr": 21.4596,
+            "rl": 22.9489,
+            "rr": 22.8558
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.2034,
+            "fr": -0.1586,
+            "rl": -0.1268,
+            "rr": -0.1307
+          },
+          "resolution_error": null,
+          "session_uuid": "9242e37ae914",
+          "source_sha256": "57d27d9988cac9195cd7b9fe2628c753296895070e061e43991a0d3235688fab",
+          "trace_samples": 2000,
+          "track_id": "spa"
+        },
+        {
+          "archive_name": "lap_20261014-095451_9242e37a_27_141435_6acf516b6511.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "shared",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 27,
+          "lap_uuid": "6acf516b651144d01b",
+          "measured_core_temp_median_c": {
+            "fl": 82.8909,
+            "fr": 80.4479,
+            "rl": 95.5234,
+            "rr": 94.5306
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 21.7126,
+            "fr": 21.4635,
+            "rl": 22.9774,
+            "rr": 22.8778
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.1589,
+            "fr": -0.1885,
+            "rl": -0.1711,
+            "rr": -0.1559
+          },
+          "resolution_error": null,
+          "session_uuid": "9242e37ae914",
+          "source_sha256": "b7102c7e208b487fa61403d0b64d9f0c932d6c089c8b6feb0ae106ff979b4725",
+          "trace_samples": 2000,
+          "track_id": "spa"
+        }
+      ]
+    },
+    {
+      "adjudication": "INELIGIBLE",
+      "case_id": "P06",
+      "expected_action": null,
+      "purpose": "two-lap measured-pressure illustration; not an admissible pit-return snapshot",
+      "reasons": [
+        "historical_cold_pressure_snapshot_missing",
+        "historical_setup_path_and_hash_missing",
+        "pit_return_event_not_recorded",
+        "historical_car_data_version_unbound"
+      ],
+      "sources": [
+        {
+          "archive_name": "lap_20261014-095712_9242e37a_28_141610_6acf51f83f1a.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "shared",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 28,
+          "lap_uuid": "6acf51f83f1ae82e1c",
+          "measured_core_temp_median_c": {
+            "fl": 82.9147,
+            "fr": 80.3444,
+            "rl": 95.3729,
+            "rr": 94.4888
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 21.7147,
+            "fr": 21.4546,
+            "rl": 22.9692,
+            "rr": 22.8741
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.1903,
+            "fr": -0.1731,
+            "rl": -0.1352,
+            "rr": -0.1299
+          },
+          "resolution_error": null,
+          "session_uuid": "9242e37ae914",
+          "source_sha256": "52fa1708303b85981fe5c3684675521c9bed95103f4434d1a7e7abf07c92ca6e",
+          "trace_samples": 2000,
+          "track_id": "spa"
+        },
+        {
+          "archive_name": "lap_20261014-095934_9242e37a_29_141485_6acf52863321.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "shared",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 29,
+          "lap_uuid": "6acf528633211fdb1d",
+          "measured_core_temp_median_c": {
+            "fl": 82.7668,
+            "fr": 79.9226,
+            "rl": 94.6988,
+            "rr": 93.3286
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 21.6997,
+            "fr": 21.4132,
+            "rl": 22.8922,
+            "rr": 22.7573
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.2016,
+            "fr": -0.1767,
+            "rl": -0.148,
+            "rr": -0.1377
+          },
+          "resolution_error": null,
+          "session_uuid": "9242e37ae914",
+          "source_sha256": "fb8e239051c9d26eec2fc70768351308b5cd52ce31ca4d76a541adc7d12e2d9e",
+          "trace_samples": 2000,
+          "track_id": "spa"
+        }
+      ]
+    },
+    {
+      "adjudication": "INELIGIBLE",
+      "case_id": "T01",
+      "expected_action": null,
+      "purpose": "cold/short autonomous-lab illustration",
+      "reasons": [
+        "historical_cold_pressure_snapshot_missing",
+        "historical_setup_path_and_hash_missing",
+        "pit_return_event_not_recorded",
+        "historical_car_data_version_unbound"
+      ],
+      "sources": [
+        {
+          "archive_name": "lap_20261015-011944_1da256a0_1_145833_6ad02a307605.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "legacy_unknown",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 1,
+          "lap_uuid": "6ad02a3076053a831",
+          "measured_core_temp_median_c": {
+            "fl": 51.5425,
+            "fr": 51.1269,
+            "rl": 55.1863,
+            "rr": 54.8659
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 20.0868,
+            "fr": 20.0203,
+            "rl": 20.6698,
+            "rr": 20.6186
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.9027,
+            "fr": -0.3094,
+            "rl": -0.2084,
+            "rr": -0.1373
+          },
+          "resolution_error": null,
+          "session_uuid": "1da256a08688",
+          "source_sha256": "348cedd9084103a8fbec318881edc840a518b18345bf2a4cbfbf8d8b943afd15",
+          "trace_samples": 2000,
+          "track_id": "magione"
+        }
+      ]
+    },
+    {
+      "adjudication": "INELIGIBLE",
+      "case_id": "T02",
+      "expected_action": null,
+      "purpose": "cold second-lap autonomous-lab illustration",
+      "reasons": [
+        "historical_cold_pressure_snapshot_missing",
+        "historical_setup_path_and_hash_missing",
+        "pit_return_event_not_recorded",
+        "historical_car_data_version_unbound"
+      ],
+      "sources": [
+        {
+          "archive_name": "lap_20261015-015225_80fefe2d_2_133526_6ad031d9b0fc.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "legacy_unknown",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 2,
+          "lap_uuid": "6ad031d9b0fc189f2",
+          "measured_core_temp_median_c": {
+            "fl": 43.3135,
+            "fr": 42.1756,
+            "rl": 48.2921,
+            "rr": 47.1632
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 18.7702,
+            "fr": 18.5881,
+            "rl": 19.5667,
+            "rr": 19.3861
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.5255,
+            "fr": -0.2958,
+            "rl": -0.1591,
+            "rr": -0.1233
+          },
+          "resolution_error": null,
+          "session_uuid": "80fefe2d9d34",
+          "source_sha256": "2b169481cc42e0ca5b0a9b6361ac656a463e1adf0d7e07c09d6ddcd3f5be34f7",
+          "trace_samples": 2000,
+          "track_id": "magione"
+        }
+      ]
+    },
+    {
+      "adjudication": "INELIGIBLE",
+      "case_id": "T03",
+      "expected_action": null,
+      "purpose": "cold short-stint illustration",
+      "reasons": [
+        "historical_cold_pressure_snapshot_missing",
+        "historical_setup_path_and_hash_missing",
+        "pit_return_event_not_recorded",
+        "historical_car_data_version_unbound"
+      ],
+      "sources": [
+        {
+          "archive_name": "lap_20261016-071222_98100682_2_135560_6ad1ce5626a8.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "legacy_unknown",
+          "car_id": "ks_mclaren_650_gt3",
+          "compound_index": 1,
+          "lap_n": 2,
+          "lap_uuid": "6ad1ce5626a866cd2",
+          "measured_core_temp_median_c": {
+            "fl": 46.7405,
+            "fr": 44.5514,
+            "rl": 48.3743,
+            "rr": 47.706
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 18.1011,
+            "fr": 17.8793,
+            "rl": 18.2666,
+            "rr": 18.1989
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.4142,
+            "fr": -0.3011,
+            "rl": -0.1246,
+            "rr": -0.097
+          },
+          "resolution_error": null,
+          "session_uuid": "98100682c942",
+          "source_sha256": "b83d928ed2abe4473f4ceb4b92f0513ff28ccdcb8430c2cb412c13b883eced6f",
+          "trace_samples": 2000,
+          "track_id": "magione"
+        }
+      ]
+    },
+    {
+      "adjudication": "INELIGIBLE",
+      "case_id": "T04",
+      "expected_action": null,
+      "purpose": "cold first-lap AI illustration",
+      "reasons": [
+        "historical_cold_pressure_snapshot_missing",
+        "historical_setup_path_and_hash_missing",
+        "pit_return_event_not_recorded",
+        "historical_car_data_version_unbound"
+      ],
+      "sources": [
+        {
+          "archive_name": "lap_20261022-213707_106e35e2_1_346649_6ada8203022f.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "ai",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 1,
+          "lap_uuid": "6ada8203022f73541",
+          "measured_core_temp_median_c": {
+            "fl": 41.4918,
+            "fr": 41.4227,
+            "rl": 46.8089,
+            "rr": 46.598
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 17.5547,
+            "fr": 17.5476,
+            "rl": 18.0881,
+            "rr": 18.067
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.494,
+            "fr": -3.1278,
+            "rl": -0.0382,
+            "rr": -0.037
+          },
+          "resolution_error": null,
+          "session_uuid": "106e35e28efa",
+          "source_sha256": "30e719243a895f5d1ba0394cda9e5c5b02b59dd5324a9c4fe7aaa279f02b139c",
+          "trace_samples": 2000,
+          "track_id": "spa"
+        }
+      ]
+    },
+    {
+      "adjudication": "INELIGIBLE",
+      "case_id": "T05",
+      "expected_action": null,
+      "purpose": "cold lockup-contaminated AI illustration",
+      "reasons": [
+        "historical_cold_pressure_snapshot_missing",
+        "historical_setup_path_and_hash_missing",
+        "pit_return_event_not_recorded",
+        "historical_car_data_version_unbound"
+      ],
+      "sources": [
+        {
+          "archive_name": "lap_20261023-001109_df94578f_1_346654_6adaa61d613e.json",
+          "archived_live_optimal_temp_c": 95,
+          "authority": "ai",
+          "car_id": "ks_porsche_911_gt3_r_2016",
+          "compound_index": 1,
+          "lap_n": 1,
+          "lap_uuid": "6adaa61d613efbb41",
+          "measured_core_temp_median_c": {
+            "fl": 41.4918,
+            "fr": 41.4276,
+            "rl": 46.8034,
+            "rr": 46.6088
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 17.5547,
+            "fr": 17.5481,
+            "rl": 18.0875,
+            "rr": 18.0676
+          },
+          "measured_slip_ratio_min": {
+            "fl": -1.0871,
+            "fr": -0.8587,
+            "rl": -0.0309,
+            "rr": -0.0293
+          },
+          "resolution_error": null,
+          "session_uuid": "df94578fe8a8",
+          "source_sha256": "bc35896b4282d07bc206748ed3f511002a292e86c1837e9a5a3838537a1953f9",
+          "trace_samples": 2000,
+          "track_id": "spa"
+        }
+      ]
+    },
+    {
+      "adjudication": "INELIGIBLE",
+      "case_id": "T06",
+      "expected_action": null,
+      "purpose": "zero-pressure unread-sentinel illustration",
+      "reasons": [
+        "historical_cold_pressure_snapshot_missing",
+        "historical_setup_path_and_hash_missing",
+        "pit_return_event_not_recorded",
+        "historical_car_data_version_unbound"
+      ],
+      "sources": [
+        {
+          "archive_name": "lap_20261111-192858_86ce7e3e_1_155068_6af4c1fada8b.json",
+          "archived_live_optimal_temp_c": 85,
+          "authority": "legacy_unknown",
+          "car_id": "ks_ferrari_488_gt3",
+          "compound_index": 1,
+          "lap_n": 1,
+          "lap_uuid": "6af4c1fada8b7aae1",
+          "measured_core_temp_median_c": {
+            "fl": 26.0,
+            "fr": 26.0,
+            "rl": 26.0,
+            "rr": 26.0
+          },
+          "measured_hot_pressure_median_psi": {
+            "fl": 0.0,
+            "fr": 0.0,
+            "rl": 0.0,
+            "rr": 0.0
+          },
+          "measured_slip_ratio_min": {
+            "fl": -0.1741,
+            "fr": -0.3276,
+            "rl": -0.1146,
+            "rr": -0.1149
+          },
+          "resolution_error": null,
+          "session_uuid": "86ce7e3e8cd2",
+          "source_sha256": "1b9dc65fecd676ad725c07152647c26a192362d185d61b0c20355f4abc04b69a",
+          "trace_samples": 2000,
+          "track_id": "spa"
+        }
+      ]
+    }
+  ],
+  "issue": 956,
+  "operator_decision_time_measurements": 0,
+  "pit_state_trace_channel_count": 0,
+  "positive_measured_pressure_archives": 182,
+  "schema_version": 1,
+  "scope_limits": [
+    "Only the canonical native archive root is counted; other historical scratch/verification copies do not create additional observations.",
+    "The twelve illustrations below are INELIGIBLE, not twelve usable snapshots, and do not populate positive/negative experiment denominators.",
+    "Multiple adjacent lap windows in one shared-control session are not independent pit returns.",
+    "Current car data cannot retroactively establish historical pressure/thermal targets. Current tyre_specs front/rear fallback must not be assumed to prove per-axle equality on arbitrary cars.",
+    "in_game is acquisition source, not evidence of human control."
+  ],
+  "session_count": 22,
+  "setup_hash_present_count": 0,
+  "setup_path_present_count": 0,
+  "setup_snapshot_present_count": 0,
+  "source_count": 183,
+  "source_manifest_encoding": "UTF-8 compact sorted-key JSON array of {name,sha256} sorted archive filenames",
+  "source_manifest_sha256": "7574a3938fd46a94be7cfa7acfbbb590ccbf08bf19db9eb0ce81f6eab82d2739",
+  "trap_acceptance_cases": 0,
+  "unique_trace_count": 183,
+  "usable_adjudicated_pit_return_snapshots": 0,
+  "verified_human_archive_count": 0
+}

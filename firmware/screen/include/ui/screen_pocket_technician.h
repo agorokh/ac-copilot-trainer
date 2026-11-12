@@ -97,6 +97,21 @@ void screen_pocket_technician_apply_live_electronics(float brake_bias_pct,
                                                      const char* lock_reason);
 void screen_pocket_technician_invalidate_live_state(void);
 
+// Bounded cold-pressure experiment card. A decision tap only queues consent;
+// applied state always comes back from the sidecar after real setup readback.
+#define PT_PRESCRIPTION_ID_MAX 65
+#define PT_PRESCRIPTION_REQUEST_MAX 24
+typedef struct {
+    char section[32];
+    float from_value;
+    float to_value;
+    float delta_psi;
+} pt_prescription_change_t;
+void screen_pocket_technician_apply_prescription(
+    const char* request_id, const char* prescription_id, const char* status,
+    const char* summary, const char* evidence, const char* reason,
+    const pt_prescription_change_t* changes, int change_count);
+
 // ---- Out-queue (screen → trainer) ----------------------------------------
 // The screen module never writes to the WS directly; it stages a request
 // in a small bounded out-queue that `main.cpp` drains every loop tick.
@@ -108,6 +123,9 @@ typedef enum {
     PT_REQ_LOAD,        // {"v":1,"type":"setup.load","name":"<name>"}
     PT_REQ_SPINNER_LIST, // {"v":1,"type":"setup.spinner.list","path":"..."}
     PT_REQ_SPINNER_SET,  // {"v":1,"type":"setup.spinner.set","section":"...","value":N}
+    PT_REQ_PRESCRIPTION_GET,
+    PT_REQ_PRESCRIPTION_ACCEPT,
+    PT_REQ_PRESCRIPTION_REJECT,
 } pt_request_kind_t;
 
 // Absolute INI paths on Windows can exceed 160–256 chars; keep one shared cap
@@ -117,11 +135,10 @@ typedef enum {
 // the trainer scientist's 51-character names were silently cut on screen and no longer matched
 // the trainer's acknowledgement when the ACTIVE row was resolved.
 #define PT_SETUP_NAME_MAX 96
-// Bounded active-setup spinner cache (#86): `screen_pocket_technician_add_spinner` keeps the top
-// 12 priority controls (`SPINNER_DEFS` order first) so 7-widget spinner rows + up to 64 setup
-// cards stay comfortably inside LVGL's 64 KiB `LV_MEM_SIZE` pool (`LV_USE_ASSERT_MALLOC=1`) and
-// `SAVED` setups remain ~1.5 swipes down on the 320x480 panel. `tools/ai_sidecar/server.py`
-// (`SCREEN_PEER_MAX_SPINNERS`) mirrors this exact constant.
+// Cache the top 12 priority controls (`SPINNER_DEFS` order first). Pocket
+// Technician renders four controls and four of its 64 cached saved setups per
+// page, retaining room for prescription cards in LVGL's 64 KiB pool. The
+// sidecar's SCREEN_PEER_MAX_SPINNERS mirrors this cache capacity.
 #define PT_MAX_SPINNERS 12
 
 typedef struct {
@@ -130,6 +147,8 @@ typedef struct {
     char              path[PT_SETUP_PATH_MAX];  // optional disambiguator; "" if unknown
     char              section[32]; // valid for PT_REQ_SPINNER_SET only
     float             value;       // valid for PT_REQ_SPINNER_SET only
+    char              prescription_id[PT_PRESCRIPTION_ID_MAX];
+    char              request_id[PT_PRESCRIPTION_REQUEST_MAX];
 } pt_request_t;
 
 // Pop the next pending request, or PT_REQ_NONE. Drained from main.cpp.

@@ -1117,6 +1117,22 @@ static void dispatch_phase2_message(const String& body) {
       }
     }
     screen_pocket_technician_finish_spinner_list();
+  } else if (strcmp(type, "setup.prescription.card") == 0) {
+    pt_prescription_change_t changes[4] = {};
+    JsonArrayConst rows = doc["changes"].as<JsonArrayConst>();
+    int count = rows.isNull() ? 0 : static_cast<int>(rows.size());
+    int i = 0;
+    for (JsonVariantConst entry : rows) {
+      if (i >= 4) break;
+      snprintf(changes[i].section, sizeof(changes[i].section), "%s", entry["section"] | "");
+      changes[i].from_value = phase2_json_float_or(entry["from"], NAN);
+      changes[i].to_value = phase2_json_float_or(entry["to"], NAN);
+      changes[i].delta_psi = phase2_json_float_or(entry["delta_psi"], NAN);
+      ++i;
+    }
+    screen_pocket_technician_apply_prescription(
+        doc["request_id"] | "", doc["prescription_id"] | "", doc["status"] | "blocked",
+        doc["summary"] | "", doc["evidence"] | "", doc["reason"] | "", changes, count);
   } else if (strcmp(type, "setup.spinner.set.ack") == 0) {
     bool ok = doc["ok"] | false;
     const char* section = doc["section"] | "";
@@ -1678,6 +1694,14 @@ static void pt_request_drain() {
       doc["section"] = req.section;
       doc["value"] = req.value;
       if (req.path[0]) doc["path"] = req.path;
+    } else if (req.kind == PT_REQ_PRESCRIPTION_GET) {
+      doc["type"] = "setup.prescription.get";
+      doc["request_id"] = req.request_id;
+    } else if (req.kind == PT_REQ_PRESCRIPTION_ACCEPT || req.kind == PT_REQ_PRESCRIPTION_REJECT) {
+      doc["type"] = "setup.prescription.decide";
+      doc["prescription_id"] = req.prescription_id;
+      doc["request_id"] = req.request_id;
+      doc["decision"] = req.kind == PT_REQ_PRESCRIPTION_ACCEPT ? "accept" : "reject";
     } else {
       continue;
     }

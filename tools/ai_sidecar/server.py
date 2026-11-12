@@ -18,6 +18,7 @@ import errno
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -32,7 +33,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from tools.ai_sidecar import observability
-from tools.ai_sidecar.car_class import CarClassResolution, resolve_installed_car
+from tools.ai_sidecar.car_class import CarClassResolution, resolve_ac_root, resolve_installed_car
 from tools.ai_sidecar.coaching.generation import LatestGenerationQueue
 from tools.ai_sidecar.coaching.llm_coach import (
     corner_hints_enabled,
@@ -107,6 +108,11 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_SETUP_LIST_RESULT,
     TYPE_SETUP_LOAD,
     TYPE_SETUP_LOAD_ACK,
+    TYPE_SETUP_PRESCRIPTION_CARD,
+    TYPE_SETUP_PRESCRIPTION_DECIDE,
+    TYPE_SETUP_PRESCRIPTION_GET,
+    TYPE_SETUP_PRESCRIPTION_RPC,
+    TYPE_SETUP_PRESCRIPTION_RPC_RESULT,
     TYPE_SETUP_SPINNER_LIST,
     TYPE_SETUP_SPINNER_LIST_RESULT,
     TYPE_SETUP_SPINNER_SET,
@@ -175,6 +181,7 @@ from tools.ai_sidecar.setup_optimizer import (
     suggest_next_setup,
 )
 from tools.ai_sidecar.shift_observer import ShiftObserver
+from tools.ai_sidecar.tyre_specs import read_tyre_specs
 from tools.ai_sidecar.voice.vocabulary import KINDS as VOICE_KINDS
 from tools.lap_archive_export import LapArchiveExportError
 
@@ -206,6 +213,8 @@ _setup_exchange_endpoint: str | None = None
 _setup_exchange_user_setups_root: Path | None = None
 _setup_exchange_broker = SetupExchangeBroker()
 _setup_exchange_tasks: dict[Any, asyncio.Task[Any]] = {}
+_prescription_broker = SetupExchangeBroker(timeout_s=5.0)
+_prescription_tasks: dict[Any, asyncio.Task[Any]] = {}
 _external_peer_classes: dict[Any, str] = {}
 # #86: the rig-screen framebuffer capture in flight, capture_id -> (requester, last activity).
 # The screen streams one capture at a time and ignores requests while busy, so the sidecar admits
@@ -481,6 +490,8 @@ CLIENT_TO_SERVER_TYPES = frozenset(
         TYPE_SETUP_LOAD,
         TYPE_SETUP_SPINNER_LIST,
         TYPE_SETUP_SPINNER_SET,
+        TYPE_SETUP_PRESCRIPTION_GET,
+        TYPE_SETUP_PRESCRIPTION_DECIDE,
         TYPE_SETUP_EXPERIMENT_STORE,
         TYPE_SETUP_EXPERIMENT_RECORD,
         TYPE_SETUP_COMPARE,
@@ -589,6 +600,10 @@ def _reset_external_state() -> None:
         task.cancel()
     _setup_exchange_tasks.clear()
     _setup_exchange_broker.reset()
+    for task in list(_prescription_tasks.values()):
+        task.cancel()
+    _prescription_tasks.clear()
+    _prescription_broker.reset()
     _external_peers.clear()
     _session_start_authorized_peers.clear()
     _screen_touch_authorized_peers.clear()
@@ -2813,6 +2828,249 @@ def _drop_setup_exchange_peer(peer: Any) -> None:
     if task is not None:
         task.cancel()
     _setup_exchange_broker.drop(peer)
+    task = _prescription_tasks.pop(peer, None)
+    if task is not None:
+        task.cancel()
+    _prescription_broker.drop(peer)
+
+
+def _prescription_lap_dir(ctx: dict[str, Any], store_path: Path) -> Path:
+    """Pin all prescription persistence to the authenticated trainer's journal."""
+    lap_dir = Path(ctx["lap_dir"]).resolve()
+    expected_store = lap_dir.parent / "setup_experiments" / "experiments.jsonl"
+    if (
+        lap_dir.name.lower() != "laps"
+        or lap_dir.parent.name.lower() != "journal"
+        or store_path.resolve() != expected_store
+    ):
+        raise ValueError("Trainer journal does not match the registered experiment store")
+    return lap_dir
+
+
+def _prescription_inputs(
+    ctx: dict[str, Any], store_path: Path
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Read only the authenticated trainer's registered current-session journal."""
+    identity = ctx["identity"]
+    lap_dir = _prescription_lap_dir(ctx, store_path)
+    candidates = [
+        row
+        for row in load_records(store_path)
+        if row.get("session_uuid") == identity.get("session_id")
+        and isinstance(row.get("lap"), dict)
+    ]
+    candidates.sort(key=lambda row: float(row["lap"].get("lap_n", -1)))
+    archives = []
+    for row in candidates[-2:]:
+        path = Path(row["source_lap_path"]).resolve()
+        if path.parent != lap_dir or not path.name.startswith("lap_") or path.suffix != ".json":
+            raise ValueError("Prescription evidence is outside the trainer lap journal")
+        if path.stat().st_size > 32 * 1024 * 1024:
+            raise ValueError("Prescription evidence exceeds the bounded archive size")
+        archives.append(json.loads(path.read_text(encoding="utf-8-sig")))
+    car_id = identity.get("car_id")
+    compound = identity.get("compound_index")
+    targets: dict[str, Any] = {}
+    if (
+        isinstance(car_id, str)
+        and re.fullmatch(r"[A-Za-z0-9_-]+", car_id)
+        and isinstance(compound, int | float)
+        and not isinstance(compound, bool)
+        and (not isinstance(compound, float) or math.isfinite(compound))
+        and compound >= 0
+        and compound == int(compound)
+    ):
+        for axle, wheels in (("front", ("fl", "fr")), ("rear", ("rl", "rr"))):
+            spec = read_tyre_specs(
+                resolve_ac_root() / "content" / "cars" / car_id, int(compound), axle=axle
+            )
+            if spec is not None:
+                for wheel in wheels:
+                    targets[wheel] = {
+                        "pressure_ideal_psi": spec.pressure_ideal_psi,
+                        "optimal_temp_c": spec.optimal_temp_c,
+                    }
+    return archives, targets
+
+
+async def _prescription_rpc(
+    requester: Any, producer: Any, operation: str, **fields: Any
+) -> dict[str, Any]:
+    if requester not in _external_peers or producer not in _lua_authorized_peers:
+        raise ValueError("Prescription requester or trainer disconnected")
+    request_id = _prescription_broker.begin(requester, producer, operation)
+    try:
+        error = await asyncio.wait_for(
+            _safe_send_raw(
+                producer,
+                json.dumps(
+                    {
+                        "v": 1,
+                        "type": TYPE_SETUP_PRESCRIPTION_RPC,
+                        "request_id": request_id,
+                        "operation": operation,
+                        **fields,
+                    },
+                    separators=(",", ":"),
+                ),
+            ),
+            timeout=5.0,
+        )
+        if error is not None:
+            raise ValueError("Trainer disconnected; pressure application was not retried")
+        result = await _prescription_broker.wait(request_id)
+        if result.get("ok") is not True:
+            raise ValueError(str(result.get("error") or "Trainer prescription check failed")[:160])
+        return result
+    finally:
+        pending = _prescription_broker.pending.pop(request_id, None)
+        if pending is not None and not pending.future.done():
+            pending.future.cancel()
+
+
+def _prescription_wire(record: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+    # Private identity, paths and journal provenance never reach the screen.
+    out = {"v": 1, "type": TYPE_SETUP_PRESCRIPTION_CARD}
+    for key in ("prescription_id", "status", "summary", "evidence", "reason", "changes"):
+        if key in record:
+            out[key] = record[key]
+    if data.get("request_id") is not None:
+        out["request_id"] = data["request_id"]
+    return out
+
+
+async def _handle_prescription(websocket: Any, data: dict[str, Any]) -> None:
+    from tools.ai_sidecar.setup_prescription import PrescriptionJournal, build_prescription
+
+    record: dict[str, Any] | None = None
+    try:
+        armed = os.environ.get("AC_COPILOT_PRESSURE_EXPERIMENT") == "1"
+        if data["type"] == TYPE_SETUP_PRESCRIPTION_GET and not armed:
+            record = {
+                "status": "abstained",
+                "summary": "No pressure change",
+                "changes": [],
+                "reason": "Pressure experiment inactive",
+            }
+            if websocket in _external_peers:
+                await _safe_send(websocket, _prescription_wire(record, data))
+            return
+        if (
+            data["type"] == TYPE_SETUP_PRESCRIPTION_DECIDE
+            and data["decision"] == "reject"
+            and _setup_experiment_store_path is not None
+        ):
+            # A safe refusal remains recordable after the trainer disconnects;
+            # it needs no pit state, context RPC, archive reread or actuator.
+            record = PrescriptionJournal(_setup_experiment_store_path).decide(
+                data["prescription_id"], "reject"
+            )
+            if websocket in _external_peers:
+                await _safe_send(websocket, _prescription_wire(record, data))
+            return
+        if data["type"] == TYPE_SETUP_PRESCRIPTION_DECIDE and not armed:
+            if _setup_experiment_store_path is not None:
+                record = PrescriptionJournal(_setup_experiment_store_path).get(
+                    data["prescription_id"]
+                )
+            if record is None or record.get("status") != "accepted_unverified":
+                record = {
+                    **(record or {}),
+                    "status": "blocked",
+                    "reason": "Pressure experiment inactive",
+                }
+                if websocket in _external_peers:
+                    await _safe_send(websocket, _prescription_wire(record, data))
+                return
+        producers = [
+            peer
+            for peer in _external_peers
+            if peer in _lua_authorized_peers and _peer_class(peer) == CLIENT_CLASS_LUA
+        ]
+        if len(producers) != 1:
+            raise ValueError("Open one AC practice session with the trainer connected")
+        producer = producers[0]
+        ctx = await _prescription_rpc(websocket, producer, "context")
+        if websocket not in _external_peers:
+            return
+        if _setup_experiment_store_path is None:
+            raise ValueError("Awaiting the trainer experiment journal")
+        store = _setup_experiment_store_path
+        # Context pins the journal too: a stale or forged generic store registration
+        # cannot redirect prescription reads or writes.
+        _prescription_lap_dir(ctx, store)
+        journal = PrescriptionJournal(store)
+        if data["type"] == TYPE_SETUP_PRESCRIPTION_GET:
+            if ctx.get("is_in_pit") is not True or ctx.get("reset_allowed") is not True:
+                raise ValueError("Return to the pit box for pressure prescriptions")
+            archives, targets = await asyncio.to_thread(_prescription_inputs, ctx, store)
+            if websocket not in _external_peers:
+                return
+            card = build_prescription(
+                archives, ctx.get("spinners", []), identity=ctx["identity"], targets=targets
+            )
+            record = journal.remember(card)
+        else:
+            record = journal.get(data["prescription_id"])
+            if record is None:
+                raise ValueError("Prescription unavailable; refresh the card")
+            if record.get("identity") != ctx.get("identity"):
+                raise ValueError("Session, compound or setup changed; refresh the card")
+            if (
+                os.environ.get("AC_COPILOT_PRESSURE_EXPERIMENT") != "1"
+                and record.get("status") != "accepted_unverified"
+            ):
+                record = {**record, "status": "blocked"}
+                raise ValueError("Pressure experiment inactive")
+            record = journal.decide(data["prescription_id"], data["decision"])
+            if record.get("status") == "accepted_unverified":
+                if record.get("new_decision") is True:
+                    # Persistence happens before this one permitted dispatch. If
+                    # its result is lost, later Accept retries only read back.
+                    result = await _prescription_rpc(
+                        websocket,
+                        producer,
+                        "apply",
+                        prescription_id=record["prescription_id"],
+                        context_id=ctx["context_id"],
+                        identity=record["identity"],
+                        changes=record["changes"],
+                    )
+                else:
+                    result = await _prescription_rpc(
+                        websocket, producer, "readback", identity=record["identity"]
+                    )
+                record = journal.verify(record["prescription_id"], result.get("readback", {}))
+    except (ValueError, OSError, SetupExchangeError, KeyError, TypeError) as exc:
+        if record is None:
+            record = {"status": "abstained", "summary": "No pressure change", "changes": []}
+        record = {**record, "reason": str(exc)[:160]}
+    if websocket in _external_peers:
+        await _safe_send(websocket, _prescription_wire(record, data))
+
+
+async def _schedule_prescription(websocket: Any, data: dict[str, Any]) -> None:
+    if websocket in _prescription_tasks or len(_prescription_tasks) >= 8:
+        await _safe_send(
+            websocket,
+            _prescription_wire(
+                {"status": "blocked", "summary": "Prescription request pending", "changes": []},
+                data,
+            ),
+        )
+        return
+    task = asyncio.create_task(_handle_prescription(websocket, data))
+    _prescription_tasks[websocket] = task
+    _background_tasks.add(task)
+
+    def done(completed: asyncio.Task[Any]) -> None:
+        _background_tasks.discard(completed)
+        if _prescription_tasks.get(websocket) is completed:
+            _prescription_tasks.pop(websocket, None)
+        if not completed.cancelled() and completed.exception() is not None:
+            logger.error("Prescription request failed: %s", completed.exception())
+
+    task.add_done_callback(done)
 
 
 def _uses_native_setup_exchange() -> bool:
@@ -3160,6 +3418,27 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             )
         elif not _setup_exchange_broker.accept(websocket, data):
             await _safe_send(websocket, make_error("unknown Setup Exchange request", ref_type=t))
+        return
+    if t == TYPE_SETUP_PRESCRIPTION_RPC_RESULT:
+        if (
+            websocket not in _lua_authorized_peers
+            or _peer_class(websocket) != CLIENT_CLASS_LUA
+            or not _prescription_broker.accept(websocket, data)
+        ):
+            await _safe_send(
+                websocket,
+                make_error(
+                    "Prescription result requires the pinned authenticated trainer", ref_type=t
+                ),
+            )
+        return
+    if t in (TYPE_SETUP_PRESCRIPTION_RPC, TYPE_SETUP_PRESCRIPTION_CARD):
+        await _safe_send(
+            websocket, make_error("Prescription frame is sidecar-originated", ref_type=t)
+        )
+        return
+    if t in (TYPE_SETUP_PRESCRIPTION_GET, TYPE_SETUP_PRESCRIPTION_DECIDE):
+        await _schedule_prescription(websocket, data)
         return
     if t in (TYPE_SETUP_EXCHANGE_SEARCH_RESULT, TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK):
         await _safe_send(

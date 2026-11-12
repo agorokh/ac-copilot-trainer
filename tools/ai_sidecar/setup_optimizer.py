@@ -8,9 +8,14 @@ all optimizer math stdlib-only so the default sidecar install stays lightweight.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import math
 import os
+import threading
+import time
+from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +26,87 @@ DEFAULT_STORE_NAME = "experiments.jsonl"
 DEFAULT_STORE_DIR = "setup_experiments"
 MAX_TUNABLE_PARAMS = 6
 MIN_EXPERIMENTS_FOR_SUGGESTION = 2
+# Shared by the journal, sidecar worker threads and documented CLI rebuilds.
+STORE_LOCK = threading.RLock()
+_STORE_HELD = threading.local()
+
+
+@contextmanager
+def store_transaction(store_path: str | os.PathLike[str]):
+    """Serialize the entire read/modify/replace across threads AND processes.
+
+    Keep the lockfile: deleting it would let a new process lock another inode.
+    OS-owned locks release on process death; uncertain acquisition fails closed.
+    Nested journal/save calls in this thread reuse the same held lock.
+    """
+    path = Path(store_path).resolve()
+    key = os.path.normcase(str(path))
+    with STORE_LOCK:
+        held = getattr(_STORE_HELD, "paths", set())
+        if key in held:
+            yield
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.with_name(path.name + ".lock").open("a+b") as lock:
+            if os.name == "nt":
+                import msvcrt
+
+                if lock.seek(0, os.SEEK_END) == 0:
+                    lock.write(b"\0")
+                    lock.flush()
+
+                def acquire():
+                    lock.seek(0)
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+
+                def release():
+                    lock.seek(0)
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                def acquire():
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+                def release():
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+            deadline = time.monotonic() + 5.0
+            while True:
+                try:
+                    acquire()
+                    break
+                except OSError as exc:
+                    if exc.errno not in {11, 13, 35, 36}:
+                        raise
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(
+                            "Experiment journal is busy; no decision authorized"
+                        ) from exc
+                    time.sleep(0.02)
+            _STORE_HELD.paths = held | {key}
+            try:
+                yield
+            finally:
+                _STORE_HELD.paths = held
+                release()
+
+
+def _store_locked(function):
+    signature = inspect.signature(function)
+
+    @wraps(function)
+    def locked(*args, **kwargs):
+        arguments = signature.bind(*args, **kwargs)
+        arguments.apply_defaults()
+        path = arguments.arguments["store_path"]
+        if path is None:
+            path = default_store_path_for_lap_dir(arguments.arguments["lap_dir"])
+        with store_transaction(path):
+            return function(*args, **kwargs)
+
+    return locked
+
 
 COMMON_PARAM_PRIORITY: tuple[str, ...] = (
     "FRONT_BIAS.VALUE",
@@ -284,6 +370,7 @@ def load_records(store_path: str | os.PathLike[str]) -> list[dict[str, Any]]:
     return out
 
 
+@_store_locked
 def save_records(records: list[dict[str, Any]], store_path: str | os.PathLike[str]) -> None:
     path = Path(store_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -301,9 +388,12 @@ def save_records(records: list[dict[str, Any]], store_path: str | os.PathLike[st
         for rec in records_sorted:
             fh.write(json.dumps(rec, sort_keys=True, separators=(",", ":")))
             fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
     tmp.replace(path)
 
 
+@_store_locked
 def upsert_records(
     records: list[dict[str, Any]],
     store_path: str | os.PathLike[str],
@@ -352,6 +442,7 @@ def record_lap_archive(
     }
 
 
+@_store_locked
 def rebuild_experiments(
     lap_dir: str | os.PathLike[str],
     *,
@@ -378,7 +469,12 @@ def rebuild_experiments(
             duplicates.append({"path": str(path), "experiment_id": rid})
         by_id[rid] = rec
     records = list(by_id.values())
-    save_records(records, store)
+    # Lap rebuilds regenerate lap experiments only. Human decisions are not
+    # derivable from archives and must survive a routine optimizer rebuild.
+    decisions = [
+        row for row in load_records(store) if row.get("record_type") == "setup_prescription"
+    ]
+    save_records([*records, *decisions], store)
     return {
         "ok": True,
         "store_path": str(store),

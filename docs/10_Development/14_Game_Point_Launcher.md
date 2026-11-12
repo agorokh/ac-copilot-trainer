@@ -350,3 +350,41 @@ Optional environment overrides:
   endpoint for local tests.
 - `AC_COPILOT_USER_SETUPS_DIR` points at the Assetto Corsa `setups` directory
   when Windows Documents discovery cannot find it.
+
+## Pocket Technician pressure experiment (#956)
+
+The cold-pressure card is a bounded experiment, disabled by default. For an
+authorized trial, start Game Point from a shell with
+`AC_COPILOT_PRESSURE_EXPERIMENT=1` in its process environment; the sidecar inherits
+it. Use the normal Game Point START and Content Manager practice path. Do not
+change the user's permanent environment or substitute a second sidecar. With
+the flag absent, the card reports that the experiment is inactive and authorizes
+no pressure writes. This flag is a trial switch, not a completed feature rollout.
+
+Before the trial, run `python -m tools.screen_simulator`, inspect the generated
+prescription PNGs, and follow the existing screen upload gate. Source, packaged
+Game Point/sidecar, Lua app and firmware must all contain this PR's changes.
+Do not flash or replace another owner's active rig session. Keep the real
+bench/pit verification within the issue's60-minute cap.
+
+In Pocket Technician, the card reports measured evidence, affected corners and
+cold psi changes. Accept rechecks the current pit box, session, compound, setup,
+units, bounds and steps at the authoritative Lua write boundary. Reject makes
+no setup change. A card expires120seconds after first issuance; refresh of the
+same evidence does not renew it. Accepted remains unverified until every intended
+cold setup value is read back from CSP. A lost/partial application is never
+automatically replayed; retry only requests readback. Readback verifies the cold
+setting, not a later hot-pressure or lap-time improvement.
+
+Each card/decision has one durable record in the existing
+`journal/setup_experiments/experiments.jsonl`. Its persistent `.lock` companion
+serializes sidecar decisions and CLI rebuilds; do not remove an active lockfile.
+Normal lap rebuild preserves these human decision rows. Raw lap files remain
+unchanged. Unknown or conflicting telemetry/targets explicitly abstain.
+
+The real experiment is **inconclusive** until twelve independently adjudicated
+pit-return snapshots and actual counterbalanced operator decision-to-apply times
+meet #956. See `tests/fixtures/setup_prescription/README.md` for capture
+prerequisites. The archived inventory and synthetic safety tests do not satisfy
+that comparison. Stop live application at the first wrong-direction actionable
+prescription; leave the trial flag unset outside the authorized experiment.

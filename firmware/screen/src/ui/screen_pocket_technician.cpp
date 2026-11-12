@@ -42,6 +42,10 @@ namespace {
 // ---- Module-static cache -------------------------------------------------
 
 constexpr int  PT_MAX_SETUPS    = 64;     // bounded list cache (PT_MAX_SPINNERS lives in screen_pocket_technician.h)
+constexpr int PT_SPINNERS_PER_PAGE = 4;
+constexpr int PT_SETUPS_PER_PAGE = 4;
+int g_spinner_page = 0;
+int g_setup_page = 0;
 bool g_setup_allowed = false;
 char g_lock_reason[80] = "Awaiting setup capability";
 char g_spinner_source[24] = "unknown";
@@ -54,6 +58,48 @@ int g_live_tc = -1, g_live_tc_modes = -1, g_live_abs = -1, g_live_abs_modes = -1
 lv_obj_t* g_minus_buttons[PT_MAX_SPINNERS] = {};
 lv_obj_t* g_plus_buttons[PT_MAX_SPINNERS] = {};
 lv_obj_t* g_spinner_value_labels[PT_MAX_SPINNERS] = {};
+char g_prescription_request_id[PT_PRESCRIPTION_REQUEST_MAX] = {};
+uint32_t g_prescription_generation = 0;
+bool g_prescription_has_card = false;
+bool g_prescription_pending = false;
+char g_prescription_pending_epoch[PT_PRESCRIPTION_REQUEST_MAX] = {};
+bool g_prescription_refresh_pending = false;
+char g_prescription_id[PT_PRESCRIPTION_ID_MAX] = {};
+char g_prescription_status[32] = {};
+char g_prescription_summary[96] = {};
+char g_prescription_evidence[160] = {};
+char g_prescription_reason[96] = {};
+pt_prescription_change_t g_prescription_changes[4] = {};
+int g_prescription_change_count = 0;
+lv_obj_t* g_prescription_accept = nullptr;
+lv_obj_t* g_prescription_reject = nullptr;
+lv_obj_t* g_prescription_state_label = nullptr;
+
+void refresh_prescription_controls();
+void request_prescription();
+
+void clear_prescription_decision(const char* epoch) {
+    if (epoch && strcmp(epoch, g_prescription_pending_epoch) != 0) return;
+    g_prescription_pending = false;
+    g_prescription_pending_epoch[0] = 0;
+}
+
+void adopt_prescription_epoch(const char* epoch) {
+    if (strcmp(epoch, g_prescription_request_id) == 0) return;
+    snprintf(g_prescription_request_id, sizeof(g_prescription_request_id), "%s", epoch);
+    // Pending UI flags belong to one displayed epoch. Queued safe Rejects
+    // retain their original IDs and can still be logged after a refresh.
+    clear_prescription_decision(nullptr);
+    g_prescription_refresh_pending = false;
+}
+
+void invalidate_prescription() {
+    adopt_prescription_epoch("");
+    g_prescription_has_card = false;
+    clear_prescription_decision(nullptr);
+    g_prescription_refresh_pending = false;
+    g_prescription_id[0] = 0;
+}
 // Effective capacity of a one-slot-wasted ring is N-1, so we size the array
 // at 5 to honor the documented depth of 4 in-flight requests (CodeRabbit on
 // PR #91). On creation we already enqueue PT_REQ_LIST once, so a user who
@@ -128,7 +174,7 @@ static void pending_load_clear() {
 static void discard_queued_mutations() {
     pt_request_t kept[PT_MAX_REQUESTS];
     int kept_n = 0;
-    bool kept_list = false, kept_spinners = false;
+    bool kept_list = false, kept_spinners = false, kept_prescription = false;
     while (g_req_head != g_req_tail) {
         const pt_request_t& request = g_req_q[g_req_head];
         bool keep = false;
@@ -138,8 +184,15 @@ static void discard_queued_mutations() {
         } else if (request.kind == PT_REQ_SPINNER_LIST && !kept_spinners) {
             kept_spinners = true;
             keep = true;
+        } else if (request.kind == PT_REQ_PRESCRIPTION_GET && !kept_prescription) {
+            kept_prescription = true;
+            keep = true;
+        } else if (request.kind == PT_REQ_PRESCRIPTION_REJECT) {
+            keep = true;
         }
         if (keep) kept[kept_n++] = request;
+        else if (request.kind == PT_REQ_PRESCRIPTION_ACCEPT)
+            clear_prescription_decision(request.request_id);
         g_req_head = (g_req_head + 1) % PT_MAX_REQUESTS;
     }
     g_req_head = 0;
@@ -170,8 +223,8 @@ static bool pending_load_push(const char* name, const char* path, lv_obj_t* row)
 // steal each other's ack (chatgpt-codex P2 on PR #91). When `ack_path` is
 // empty, only match pendings that also had no path at enqueue time so a
 // path-qualified row never pairs with a bare ack.
-static lv_obj_t* pending_load_take_row(const char* name, const char* ack_path) {
-    if (!name || !name[0]) return nullptr;
+static bool pending_load_take(const char* name, const char* ack_path, lv_obj_t** matched_row) {
+    if (!name || !name[0]) return false;
     for (int i = 0; i < g_pending_load_n; ++i) {
         if (strcmp(g_pending_loads[i].name, name) != 0) continue;
         if (ack_path && ack_path[0]) {
@@ -187,9 +240,10 @@ static lv_obj_t* pending_load_take_row(const char* name, const char* ack_path) {
             g_pending_loads[j] = g_pending_loads[j + 1];
         }
         --g_pending_load_n;
-        return row;
+        if (matched_row) *matched_row = row;
+        return true;
     }
-    return nullptr;
+    return false;
 }
 
 bool req_q_push(pt_request_kind_t kind, const char* name, const char* path) {
@@ -205,6 +259,7 @@ bool req_q_push(pt_request_kind_t kind, const char* name, const char* path) {
     int next = (g_req_tail + 1) % PT_MAX_REQUESTS;
     if (next == g_req_head) return false;  // full
     pt_request_t* r = &g_req_q[g_req_tail];
+    *r = pt_request_t{};
     r->kind = kind;
     if (name) {
         strncpy(r->name, name, sizeof(r->name) - 1);
@@ -406,6 +461,206 @@ void rebuild_list_widgets(pt_ctx_t* ctx);
 lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s);
 lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s);
 
+void on_page_clicked(lv_event_t* e) {
+    const intptr_t action = reinterpret_cast<intptr_t>(lv_event_get_user_data(e));
+    if (action == 1 && g_spinner_page > 0) --g_spinner_page;
+    if (action == 2 && (g_spinner_page + 1) * PT_SPINNERS_PER_PAGE < g_spinner_count) ++g_spinner_page;
+    if (action == 3 && g_setup_page > 0) --g_setup_page;
+    if (action == 4 && (g_setup_page + 1) * PT_SETUPS_PER_PAGE < g_setup_count) ++g_setup_page;
+    if (g_active_ctx) rebuild_list_widgets(g_active_ctx);
+}
+
+void make_page_controls(lv_obj_t* parent, bool spinners) {
+    const int count = spinners ? g_spinner_count : g_setup_count;
+    const int page_size = spinners ? PT_SPINNERS_PER_PAGE : PT_SETUPS_PER_PAGE;
+    const int page = spinners ? g_spinner_page : g_setup_page;
+    if (count <= page_size) return;
+    auto* row = lv_obj_create(parent);
+    lv_obj_set_size(row, 272, 32);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(row, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < 2; ++i) {
+        auto* button = lv_btn_create(row);
+        lv_obj_set_size(button, 82, 30);
+        lv_obj_align(button, i == 0 ? LV_ALIGN_LEFT_MID : LV_ALIGN_RIGHT_MID, 0, 0);
+        lv_obj_set_style_pad_all(button, 0, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(button, UI_BG_HEADER, LV_PART_MAIN);
+        const bool disabled = i == 0 ? page == 0 : (page + 1) * page_size >= count;
+        if (disabled) lv_obj_add_state(button, LV_STATE_DISABLED);
+        lv_obj_add_event_cb(button, on_page_clicked, LV_EVENT_CLICKED,
+            reinterpret_cast<void*>(static_cast<intptr_t>((spinners ? 1 : 3) + i)));
+        auto* label = lv_label_create(button);
+        lv_label_set_text(label, spinners ? (i == 0 ? "< CONTROLS" : "CONTROLS >")
+                                         : (i == 0 ? "< SETUPS" : "SETUPS >"));
+        lv_obj_set_style_text_font(label, UI_FONT_LABEL_XS, LV_PART_MAIN);
+        lv_obj_center(label);
+    }
+    char text[28];
+    snprintf(text, sizeof(text), "%d-%d/%d", page * page_size + 1,
+        LV_MIN((page + 1) * page_size, count), count);
+    auto* label = lv_label_create(row);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, UI_FONT_LABEL_XS, LV_PART_MAIN);
+    lv_obj_center(label);
+}
+
+bool prescription_is_proposed() {
+    return g_prescription_has_card && strcmp(g_prescription_status, "proposed") == 0
+        && g_prescription_id[0] && g_prescription_change_count > 0;
+}
+
+bool prescription_can_accept() {
+    return prescription_is_proposed() && !g_prescription_pending && !g_prescription_refresh_pending
+        && g_pt_sidecar_link_up && g_prescription_request_id[0]
+        && g_setup_allowed && g_live_known && (uint32_t)(millis() - g_live_at) <= 1500;
+}
+
+void request_prescription() {
+    if (!g_active_ctx || !g_pt_sidecar_link_up) return;
+    // Every refresh creates a new epoch. A delayed reply from an earlier
+    // session, disconnect or refresh can never restore an old actionable card.
+    char request_id[PT_PRESCRIPTION_REQUEST_MAX];
+    snprintf(request_id, sizeof(request_id), "pt-%lu", (unsigned long)++g_prescription_generation);
+    for (int i = g_req_head; i != g_req_tail; i = (i + 1) % PT_MAX_REQUESTS) {
+        if (g_req_q[i].kind == PT_REQ_PRESCRIPTION_GET) {
+            snprintf(g_req_q[i].request_id, sizeof(g_req_q[i].request_id), "%s", request_id);
+            adopt_prescription_epoch(request_id);
+            g_prescription_refresh_pending = true;
+            refresh_prescription_controls();
+            return;
+        }
+    }
+    int next = (g_req_tail + 1) % PT_MAX_REQUESTS;
+    if (next == g_req_head) {
+        ui_toast_error("Prescription refresh busy");
+        return;
+    }
+    auto& request = g_req_q[g_req_tail];
+    request = pt_request_t{};
+    request.kind = PT_REQ_PRESCRIPTION_GET;
+    snprintf(request.request_id, sizeof(request.request_id), "%s", request_id);
+    adopt_prescription_epoch(request_id);
+    g_req_tail = next;
+    g_prescription_refresh_pending = true;
+    refresh_prescription_controls();
+}
+
+void on_prescription_refresh(lv_event_t*) { request_prescription(); }
+
+void on_prescription_decision(lv_event_t* e) {
+    const bool accept = lv_event_get_user_data(e) != nullptr;
+    if (!prescription_is_proposed() || g_prescription_pending || g_prescription_refresh_pending
+        || !g_pt_sidecar_link_up
+        || !g_prescription_request_id[0]) return;
+    if (accept && !prescription_can_accept()) return;
+    int next = (g_req_tail + 1) % PT_MAX_REQUESTS;
+    if (next == g_req_head) {
+        ui_toast_error("Prescription decision busy");
+        return;
+    }
+    auto& request = g_req_q[g_req_tail];
+    request = pt_request_t{};
+    request.kind = accept ? PT_REQ_PRESCRIPTION_ACCEPT : PT_REQ_PRESCRIPTION_REJECT;
+    snprintf(request.prescription_id, sizeof(request.prescription_id), "%s", g_prescription_id);
+    snprintf(request.request_id, sizeof(request.request_id), "%s", g_prescription_request_id);
+    g_req_tail = next;
+    g_prescription_pending = true;
+    snprintf(g_prescription_pending_epoch, sizeof(g_prescription_pending_epoch), "%s", request.request_id);
+    refresh_prescription_controls();
+}
+
+void refresh_prescription_controls() {
+    const bool proposed = prescription_is_proposed();
+    const bool reject_enabled = proposed && !g_prescription_pending && !g_prescription_refresh_pending
+        && g_pt_sidecar_link_up
+        && g_prescription_request_id[0];
+    for (int i = 0; i < 2; ++i) {
+        auto* button = i == 0 ? g_prescription_accept : g_prescription_reject;
+        if (!button || !lv_obj_is_valid(button)) continue;
+        const bool enabled = i == 0 ? prescription_can_accept() : reject_enabled;
+        if (enabled) lv_obj_clear_state(button, LV_STATE_DISABLED);
+        else lv_obj_add_state(button, LV_STATE_DISABLED);
+    }
+    if (g_prescription_state_label && lv_obj_is_valid(g_prescription_state_label)) {
+        const char* text = g_prescription_status;
+        if (g_prescription_refresh_pending) text = "Refreshing pressure evidence";
+        else if (g_prescription_pending) text = "Awaiting decision receipt";
+        else if (proposed && !prescription_can_accept()) text = "Accept locked: fresh pit state required";
+        else if (strcmp(text, "accepted_unverified") == 0) text = "Accepted - awaiting setup readback";
+        else if (strcmp(text, "verified_applied") == 0) text = "Applied - setup readback verified";
+        else if (strcmp(text, "abstained") == 0) text = "Abstained - no setup change";
+        else if (strcmp(text, "proposed") == 0) text = "Proposed - confirm in pit box";
+        lv_label_set_text(g_prescription_state_label, text);
+    }
+}
+
+lv_obj_t* prescription_label(lv_obj_t* parent, const char* text, int height) {
+    auto* label = lv_label_create(parent);
+    lv_obj_set_width(label, 256);
+    lv_obj_set_height(label, height);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, UI_FONT_LABEL_XS, LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, UI_TX_PRIMARY, LV_PART_MAIN);
+    return label;
+}
+
+void make_prescription_card(lv_obj_t* parent) {
+    if (!g_prescription_has_card) return;
+    auto* card = lv_obj_create(parent);
+    lv_obj_set_width(card, 272);
+    lv_obj_set_height(card, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(card, UI_BG_PANEL, LV_PART_MAIN);
+    lv_obj_set_style_border_color(card, UI_ACCENT_GOLD, LV_PART_MAIN);
+    lv_obj_set_style_border_width(card, 1, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(card, 7, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(card, 2, LV_PART_MAIN);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    prescription_label(card, "COLD PRESSURE", 14);
+    prescription_label(card, g_prescription_summary, 28);
+    prescription_label(card, g_prescription_evidence, 28);
+    for (int i = 0; i < g_prescription_change_count; ++i) {
+        char line[88];
+        const auto& change = g_prescription_changes[i];
+        const char* corner = strncmp(change.section, "PRESSURE_", 9) == 0
+            ? change.section + 9 : change.section;
+        snprintf(line, sizeof(line), "%s %.1f -> %.1f psi (%+.1f)", corner,
+            (double)change.from_value, (double)change.to_value, (double)change.delta_psi);
+        prescription_label(card, line, 14);
+    }
+    if (g_prescription_reason[0]) prescription_label(card, g_prescription_reason, 28);
+    g_prescription_state_label = prescription_label(card, "", 28);
+    auto* controls = lv_obj_create(card);
+    lv_obj_set_size(controls, 256, 38);
+    lv_obj_set_style_bg_opa(controls, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(controls, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(controls, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(controls, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(controls, LV_FLEX_FLOW_ROW);
+    const char* labels[] = {"ACCEPT", "REJECT", "REFRESH"};
+    for (int i = 0; i < 3; ++i) {
+        auto* button = lv_btn_create(controls);
+        lv_obj_set_size(button, i == 2 ? 82 : 78, 36);
+        lv_obj_set_style_bg_color(button, UI_BG_HEADER, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(button, 0, LV_PART_MAIN);
+        auto* label = lv_label_create(button);
+        lv_label_set_text(label, labels[i]);
+        lv_obj_set_style_text_font(label, UI_FONT_LABEL_XS, LV_PART_MAIN);
+        lv_obj_center(label);
+        if (i == 2) lv_obj_add_event_cb(button, on_prescription_refresh, LV_EVENT_CLICKED, nullptr);
+        else {
+            lv_obj_add_event_cb(button, on_prescription_decision, LV_EVENT_CLICKED,
+                i == 0 ? reinterpret_cast<void*>(1) : nullptr);
+            if (i == 0) g_prescription_accept = button;
+            else g_prescription_reject = button;
+        }
+    }
+    refresh_prescription_controls();
+}
+
 void on_row_clicked(lv_event_t* e) {
     auto* ctx = g_active_ctx;
     if (!ctx) return;
@@ -469,6 +724,7 @@ void on_spinner_plus_clicked(lv_event_t* e) {
 }
 
 void refresh_controls() {
+    refresh_prescription_controls();
     if (g_active_ctx && g_active_ctx->meta_lock) {
         const char* reason = g_pending_spinner[0] ? "Awaiting confirmed setup state"
             : (g_setup_allowed ? "Setup controls: pits/reset allowed" : g_lock_reason);
@@ -708,14 +964,19 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
     lv_obj_set_style_text_color(chev, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_align(chev, LV_ALIGN_RIGHT_MID, -4, 0);
 
+    for (int i = 0; i < g_pending_load_n; ++i) {
+        if (strcmp(g_pending_loads[i].name, s.name) == 0 &&
+            strcmp(g_pending_loads[i].path, s.path) == 0) g_pending_loads[i].row = row;
+    }
+
     return row;
 }
 
 void rebuild_list_widgets(pt_ctx_t* ctx) {
     if (!ctx || !ctx->list_col) return;
-    // Row widgets are about to be destroyed — drop any pending `setup.load`
-    // correlation that still points at them (PR #91 review threads).
-    pending_load_clear();
+    // Paging destroys widgets, not in-flight decisions. Keep full name/path
+    // correlation and detach widget pointers until the matching row is visible.
+    for (int i = 0; i < g_pending_load_n; ++i) g_pending_loads[i].row = nullptr;
     for (int i = 0; i < PT_MAX_SPINNERS; ++i) {
         g_minus_buttons[i] = nullptr;
         g_plus_buttons[i] = nullptr;
@@ -725,8 +986,13 @@ void rebuild_list_widgets(pt_ctx_t* ctx) {
         g_row_chip_labels[i] = nullptr;
     }
     // Clear existing children.
+    g_prescription_accept = nullptr;
+    g_prescription_reject = nullptr;
+    g_prescription_state_label = nullptr;
     lv_obj_clean(ctx->list_col);
     ctx->active_row_obj = nullptr;
+
+    make_prescription_card(ctx->list_col);
 
     if (g_spinner_count > 0) {
         lv_obj_t* heading = lv_label_create(ctx->list_col);
@@ -734,7 +1000,9 @@ void rebuild_list_widgets(pt_ctx_t* ctx) {
         lv_obj_set_style_text_font(heading, UI_FONT_LABEL_XS, LV_PART_MAIN);
         lv_obj_set_style_text_color(heading, UI_TX_MUTED, LV_PART_MAIN);
         lv_obj_set_style_text_letter_space(heading, 2, LV_PART_MAIN);
-        for (int i = 0; i < g_spinner_count; ++i) {
+        make_page_controls(ctx->list_col, true);
+        for (int i = g_spinner_page * PT_SPINNERS_PER_PAGE;
+             i < g_spinner_count && i < (g_spinner_page + 1) * PT_SPINNERS_PER_PAGE; ++i) {
             make_spinner_row(ctx->list_col, i, g_spinners[i]);
         }
     }
@@ -756,7 +1024,9 @@ void rebuild_list_widgets(pt_ctx_t* ctx) {
     lv_obj_set_style_text_font(heading, UI_FONT_LABEL_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(heading, UI_TX_MUTED, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(heading, 2, LV_PART_MAIN);
-    for (int i = 0; i < g_setup_count; ++i) {
+    make_page_controls(ctx->list_col, false);
+    for (int i = g_setup_page * PT_SETUPS_PER_PAGE;
+         i < g_setup_count && i < (g_setup_page + 1) * PT_SETUPS_PER_PAGE; ++i) {
         make_row(ctx->list_col, i, g_setups[i]);
     }
 }
@@ -838,6 +1108,10 @@ void on_screen_delete(lv_event_t* e) {
     g_req_head = 0;
     g_req_tail = 0;
     g_pending_spinner[0] = 0;
+    invalidate_prescription();
+    g_prescription_accept = nullptr;
+    g_prescription_reject = nullptr;
+    g_prescription_state_label = nullptr;
     for (int i = 0; i < PT_MAX_SPINNERS; ++i) {
         g_minus_buttons[i] = nullptr;
         g_plus_buttons[i] = nullptr;
@@ -851,6 +1125,7 @@ void on_screen_delete(lv_event_t* e) {
 }  // namespace
 
 extern "C" void screen_pocket_technician_set_sidecar_link_up(int link_up) {
+    const bool reconnected = !g_pt_sidecar_link_up && link_up != 0;
     g_pt_sidecar_link_up = link_up != 0;
     if (!g_pt_sidecar_link_up || (g_live_known && (uint32_t)(millis() - g_live_at) > 1500)
         || (g_setup_allowed && (uint32_t)(millis() - g_capability_at) > 1500)) {
@@ -858,8 +1133,12 @@ extern "C" void screen_pocket_technician_set_sidecar_link_up(int link_up) {
         g_setup_allowed = false;
         strncpy(g_lock_reason, "Setup controls locked: telemetry stale/offline", sizeof(g_lock_reason) - 1);
         discard_queued_mutations();
+        // Expire the response epoch on disconnect, but retain the visible card
+        // as locked evidence until a fresh request succeeds.
+        if (!g_pt_sidecar_link_up) adopt_prescription_epoch("");
         refresh_live_label();
     }
+    if (reconnected) request_prescription();
     refresh_controls();
 }
 
@@ -899,13 +1178,17 @@ extern "C" void screen_pocket_technician_invalidate_live_state(void) {
     g_live_known = false;
     g_setup_allowed = false;
     discard_queued_mutations();
+    invalidate_prescription();
     g_spinner_count = 0;
+    g_spinner_page = 0;
+    g_setup_page = 0;
     snprintf(g_lock_reason, sizeof(g_lock_reason), "Awaiting session setup capability");
     refresh_live_label();
     refresh_controls();
     if (g_active_ctx) {
         rebuild_list_widgets(g_active_ctx);
         req_q_push_refresh_or_toast(true);
+        request_prescription();
     }
 }
 
@@ -1062,12 +1345,14 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     // rebuild via set_identity / set_active_setup callbacks.
     req_q_push(PT_REQ_LIST, nullptr, nullptr);
     req_q_push(PT_REQ_SPINNER_LIST, nullptr, active_path_or_null());
+    request_prescription();
 
     return scr;
 }
 
 extern "C" void screen_pocket_technician_clear_setups(void) {
     g_setup_count = 0;
+    g_setup_page = 0;
     // Full rebuild on the clear-edge only - keeps the list-arrival path at
     // O(N) total widget creations instead of O(N^2) (CodeRabbit + Cursor on
     // PR #91). main.cpp's `setup.list.result` dispatch always calls
@@ -1113,7 +1398,7 @@ extern "C" void screen_pocket_technician_add_setup(const char* name,
     }
     int idx = g_setup_count++;
 
-    if (g_active_ctx && g_active_ctx->list_col) {
+    if (g_active_ctx && g_active_ctx->list_col && idx < PT_SETUPS_PER_PAGE) {
         // Append-only: drop the placeholder on the very first entry, then
         // create exactly one new row widget. No churn on the existing rows.
         if (g_active_ctx->placeholder_lbl) {
@@ -1131,6 +1416,7 @@ extern "C" void screen_pocket_technician_add_setup(const char* name,
 
 extern "C" void screen_pocket_technician_finish_setup_list(void) {
     if (!g_active_ctx) return;
+    if (g_setup_count > PT_SETUPS_PER_PAGE) rebuild_list_widgets(g_active_ctx);
     for (int i = 0; i < g_setup_count; ++i) {
         refresh_chip_label(i);
     }
@@ -1138,6 +1424,7 @@ extern "C" void screen_pocket_technician_finish_setup_list(void) {
 
 extern "C" void screen_pocket_technician_clear_spinners(void) {
     g_spinner_count = 0;
+    g_spinner_page = 0;
 }
 
 extern "C" void screen_pocket_technician_add_spinner(const char* section,
@@ -1261,12 +1548,19 @@ extern "C" void screen_pocket_technician_set_identity(const char* car_id, const 
         set_active_path(nullptr);
         pending_load_clear();
         discard_queued_mutations();
+        invalidate_prescription();
         g_spinner_count = 0;
+        g_spinner_page = 0;
+        g_setup_page = 0;
         g_pending_spinner[0] = 0;
         g_setup_allowed = false;
         g_live_known = false;
         snprintf(g_lock_reason, sizeof(g_lock_reason), "Awaiting setup capability");
-        if (g_active_ctx) req_q_push_refresh_or_toast(true);
+        if (g_active_ctx) {
+            rebuild_list_widgets(g_active_ctx);
+            req_q_push_refresh_or_toast(true);
+            request_prescription();
+        }
         refresh_live_label();
         refresh_controls();
     }
@@ -1297,13 +1591,11 @@ extern "C" void screen_pocket_technician_apply_load_ack(bool ok,
                                                          const char* error) {
     if (!g_active_ctx) return;
     lv_obj_t* row = nullptr;
-    if (name && name[0]) {
-        row = pending_load_take_row(name, path);
-    }
+    const bool matched = name && name[0] && pending_load_take(name, path, &row);
     // A session/link transition invalidates pending correlation. An old
     // in-flight ack must not restore the previous car's name/path afterwards;
     // externally initiated actual loads are delivered via setup.active.
-    if (!row) return;
+    if (!matched) return;
     g_active_ctx->active_row_obj = row;
 
     if (ok) {
@@ -1341,14 +1633,70 @@ extern "C" void screen_pocket_technician_apply_load_ack(bool ok,
 }
 
 extern "C" pt_request_t screen_pocket_technician_pop_request(void) {
-    pt_request_t out;
-    out.kind = PT_REQ_NONE;
-    out.name[0] = 0;
-    out.path[0] = 0;
-    out.section[0] = 0;
-    out.value = 0.0f;
-    if (g_req_head == g_req_tail) return out;
-    out = g_req_q[g_req_head];
-    g_req_head = (g_req_head + 1) % PT_MAX_REQUESTS;
-    return out;
+    while (g_req_head != g_req_tail) {
+        pt_request_t out = g_req_q[g_req_head];
+        g_req_head = (g_req_head + 1) % PT_MAX_REQUESTS;
+        if (out.kind == PT_REQ_PRESCRIPTION_GET &&
+            strcmp(out.request_id, g_prescription_request_id) != 0) continue;
+        // Reject never actuates a setup. Deliver the explicit refusal with its
+        // original identity even after a display epoch change; its stale reply
+        // is ignored by apply_prescription's existing response-epoch guard.
+        if (out.kind == PT_REQ_PRESCRIPTION_ACCEPT &&
+            (!g_setup_allowed || !g_pt_sidecar_link_up || !g_live_known ||
+             (uint32_t)(millis() - g_live_at) > 1500 ||
+             strcmp(out.request_id, g_prescription_request_id) != 0)) {
+            clear_prescription_decision(out.request_id);
+            refresh_prescription_controls();
+            continue;
+        }
+        return out;
+    }
+    pt_request_t empty{};
+    empty.kind = PT_REQ_NONE;
+    return empty;
+}
+
+extern "C" void screen_pocket_technician_apply_prescription(
+    const char* request_id, const char* prescription_id, const char* status,
+    const char* summary, const char* evidence, const char* reason,
+    const pt_prescription_change_t* changes, int change_count) {
+    if (!request_id || !g_prescription_request_id[0] ||
+        strcmp(request_id, g_prescription_request_id) != 0) return;
+    bool known_status = false;
+    const char* statuses[] = {"proposed", "abstained", "accepted_unverified", "verified_applied",
+        "rejected", "expired", "blocked"};
+    for (const auto* known : statuses) {
+        if (status && strcmp(status, known) == 0) known_status = true;
+    }
+    const bool invalid_card = !known_status ||
+        (prescription_id && strlen(prescription_id) >= sizeof(g_prescription_id)) ||
+        (status && strcmp(status, "proposed") == 0 &&
+         (!prescription_id || !prescription_id[0] || change_count < 1 || change_count > 4));
+    g_prescription_has_card = true;
+    clear_prescription_decision(request_id);
+    g_prescription_refresh_pending = false;
+    snprintf(g_prescription_id, sizeof(g_prescription_id), "%s", prescription_id ? prescription_id : "");
+    snprintf(g_prescription_status, sizeof(g_prescription_status), "%s", invalid_card ? "blocked" : status);
+    ui_ascii_fold(g_prescription_summary, sizeof(g_prescription_summary), summary ? summary : "");
+    ui_ascii_fold(g_prescription_evidence, sizeof(g_prescription_evidence), evidence ? evidence : "");
+    ui_ascii_fold(g_prescription_reason, sizeof(g_prescription_reason), reason ? reason : "");
+    g_prescription_change_count = 0;
+    if (!invalid_card && changes && change_count >= 0 && change_count <= 4) {
+        for (int i = 0; i < change_count; ++i) {
+            const auto& change = changes[i];
+            if (strcmp(change.section, "PRESSURE_LF") != 0 &&
+                strcmp(change.section, "PRESSURE_RF") != 0 &&
+                strcmp(change.section, "PRESSURE_LR") != 0 &&
+                strcmp(change.section, "PRESSURE_RR") != 0) break;
+            if (!isfinite(change.from_value) || !isfinite(change.to_value) ||
+                !isfinite(change.delta_psi)) break;
+            g_prescription_changes[g_prescription_change_count++] = change;
+        }
+    }
+    if (invalid_card || g_prescription_change_count != change_count) {
+        g_prescription_change_count = 0;
+        snprintf(g_prescription_status, sizeof(g_prescription_status), "blocked");
+        snprintf(g_prescription_reason, sizeof(g_prescription_reason), "Invalid pressure changes - refresh required");
+    }
+    if (g_active_ctx) rebuild_list_widgets(g_active_ctx);
 }

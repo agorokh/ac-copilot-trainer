@@ -48,6 +48,7 @@ local lifecyclePublisher = require("lifecycle_publisher")
 local telemetryPublisher = require("telemetry_publisher")
 local chassisRead = require("chassis_read")
 local setupLibrary = require("setup_library")
+local setupPrescription = require("setup_prescription")
 -- Reuse script.update's existing wsBridge capture to avoid adding more upvalues.
 wsBridge.setupExchange = require("setup_exchange")
 wsBridge.registerAsyncRequestHandler("se.csp.request", "se.csp.result", wsBridge.setupExchange.handle)
@@ -926,6 +927,10 @@ if wsBridge.registerRequestHandler then
       return { ok = false, error = "library returned no spinner list" }
     end
     return result
+  end)
+
+  wsBridge.registerRequestHandler("setup.prescription.rpc", "setup.prescription.rpc.result", function(payload)
+    return setupPrescription.handle(payload, SESSION_UUID)
   end)
 
   wsBridge.registerRequestHandler("setup.spinner.set", "setup.spinner.set.ack", function(payload)

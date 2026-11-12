@@ -939,7 +939,7 @@ local function cspSpinnerByName(name)
   return nil, true
 end
 
-local function setCspSpinner(section, value)
+local function setCspSpinner(section, value, requirePitBox)
   if not (ac and isCallable(ac.setSetupSpinnerValue)) then
     return nil, false
   end
@@ -968,6 +968,16 @@ local function setCspSpinner(section, value)
     if appliedValue > spinner.max then appliedValue = spinner.max end
   end
   local setName = spinner and spinner.name or section
+  if requirePitBox then
+    -- Prescription confirmation is stricter than the normal reset capability:
+    -- a stationary car elsewhere on track must never receive a pressure write.
+    -- Check here, after all list/bounds work, immediately before the setter.
+    local okCar, car = pcall(function() return ac.getCar(0) end)
+    local okPit, inPit = pcall(function() return car.isInPit end)
+    if not okCar or not okPit or inPit ~= true or M.capability().reset_allowed ~= true then
+      return { ok = false, section = section, error = "Prescription requires the pit box" }, true
+    end
+  end
   local okSet, ret = pcall(ac.setSetupSpinnerValue, setName, appliedValue)
   if not okSet or ret == false then
     return {
@@ -1055,9 +1065,12 @@ function M.setSpinner(payload)
   if value == nil then
     return { ok = false, section = section, error = "invalid value" }
   end
-  local cspAck, cspHandled = setCspSpinner(section, value)
+  local cspAck, cspHandled = setCspSpinner(section, value, payload.require_pit_box == true)
   if cspHandled then
     return cspAck
+  end
+  if payload.require_pit_box == true then
+    return { ok = false, section = section, error = "Prescription requires live CSP spinners" }
   end
   local path, pathErr = setupPathFromPayload(payload)
   if not path then
