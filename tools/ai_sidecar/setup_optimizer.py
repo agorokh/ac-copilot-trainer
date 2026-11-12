@@ -11,6 +11,8 @@ import hashlib
 import json
 import math
 import os
+import threading
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,19 @@ DEFAULT_STORE_NAME = "experiments.jsonl"
 DEFAULT_STORE_DIR = "setup_experiments"
 MAX_TUNABLE_PARAMS = 6
 MIN_EXPERIMENTS_FOR_SUGGESTION = 2
+# One sidecar writer process, including its asyncio worker threads. Shared by
+# the prescription decision journal so ingest/rebuild cannot lose decisions.
+STORE_LOCK = threading.RLock()
+
+
+def _store_locked(function):
+    @wraps(function)
+    def locked(*args, **kwargs):
+        with STORE_LOCK:
+            return function(*args, **kwargs)
+
+    return locked
+
 
 COMMON_PARAM_PRIORITY: tuple[str, ...] = (
     "FRONT_BIAS.VALUE",
@@ -284,6 +299,7 @@ def load_records(store_path: str | os.PathLike[str]) -> list[dict[str, Any]]:
     return out
 
 
+@_store_locked
 def save_records(records: list[dict[str, Any]], store_path: str | os.PathLike[str]) -> None:
     path = Path(store_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -301,9 +317,12 @@ def save_records(records: list[dict[str, Any]], store_path: str | os.PathLike[st
         for rec in records_sorted:
             fh.write(json.dumps(rec, sort_keys=True, separators=(",", ":")))
             fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
     tmp.replace(path)
 
 
+@_store_locked
 def upsert_records(
     records: list[dict[str, Any]],
     store_path: str | os.PathLike[str],
@@ -352,6 +371,7 @@ def record_lap_archive(
     }
 
 
+@_store_locked
 def rebuild_experiments(
     lap_dir: str | os.PathLike[str],
     *,
@@ -378,7 +398,12 @@ def rebuild_experiments(
             duplicates.append({"path": str(path), "experiment_id": rid})
         by_id[rid] = rec
     records = list(by_id.values())
-    save_records(records, store)
+    # Lap rebuilds regenerate lap experiments only. Human decisions are not
+    # derivable from archives and must survive a routine optimizer rebuild.
+    decisions = [
+        row for row in load_records(store) if row.get("record_type") == "setup_prescription"
+    ]
+    save_records([*records, *decisions], store)
     return {
         "ok": True,
         "store_path": str(store),
