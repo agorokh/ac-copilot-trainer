@@ -15,5 +15,29 @@
     "line_tolerance": 0,
     "finding": "Stale geometry calculation truncates window height and locks excessive width",
     "reason": "Confirmed false positive at reviewed head 90323fd865bfb8789f2ff761ec90e1f8bb19006d: root.update_idletasks() already follows the wrapping loop at line 296, before root.winfo_reqwidth()/winfo_reqheight() at lines 298-299. Real Tk layout tests exercise long wrapping at scaling 1.0 and 2.0 and full ci-fast passes. Exact-head source: https://github.com/agorokh/ac-copilot-trainer/blob/90323fd865bfb8789f2ff761ec90e1f8bb19006d/tools/rig_launcher/view.py#L290-L300 ; adjudication: https://github.com/agorokh/ac-copilot-trainer/pull/805#issuecomment-6117893871"
+  },
+  {
+    "kind": "review_instance_v1",
+    "match": {
+      "repository": "agorokh/ac-copilot-trainer",
+      "pr": 964,
+      "review_id": 5879407247,
+      "lens": "cursor",
+      "path": "src/ac_copilot_trainer/modules/setup_prescription.lua",
+      "finding": "Wrong CSP pit field breaks prescription context",
+      "line": 18,
+      "current_head": "d800c427f27381dc9ada627ffa5a2229ad097633", "reviewed_head": "d800c427f27381dc9ada627ffa5a2229ad097633" }, "reason": "Confirmed false positive: installed first-party CSP app SDK defines isInPit (parked pit-stop place) separately from isInPitlane (pits area). Exact reviewed source preserves the stricter box guard; frozen LuaJIT FFI replay succeeds in the box and blocks0writes outside it, while the recommended lane substitution permits an unsafe outside-box write. Source/SDK excerpts and replay adjudication: https://github.com/agorokh/ac-copilot-trainer/pull/964#issuecomment-6832550175 # pragma: allowlist secret (current_head/reviewed_head are public Git commit identities)"
+  },
+  {
+    "kind": "review_instance_v1",
+    "match": {
+      "repository": "agorokh/ac-copilot-trainer",
+      "pr": 964,
+      "review_id": 5879407247,
+      "lens": "cursor",
+      "path": "src/ac_copilot_trainer/modules/setup_library.lua",
+      "finding": "require_pit_box setter checks car.isInPit",
+      "line": 976,
+      "current_head": "d800c427f27381dc9ada627ffa5a2229ad097633", "reviewed_head": "d800c427f27381dc9ada627ffa5a2229ad097633" }, "reason": "Confirmed false positive: installed first-party CSP app SDK defines isInPit (parked pit-stop place) separately from isInPitlane (pits area). Exact reviewed source preserves the stricter box guard; frozen LuaJIT FFI replay succeeds in the box and blocks0writes outside it, while the recommended lane substitution permits an unsafe outside-box write. Source/SDK excerpts and replay adjudication: https://github.com/agorokh/ac-copilot-trainer/pull/964#issuecomment-6832550175 # pragma: allowlist secret (current_head/reviewed_head are public Git commit identities)"
   }
 ]
