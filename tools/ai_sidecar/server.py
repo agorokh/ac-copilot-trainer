@@ -18,6 +18,7 @@ import errno
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -2873,12 +2874,15 @@ def _prescription_inputs(
     if (
         isinstance(car_id, str)
         and re.fullmatch(r"[A-Za-z0-9_-]+", car_id)
-        and type(compound) is int
+        and isinstance(compound, int | float)
+        and not isinstance(compound, bool)
+        and (not isinstance(compound, float) or math.isfinite(compound))
         and compound >= 0
+        and compound == int(compound)
     ):
         for axle, wheels in (("front", ("fl", "fr")), ("rear", ("rl", "rr"))):
             spec = read_tyre_specs(
-                resolve_ac_root() / "content" / "cars" / car_id, compound, axle=axle
+                resolve_ac_root() / "content" / "cars" / car_id, int(compound), axle=axle
             )
             if spec is not None:
                 for wheel in wheels:

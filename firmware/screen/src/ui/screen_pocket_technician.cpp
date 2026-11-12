@@ -62,6 +62,7 @@ char g_prescription_request_id[PT_PRESCRIPTION_REQUEST_MAX] = {};
 uint32_t g_prescription_generation = 0;
 bool g_prescription_has_card = false;
 bool g_prescription_pending = false;
+char g_prescription_pending_epoch[PT_PRESCRIPTION_REQUEST_MAX] = {};
 bool g_prescription_refresh_pending = false;
 char g_prescription_id[PT_PRESCRIPTION_ID_MAX] = {};
 char g_prescription_status[32] = {};
@@ -77,10 +78,25 @@ lv_obj_t* g_prescription_state_label = nullptr;
 void refresh_prescription_controls();
 void request_prescription();
 
-void invalidate_prescription() {
-    g_prescription_request_id[0] = 0;
-    g_prescription_has_card = false;
+void clear_prescription_decision(const char* epoch) {
+    if (epoch && strcmp(epoch, g_prescription_pending_epoch) != 0) return;
     g_prescription_pending = false;
+    g_prescription_pending_epoch[0] = 0;
+}
+
+void adopt_prescription_epoch(const char* epoch) {
+    if (strcmp(epoch, g_prescription_request_id) == 0) return;
+    snprintf(g_prescription_request_id, sizeof(g_prescription_request_id), "%s", epoch);
+    // Pending UI flags belong to one displayed epoch. Queued safe Rejects
+    // retain their original IDs and can still be logged after a refresh.
+    clear_prescription_decision(nullptr);
+    g_prescription_refresh_pending = false;
+}
+
+void invalidate_prescription() {
+    adopt_prescription_epoch("");
+    g_prescription_has_card = false;
+    clear_prescription_decision(nullptr);
     g_prescription_refresh_pending = false;
     g_prescription_id[0] = 0;
 }
@@ -159,7 +175,6 @@ static void discard_queued_mutations() {
     pt_request_t kept[PT_MAX_REQUESTS];
     int kept_n = 0;
     bool kept_list = false, kept_spinners = false, kept_prescription = false;
-    bool kept_decision = false;
     while (g_req_head != g_req_tail) {
         const pt_request_t& request = g_req_q[g_req_head];
         bool keep = false;
@@ -172,18 +187,18 @@ static void discard_queued_mutations() {
         } else if (request.kind == PT_REQ_PRESCRIPTION_GET && !kept_prescription) {
             kept_prescription = true;
             keep = true;
-        } else if (request.kind == PT_REQ_PRESCRIPTION_REJECT && !kept_decision) {
-            kept_decision = true;
+        } else if (request.kind == PT_REQ_PRESCRIPTION_REJECT) {
             keep = true;
         }
         if (keep) kept[kept_n++] = request;
+        else if (request.kind == PT_REQ_PRESCRIPTION_ACCEPT)
+            clear_prescription_decision(request.request_id);
         g_req_head = (g_req_head + 1) % PT_MAX_REQUESTS;
     }
     g_req_head = 0;
     g_req_tail = kept_n;
     for (int i = 0; i < kept_n; ++i) g_req_q[i] = kept[i];
     g_pending_spinner[0] = 0;
-    g_prescription_pending = kept_decision;
     pending_load_clear();
 }
 
@@ -511,7 +526,7 @@ void request_prescription() {
     for (int i = g_req_head; i != g_req_tail; i = (i + 1) % PT_MAX_REQUESTS) {
         if (g_req_q[i].kind == PT_REQ_PRESCRIPTION_GET) {
             snprintf(g_req_q[i].request_id, sizeof(g_req_q[i].request_id), "%s", request_id);
-            snprintf(g_prescription_request_id, sizeof(g_prescription_request_id), "%s", request_id);
+            adopt_prescription_epoch(request_id);
             g_prescription_refresh_pending = true;
             refresh_prescription_controls();
             return;
@@ -526,7 +541,7 @@ void request_prescription() {
     request = pt_request_t{};
     request.kind = PT_REQ_PRESCRIPTION_GET;
     snprintf(request.request_id, sizeof(request.request_id), "%s", request_id);
-    snprintf(g_prescription_request_id, sizeof(g_prescription_request_id), "%s", request_id);
+    adopt_prescription_epoch(request_id);
     g_req_tail = next;
     g_prescription_refresh_pending = true;
     refresh_prescription_controls();
@@ -552,6 +567,7 @@ void on_prescription_decision(lv_event_t* e) {
     snprintf(request.request_id, sizeof(request.request_id), "%s", g_prescription_request_id);
     g_req_tail = next;
     g_prescription_pending = true;
+    snprintf(g_prescription_pending_epoch, sizeof(g_prescription_pending_epoch), "%s", request.request_id);
     refresh_prescription_controls();
 }
 
@@ -1119,7 +1135,7 @@ extern "C" void screen_pocket_technician_set_sidecar_link_up(int link_up) {
         discard_queued_mutations();
         // Expire the response epoch on disconnect, but retain the visible card
         // as locked evidence until a fresh request succeeds.
-        if (!g_pt_sidecar_link_up) g_prescription_request_id[0] = 0;
+        if (!g_pt_sidecar_link_up) adopt_prescription_epoch("");
         refresh_live_label();
     }
     if (reconnected) request_prescription();
@@ -1620,13 +1636,16 @@ extern "C" pt_request_t screen_pocket_technician_pop_request(void) {
     while (g_req_head != g_req_tail) {
         pt_request_t out = g_req_q[g_req_head];
         g_req_head = (g_req_head + 1) % PT_MAX_REQUESTS;
-        if ((out.kind == PT_REQ_PRESCRIPTION_GET || out.kind == PT_REQ_PRESCRIPTION_REJECT) &&
+        if (out.kind == PT_REQ_PRESCRIPTION_GET &&
             strcmp(out.request_id, g_prescription_request_id) != 0) continue;
+        // Reject never actuates a setup. Deliver the explicit refusal with its
+        // original identity even after a display epoch change; its stale reply
+        // is ignored by apply_prescription's existing response-epoch guard.
         if (out.kind == PT_REQ_PRESCRIPTION_ACCEPT &&
             (!g_setup_allowed || !g_pt_sidecar_link_up || !g_live_known ||
              (uint32_t)(millis() - g_live_at) > 1500 ||
              strcmp(out.request_id, g_prescription_request_id) != 0)) {
-            g_prescription_pending = false;
+            clear_prescription_decision(out.request_id);
             refresh_prescription_controls();
             continue;
         }
@@ -1654,7 +1673,7 @@ extern "C" void screen_pocket_technician_apply_prescription(
         (status && strcmp(status, "proposed") == 0 &&
          (!prescription_id || !prescription_id[0] || change_count < 1 || change_count > 4));
     g_prescription_has_card = true;
-    g_prescription_pending = false;
+    clear_prescription_decision(request_id);
     g_prescription_refresh_pending = false;
     snprintf(g_prescription_id, sizeof(g_prescription_id), "%s", prescription_id ? prescription_id : "");
     snprintf(g_prescription_status, sizeof(g_prescription_status), "%s", invalid_card ? "blocked" : status);

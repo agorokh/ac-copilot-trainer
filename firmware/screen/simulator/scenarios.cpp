@@ -892,6 +892,156 @@ void pocket_technician_prescription_capacity() {
     screen_pocket_technician_clear_spinners();
 }
 
+void prescription_reject_epoch_review_regression() {
+    pt_prescription_change_t change{"PRESSURE_LF", 24, 23, -1};
+    auto open_card = [&](const char* prescription_id) {
+        screen_pocket_technician_set_sidecar_link_up(1);
+        screen_pocket_technician_set_identity("review-car", "Review car", "", "review-track", "Review track");
+        tap("POCKET TECHNICIAN");
+        screen_pocket_technician_clear_spinners();
+        screen_pocket_technician_clear_setups();
+        screen_pocket_technician_finish_setup_list();
+        std::string epoch;
+        for (;;) {
+            auto request = screen_pocket_technician_pop_request();
+            if (request.kind == PT_REQ_NONE) break;
+            if (request.kind == PT_REQ_PRESCRIPTION_GET) epoch = request.request_id;
+        }
+        require(!epoch.empty(), "review regression starts from a real GET response epoch");
+        screen_pocket_technician_apply_live_electronics(63, 3, 12, 2, 12, true, "");
+        screen_pocket_technician_apply_prescription(epoch.c_str(), prescription_id, "proposed",
+            "LF hot pressure high", "Laps 3-4: LF 29.8 psi; target 27-29", "", &change, 1);
+        tick();
+        return epoch;
+    };
+    int refresh_rejects = 0, refresh_gets = 0, refresh_mutations = 0;
+    bool refresh_original_epoch = true;
+    std::string refresh_epoch = open_card("rx-review-refresh"), new_refresh_epoch;
+    tap("REJECT");
+    tap("REFRESH");
+    for (;;) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_PRESCRIPTION_REJECT) {
+            ++refresh_rejects;
+            refresh_original_epoch = refresh_original_epoch && request.request_id == refresh_epoch;
+        }
+        if (request.kind == PT_REQ_PRESCRIPTION_GET) {
+            ++refresh_gets;
+            new_refresh_epoch = request.request_id;
+        }
+        if (request.kind == PT_REQ_PRESCRIPTION_ACCEPT || request.kind == PT_REQ_SPINNER_SET) ++refresh_mutations;
+    }
+    const bool refresh_pending_preserved = has_label("Refreshing pressure evidence");
+    std::cout << "REVIEW5878205548 reject_then_refresh: rejects=" << refresh_rejects
+        << " gets=" << refresh_gets << " mutations=" << refresh_mutations
+        << " original_epoch=" << refresh_original_epoch
+        << " refresh_pending=" << refresh_pending_preserved << std::endl;
+    capture("06m-review-reject-refresh");
+    back();
+
+    int disconnect_rejects = 0, reconnect_gets = 0, disconnect_mutations = 0;
+    bool disconnect_original_epoch = true;
+    const std::string disconnect_epoch = open_card("rx-review-disconnect");
+    tap("REJECT");
+    screen_pocket_technician_set_sidecar_link_up(0);
+    tick();
+    const bool offline_pending = has_label("Awaiting decision receipt");
+    capture("06n-review-reject-disconnect");
+    screen_pocket_technician_set_sidecar_link_up(1);
+    for (;;) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_PRESCRIPTION_REJECT) {
+            ++disconnect_rejects;
+            disconnect_original_epoch = disconnect_original_epoch && request.request_id == disconnect_epoch;
+        }
+        if (request.kind == PT_REQ_PRESCRIPTION_GET) ++reconnect_gets;
+        if (request.kind == PT_REQ_PRESCRIPTION_ACCEPT || request.kind == PT_REQ_SPINNER_SET) ++disconnect_mutations;
+    }
+    const bool reconnect_pending_preserved = has_label("Refreshing pressure evidence");
+    std::cout << "REVIEW5878205548 reject_then_disconnect: rejects=" << disconnect_rejects
+        << " gets=" << reconnect_gets << " mutations=" << disconnect_mutations
+        << " original_epoch=" << disconnect_original_epoch
+        << " offline_pending=" << offline_pending
+        << " reconnect_refresh_pending=" << reconnect_pending_preserved << std::endl;
+    std::ofstream result(output / "review-5878205548-results.json");
+    result << "{\"reject_then_refresh\":{\"rejects\":" << refresh_rejects
+        << ",\"gets\":" << refresh_gets << ",\"mutations\":" << refresh_mutations
+        << ",\"refresh_pending\":" << refresh_pending_preserved
+        << "},\"reject_then_disconnect\":{\"rejects\":" << disconnect_rejects
+        << ",\"gets\":" << reconnect_gets << ",\"mutations\":" << disconnect_mutations
+        << ",\"offline_pending\":" << offline_pending
+        << ",\"reconnect_refresh_pending\":" << reconnect_pending_preserved << "}}\n";
+    result.close();
+    back();
+    require(refresh_rejects == 1 && refresh_gets == 1 && refresh_mutations == 0 &&
+            refresh_original_epoch && new_refresh_epoch != refresh_epoch && refresh_pending_preserved,
+        "original Reject+Refresh sequence logs one safe Reject and preserves the new GET epoch");
+    require(disconnect_rejects == 1 && reconnect_gets == 1 && disconnect_mutations == 0 &&
+            disconnect_original_epoch && !offline_pending && reconnect_pending_preserved,
+        "original Reject+disconnect sequence retains safe Reject without a stale pending receipt");
+}
+
+void prescription_pending_epoch_ownership() {
+    screen_pocket_technician_set_sidecar_link_up(1);
+    screen_pocket_technician_set_identity("epoch-car", "Epoch car", "", "epoch-track", "Epoch track");
+    tap("POCKET TECHNICIAN");
+    std::string epoch;
+    for (;;) {
+        auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.kind == PT_REQ_PRESCRIPTION_GET) epoch = request.request_id;
+    }
+    pt_prescription_change_t change{"PRESSURE_LF", 24, 23, -1};
+    auto proposal = [&](const std::string& response_epoch, const char* id) {
+        screen_pocket_technician_apply_live_electronics(63, 3, 12, 2, 12, true, "");
+        screen_pocket_technician_apply_prescription(response_epoch.c_str(), id, "proposed",
+            "LF hot pressure high", "Laps 3-4 measured hot pressure", "", &change, 1);
+        tick();
+    };
+    proposal(epoch, "rx-epoch-old-accept");
+    while (screen_pocket_technician_pop_request().kind != PT_REQ_NONE) {}
+    tap("ACCEPT");
+    tap("REFRESH");
+    const auto old_accept = screen_pocket_technician_pop_request();
+    require(old_accept.kind == PT_REQ_PRESCRIPTION_GET,
+        "stale queued Accept is dropped before returning the new GET");
+    epoch = old_accept.request_id;
+    require(has_label("Refreshing pressure evidence"),
+        "dropping old Accept leaves new GET refresh ownership intact");
+    proposal(epoch, "rx-epoch-old-reject");
+    tap("REJECT");
+    tap("REFRESH");
+    const auto safe_reject = screen_pocket_technician_pop_request();
+    require(safe_reject.kind == PT_REQ_PRESCRIPTION_REJECT && safe_reject.request_id == epoch,
+        "safe old Reject keeps its original display epoch");
+    const auto next_get = screen_pocket_technician_pop_request();
+    require(next_get.kind == PT_REQ_PRESCRIPTION_GET && next_get.request_id != epoch,
+        "old Reject does not replace the newer refresh request");
+    epoch = next_get.request_id;
+    proposal(epoch, "rx-epoch-current-decision");
+    tap("REJECT");
+    screen_pocket_technician_set_setup_capability(false, "Outside pit box", "csp");
+    const auto current_reject = screen_pocket_technician_pop_request();
+    require(current_reject.kind == PT_REQ_PRESCRIPTION_REJECT && current_reject.request_id == epoch,
+        "pit transition retains the current safe Reject");
+    require(has_label("Awaiting decision receipt"),
+        "queue drain does not clear a current in-flight decision's receipt state");
+    screen_pocket_technician_apply_prescription(safe_reject.request_id, "rx-epoch-old-reject", "rejected",
+        "Old rejected prescription", "Late old-epoch receipt", "", &change, 1);
+    tick();
+    require(has_label("Awaiting decision receipt") && !has_label("Old rejected prescription"),
+        "late old Reject response cannot clear or replace the newer decision");
+    capture("06o-review-current-decision-epoch");
+    screen_pocket_technician_apply_prescription(epoch.c_str(), "rx-epoch-current-decision", "rejected",
+        "Pressure change rejected", "No setup write", "", &change, 1);
+    tick();
+    require(!has_label("Awaiting decision receipt") && has_label("rejected"),
+        "matching current receipt alone settles the current decision");
+    back();
+}
+
 void setup_exchange_utf8_community_titles() {
     screen_setup_exchange_set_sidecar_link_up(1);
     screen_setup_exchange_set_context(
@@ -985,6 +1135,8 @@ int main(int argc, char** argv) {
         pocket_technician_spinners_and_utf8();
         pocket_technician_prescriptions();
         pocket_technician_prescription_capacity();
+        prescription_reject_epoch_review_regression();
+        prescription_pending_epoch_ownership();
         setup_exchange();
         setup_exchange_utf8_community_titles();
         setup_exchange_empty_for_track();

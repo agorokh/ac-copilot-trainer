@@ -94,7 +94,7 @@ def fixture(tmp_path, monkeypatch):
     rt.globals()._root = ac_root.as_posix()
     rt.execute(
         """
-        pit, writes = true, 0
+        pit, writes, compound = true, 0, 1
         pressures = {PRESSURE_LF=20,PRESSURE_RF=20,PRESSURE_LR=20,PRESSURE_RR=20}
         ac = {
           FolderID={ScriptConfig=1,Root=2,UserSetups=3,Documents=4},
@@ -105,7 +105,7 @@ def fixture(tmp_path, monkeypatch):
           getCarID=function() return 'test_car' end,
           getTrackID=function() return 'test_track' end,
           getTrackLayout=function() return '' end,
-          getCar=function() return {isInPit=pit,compoundIndex=1,setupFilename=_setup} end,
+          getCar=function() return {isInPit=pit,compoundIndex=compound,setupFilename=_setup} end,
           getSim=function() return {} end,
           isCarResetAllowed=function() return true end,
           getSetupSpinners=function()
@@ -277,5 +277,53 @@ def test_full_synthetic_pit_exit_and_reconnect_perform_zero_setters(fixture):
             ]
             assert len(rows) == 1 and rows[0]["decision"] == "accept"
             assert rows[0]["status"] == "accepted_unverified"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("compound", [1, 1.0], ids=["integer", "integral-float"])
+def test_authenticated_integral_compound_numbers_keep_real_axle_targets(fixture, compound):
+    async def run():
+        async with _running(fixture) as (url, lua, rt, _store):
+            rt.globals().compound = compound
+            async with _peer(url) as screen:
+                await _send(screen, {"v": 1, "type": ep.TYPE_SETUP_PRESCRIPTION_GET})
+                _, context = await _relay(lua, rt)
+                assert type(context["identity"]["compound_index"]) is type(compound)
+                card = await _recv(screen)
+                (_store.parent / "integral-compound-case.json").write_text(
+                    json.dumps({"authenticated_context": context, "card": card}, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                # Keep the literal authenticated context beside the result if
+                # this input-contract regression returns an abstention again.
+                assert card["status"] == "proposed", {
+                    "authenticated_context_json": json.dumps(context),
+                    "card": card,
+                }
+                assert {change["section"]: change["to"] for change in card["changes"]} == {
+                    "PRESSURE_LF": 19,
+                    "PRESSURE_RF": 19,
+                    "PRESSURE_LR": 21,
+                    "PRESSURE_RR": 21,
+                }
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("compound", [True, 1.5, float("nan"), float("inf"), -1.0])
+def test_invalid_compound_numbers_never_resolve_pressure_targets(fixture, compound):
+    async def run():
+        async with _running(fixture) as (_url, _lua, rt, store):
+            context = _from_lua(
+                rt.globals().rpc.handle(
+                    _to_lua(rt, {"request_id": "a" * 32, "operation": "context"}), "test_session"
+                )
+            )
+            context["identity"]["compound_index"] = compound
+            archives, targets = srv._prescription_inputs(context, store)
+            assert len(archives) == 2
+            assert targets == {}
+            assert rt.globals().writes == 0
 
     asyncio.run(run())
