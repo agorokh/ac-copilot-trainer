@@ -94,7 +94,13 @@ def traffic_eligibility(context: Any, *, now_s: Any) -> TrafficEligibility:
         height = abs(ego["position"][1] - car["position"][1])
         if not all(_finite(value) for value in (gap, distance, height)):
             return _unknown("traffic_geometry_invalid")
-        if -8.0 <= gap <= horizon and distance <= horizon and height <= 3.0:
+        # Cars separated along a hilly road can differ in world height without
+        # being on different road levels. Budget that change by the approximate
+        # spline path length, retaining the existing 3 m positional allowance.
+        # A nearby overpass still fails when its vertical separation cannot be
+        # explained by that short along-track gap. Both proximity gates remain.
+        height_budget = abs(gap) + 3.0
+        if -8.0 <= gap <= horizon and distance <= horizon and height <= height_budget:
             return TrafficEligibility("constrained", "traffic_occupied_approach", car["index"])
     return TrafficEligibility("eligible", "traffic_clear")
 

@@ -74,6 +74,26 @@ def test_adjacent_segments_require_both_spline_and_3d(gap, distance, height):
     ).eligible
 
 
+@pytest.mark.parametrize("case_id", ["A011", "A012"])
+def test_original_elevation_misses_are_constrained(case_id):
+    # The failed experiment stays immutable; these are now regression inputs,
+    # never members of the fresh held-out evaluation.
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures/traffic_shadow_955/frozen_45.json").read_text()
+    )
+    case = next(c for c in fixture["approaches"] if c["id"] == case_id)
+    row = case["row"]
+    assert traffic_eligibility(row["traffic"], now_s=row["traffic_now_s"]).status == "constrained"
+
+
+@pytest.mark.parametrize("height", [6.0, 15.0, 25.0])
+def test_same_road_elevation_scales_with_along_track_distance(height):
+    assert (
+        traffic_eligibility(context(gap=80, distance=80, height=height), now_s=1.0).status
+        == "constrained"
+    )
+
+
 def test_finish_wrap_is_occupied_but_car_behind_is_clear():
     observed = context(distance=10)
     observed["cars"][0]["spline"] = 0.999
@@ -302,6 +322,37 @@ def _lua_cars(harness):
         )
         for i in range(20)
     ]
+
+
+@pytest.mark.parametrize("hz", [10, 20])
+def test_sampler_keeps_nominal_rate_across_render_jitter_without_catchup(hz):
+    harness = TraceReplayHarness()
+    result = harness.lua.eval("""function(hz)
+      local sampler = require('traffic_context').new(hz)
+      local sim = {carsCount=1,trackLengthM=5000}
+      local car = {index=0,position={x=0,y=0,z=0},splinePosition=.4,
+        speedKmh=180,isConnected=true,isInPitlane=false}
+      local function getCar(i) assert(i==0);return car end
+      local n,previous = 0,nil
+      for frame=0,3419 do
+        local now=frame/57+(frame%3)*.001
+        local snapshot,due=sampler:update(now,sim,getCar)
+        if due then
+          assert(snapshot.sampled_at_s==now)
+          assert(previous==nil or now>previous)
+          n,previous=n+1,now
+        end
+      end
+      local before=#sampler.frames
+      local _,due=sampler:update(65,sim,getCar)
+      assert(due and #sampler.frames==before+1)
+      local _,again=sampler:update(65.001,sim,getCar)
+      assert(not again, 'a hitch must not create a catch-up burst')
+      sampler:reset()
+      assert(sampler.next_at==nil)
+      return {count=n}
+    end""")(hz)
+    assert abs(result["count"] - hz * 60) <= 1
 
 
 @pytest.mark.parametrize("lua_runtime", ["default", "luajit21"])

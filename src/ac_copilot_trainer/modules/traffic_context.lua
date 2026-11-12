@@ -61,19 +61,29 @@ end
 
 function M.new(hz)
   assert(hz == 10 or hz == 20, "traffic sampling supports 10 or 20 Hz")
-  local self = { interval = 1 / hz, last = nil, snapshot = nil,
+  local self = { interval = 1 / hz, last = nil, next_at = nil, snapshot = nil,
     frames = {}, started = nil, complete = false }
   function self:reset()
-    self.last, self.snapshot, self.started = nil, nil, nil
+    self.last, self.next_at, self.snapshot, self.started = nil, nil, nil, nil
     self.frames, self.complete = {}, false
   end
   function self:update(now, sim, getCar)
-    if not finite(now) or self.last == nil or now < self.last
-        or now - self.last >= self.interval - 0.000001 then
-      local regressed = finite(now) and self.last ~= nil and now < self.last
+    local regressed = finite(now) and self.last ~= nil and now < self.last
+    if not finite(now) or self.next_at == nil or regressed
+        or now >= self.next_at - 0.000001 then
       self.snapshot = M.sample(sim, getCar, now)
       if regressed then self.snapshot.error = "traffic_clock_regressed" end
       self.last = finite(now) and now or nil
+      if self.last == nil then
+        self.next_at = nil
+      elseif self.next_at == nil or regressed then
+        self.next_at = now + self.interval
+      else
+        -- Keep phase across render-frame jitter. A hitch skips missed deadlines:
+        -- capture one real observation now, never manufacture catch-up frames.
+        local periods = math.max(1, math.floor((now - self.next_at) / self.interval + 0.000001) + 1)
+        self.next_at = self.next_at + periods * self.interval
+      end
       if self.started == nil then self.started = self.last end
       if #self.frames < 12000 then
         self.frames[#self.frames + 1] = self.snapshot
