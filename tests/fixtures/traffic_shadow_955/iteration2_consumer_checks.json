@@ -1,0 +1,1768 @@
+{
+  "archive_method": "Native20-car wrap-to-wrap traffic intervals passed through the real Lua async archive writer with a minimal derived player trace. Not a native trainer-app lap capture or human-source certification.",
+  "cue_method": "Unmodified native context at a canonical reference PRIME trigger in explicit offline replay mode; no live voice or driving actuation.",
+  "archives": [
+    {
+      "kind": "continuous_interval",
+      "interval": 1,
+      "status": "constrained",
+      "frames": 3267,
+      "simulation_interval_ms": 208080,
+      "observation_interval_ms": 208053.7726,
+      "first_sequence": 906,
+      "last_sequence": 4172,
+      "source_capture_sha256": "ec3e1c7d52989782f2afdfd248ccab8a14684d927ece94a883c953036cd308c1",
+      "output_sha256": "4891d416a5e7ce39c77b661f7c98c8f2a136d6fe21f216f5fa3ec70c237a60ba",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        }
+      },
+      "native_grid_cars": 20
+    },
+    {
+      "kind": "incomplete_perturbation",
+      "interval": 1,
+      "status": "unknown",
+      "frames": 3267,
+      "simulation_interval_ms": 208080,
+      "observation_interval_ms": 208053.7726,
+      "first_sequence": 906,
+      "last_sequence": 4172,
+      "source_capture_sha256": "ec3e1c7d52989782f2afdfd248ccab8a14684d927ece94a883c953036cd308c1",
+      "output_sha256": "4891d416a5e7ce39c77b661f7c98c8f2a136d6fe21f216f5fa3ec70c237a60ba",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        }
+      },
+      "native_grid_cars": 20
+    },
+    {
+      "kind": "continuous_interval",
+      "interval": 2,
+      "status": "constrained",
+      "frames": 4201,
+      "simulation_interval_ms": 210000,
+      "observation_interval_ms": 210006.9544,
+      "first_sequence": 4172,
+      "last_sequence": 8372,
+      "source_capture_sha256": "ec3e1c7d52989782f2afdfd248ccab8a14684d927ece94a883c953036cd308c1",
+      "output_sha256": "994113a40df845a6349027279a8bb70b56589369da33f89fceed4e973602d66c",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        }
+      },
+      "native_grid_cars": 20
+    },
+    {
+      "kind": "incomplete_perturbation",
+      "interval": 2,
+      "status": "unknown",
+      "frames": 4201,
+      "simulation_interval_ms": 210000,
+      "observation_interval_ms": 210006.9544,
+      "first_sequence": 4172,
+      "last_sequence": 8372,
+      "source_capture_sha256": "ec3e1c7d52989782f2afdfd248ccab8a14684d927ece94a883c953036cd308c1",
+      "output_sha256": "994113a40df845a6349027279a8bb70b56589369da33f89fceed4e973602d66c",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        }
+      },
+      "native_grid_cars": 20
+    },
+    {
+      "kind": "continuous_interval",
+      "interval": 3,
+      "status": "constrained",
+      "frames": 4208,
+      "simulation_interval_ms": 210360,
+      "observation_interval_ms": 210352.93469999998,
+      "first_sequence": 8372,
+      "last_sequence": 12579,
+      "source_capture_sha256": "ec3e1c7d52989782f2afdfd248ccab8a14684d927ece94a883c953036cd308c1",
+      "output_sha256": "4a4ba53667a4b568d124362ac890f3ff370af81619d7a9cfead93659641335ea",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        }
+      },
+      "native_grid_cars": 20
+    },
+    {
+      "kind": "incomplete_perturbation",
+      "interval": 3,
+      "status": "unknown",
+      "frames": 4208,
+      "simulation_interval_ms": 210360,
+      "observation_interval_ms": 210352.93469999998,
+      "first_sequence": 8372,
+      "last_sequence": 12579,
+      "source_capture_sha256": "ec3e1c7d52989782f2afdfd248ccab8a14684d927ece94a883c953036cd308c1",
+      "output_sha256": "4a4ba53667a4b568d124362ac890f3ff370af81619d7a9cfead93659641335ea",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        }
+      },
+      "native_grid_cars": 20
+    },
+    {
+      "kind": "continuous_interval",
+      "interval": 4,
+      "status": "constrained",
+      "frames": 4163,
+      "simulation_interval_ms": 208080,
+      "observation_interval_ms": 208083.76270000008,
+      "first_sequence": 12579,
+      "last_sequence": 16741,
+      "source_capture_sha256": "ec3e1c7d52989782f2afdfd248ccab8a14684d927ece94a883c953036cd308c1",
+      "output_sha256": "755a39be73cf9725c9df5022be8436c90bf0ff4d7d7ce39a4c62e6d985101c68",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        }
+      },
+      "native_grid_cars": 20
+    },
+    {
+      "kind": "incomplete_perturbation",
+      "interval": 4,
+      "status": "unknown",
+      "frames": 4163,
+      "simulation_interval_ms": 208080,
+      "observation_interval_ms": 208083.76270000008,
+      "first_sequence": 12579,
+      "last_sequence": 16741,
+      "source_capture_sha256": "ec3e1c7d52989782f2afdfd248ccab8a14684d927ece94a883c953036cd308c1",
+      "output_sha256": "755a39be73cf9725c9df5022be8436c90bf0ff4d7d7ce39a4c62e6d985101c68",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        }
+      },
+      "native_grid_cars": 20
+    },
+    {
+      "kind": "continuous_interval",
+      "interval": 5,
+      "status": "constrained",
+      "frames": 4182,
+      "simulation_interval_ms": 209040,
+      "observation_interval_ms": 209055.58340000003,
+      "first_sequence": 16741,
+      "last_sequence": 20922,
+      "source_capture_sha256": "ec3e1c7d52989782f2afdfd248ccab8a14684d927ece94a883c953036cd308c1",
+      "output_sha256": "db41639038a196acf4d9a5ebbc019c93679a5e6e5302f801f38b94649df86ba1",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": false,
+          "reason": "traffic_occupied_approach",
+          "reasons": [
+            "traffic_occupied_approach"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        }
+      },
+      "native_grid_cars": 20
+    },
+    {
+      "kind": "incomplete_perturbation",
+      "interval": 5,
+      "status": "unknown",
+      "frames": 4182,
+      "simulation_interval_ms": 209040,
+      "observation_interval_ms": 209055.58340000003,
+      "first_sequence": 16741,
+      "last_sequence": 20922,
+      "source_capture_sha256": "ec3e1c7d52989782f2afdfd248ccab8a14684d927ece94a883c953036cd308c1",
+      "output_sha256": "db41639038a196acf4d9a5ebbc019c93679a5e6e5302f801f38b94649df86ba1",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        }
+      },
+      "native_grid_cars": 20
+    },
+    {
+      "kind": "continuous_interval",
+      "interval": "solo_positive_control",
+      "status": "eligible",
+      "frames": 4163,
+      "simulation_interval_ms": 208080,
+      "observation_interval_ms": 208098.77730000002,
+      "first_sequence": 611,
+      "last_sequence": 4773,
+      "source_capture_sha256": "84f1739bb3e219ca4b17ec47b8aed6b5f2157729a23e84df32690a88c470b776",
+      "output_sha256": "45e1565d4c8db313fcaaf63c1dbb7adb047aa4630ee9198a1d74b1fa0c994047",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        }
+      },
+      "native_grid_cars": 1
+    },
+    {
+      "kind": "incomplete_perturbation",
+      "interval": "solo_positive_control",
+      "status": "unknown",
+      "frames": 4163,
+      "simulation_interval_ms": 208080,
+      "observation_interval_ms": 208098.77730000002,
+      "first_sequence": 611,
+      "last_sequence": 4773,
+      "source_capture_sha256": "84f1739bb3e219ca4b17ec47b8aed6b5f2157729a23e84df32690a88c470b776",
+      "output_sha256": "45e1565d4c8db313fcaaf63c1dbb7adb047aa4630ee9198a1d74b1fa0c994047",
+      "verdicts": {
+        "analysis": {
+          "allowed": true,
+          "reason": "legacy_unknown",
+          "reasons": [
+            "legacy_unknown"
+          ],
+          "managed": false,
+          "authority": "legacy_unknown"
+        },
+        "human_progression": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "live_reference": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        },
+        "plant_fit": {
+          "allowed": false,
+          "reason": "traffic_archive_incomplete",
+          "reasons": [
+            "traffic_archive_incomplete"
+          ],
+          "managed": true,
+          "authority": "legacy_unknown"
+        }
+      },
+      "native_grid_cars": 1
+    }
+  ],
+  "cues": [
+    {
+      "id": "B002",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B002",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B002",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B002",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B013",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B013",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B013",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B013",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B015",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B015",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B015",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B015",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B016",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B016",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B016",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B016",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B017",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B017",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B017",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B017",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B018",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B018",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B018",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B018",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B019",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B019",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B019",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B019",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B020",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B020",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B020",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B020",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B025",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B025",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B025",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B025",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B026",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B026",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B026",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B026",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B027",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B027",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B027",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B027",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B028",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B028",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B028",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B028",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B029",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B029",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B029",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B029",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B030",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B030",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B030",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B030",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B031",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B031",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B031",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B031",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B033",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B033",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B033",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B033",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B035",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B035",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B035",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B035",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B036",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B036",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B036",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B036",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B037",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B037",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B037",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B037",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B038",
+      "perturbation": "original",
+      "status": "constrained",
+      "prime_cues": 0
+    },
+    {
+      "id": "B038",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B038",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B038",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B001",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B001",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B001",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B001",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B003",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B003",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B003",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B003",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B004",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B004",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B004",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B004",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B007",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B007",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B007",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B007",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B008",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B008",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B008",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B008",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B009",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B009",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B009",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B009",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B010",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B010",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B010",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B010",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B011",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B011",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B011",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B011",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B012",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B012",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B012",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B012",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B022",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B022",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B022",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B022",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B023",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B023",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B023",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B023",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B024",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B024",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B024",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B024",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B032",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B032",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B032",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B032",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B034",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B034",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B034",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B034",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B041",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B041",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B041",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B041",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B042",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B042",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B042",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B042",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B046",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B046",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B046",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B046",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B047",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B047",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B047",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B047",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B048",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B048",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B048",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B048",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B049",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "B049",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B049",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "B049",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "C001",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "C001",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "C001",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "C001",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "C002",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "C002",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "C002",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "C002",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "C003",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "C003",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "C003",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "C003",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "C004",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "C004",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "C004",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "C004",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "C005",
+      "perturbation": "original",
+      "status": "eligible",
+      "prime_cues": 1
+    },
+    {
+      "id": "C005",
+      "perturbation": "stale",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "C005",
+      "perturbation": "missing_scalar",
+      "status": "unknown",
+      "prime_cues": 0
+    },
+    {
+      "id": "C005",
+      "perturbation": "invalid_index",
+      "status": "unknown",
+      "prime_cues": 0
+    }
+  ],
+  "solo_positive_control": {
+    "method": "Native solo positive-control wrap-to-wrap traffic interval passed through the real Lua async archive writer with a minimal derived player trace. Not a native trainer-app lap capture or human-source certification.",
+    "native_capture": {
+      "sealed_at_utc": "2026-11-12T05:32:31.230801+00:00",
+      "capture": "84f1739bb3e2_iteration2_clean_1794461273.jsonl",
+      "capture_sha256": "84f1739bb3e219ca4b17ec47b8aed6b5f2157729a23e84df32690a88c470b776",
+      "samples": 5521,
+      "source_head": "0769c3dfe59208430d7f0272c9b9d2ecb490eab7",
+      "actual_grid_cars": 1,
+      "native_csp_version": "0.3.1/4302",
+      "replay_sha256": "2b082511382ae28c8f30f6a4ffe65c705ffe758a2f5423f9149ca946b356da72",
+      "source_original_sha256": "83416329fdd97496f33104d1a028dcd7d2eb2c21ef6aafaa4d4d4ed00617ad70",
+      "phases": {
+        "20": {
+          "samples": 5521,
+          "span_s": 276.01111089999995,
+          "achieved_hz": 19.999194894729875,
+          "p99_ms": 0.062500000012733,
+          "max_ms": 0.42960000001813,
+          "max_observation_gap_s": 0.07605519999998478,
+          "first_frame": 5500,
+          "last_frame": 7800,
+          "histogram_ms": {
+            "0": 5513,
+            "0.1": 7,
+            "0.25": 1,
+            "0.5": 0,
+            "0.75": 0,
+            "1": 0,
+            "2": 0
+          }
+        }
+      },
+      "all_rosters_complete": true,
+      "errors": {
+        "none": 5521
+      },
+      "source_frames": [
+        5500,
+        7800
+      ],
+      "method": "Native solo positive control using an unchanged recorded ego stream; actual1-car replay, no traffic competitors; not20-car timing evidence",
+      "collector_sha256": "5d8120508d37f1a4aafcf1825253a87c501fc3e1071f5ee6df876685f41e9f04",
+      "sampler_sha256": "411a283134bd4219f795748a2b6ca9ce0019b731a4f50c0b3afa5090201fcbe2"
+    },
+    "derivation": {
+      "source_sha256": "83416329fdd97496f33104d1a028dcd7d2eb2c21ef6aafaa4d4d4ed00617ad70",
+      "operation": "retain1 original native car blocks byte-for-byte; filter/remap native standings; strip optional CSP extension",
+      "selected_original_indices": [
+        0
+      ],
+      "format_reference": "https://github.com/mishan/assetto-ts/blob/main/packages/acreplay/src/acreplay.ts",
+      "source_frames": 61955,
+      "interval_ms": 120.0,
+      "car_blocks": [
+        {
+          "original_index": 0,
+          "native_index": 0,
+          "bytes": 18339029,
+          "sha256": "8841312c3b301accc42f04644fd9cf1c9011dd424bc4a5059ec4ce2d233089fa",
+          "model": "ks_porsche_919_hybrid_2015"
+        }
+      ],
+      "derived_sha256": "2b082511382ae28c8f30f6a4ffe65c705ffe758a2f5423f9149ca946b356da72",
+      "derived_bytes": 18587620,
+      "derived_path": "issue955_recorded_solo_lemans_2017_no_lights.acreplay"
+    }
+  }
+}

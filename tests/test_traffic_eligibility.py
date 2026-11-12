@@ -1,4 +1,4 @@
-"""Synthetic regression cases; these are NOT the #955 replay accuracy corpus."""
+"""Scalar traffic regressions and the frozen native replay acceptance split."""
 
 from __future__ import annotations
 
@@ -523,3 +523,23 @@ def test_entry_script_and_module_compile_with_declared_harness_runtimes():
     result = harness.lua.eval("function(s) local f,e=load(s); return e or 'ok' end")(source)
     assert result == "ok"
     assert TraceReplayHarness(lua_runtime="luajit21").require("traffic_context") is not None
+
+
+def test_fresh_native_replay_split_keeps_occupied_and_clear_bars():
+    """Fixed real observations protect both suppression and usable clear-air cues."""
+    fixture = json.loads(
+        (
+            Path(__file__).parent / "fixtures/traffic_shadow_955/iteration2_frozen_45.json"
+        ).read_text()
+    )
+    cases = fixture["approaches"]
+    required = {"constrained": (20, 19), "clear": (20, 16), "adversarial": (5, 5)}
+    for cohort, (size, minimum_correct) in required.items():
+        selected = [case for case in cases if case["cohort"] == cohort]
+        assert len(selected) == size
+        correct = sum(
+            traffic_eligibility(case["row"]["traffic"], now_s=case["row"]["traffic_now_s"]).status
+            == case["label"]
+            for case in selected
+        )
+        assert correct >= minimum_correct, cohort
