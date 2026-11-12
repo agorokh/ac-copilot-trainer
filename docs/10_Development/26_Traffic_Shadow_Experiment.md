@@ -2,9 +2,11 @@
 
 This is the bounded `REX-20261111-01` experiment, capped at two engineering days
 and 90 minutes of replay/shadow capture. No driving actuation is included.
-The frozen native-replay experiment failed the accuracy bar on 2026-11-11.
-The decision is **no-go for live cue activation**; thresholds were not tuned after
-the failure. The shadow collector remains off by default. See the results below.
+The first frozen native-replay experiment failed the accuracy bar on 2026-11-11.
+An operator-authorized second iteration corrected elevation handling and sampler
+cadence, then passed a fresh frozen split and actual native 20-car timing.
+The shadow collector remains off by default. These exploratory results do not
+authorize live cue activation. Both iterations and their limits are retained below.
 
 The trainer's session-only `config.set` key `trafficShadowEnabled=true` arms
 20 Hz scalar collection through the existing authenticated harness protocol.
@@ -61,7 +63,7 @@ constrained suppression, >=16/20 clear retention, all five controls correct, and
 <=1.0 ms CSP p99 at 20 cars / both sampling rates. Fewer than 40 valid captured
 multi-car approaches means Inconclusive. Synthetic tests never fill this corpus.
 
-## Frozen experiment result (2026-11-11)
+## First frozen experiment result (2026-11-11, historical)
 
 The operator authorized autonomous input discovery. Recursive local inventory
 found five multi-car recordings; native CSP replay playback captured all five.
@@ -147,3 +149,114 @@ for cohort in ("constrained", "clear", "adversarial"):
         now_s=c["row"]["traffic_now_s"]).status == c["label"] for c in selected)
     print(cohort, correct, len(selected))
 ```
+
+## Second iteration (2026-11-11)
+
+The operator explicitly authorized fixing A011/A012, a fresh frozen set and real
+20-car verification. World-height differences now receive an allowance tied to
+along-track separation: `abs(gap) + 3 m`. Both spline and 3D proximity gates remain.
+This corrects ordinary road elevation without replacing the gate with an arbitrary
+larger fixed height cap. It is still a provisional scalar approximation of road
+topology. A nearby overpass with insufficient along-track separation stays clear.
+The sampling deadline now preserves phase across render-frame jitter and skips
+missed deadlines without manufacturing catch-up observations. Both changes have
+focused regressions, including the two exact original misses.
+
+Input discovery found a [documented native version-16 replay writer](https://github.com/mishan/assetto-ts/blob/main/packages/acreplay/src/acreplay.ts).
+Its standings layout matched all 35 snapshots in the public 54-car recording.
+A private derived replay retains 20 original native car blocks byte for byte,
+filters/remaps their standings entries, and omits optional CSP extension data.
+The original recording is unchanged. The retained roster is ego plus its 19 most
+frequent 3D neighbors within 150 m over previously unused source frames 5000–15000;
+selection did not import or run the candidate predictor. This deliberately enriches
+traffic and does not estimate ordinary race prevalence. AC loaded an actual
+20-car world; every captured native `sim.carsCount` was 20 and every unmodified
+`ac.getCar(i)` index was checked. This is a derived native replay of recorded
+trajectories, not an original 20-car race or a timing-only subset in a 54-car world.
+
+The fresh [45-case fixture](../../tests/fixtures/traffic_shadow_955/iteration2_frozen_45.json)
+was frozen and [hash-published before scoring](https://github.com/agorokh/ac-copilot-trainer/issues/955#issuecomment-6815408085).
+SHA256: `a473634d25aee2e929691daa39c64f2d7b886d2a182253d29000e31fe5f7177d`.
+Candidate `0769c3d` was fixed before capture. Labels describe current occupancy of
+the existing current-speed, two-second roadway region capped at 150 m, measured
+along observed 3D roadway geometry independently of the candidate's normalized
+spline, Euclidean shortcut and height test. Recorded future player motion supplies
+road geometry; it does not redefine the region as distance traveled during future
+braking. These are regional occupancy labels, not collision predictions or proof
+that traffic causally impeded the driver.
+
+The first blind Council image audit rejected unmarked overlapping paths as
+future-interference evidence. Timed markers and the explicit current road region
+were added. A subsequent 24-case blind geometric audit agreed on 12 occupied and
+8 empty cases and flagged four uncertain cases. All four were excluded before
+predictions, with later chronological occupied cases filling the cohort. Only
+one of the two requested voices completed that second audit; no quorum is claimed.
+The root agent remains a single unblinded primary labeler who knew the candidate
+design. Laps and corners are correlated. Five natural pit controls span four
+passages through one pit complex, including two keyframes with different nearest
+pit vehicles from one passage. They are five actual contexts, not five independent
+safety events. Pit controls, source indices and exclusion reasons are in the fixture.
+
+| Fresh cohort | Required | Candidate | Solo policy | Blanket multi-car mute |
+| --- | --- | --- | --- | --- |
+| Occupied approaches suppressed | >=19/20 | 20/20 | 0/20 | 20/20 |
+| Clear approaches retained | >=16/20 | 20/20 | 20/20 | 0/20 |
+| Native pit contexts retained | 5/5 | 5/5 | 5/5 | 0/5 |
+
+[Evaluation JSON](../../tests/fixtures/traffic_shadow_955/iteration2_evaluation.json)
+retains every prediction. The unchanged original fixture is now regression data:
+20/20 occupied, 19/20 clear and 5/5 adjacent controls. A035 is a new conservative
+false suppression (97.96 m world distance, 98.51 m spline gap and 6.73 m height
+difference); its eligible label is preserved. No labels or thresholds changed
+after the fresh score.
+
+The [native timing ledger](../../tests/fixtures/traffic_shadow_955/iteration2_native_timings.json)
+binds source/derived replay hashes, all 20 retained car-block hashes, module and
+recorder hashes, phase histograms and 22,203 complete, error-free native rosters.
+The per-call timer includes production `traffic_context:update` and its frame
+retention, excluding the temporary JSON writer. Opponent fields remain scalar;
+the wheel-access trap regression still verifies zero wheel reads.
+
+| Actual native grid | Configured rate | Samples | Achieved rate | p99 step | Maximum step |
+| --- | --- | --- | --- | --- | --- |
+| 20 cars | 10 Hz | 1,800 | 9.99976 Hz | 0.5583 ms | 0.8752 ms |
+| 20 cars | 20 Hz | 20,403 | 19.99996 Hz | 0.7034 ms | 2.8739 ms |
+
+Both p99 results satisfy the <=1 ms criterion; the maximum is reported separately
+and is not asserted to satisfy it. Maximum observation gaps were 116.1/68.5 ms.
+The replay source records at 120 ms intervals; CSP interpolates the native state
+between recorded frames. This is observed CSP 0.3.1/4302 cost, not a qualification
+of every supported CSP version or live transport age. Twenty car-block hashes
+matched exactly. A separate 5,820-point audit measured at most 0.468 m distance
+from the original recorded local 3D polyline; it does not claim centimetre identity
+between interpolated native positions and source frame positions.
+
+All 135 fresh stale/missing/index perturbations returned unknown and silenced
+PRIME cues through the real coaching runtime's explicit offline replay seam.
+Five native 20-car wrap-to-wrap intervals passed through the real asynchronous
+Lua archive writer and were read back from disk. They were constrained; separately
+identified incomplete variants were unknown. Analysis remained readable and zero
+constrained/unknown variants entered human_progression, live_reference or plant_fit.
+[Consumer evidence](../../tests/fixtures/traffic_shadow_955/iteration2_consumer_checks.json)
+retains the intervals, archive hashes and qualification verdicts. The player
+traces for this writer probe are minimal derived traces, not native trainer-app
+lap archives or human-driving certification. A separate native solo replay retains
+the original ego car block unchanged and contains no opponents. Its full
+wrap-to-wrap interval (4,163 frames) was eligible after the same writer/readback
+path; its incomplete variant was unknown. The clean interval kept the existing
+`legacy_unknown` allowance for all four uses, rather than receiving human-source
+certification. Its 5,521 native observations are positive-control evidence only,
+not part of the 20-car cost proof or fresh accuracy split.
+
+Both owned replay sessions were closed and their temporary collectors/track links
+retired. Seven affected configuration/state files per session were restored;
+all 405/406 original file hashes matched their respective pre-capture snapshots.
+The original trainer junction was restored and the canonical rig lock released.
+Pre-existing Game Point, Steam and SimHub remained running. Conservative capture
+accounting, including all owned setup/restoration windows and prior failed setup,
+is 78.99 minutes across both iterations, within the original 90-minute cap.
+
+To reproduce the fresh result, use the code above with the second fixture path
+and its recorded SHA256. The first fixture's bytes and historical failed result
+remain unchanged. No driving, race start, setup, live voice or firmware actuation
+is part of either iteration.

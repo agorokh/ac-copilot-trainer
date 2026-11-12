@@ -1,0 +1,613 @@
+{
+  "evaluated_at_utc": "2026-11-12T05:20:34.885673+00:00",
+  "fixture_sha256": "a473634d25aee2e929691daa39c64f2d7b886d2a182253d29000e31fe5f7177d",
+  "candidate_head": "0769c3dfe59208430d7f0272c9b9d2ecb490eab7",
+  "frozen_before_score_issue_comment": "https://github.com/agorokh/ac-copilot-trainer/issues/955#issuecomment-6815408085",
+  "counts": {
+    "constrained": {
+      "correct": 20,
+      "total": 20
+    },
+    "clear": {
+      "correct": 20,
+      "total": 20
+    },
+    "adversarial": {
+      "correct": 5,
+      "total": 5
+    }
+  },
+  "accuracy_bar_passed": true,
+  "original45_regression_only": {
+    "constrained": 20,
+    "clear": 19,
+    "adversarial": 5
+  },
+  "results": [
+    {
+      "id": "B002",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B013",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B015",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B016",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B017",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B018",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B019",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B020",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B025",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B026",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B027",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B028",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B029",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B030",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B031",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B033",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B035",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B036",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B037",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B038",
+      "cohort": "constrained",
+      "label": "constrained",
+      "candidate": {
+        "status": "constrained",
+        "reason": "traffic_occupied_approach",
+        "car_index": 1
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B001",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B003",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B004",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B007",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B008",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B009",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B010",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B011",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B012",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B022",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B023",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B024",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B032",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B034",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B041",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B042",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B046",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B047",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B048",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "B049",
+      "cohort": "clear",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "C001",
+      "cohort": "adversarial",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "C002",
+      "cohort": "adversarial",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "C003",
+      "cohort": "adversarial",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "C004",
+      "cohort": "adversarial",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    },
+    {
+      "id": "C005",
+      "cohort": "adversarial",
+      "label": "eligible",
+      "candidate": {
+        "status": "eligible",
+        "reason": "traffic_clear",
+        "car_index": null
+      },
+      "candidate_correct": true,
+      "solo": "eligible",
+      "blanket": "constrained"
+    }
+  ]
+}

@@ -11,3 +11,4 @@ scripts/hook_*.py text eol=lf
 
 # Native Windows experiment fixture: preserve the bytes sealed before predictions.
 tests/fixtures/traffic_shadow_955/frozen_45.json -text whitespace=cr-at-eol
+tests/fixtures/traffic_shadow_955/iteration2_*.json text eol=lf
