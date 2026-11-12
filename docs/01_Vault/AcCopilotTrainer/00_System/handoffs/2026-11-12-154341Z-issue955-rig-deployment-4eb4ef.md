@@ -124,3 +124,11 @@ its old HEAD lacks merged handoff963, so proceeding could revert that note.
 Resume SAVE from the already-synchronized primary checkout; copy only this owned
 new note. No source checkout move, stash, runtime rebuild or session restart is
 needed. The failed submission log is retained as vault-submit.log.
+
+
+Submission integrity check caught106 unrelated CRLF-to-LF normalizations produced
+by the canonical temporary-index SAVE. In the same965 carrier, restored every
+unrelated path to its exact merged-base blob; final net diff is only this new
+handoff. No runtime source or primary checkout move was needed. The first red
+vault-automerge check reported lease_in_flight on the earlier head; no bypass or
+manual merge. Unintended-eol-audit.json and failed-vault-guard.log are retained.
