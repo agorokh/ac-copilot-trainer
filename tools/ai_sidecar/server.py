@@ -181,7 +181,7 @@ from tools.ai_sidecar.setup_optimizer import (
     suggest_next_setup,
 )
 from tools.ai_sidecar.shift_observer import ShiftObserver
-from tools.ai_sidecar.tyre_specs import read_tyre_specs
+from tools.ai_sidecar.tyre_specs import read_tyre_peak_window, read_tyre_specs
 from tools.ai_sidecar.voice.vocabulary import KINDS as VOICE_KINDS
 from tools.lap_archive_export import LapArchiveExportError
 
@@ -2881,14 +2881,16 @@ def _prescription_inputs(
         and compound == int(compound)
     ):
         for axle, wheels in (("front", ("fl", "fr")), ("rear", ("rl", "rr"))):
-            spec = read_tyre_specs(
-                resolve_ac_root() / "content" / "cars" / car_id, int(compound), axle=axle
-            )
+            car_dir = resolve_ac_root() / "content" / "cars" / car_id
+            spec = read_tyre_specs(car_dir, int(compound), axle=axle)
+            peak_window = read_tyre_peak_window(car_dir, int(compound), axle=axle)
             if spec is not None:
                 for wheel in wheels:
                     targets[wheel] = {
                         "pressure_ideal_psi": spec.pressure_ideal_psi,
                         "optimal_temp_c": spec.optimal_temp_c,
+                        "peak_temp_min_c": peak_window[0] if peak_window else None,
+                        "peak_temp_max_c": peak_window[1] if peak_window else None,
                     }
     return archives, targets
 

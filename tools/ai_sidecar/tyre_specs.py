@@ -18,6 +18,7 @@ and never raises — the sidecar must not crash on one bad car.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -209,16 +210,12 @@ def _parse_lut_pairs(text: str) -> list[tuple[float, float]]:
     return pairs
 
 
-def _optimal_temp_from_curve(
-    performance_curve: str | None, archive: dict[str, str]
-) -> float | None:
-    """Resolve the PERFORMANCE_CURVE (a ``.lut`` filename in the same archive, or an inline table)
-    and return the temperature (x) at peak grip (max y). Ties resolve to the first (lowest) x that
-    reaches the max — the temperature at which peak grip is first achieved. ``None`` if it cannot be
-    resolved.
-    """
+def _performance_curve_pairs(
+    performance_curve: str | None, archive: dict[str, str], *, strict: bool = False
+) -> list[tuple[float, float]]:
+    """Resolve a member or inline curve using the same rules for all consumers."""
     if not performance_curve:
-        return None
+        return []
     curve_text: str | None = None
     candidate = performance_curve.strip()
     if candidate.lower().endswith(".lut"):
@@ -232,8 +229,20 @@ def _optimal_temp_from_curve(
         curve_text = candidate.replace("(", "\n").replace(")", "\n").replace(",", "\n")
 
     if not curve_text:
-        return None
-    pairs = _parse_lut_pairs(curve_text)
+        return []
+    if strict:
+        for line in curve_text.splitlines():
+            value = re.split(r"[;#]", line, maxsplit=1)[0].strip()
+            if value and not _LUT_PAIR_RE.fullmatch(value):
+                return []
+    return _parse_lut_pairs(curve_text)
+
+
+def _optimal_temp_from_curve(
+    performance_curve: str | None, archive: dict[str, str]
+) -> float | None:
+    """Return the first peak temperature, preserving the scalar reader contract."""
+    pairs = _performance_curve_pairs(performance_curve, archive)
     if not pairs:
         return None
     max_y = max(y for _, y in pairs)
@@ -241,6 +250,40 @@ def _optimal_temp_from_curve(
         if y == max_y:
             return x
     return None
+
+
+def read_tyre_peak_window(
+    car_dir: str | Path, compound_index: int, *, axle: str
+) -> tuple[float, float] | None:
+    """Strict authored maximum-grip plateau for prescription provenance checks.
+
+    CSP may report another point on a flat maximum than the scalar reader's
+    first peak. A dip between equal maxima is not a plateau. This does not
+    change the scalar optimum or the experiment's thermal admissibility policy.
+    """
+    if axle not in ("front", "rear"):
+        return None
+    try:
+        archive = _load_archive(Path(car_dir))
+        if archive is None or not archive.get("tyres.ini"):
+            return None
+        sections = _parse_ini_sections(archive["tyres.ini"])
+        thermal = _section_for(sections, "THERMAL_" + axle.upper(), compound_index)
+        pairs = _performance_curve_pairs(_get(thermal, "PERFORMANCE_CURVE"), archive, strict=True)
+        if not pairs or any(not math.isfinite(v) for pair in pairs for v in pair):
+            return None
+        if any(b[0] <= a[0] for a, b in zip(pairs, pairs[1:], strict=False)):
+            return None
+        peak = max(y for _, y in pairs)
+        indices = [i for i, (_, y) in enumerate(pairs) if y == peak]
+        first, last = indices[0], indices[-1]
+        if peak <= 0 or pairs[first][0] <= 0:
+            return None
+        if any(y != peak for _, y in pairs[first : last + 1]):
+            return None
+        return pairs[first][0], pairs[last][0]
+    except (OSError, ValueError, TypeError, KeyError, OverflowError):
+        return None
 
 
 # --------------------------------------------------------------------------------------------------
