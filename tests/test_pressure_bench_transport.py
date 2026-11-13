@@ -22,6 +22,25 @@ sealed = sealed_fixture
 
 
 @pytest.mark.parametrize(
+    "laps,expected",
+    [([1], [1]), ([1, 2], [2]), ([1, 2, 3], [2, 3]), ([1, 2, 3, 4, 5], [4, 5])],
+)
+def test_native_window_separates_first_lap_from_flying_window(sealed, laps, expected):
+    ctx = copy.deepcopy(sealed.ctx)
+    session = ctx["identity"]["session_id"]
+    token = "".join(c for c in session if c.isascii() and c.isalnum())[:8] or "sess"
+    paths = {}
+    for n in laps:
+        path = sealed.lap_dir / f"lap_20261113-010000_{token}_{n}_90000_window{n}.json"
+        # Outcomes are intentionally bad: fixed ordinal selection must never
+        # fall back to an older passing archive or silently drop a failed lap.
+        path.write_text(json.dumps({"session_uuid": session, "lap": {"lap_n": n, "valid": False}}))
+        paths[n] = path.resolve()
+    store = sealed.lap_dir.parent / "setup_experiments/experiments.jsonl"
+    assert srv._bench_source_paths(ctx, store) == [paths[n] for n in expected]
+
+
+@pytest.mark.parametrize(
     "session,filename_token",
     [
         ("test_session", "testsess"),

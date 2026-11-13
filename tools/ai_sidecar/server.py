@@ -3155,7 +3155,14 @@ def _bench_source_paths(ctx: dict[str, Any], store: Path) -> list[Path]:
         if archive.get("session_uuid") == session:
             rows.append((float(archive.get("lap", {}).get("lap_n", -1)), path.resolve()))
     rows.sort(key=lambda item: item[0])
-    return [p for _, p in rows[-2:]]
+    window = rows[-2:]
+    # The protocol's flying windows start at native lap 2. A return after
+    # laps 1/2 has one flying lap, not a two-lap window including its warmup.
+    # Keep a lone lap 1 for cold/outlap trials. This fixed ordinal rule never
+    # filters a flying lap by validity, qualification, prediction or outcome.
+    if len(window) == 2 and window[0][0] == 1 and window[1][0] == 2:
+        window = window[1:]
+    return [p for _, p in window]
 
 
 async def _bench_watchdog() -> None:
