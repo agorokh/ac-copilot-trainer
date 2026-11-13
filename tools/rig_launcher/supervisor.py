@@ -766,6 +766,18 @@ class GamePointSupervisor:
         which needs the sidecar's live device name.
         """
         checks: list[ProbeResult] = []
+        if (
+            self._environ.get("AC_COPILOT_PRESSURE_BENCH_PERMIT")
+            and self._environ.get("AC_COPILOT_PRESSURE_EXPERIMENT") == "1"
+        ):
+            checks.append(
+                ProbeResult(
+                    "pressure_bench",
+                    False,
+                    "blocked",
+                    "Disable the normal pressure experiment before the AI bench",
+                )
+            )
         if self.config.external_bind and not _is_loopback(self.config.external_bind):
             if not self.config.token:
                 checks.append(
@@ -1648,8 +1660,12 @@ class GamePointSupervisor:
             )
         peers = int(payload.get("connected_peers") or 0)
         screens = int(payload.get("screen_peers") or 0)
+        detail = f"peers={peers} screen_peers={screens}"
+        bench = payload.get("pressure_bench")
+        if isinstance(bench, dict) and bench.get("configured") is True:
+            detail += " | 956 AI BENCH " + ("ARMED" if bench.get("active") is True else "DISARMED")
         return (
-            ProbeResult("sidecar", True, "healthy", f"peers={peers} screen_peers={screens}"),
+            ProbeResult("sidecar", True, "healthy", detail),
             payload,
         )
 

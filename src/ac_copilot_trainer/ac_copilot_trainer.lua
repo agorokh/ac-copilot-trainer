@@ -351,6 +351,8 @@ local function loadConfig()
 end
 
 local config = loadConfig()
+-- Kept outside ac.storage's table: process-only, sticky until AC closes.
+local pressureBenchCapture = false
 
 -- Issue #77 Part C: stable session id stamped on every archived lap from this script load.
 -- Use 16-bit math.random bounds only (Lua 5.1 / some LuaJIT builds reject 0xFFFFFFFF as int32).
@@ -926,11 +928,23 @@ if wsBridge.registerRequestHandler then
     if type(result) ~= "table" then
       return { ok = false, error = "library returned no spinner list" }
     end
+    if type(payload) == "table" and type(payload.request_id) == "string" and #payload.request_id <= 24 then
+      result.request_id = payload.request_id
+    end
     return result
   end)
 
   wsBridge.registerRequestHandler("setup.prescription.rpc", "setup.prescription.rpc.result", function(payload)
-    return setupPrescription.handle(payload, SESSION_UUID)
+    return setupPrescription.handle(payload, SESSION_UUID, pressureBenchCapture)
+  end)
+
+  wsBridge.registerRequestHandler("setup.spinner.audit", "setup.spinner.audit.result", function(payload)
+    local result = setupLibrary.spinnerAudit(SESSION_UUID,
+      type(payload) == "table" and payload.prescription_id or nil)
+    if type(payload) == "table" and type(payload.request_id) == "string" and #payload.request_id <= 24 then
+      result.request_id = payload.request_id
+    end
+    return result
   end)
 
   wsBridge.registerRequestHandler("setup.spinner.set", "setup.spinner.set.ack", function(payload)
@@ -978,6 +992,14 @@ if wsBridge.registerRequestHandler then
 end
 
 local function applyExternalConfigSet(key, value)
+  if key == "pressureBenchCapture" then
+    if type(value) ~= "boolean" then return false, "value must be boolean" end
+    if pressureBenchCapture and not value then
+      return false, "Close AC to end bench capture isolation"
+    end
+    pressureBenchCapture = value
+    return true, nil
+  end
   if config[key] == nil then
     return false, "unknown config key"
   end
@@ -1064,6 +1086,7 @@ end
 if wsBridge.registerConfigBridge then
   wsBridge.registerConfigBridge(
     function(key)
+      if key == "pressureBenchCapture" then return pressureBenchCapture end
       return config[key]
     end,
     function(key, value)
@@ -1675,6 +1698,7 @@ end
 
 ---@return boolean
 local function persistSnapshotLive()
+  if pressureBenchCapture then return false end
   if not sim or sim.isInMainMenu or not car then
     return false
   end
@@ -1683,6 +1707,7 @@ end
 
 ---@return boolean
 local function persistSnapshotCached()
+  if pressureBenchCapture then return false end
   local c, s = lastDriveCar, lastDriveSim
   if not c or not s then
     return false
@@ -2985,12 +3010,13 @@ function script.update(dt)
     state.racingLastLine = racingLine.traceToLine(completedTrace)
 
     -- PB flag must use pre-update `bestLapMs` (Cursor #78); archive runs after PB block mutates it.
-    local isPbThisLap = lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs)
+    local isPbThisLap = not pressureBenchCapture and lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs)
     local referenceArchivePathForBrain = bestLapArchivePath
+    if pressureBenchCapture then referenceArchivePathForBrain = nil end
 
     local prevBestBp = copyBpList(state.brakingPoints.best)
     local localBestChanged = false
-    if lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
+    if not pressureBenchCapture and lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
       if state.activeReferenceSource == "imported" then
         restoreLocalReferenceState()
       end

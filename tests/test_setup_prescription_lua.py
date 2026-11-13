@@ -214,3 +214,61 @@ def test_final_full_readback_detects_later_coupled_change(lua):
     assert result["ok"] is False
     assert result["error"] == "Awaiting complete cold-pressure readback"
     assert lua.globals().writes == 2
+
+
+def test_authoritative_audit_counts_same_value_native_dispatch(lua):
+    before = lua.execute("return require('setup_library').spinnerAudit('session')")
+    assert before["attempts"] == before["writes"] == 0
+    lua.execute("require('setup_library').setSpinner({section='PRESSURE_LF',value=24})")
+    after = lua.execute("return require('setup_library').spinnerAudit('session')")
+    assert lua.globals().pressure == 24
+    assert after["attempts"] == after["writes"] == after["csp_setter"] == 1
+    assert after["audit_epoch"] == before["audit_epoch"]
+    assert before["writes"] == 0  # read receipts never share mutable counter tables
+    assert after["counter_semantics"] == "native_mutation_dispatches_including_refusal_or_unknown"
+
+
+@pytest.mark.parametrize("behavior", ["return false", "error('uncertain native result')"])
+def test_audit_never_hides_refused_or_raised_native_dispatch(lua, behavior):
+    lua.execute("ac.setSetupSpinnerValue=function() writes=writes+1; " + behavior + " end")
+    result = lua.execute(
+        "return require('setup_library').setSpinner({section='PRESSURE_LF',value=23})"
+    )
+    assert result["ok"] is False
+    audit = lua.execute("return require('setup_library').spinnerAudit('session')")
+    assert audit["attempts"] == audit["writes"] == lua.globals().writes == 1
+
+
+def test_audit_distinguishes_blocked_attempt_from_actual_boundary(lua):
+    lua.execute("pit=false")
+    result = lua.execute("""
+      return require('setup_library').setSpinner({section='PRESSURE_LF',value=23,
+          require_pit_box=true,prescription_id='blocked'})
+    """)
+    assert result["ok"] is False
+    audit = lua.execute("return require('setup_library').spinnerAudit('session','blocked')")
+    assert audit["attempts"] == audit["attribution"]["attempts"] == 1
+    assert audit["writes"] == audit["attribution"]["writes"] == lua.globals().writes == 0
+
+
+def test_rpc_audit_attribution_preserves_duplicate_denial(lua):
+    assert lua.eval("apply('audited')")["ok"] is True
+    first = lua.execute("return require('setup_library').spinnerAudit('session','audited')")
+    assert first["attribution"]["writes"] == 1
+    assert first["attribution_observed"] is True
+    assert lua.eval("apply('audited')")["ok"] is False
+    again = lua.execute("return require('setup_library').spinnerAudit('session','audited')")
+    assert again["attempts"] == first["attempts"] == 1
+    assert again["writes"] == first["writes"] == 1
+    other_session = lua.execute("return require('setup_library').spinnerAudit('next-session')")
+    assert other_session["session_id"] == "next-session"
+    assert other_session["writes"] == 1  # changing session never resets the lifetime counters
+
+
+def test_audit_epoch_changes_on_module_reload(lua):
+    before = lua.execute("return require('setup_library').spinnerAudit('session')")
+    after = lua.execute(
+        "package.loaded.setup_library=nil; return require('setup_library').spinnerAudit('session')"
+    )
+    assert after["audit_epoch"] != before["audit_epoch"]
+    assert after["attempts"] == after["writes"] == 0

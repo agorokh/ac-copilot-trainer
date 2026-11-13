@@ -1042,6 +1042,124 @@ void prescription_pending_epoch_ownership() {
     back();
 }
 
+void pocket_technician_ai_bench_routing() {
+    screen_pocket_technician_set_sidecar_link_up(1);
+    screen_pocket_technician_set_identity("bench-car", "Bench car", "", "bench-track", "Bench track");
+    tap("POCKET TECHNICIAN");
+    screen_pocket_technician_clear_setups();
+    screen_pocket_technician_clear_spinners();
+    screen_pocket_technician_finish_setup_list();
+    while (screen_pocket_technician_pop_request().kind != PT_REQ_NONE) {}
+    require(!screen_pocket_technician_bench_active(), "956 AI bench starts disabled");
+    screen_pocket_technician_add_spinner("PRESSURE_LF", "Pressure LF", 24, 20, 35, 1, "psi", true, 1);
+    screen_pocket_technician_finish_spinner_list();
+    pt_setup_summary_t setup_summary{63, 2, 3, 1, 20};
+    screen_pocket_technician_add_setup("Bench baseline", "", -1, "C:/bench/baseline.ini", &setup_summary);
+    screen_pocket_technician_finish_setup_list();
+    screen_pocket_technician_apply_live_electronics(63, 3, 12, 2, 12, true, "");
+    while (screen_pocket_technician_pop_request().kind != PT_REQ_NONE) {}
+    tap_prefix("+");
+    tap_prefix("Bench baseline");
+    require(screen_pocket_technician_set_bench_status(true, "bench-run-956"), "explicit bench status is accepted");
+    tick();
+    require(find_label(lv_scr_act(), "956 AI BENCH |", true) != nullptr,
+        "956 AI BENCH is visible before any card response");
+    const auto get = screen_pocket_technician_pop_request();
+    require(get.kind == PT_REQ_PRESCRIPTION_GET && get.ai_bench &&
+            strcmp(get.bench_run_id, "bench-run-956") == 0,
+        "active bench GET carries distinct routing and exact run id");
+    require(screen_pocket_technician_pop_request().kind == PT_REQ_NONE,
+        "arming bench discards previously queued manual spinner and setup mutations");
+    tap("+");
+    tap("Bench baseline");
+    require(screen_pocket_technician_pop_request().kind == PT_REQ_NONE,
+        "bench keeps manual values visible but locks spinner and saved-setup actions");
+    screen_pocket_technician_apply_live_electronics(63, 3, 12, 2, 12, true, "");
+    while (screen_pocket_technician_pop_request().kind != PT_REQ_NONE) {}
+    pt_prescription_change_t change{"PRESSURE_LF", 24, 23, -1};
+    screen_pocket_technician_apply_prescription(get.request_id, "ordinary", "proposed",
+        "Ordinary response must not appear", "No bench authority", "", &change, 1);
+    tick();
+    require(!has_label("Ordinary response must not appear"), "ordinary card cannot enter bench mode");
+    screen_pocket_technician_apply_prescription_mode(get.request_id, "wrong-run", "proposed",
+        "Wrong bench run", "Mismatched run authority", "", &change, 1, "ai_bench", "another-run");
+    tick();
+    require(!has_label("Wrong bench run"), "bench card must match the explicitly armed run");
+    screen_pocket_technician_apply_prescription_mode(get.request_id, "bench-card", "proposed",
+        "AI BENCH: LF pressure high", "Laps 3-4 measured hot pressure", "", &change, 1,
+        "ai_bench", "bench-run-956");
+    tick();
+    require(has_label("956 AI BENCH") && has_label("AI BENCH: LF pressure high"),
+        "bench card visibly distinguishes AI bench from ordinary pressure advice");
+    capture("06p-ai-bench-proposed");
+    tap("ACCEPT");
+    const auto accept = screen_pocket_technician_pop_request();
+    require(accept.kind == PT_REQ_PRESCRIPTION_ACCEPT && accept.ai_bench &&
+            strcmp(accept.bench_run_id, "bench-run-956") == 0 &&
+            strcmp(accept.prescription_id, "bench-card") == 0,
+        "bench Accept can only leave through the bench namespace with its run");
+    require(screen_pocket_technician_set_bench_status(true, "bench-run-956"), "same status is idempotent");
+    require(has_label("Awaiting decision receipt"), "repeated status does not clear an in-flight decision");
+    screen_pocket_technician_apply_prescription_mode(get.request_id, "bench-card", "verified_applied",
+        "AI BENCH: verified trim", "All cold pressures read back", "", &change, 1,
+        "ai_bench", "bench-run-956");
+    tick();
+    require(has_label("Applied - setup readback verified"), "bench applied state still requires matching readback response");
+    capture("06q-ai-bench-verified");
+    tap("REFRESH");
+    const auto next_get = screen_pocket_technician_pop_request();
+    screen_pocket_technician_apply_live_electronics(63, 3, 12, 2, 12, true, "");
+    screen_pocket_technician_apply_prescription_mode(next_get.request_id, "bench-pending", "proposed",
+        "AI BENCH: pending trim", "Measured evidence", "", &change, 1, "ai_bench", "bench-run-956");
+    tick();
+    tap("ACCEPT");
+    screen_pocket_technician_set_sidecar_link_up(0);
+    tick();
+    require(!screen_pocket_technician_bench_active() &&
+            strcmp(screen_pocket_technician_bench_run_id(), "") == 0,
+        "disconnect immediately forgets bench authority");
+    bool leaked_bench = false;
+    for (;;) {
+        const auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        if (request.ai_bench) leaked_bench = true;
+    }
+    require(!leaked_bench && !has_label("956 AI BENCH"), "disconnect revokes queued trial requests and visible active card");
+    screen_pocket_technician_set_sidecar_link_up(1);
+    const auto ordinary_get = screen_pocket_technician_pop_request();
+    require(ordinary_get.kind == PT_REQ_PRESCRIPTION_GET && !ordinary_get.ai_bench,
+        "reconnect returns to ordinary GET without automatic bench rearm");
+    screen_pocket_technician_apply_prescription_mode(ordinary_get.request_id, "bench-forged", "proposed",
+        "Bench must never become ordinary", "Wrong namespace", "", &change, 1, "ai_bench", "bench-run-956");
+    tick();
+    require(!has_label("Bench must never become ordinary"), "ordinary mode cannot redeem a bench card");
+    screen_pocket_technician_apply_prescription(ordinary_get.request_id, "inactive", "abstained",
+        "No pressure change", "", "Pressure experiment inactive", nullptr, 0);
+    tick();
+    require(has_label("Pressure experiment inactive") && has_label("COLD PRESSURE"),
+        "normal disabled experiment behavior is restored after disconnect");
+    capture("06r-ai-bench-disarmed");
+    require(screen_pocket_technician_set_bench_status(true, "bench-run-session"),
+        "a new trial requires explicit rearm");
+    screen_pocket_technician_invalidate_live_state();
+    require(!screen_pocket_technician_bench_active(), "session reset immediately disarms bench routing");
+    while (screen_pocket_technician_pop_request().kind != PT_REQ_NONE) {}
+    require(screen_pocket_technician_set_bench_status(true, "bench-run-scope"),
+        "scope trial is explicitly armed");
+    screen_pocket_technician_set_identity("changed-car", "Changed car", "", nullptr, nullptr);
+    require(!screen_pocket_technician_bench_active(), "actual car identity change revokes bench mode");
+    for (;;) {
+        const auto request = screen_pocket_technician_pop_request();
+        if (request.kind == PT_REQ_NONE) break;
+        require(!request.ai_bench, "scope change cannot retain a queued trial request");
+    }
+    require(!screen_pocket_technician_set_bench_status(true, ""), "empty run id fails closed");
+    require(!screen_pocket_technician_bench_active(), "malformed status never arms a trial");
+    back();
+    screen_pocket_technician_clear_setups();
+    screen_pocket_technician_clear_spinners();
+}
+
 void setup_exchange_utf8_community_titles() {
     screen_setup_exchange_set_sidecar_link_up(1);
     screen_setup_exchange_set_context(
@@ -1137,6 +1255,7 @@ int main(int argc, char** argv) {
         pocket_technician_prescription_capacity();
         prescription_reject_epoch_review_regression();
         prescription_pending_epoch_ownership();
+        pocket_technician_ai_bench_routing();
         setup_exchange();
         setup_exchange_utf8_community_titles();
         setup_exchange_empty_for_track();

@@ -101,6 +101,7 @@ void screen_pocket_technician_invalidate_live_state(void);
 // applied state always comes back from the sidecar after real setup readback.
 #define PT_PRESCRIPTION_ID_MAX 65
 #define PT_PRESCRIPTION_REQUEST_MAX 24
+#define PT_BENCH_RUN_ID_MAX 65
 typedef struct {
     char section[32];
     float from_value;
@@ -111,6 +112,15 @@ void screen_pocket_technician_apply_prescription(
     const char* request_id, const char* prescription_id, const char* status,
     const char* summary, const char* evidence, const char* reason,
     const pt_prescription_change_t* changes, int change_count);
+void screen_pocket_technician_apply_prescription_mode(
+    const char* request_id, const char* prescription_id, const char* status,
+    const char* summary, const char* evidence, const char* reason,
+    const pt_prescription_change_t* changes, int change_count,
+    const char* mode, const char* run_id);
+// Trial routing is explicit, visible, and forgotten immediately on disconnect.
+bool screen_pocket_technician_set_bench_status(bool active, const char* run_id);
+bool screen_pocket_technician_bench_active(void);
+const char* screen_pocket_technician_bench_run_id(void);
 
 // ---- Out-queue (screen → trainer) ----------------------------------------
 // The screen module never writes to the WS directly; it stages a request
@@ -149,6 +159,8 @@ typedef struct {
     float             value;       // valid for PT_REQ_SPINNER_SET only
     char              prescription_id[PT_PRESCRIPTION_ID_MAX];
     char              request_id[PT_PRESCRIPTION_REQUEST_MAX];
+    bool              ai_bench;
+    char              bench_run_id[PT_BENCH_RUN_ID_MAX];
 } pt_request_t;
 
 // Pop the next pending request, or PT_REQ_NONE. Drained from main.cpp.

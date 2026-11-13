@@ -41,7 +41,7 @@ local function clock()
   return (os.preciseClock and os.preciseClock()) or os.clock()
 end
 
-function M.handle(payload, sessionId)
+function M.handle(payload, sessionId, captureIsolated)
   local out = { request_id = payload.request_id, operation = payload.operation, ok = false }
   local ctx, err = context(sessionId)
   if not ctx then out.error = err; return out end
@@ -51,6 +51,7 @@ function M.handle(payload, sessionId)
     out.ok, out.context_id = true, payload.request_id
     out.spinners, out.is_in_pit = ctx.spinners, ctx.is_in_pit
     out.reset_allowed, out.lap_dir = ctx.reset_allowed, ctx.lap_dir
+    out.capture_isolated = captureIsolated == true
     return out
   end
   if not sameIdentity(payload.identity, ctx.identity) then
@@ -104,7 +105,8 @@ function M.handle(payload, sessionId)
   decisions[id], decisionCount = true, decisionCount + 1
   out.readback = {}
   for _, change in ipairs(changes) do
-    local ack = library.setSpinner({ section = change.section, value = change.to, require_pit_box = true })
+    local ack = library.setSpinner({ section = change.section, value = change.to,
+      require_pit_box = true, prescription_id = id })
     if not ack.ok or not ack.confirmed then
       out.error = ack.error or "Awaiting setup readback"; return out
     end

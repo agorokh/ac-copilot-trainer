@@ -15,6 +15,44 @@
 
 local M = {}
 
+-- Monotonic instrumentation of this module's actual native mutation boundary.
+-- A dispatch is counted BEFORE calling native code, including refused/raised or
+-- uncertain calls. Zero dispatches therefore proves no call could transiently
+-- write; a positive count never claims that readback/application succeeded.
+local auditEpoch = tostring(os.time()) .. ":" .. tostring(os.clock()) .. ":" .. tostring({})
+local auditTotals = { attempts = 0, writes = 0, csp_setter = 0, ini_write = 0, setup_load = 0 }
+local auditById, auditIdCount, auditComplete = {}, 0, true
+local function auditRecord(kind, id)
+  auditTotals[kind] = auditTotals[kind] + 1
+  if type(id) ~= "string" or #id < 1 or #id > 64 or id:find("[^%w_-]") then return end
+  local row = auditById[id]
+  if not row then
+    if auditIdCount >= 256 then auditComplete = false; return end
+    row = { attempts = 0, writes = 0, csp_setter = 0, ini_write = 0, setup_load = 0 }
+    auditById[id], auditIdCount = row, auditIdCount + 1
+  end
+  row[kind] = row[kind] + 1
+end
+local function auditDispatch(kind, id)
+  auditRecord("writes", id)
+  auditRecord(kind, id)
+end
+
+function M.spinnerAudit(sessionId, prescriptionId)
+  local out = { ok = true, session_id = sessionId, audit_epoch = auditEpoch,
+    counter_semantics = "native_mutation_dispatches_including_refusal_or_unknown",
+    attribution_complete = auditComplete }
+  for key, value in pairs(auditTotals) do out[key] = value end
+  if type(prescriptionId) == "string" and #prescriptionId > 0 and #prescriptionId <= 64
+      and not prescriptionId:find("[^%w_-]") then
+    out.prescription_id, out.attribution = prescriptionId, {}
+    local row = auditById[prescriptionId]
+    out.attribution_observed = row ~= nil
+    for key, _ in pairs(auditTotals) do out.attribution[key] = row and row[key] or 0 end
+  end
+  return out
+end
+
 local ch = require("csp_helpers")
 local persistence = require("persistence")  -- shares the journal/laps dir layout
 local lapMetadata = require("lap_metadata")
@@ -410,6 +448,7 @@ end
 ---@param nameOrOpts string|table  basename, or { name=..., path=... }
 ---@return table  ack payload
 function M.loadByName(nameOrOpts)
+  auditRecord("attempts")
   local name, wantPath
   if type(nameOrOpts) == "table" then
     name = tostring(nameOrOpts.name or "")
@@ -466,6 +505,7 @@ function M.loadByName(nameOrOpts)
     return { ok = false, name = resolvedName, error = "ac.loadSetup unavailable" }
   end
 
+  auditDispatch("setup_load")
   local okCall, loadRet = pcall(ac.loadSetup, match.path)
   if not okCall then
     return {
@@ -671,7 +711,7 @@ local function readTextFile(path)
   return text, nil
 end
 
-local function writeTextFile(path, text)
+local function writeTextFile(path, text, auditId)
   local tmp
   for i = 1, 16 do
     local candidate = string.format("%s.ac-copilot-tmp-%d", path, i)
@@ -691,6 +731,7 @@ local function writeTextFile(path, text)
   if not f then
     return false, "setup file not writable"
   end
+  auditDispatch("ini_write", auditId)
   local ok, writeRet, writeErr = pcall(function()
     return f:write(text)
   end)
@@ -945,7 +986,7 @@ local function cspSpinnerByName(name)
   return nil, true
 end
 
-local function setCspSpinner(section, value, requirePitBox)
+local function setCspSpinner(section, value, requirePitBox, auditId)
   if not (ac and isCallable(ac.setSetupSpinnerValue)) then
     return nil, false
   end
@@ -984,6 +1025,7 @@ local function setCspSpinner(section, value, requirePitBox)
       return { ok = false, section = section, error = "Prescription requires the pit box" }, true
     end
   end
+  auditDispatch("csp_setter", auditId)
   local okSet, ret = pcall(ac.setSetupSpinnerValue, setName, appliedValue)
   if not okSet or ret == false then
     return {
@@ -1056,6 +1098,8 @@ end
 ---@param payload table|nil
 ---@return table
 function M.setSpinner(payload)
+  local auditId = type(payload) == "table" and payload.prescription_id or nil
+  auditRecord("attempts", auditId)
   if type(payload) ~= "table" then
     return { ok = false, error = "missing payload" }
   end
@@ -1071,7 +1115,7 @@ function M.setSpinner(payload)
   if value == nil then
     return { ok = false, section = section, error = "invalid value" }
   end
-  local cspAck, cspHandled = setCspSpinner(section, value, payload.require_pit_box == true)
+  local cspAck, cspHandled = setCspSpinner(section, value, payload.require_pit_box == true, auditId)
   if cspHandled then
     return cspAck
   end
@@ -1115,17 +1159,18 @@ function M.setSpinner(payload)
   local prefix = parsed.lines[idx]:match("^(%s*[%w_]+%s*=%s*)") or "VALUE="
   parsed.lines[idx] = prefix .. formatNumber(appliedValue)
   local newText = encodeSetupIni(parsed)
-  local okWrite, writeErr = writeTextFile(path, newText)
+  local okWrite, writeErr = writeTextFile(path, newText, auditId)
   if not okWrite then
     return { ok = false, path = path, section = section, value = appliedValue, error = writeErr }
   end
   if not (ac and isCallable(ac.loadSetup)) then
-    writeTextFile(path, text)
+    writeTextFile(path, text, auditId)
     return { ok = false, path = path, section = section, value = appliedValue, error = "ac.loadSetup unavailable" }
   end
+  auditDispatch("setup_load", auditId)
   local okLoad, loadRet = pcall(ac.loadSetup, path)
   if not okLoad or loadRet == nil or loadRet == false then
-    writeTextFile(path, text)
+    writeTextFile(path, text, auditId)
     return {
       ok = false,
       path = path,

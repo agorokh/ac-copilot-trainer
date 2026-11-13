@@ -1,6 +1,6 @@
 ---
 type: investigation
-status: draft
+status: active
 created: 2026-11-12
 updated: 2026-11-12
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/956
@@ -12,25 +12,25 @@ relates_to:
   - AcCopilotTrainer/00_System/invariants/persistence.md
 ---
 
-# Proposed fully autonomous acceptance for956
+# Adopted fully autonomous acceptance for956
 
-**Preparation only.** The operator selected "Prepare fully autonomous acceptance
-criteria." This draft grants no implementation, trial activation, extra budget
-or issue closure. The experiment stays disabled and956 stays OPEN. Existing
-acceptance remains controlling until the replacement below is explicitly adopted.
+**Adopted by the operator on2026-11-12 Pacific.** After preparation in PR970,
+the operator explicitly adopted this protocol, approved the four-hour cumulative
+rig cap and temporary AI bench permission, and instructed autonomous implementation
+and execution. The normal experiment stays disabled and956 stays OPEN until
+acceptance passes. This adoption supersedes the earlier human timing criterion.
 
-**Execution is blocked** until the owner adopts this protocol, authorizes the
-specific temporary bench data use/actuation and budget increase, and the permit,
+**Live execution requires** the permit,
 admission checks, sealed oracle and authoritative write instrumentation are
 implemented, reviewed, tested and deployed. A document approval is not proof
-that those implementation prerequisites exist. This draft implements none of them.
+that those implementation prerequisites exist. This document implements none of them.
 
 The proposed result is an autonomous engineering trial: correct bounded pressure
 decisions, timely touchscreen execution, authoritative application and audit proof.
 It makes no claim about human decision time, driver benefit, lap-time improvement,
 general AI coaching eligibility or clinical/statistical reliability beyond12 cases.
 
-## Changes requiring explicit adoption
+## Adopted replacements
 
 | Existing condition | Proposed replacement |
 |---|---|
@@ -161,13 +161,13 @@ is a prerequisite, not a permission to substitute endpoint health as proof.
 
 ## E. Budget, restoration and final verdict
 
-Proposed total240min minus previously spent3139.772911s leaves11260.227089s
-(187m40.23s), **only if the owner approves the increase**. Allocate20min for
+Approved total240min minus previously spent3139.772911s leaves11260.227089s
+(187m40.23s) before new rig operation. Allocate20min for
 setup/pilots,120min for capture plus scored interaction,35min for separate safety
 trials and12m40.23s reserved for restoration. Every rig-held minute counts;
 do not double-count the interaction budget or exclude waits/retries. Reserve the
 restoration allowance before starting a run; stop earlier if teardown needs more.
-Original60min cap and its460.227089s remainder remain current until adoption.
+The prior60min cap was explicitly increased; its consumed time remains included.
 
 On any integrity loss, wrong action, uncertain application, lost owner or cap
 boundary: stop, disarm, preserve evidence and use observed safe teardown. End by

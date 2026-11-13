@@ -1117,6 +1117,20 @@ static void dispatch_phase2_message(const String& body) {
       }
     }
     screen_pocket_technician_finish_spinner_list();
+  } else if (strcmp(type, "setup.bench.status") == 0) {
+    const bool shape_ok = doc["active"].is<bool>();
+    const bool applied = screen_pocket_technician_set_bench_status(
+        shape_ok && (doc["active"] | false), doc["run_id"] | "");
+    JsonDocument ack;
+    ack["v"] = 1;
+    ack["type"] = "setup.bench.status.ack";
+    ack["ok"] = shape_ok && applied;
+    ack["active"] = screen_pocket_technician_bench_active();
+    ack["run_id"] = screen_pocket_technician_bench_run_id();
+    if (!shape_ok || !applied) ack["error"] = "Invalid bench status";
+    String response;
+    serializeJson(ack, response);
+    transport_send(response);
   } else if (strcmp(type, "setup.prescription.card") == 0) {
     pt_prescription_change_t changes[4] = {};
     JsonArrayConst rows = doc["changes"].as<JsonArrayConst>();
@@ -1130,9 +1144,10 @@ static void dispatch_phase2_message(const String& body) {
       changes[i].delta_psi = phase2_json_float_or(entry["delta_psi"], NAN);
       ++i;
     }
-    screen_pocket_technician_apply_prescription(
+    screen_pocket_technician_apply_prescription_mode(
         doc["request_id"] | "", doc["prescription_id"] | "", doc["status"] | "blocked",
-        doc["summary"] | "", doc["evidence"] | "", doc["reason"] | "", changes, count);
+        doc["summary"] | "", doc["evidence"] | "", doc["reason"] | "", changes, count,
+        doc["mode"] | "", doc["run_id"] | "");
   } else if (strcmp(type, "setup.spinner.set.ack") == 0) {
     bool ok = doc["ok"] | false;
     const char* section = doc["section"] | "";
@@ -1695,12 +1710,14 @@ static void pt_request_drain() {
       doc["value"] = req.value;
       if (req.path[0]) doc["path"] = req.path;
     } else if (req.kind == PT_REQ_PRESCRIPTION_GET) {
-      doc["type"] = "setup.prescription.get";
+      doc["type"] = req.ai_bench ? "setup.bench.get" : "setup.prescription.get";
       doc["request_id"] = req.request_id;
+      if (req.ai_bench) { doc["mode"] = "ai_bench"; doc["run_id"] = req.bench_run_id; }
     } else if (req.kind == PT_REQ_PRESCRIPTION_ACCEPT || req.kind == PT_REQ_PRESCRIPTION_REJECT) {
-      doc["type"] = "setup.prescription.decide";
+      doc["type"] = req.ai_bench ? "setup.bench.decide" : "setup.prescription.decide";
       doc["prescription_id"] = req.prescription_id;
       doc["request_id"] = req.request_id;
+      if (req.ai_bench) { doc["mode"] = "ai_bench"; doc["run_id"] = req.bench_run_id; }
       doc["decision"] = req.kind == PT_REQ_PRESCRIPTION_ACCEPT ? "accept" : "reject";
     } else {
       continue;
