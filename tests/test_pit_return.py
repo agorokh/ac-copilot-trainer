@@ -22,6 +22,7 @@ from tools.ac_harness.pit_return import (
     PitReturnStop,
     build_route,
     distance,
+    observe_until_drive_ends,
 )
 from tools.ac_harness.shared_memory import AcGameStatus, GraphicsSnapshot
 
@@ -253,3 +254,33 @@ def test_actual_lua_geometry_is_read_only_and_offline():
     assert control.pitBox("sid")["position"][1] == 1
     rt.execute("online=true")
     assert control.pitBox("sid") is None and rt.globals().calls == 0
+
+
+def test_early_driver_failure_cancels_the_lap_observer():
+    async def run():
+        cancelled = asyncio.Event()
+
+        async def observer():
+            try:
+                await asyncio.sleep(20)
+            finally:
+                cancelled.set()
+
+        async def driver():
+            await asyncio.sleep(0.01)
+            raise ValueError("native pit geometry unavailable")
+
+        task = asyncio.create_task(driver())
+        with pytest.raises(ValueError, match="geometry unavailable"):
+            await observe_until_drive_ends(observer(), task)
+        assert cancelled.is_set()
+
+    asyncio.run(run())
+
+
+def test_geometric_stop_without_native_arrival_is_bounded():
+    driver = PitReturnDriver([(float(i), 0.0, 0.0) for i in range(101)], started_at=0)
+    driver.index = 99
+    driver.step((99.5, 0.0, 0.0), (1.0, 0.0, 0.0), 0.0, 4000.0, 2, 0.0)
+    with pytest.raises(ValueError, match="not confirmed"):
+        driver.step((99.5, 0.0, 0.0), (1.0, 0.0, 0.0), 0.0, 4000.0, 2, 6.0)

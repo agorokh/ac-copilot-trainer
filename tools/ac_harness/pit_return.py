@@ -25,6 +25,25 @@ class PitReturnStop(threading.Event):
         self.return_requested = threading.Event()
 
 
+async def observe_until_drive_ends(observer, drive_task):
+    """Do not wait a full lap deadline when navigation initialization already failed."""
+    observer_task = asyncio.create_task(observer)
+    try:
+        done, _ = await asyncio.wait(
+            (observer_task, drive_task), return_when=asyncio.FIRST_COMPLETED
+        )
+        if observer_task in done:
+            return await observer_task
+        # A natural-return drive can only finish cleanly after its observer has
+        # requested return. An early exit therefore cannot establish a lap window.
+        await drive_task  # Preserve an actual driver exception when present.
+        raise ValueError("drive ended before the requested lap observation completed")
+    finally:
+        if not observer_task.done():
+            observer_task.cancel()
+        await asyncio.gather(observer_task, return_exceptions=True)
+
+
 def vector(value: object) -> tuple[float, float, float]:
     if not isinstance(value, (list, tuple)) or len(value) != 3:
         raise ValueError("native pit geometry requires three coordinates")
@@ -149,6 +168,7 @@ class PitReturnDriver:
         self.index = 0
         self.last_progress = started_at
         self._shift_at = -math.inf
+        self.stationary_since: float | None = None
         self.remaining = [0.0] * len(route)
         for i in range(len(route) - 2, -1, -1):
             self.remaining[i] = self.remaining[i + 1] + distance(route[i], route[i + 1])
@@ -174,6 +194,13 @@ class PitReturnDriver:
             self.last_progress = now
         if distance(self.route[self.index], position) > 8:
             raise ValueError("natural pit return left authored corridor")
+        if distance(position, self.route[-1]) <= 1.5 and abs(speed) <= 0.1:
+            if self.stationary_since is None:
+                self.stationary_since = now
+            elif now - self.stationary_since > 5:
+                raise ValueError("native pit arrival not confirmed at geometric stop")
+        else:
+            self.stationary_since = None
         if now - self.last_progress > 12 and distance(position, self.route[-1]) > 1:
             raise ValueError("natural pit return made no forward progress")
         aim = self.index

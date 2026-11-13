@@ -1503,7 +1503,15 @@ async def run_auto_drive(
                 # HIGH). The deadline stays the drive-budget-derived one — "N laps or the time
                 # budget, whichever first" — so a shortfall ends honestly, never hangs.
                 tap_kwargs["lap_count"] = config.target_laps
-        frames = await tap(config.sidecar_url, **tap_kwargs)
+        if config.natural_pit_return:
+            from tools.ac_harness.pit_return import observe_until_drive_ends
+
+            frames = await observe_until_drive_ends(
+                tap(config.sidecar_url, **tap_kwargs),
+                drive_task,
+            )
+        else:
+            frames = await tap(config.sidecar_url, **tap_kwargs)
         session_uuid = _session_uuid_from_frames(frames)
         timed_laps = _timed_laps_from_frames(frames)
         # #531 Part D: derive the electronics-intervention evidence from the SAME captured stream
@@ -1560,6 +1568,8 @@ async def run_auto_drive(
             # poll gates on report.lap_grace_applied, this exact boolean, so the two never diverge.
             await asyncio.sleep(config.lap_finalize_grace_s)
         if config.natural_pit_return and seq_ok is True:
+            if len(lap_times_ms) < config.target_laps:
+                raise ValueError("natural pit return requires the complete requested timed window")
             # Reuse the same control owner and thread. Abort remains a separate event;
             # pipeline failure/cancellation cannot be mistaken for a return request.
             stop.return_requested.set()
