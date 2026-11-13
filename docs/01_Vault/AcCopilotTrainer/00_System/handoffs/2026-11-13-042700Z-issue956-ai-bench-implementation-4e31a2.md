@@ -96,3 +96,14 @@ that test ID with a clearly synthetic repeated-pair hex value; focused scanner
 and all15 transport tests pass. No production source changed after the clean
 round3 review. This fixture correction receives fresh full CI and exact-head
 review before merge. All live acceptance remains UNVERIFIED and956 OPEN.
+
+Round4 onf78139c found filesystem errors outside the guard could expose absolute
+paths through bench control/status/card reasons. Adopted: reuse the guard's
+public-reason boundary, keep detailed errors in private logs, disarm on file or
+JSON-integrity failure during a bench request, and hide shared ordinary-pressure
+filesystem errors too. Real WS ARM/card and health negatives prove no path reaches
+screen/status and0 native dispatches. All167 focused+existing external/E2E tests
+pass; touched-file secret scan and lint pass. Fresh Tier3 canonical prefetch again
+succeeded with the same stale-endpoint warning. Full CI and exact-head round5
+precede merge; previous f78139c full CI passed5661/34skipped at87.42%.
+No live rig/hardware operation or scoring occurred; cumulative time unchanged.

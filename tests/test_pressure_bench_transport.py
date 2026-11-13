@@ -45,6 +45,75 @@ def test_native_source_discovery_matches_lua_filename_contract(sealed, session, 
     assert srv._bench_source_paths(ctx, store) == selected
 
 
+@pytest.mark.parametrize("operation", ["arm", "get"])
+def test_native_file_failure_never_exposes_paths_on_screen(sealed, monkeypatch, operation):
+    async def run():
+        async with running(sealed, monkeypatch) as (url, state):
+            async with peer(url, client=ep.PRESSURE_BENCH_CLIENT_ID) as owner:
+                async with peer(url, client="ac-copilot-screen-test", screen=True) as screen:
+                    if operation == "get":
+                        await send(owner, ep.TYPE_SETUP_BENCH_ARM, case_file=str(sealed.case_path))
+                        assert (await receive(owner, ep.TYPE_SETUP_BENCH_STATUS))["active"] is True
+                    private = str(sealed.tmp_path / "hidden-oracle/secret-case.json")
+
+                    def unavailable(*_):
+                        raise FileNotFoundError(2, "Synthetic missing evidence", private)
+
+                    monkeypatch.setattr(srv, "_bench_inputs", unavailable)
+                    if operation == "arm":
+                        await send(owner, ep.TYPE_SETUP_BENCH_ARM, case_file=str(sealed.case_path))
+                        response = await receive(owner, "error")
+                    else:
+                        await send(
+                            owner, ep.TYPE_SETUP_BENCH_GET, mode="ai_bench", run_id="run-one"
+                        )
+                        response = await receive(owner, ep.TYPE_SETUP_PRESCRIPTION_CARD)
+                    assert private not in json.dumps(response) and str(
+                        sealed.tmp_path
+                    ) not in json.dumps(response)
+                    for _ in range(3):
+                        status = await receive(screen, ep.TYPE_SETUP_BENCH_STATUS)
+                        assert str(sealed.tmp_path) not in json.dumps(status)
+                        if status["active"] is False:
+                            break
+                    assert status["active"] is False and state.applies == 0
+                    assert private not in sealed.guard.status()["reason"]
+
+    asyncio.run(run())
+
+
+def test_bench_health_hides_runtime_file_paths(monkeypatch):
+    monkeypatch.setenv("AC_COPILOT_PRESSURE_BENCH_PERMIT", "configured-test-path")
+
+    def unavailable():
+        raise FileNotFoundError(2, "Synthetic missing runtime", "C:/private/runtime.exe")
+
+    monkeypatch.setattr(srv, "_bench_guard", unavailable)
+    status = srv._bench_status()
+    assert status["active"] is False and status["configured"] is True
+    assert "C:/private" not in json.dumps(status)
+
+
+def test_shared_normal_prescription_file_errors_also_keep_paths_private(sealed, monkeypatch):
+    async def run():
+        async with running(sealed, monkeypatch) as (url, state):
+            # Isolated software-only negative control, never the rig runtime.
+            monkeypatch.setenv("AC_COPILOT_PRESSURE_EXPERIMENT", "1")
+
+            def unavailable(*_):
+                raise FileNotFoundError(
+                    2, "Synthetic missing journal", "C:/private/experiments.jsonl"
+                )
+
+            monkeypatch.setattr(srv, "_prescription_inputs", unavailable)
+            async with peer(url) as external:
+                await send(external, ep.TYPE_SETUP_PRESCRIPTION_GET)
+                response = await receive(external, ep.TYPE_SETUP_PRESCRIPTION_CARD)
+                assert "C:/private" not in json.dumps(response) and state.applies == 0
+
+    asyncio.run(run())
+
+
 async def receive(ws, kind):
     for _ in range(30):
         frame = json.loads(await asyncio.wait_for(ws.recv(), 2))

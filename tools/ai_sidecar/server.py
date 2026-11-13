@@ -3039,6 +3039,12 @@ def _bench_guard() -> Any:
     return _pressure_bench_guard
 
 
+def _bench_public_reason(exc: Exception) -> str:
+    from tools.ai_sidecar.pressure_bench import _public_reason
+
+    return _public_reason(exc)[:160]
+
+
 def _is_bench_screen(peer: Any) -> bool:
     from tools.ai_sidecar.serial_transport import SerialPeer
 
@@ -3061,7 +3067,13 @@ def _bench_status() -> dict[str, Any]:
         status["run_id"] = status.get("run_id") or ""
         return status
     except (OSError, ValueError) as exc:
-        return {"active": False, "configured": True, "run_id": "", "reason": str(exc)[:160]}
+        logger.warning("Bench status unavailable", exc_info=True)
+        return {
+            "active": False,
+            "configured": True,
+            "run_id": "",
+            "reason": _bench_public_reason(exc),
+        }
 
 
 def _bench_health_json(body: str | bytes) -> str:
@@ -3230,9 +3242,11 @@ async def _handle_bench_control_transaction(
         await _safe_send(websocket, status)
         await _broadcast_bench_status()
     except (ValueError, OSError, KeyError, TypeError) as exc:
+        reason = _bench_public_reason(exc)
+        logger.warning("Bench control request refused", exc_info=True)
         if _pressure_bench_guard is not None:
-            _pressure_bench_guard.disarm(str(exc))
-        await _safe_send(websocket, make_error(str(exc)[:160], ref_type=data["type"]))
+            _pressure_bench_guard.disarm(reason)
+        await _safe_send(websocket, make_error(reason, ref_type=data["type"]))
         await _broadcast_bench_status()
 
 
@@ -3390,8 +3404,21 @@ async def _handle_prescription_transaction(websocket: Any, data: dict[str, Any])
     except (ValueError, OSError, SetupExchangeError, KeyError, TypeError) as exc:
         if record is None:
             record = {"status": "abstained", "summary": "No pressure change", "changes": []}
-        record = {**record, "reason": str(exc)[:160]}
         if bench:
+            reason = _bench_public_reason(exc)
+        elif isinstance(exc, OSError | json.JSONDecodeError):
+            logger.warning("Prescription evidence unavailable", exc_info=True)
+            reason = "Pressure prescription evidence is unavailable"
+        else:
+            reason = str(exc)[:160]
+        record = {**record, "reason": reason}
+        if bench:
+            logger.warning("Bench prescription request refused", exc_info=True)
+            if (
+                isinstance(exc, OSError | json.JSONDecodeError)
+                and _pressure_bench_guard is not None
+            ):
+                _pressure_bench_guard.disarm(reason)
             record.update(mode="ai_bench", run_id=data.get("run_id", ""))
             if _bench_status().get("active") is not True:
                 record.update(status="blocked", changes=[])
