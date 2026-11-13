@@ -83,7 +83,7 @@ def test_brake_ack_wait_is_bounded_and_rejects_finished_driver():
         stop = PitReturnStop()
         task = asyncio.create_task(asyncio.sleep(10))
         with pytest.raises(TimeoutError, match="acknowledgment"):
-            await await_brake_hold(stop, task, timeout=0.01)
+            await await_brake_hold(stop, task, budget_s=0.01)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         stop.brake_ack.set()

@@ -86,7 +86,15 @@ class BrakeHoldProof:
         self.laps = None
 
     def observe(self, graphics, physics_packet, speed: float, now: float) -> bool:
-        if graphics is None or not graphics.is_live or not math.isfinite(speed):
+        if (
+            graphics is None
+            or not graphics.is_live
+            or type(graphics.packet_id) is not int
+            or type(physics_packet) is not int
+            or type(graphics.completed_laps) is not int
+            or graphics.completed_laps < 0
+            or not math.isfinite(speed)
+        ):
             raise ValueError("brake hold requires live native telemetry")
         if self.laps is None:
             self.laps = graphics.completed_laps
@@ -104,9 +112,9 @@ class BrakeHoldProof:
         return self.samples >= 3
 
 
-async def await_brake_hold(stop: PitReturnStop, drive_task, *, timeout: float = 10) -> None:
+async def await_brake_hold(stop: PitReturnStop, drive_task, *, budget_s: float = 10) -> None:
     """A bounded async wait keeps the network loop and cooperative abort live."""
-    deadline = asyncio.get_running_loop().time() + timeout
+    deadline = asyncio.get_running_loop().time() + budget_s
     while not stop.brake_ack.is_set():
         if stop.is_set() or drive_task.done():
             raise ValueError("drive ended before stationary brake acknowledgment")
