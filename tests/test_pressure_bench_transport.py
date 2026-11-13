@@ -26,7 +26,7 @@ sealed = sealed_fixture
     [
         ("test_session", "testsess"),
         ("abc-defghi", "abcdefgh"),
-        ("975c1b0c3af9", "975c1b0c"),
+        ("aabbccddeeff", "aabbccdd"),
         ("_-------", "sess"),
     ],
 )

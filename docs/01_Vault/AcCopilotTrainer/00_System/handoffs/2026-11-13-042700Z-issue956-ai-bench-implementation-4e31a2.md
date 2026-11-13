@@ -88,3 +88,11 @@ full-session collision exclusion. All88 guard/transport tests pass. d1eb81d full
 CI passed5657/34skipped at87.39%; the normalization fix starts a fresh exact-head
 CI/review round. Candidate normal GUI showed AI BENCH DISARMED and exited cleanly;
 packaged oracle matched reviewed source. Still no live trial or rig time used.
+
+Round3 on0cf84ba returned0 raw findings/no medium-or-higher defects. Full Python
+suite passed5661/34skipped at87.42%, but the secret scanner correctly required a
+non-entropy fixture instead of a historical session UUID in the new test. Replaced
+that test ID with a clearly synthetic repeated-pair hex value; focused scanner
+and all15 transport tests pass. No production source changed after the clean
+round3 review. This fixture correction receives fresh full CI and exact-head
+review before merge. All live acceptance remains UNVERIFIED and956 OPEN.
