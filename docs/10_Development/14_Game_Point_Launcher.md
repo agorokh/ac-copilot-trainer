@@ -388,3 +388,96 @@ meet #956. See `tests/fixtures/setup_prescription/README.md` for capture
 prerequisites. The archived inventory and synthetic safety tests do not satisfy
 that comparison. Stop live application at the first wrong-direction actionable
 prescription; leave the trial flag unset outside the authorized experiment.
+
+### Adopted autonomous AI bench (#956 / PR970)
+
+The operator adopted the [autonomous protocol](../01_Vault/AcCopilotTrainer/03_Investigations/issue-956-autonomous-acceptance-proposal-2026-11-12.md), replacing the human timing comparison above. Normal `AC_COPILOT_PRESSURE_EXPERIMENT` stays unset. Bench authority is a separate, temporary permission; ordinary production still rejects AI reference eligibility.
+
+Use normal Game Point (`AC-Copilot-Game-Point.exe --start`) with the process-local
+`AC_COPILOT_PRESSURE_BENCH_PERMIT` path. Do not put that path or any trial arming
+flag in user/machine environment or persistent launcher settings. Environment
+presence alone never arms a case. `/health` reports `pressure_bench` runtime ID,
+actual candidate/oracle fingerprints, configured/active state and ordinary flag.
+Game Point's Sidecar row visibly identifies configured AI bench operation.
+
+One authenticated loopback controller uses HTTP Upgrade identity
+`X-AC-Copilot-Client: pressure-bench`, the existing sidecar token method when
+configured, and the normal `hello`. No token or private receipt is logged.
+
+| Request | Behavior |
+|---|---|
+|`setup.bench.status`|Read the current disarmed runtime ID/fingerprints or active case status.|
+|`setup.bench.inspect`|Read-only authenticated trainer context, current native source paths, spinners and freshly hashed car targets. No candidate is evaluated.|
+|`setup.bench.arm {case_file}`|Explicitly admit one sealed current case inside the approved run root. Requires actual pit/reset state, source/identity/owner/expiry/code/AI-analysis bindings and capture isolation.|
+|`setup.bench.disarm`|Park the case and screen immediately.|
+|`setup.bench.get {mode:"ai_bench",run_id}`|The admitted screen/actor requests the case card after label sealing.|
+|`setup.bench.get {...,prescription_id}`|Reconcile that same immutable record; accepted decisions may only read back. Never dispatch another apply.|
+|`setup.bench.decide {...,prescription_id,decision}`|Physical Pocket Technician's explicit decision. Ordinary namespaces cannot redeem bench records.|
+|`setup.spinner.audit {request_id}`|Read native session/runtime audit counters; the result must come from authenticated Lua. Zero dispatch delta proves no native boundary was invoked.|
+
+Before driving, acquire the canonical rig lease, confirm installed source, park
+voice/coaching reference inputs for this process and set/confirm
+`config.set {key:"pressureBenchCapture",value:true}`. This native latch is outside
+`ac.storage` and cannot be cleared within that AC process: it suppresses AI PB,
+reference promotion and persistence while retaining native raw archives. The
+configured bench sidecar also suppresses live coaching/calibration and defers
+ordinary archive-derived indexing. Closing AC ends the latch; a normal next
+process defaults to ordinary operation. No global qualification policy is changed.
+
+Use the existing `lapArchiveMaxMB` setting to provide sufficient retention before
+any lap (documented range50-5000MB). Snapshot its original value and prove enough
+headroom for every preserved source and this bounded campaign. Verify all original
+raw hashes and retention capacity first; copying only after rotation is unsafe.
+Record every actual attempt, including failed pilots and input-only exclusions.
+
+Register immutable rules/roster/candidate/oracle before collection with
+`python -m tools.pressure_bench_oracle register-run --run-id <opaque-id> --candidate <reviewed-artifact> --output <run-root>/run.json`.
+Use truthful native AI attribution through the canonical API, with measured native
+channel units/basis and actual harness evidence. Verify `analysis.allowed` before
+sealing. Legacy-unknown, missing channel declarations and incomplete outlaps do
+not become admissible merely because they are intended traps.
+
+The run permission JSON uses schema1/mode `956_ai_bench`, issue956, explicit
+`operator_adopted_pr970_native_ai_bench` authority and separate AI/write booleans.
+It binds run root, current runtime, canonical owner PID/cwd/start/creation epoch,
+candidate/oracle hashes and issued/expiry times. Each case binds exact identity,
+raw paths/hashes, target/baseline hashes and a structurally matching independent
+oracle seal. See `tools/ai_sidecar/pressure_bench.py` for the strict schema; extra
+declared analysis permission alone supplies no actuator authority.
+
+Seal the current source case with `python -m tools.pressure_bench_oracle inspect`
+using its real archives, identity, target and spinner snapshots and registered
+slot. The output must be an exclusive opaque file in registered `oracle-seals/`.
+Prerequisite pilots use `--pilot`; they never occupy real slots or get reused.
+Do not read or pass hidden label files to the acting process.
+
+Start the monotonic workflow timer **before ARM or any card reveal**. Keep the
+arming controller connected. Launch a fresh isolated deterministic actor:
+
+```text
+python -m tools.pressure_bench_actor --run-id <opaque-id> --evidence-dir <opaque-output-dir> --started-at <parent-monotonic-time>
+```
+
+The actor has no oracle/permit/raw-journal inputs and performs no direct decision
+or setup-write RPC. It records its FSM/code version, explicitly0 LLM inference,
+native nonce-correlated pressure/audit reads and actual screen PNGs. For a proposed
+card it writes `ready.json`/`before.png`, then waits for one observed geometry line
+on stdin: `{"accept_x":70,"accept_y":338,"frame_sha256":"<observed-frame-hash>","prescription_id":"<observed-id>"}`.
+Coordinates above are an example, never an unobserved live target. Inspect the
+actual current framebuffer first and supply its real coordinates/hash. Timer
+continues during this observation. The actor taps once through physical LVGL,
+pins the immutable decision, checks all4 fresh native values and authoritative
+audit epoch/counters, and never retaps after uncertainty. Its deadline is90s per
+case; incomplete/expired workflows retain a failed result.
+
+Disconnect, clock regression, owner loss, scope/hash change, restart or expiry
+disarms. Physical screen shows **956 AI BENCH** and locks manual setup mutations
+while armed. Readback remains visible. Do not resume an uncertain apply by
+rearming; retain `accepted_unverified` until genuine complete readback exists.
+
+The approved cap is240 cumulative rig minutes;3139.772911s was already spent
+before this campaign. Reserve restoration time, restore the exact prior cap and
+configuration, disarm/remove process-local permission, close owned rig apps,
+verify original hashes/ports/lock, and preserve other owners. No issue closure,
+normal trial activation, human benefit or successful acceptance is inferred from
+implementation, simulator output or a partial set of cases.

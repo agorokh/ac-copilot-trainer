@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import time
+from collections.abc import Callable
 from pathlib import Path
 from statistics import median
 from typing import Any
@@ -128,12 +129,44 @@ def _trace_summary(archive: dict[str, Any], wheel: str) -> tuple[float, float]:
     return float(median(pressure)), float(median(core))
 
 
+def _ordinary_archive_admission(archive: dict[str, Any], identity: dict[str, Any]) -> None:
+    qualification = qualify_archive(
+        archive,
+        use="live_reference",
+        expected_combo=(
+            identity["car_id"],
+            identity["track_id"],
+            identity.get("layout_id") or None,
+        ),
+    )
+    if not qualification.allowed:
+        raise ValueError("Archive is not eligible driver telemetry")
+
+
 def build_prescription(
     archives: list[dict[str, Any]],
     spinners: list[dict[str, Any]],
     *,
     identity: dict[str, Any],
     targets: dict[str, Any],
+) -> dict[str, Any]:
+    """Ordinary driver admission; AI remains excluded by the canonical policy."""
+    return _evaluate_prescription(
+        archives,
+        spinners,
+        identity=identity,
+        targets=targets,
+        admit_archive=_ordinary_archive_admission,
+    )
+
+
+def _evaluate_prescription(
+    archives: list[dict[str, Any]],
+    spinners: list[dict[str, Any]],
+    *,
+    identity: dict[str, Any],
+    targets: dict[str, Any],
+    admit_archive: Callable[[dict[str, Any], dict[str, Any]], None],
 ) -> dict[str, Any]:
     """Evaluate the last two consecutive laps; never skip a confounded last lap.
 
@@ -169,20 +202,10 @@ def build_prescription(
             evidence_hashes.append(_hash(archive))
             if archive.get("source") != "in_game":
                 raise ValueError("Native driver laps required")
-            qualification = qualify_archive(
-                archive,
-                use="live_reference",
-                expected_combo=(
-                    identity["car_id"],
-                    identity["track_id"],
-                    identity.get("layout_id") or None,
-                ),
-            )
             # Honor the canonical policy's legacy-driver allowance. Its ledger
             # can restrict AI/shared records but cannot certify a new human
             # session; experiment adjudication needs its own observed evidence.
-            if not qualification.allowed:
-                raise ValueError("Archive is not eligible driver telemetry")
+            admit_archive(archive, identity)
             lap = archive.get("lap", {})
             number = _number(lap.get("lap_n"))
             if (

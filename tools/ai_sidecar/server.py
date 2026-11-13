@@ -35,17 +35,6 @@ from types import SimpleNamespace
 from typing import Any
 
 from tools.ai_sidecar import observability
-from tools.ai_sidecar.external_protocol import (
-    PRESSURE_BENCH_CLIENT_ID,
-    TYPE_SETUP_BENCH_ARM,
-    TYPE_SETUP_BENCH_DECIDE,
-    TYPE_SETUP_BENCH_DISARM,
-    TYPE_SETUP_BENCH_GET,
-    TYPE_SETUP_BENCH_STATUS,
-    TYPE_SETUP_BENCH_STATUS_ACK,
-    TYPE_SETUP_SPINNER_AUDIT,
-    TYPE_SETUP_SPINNER_AUDIT_RESULT,
-)
 from tools.ai_sidecar.car_class import CarClassResolution, resolve_ac_root, resolve_installed_car
 from tools.ai_sidecar.coaching.generation import LatestGenerationQueue
 from tools.ai_sidecar.coaching.llm_coach import (
@@ -75,6 +64,7 @@ from tools.ai_sidecar.external_protocol import (
     HAPTIC_CLIENT_CLASSES,
     IDENTITY_REPLAY_TOPICS,
     LUA_CLIENT_ID,
+    PRESSURE_BENCH_CLIENT_ID,
     SCREEN_TOUCH_CLIENT_ID,
     SESSION_START_CLIENT_ID,
     SIDECAR_PRODUCED_TOPICS,
@@ -101,6 +91,13 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_SESSION_START_ACK,
     TYPE_SETUP_ADVICE,
     TYPE_SETUP_ADVICE_RESULT,
+    TYPE_SETUP_BENCH_ARM,
+    TYPE_SETUP_BENCH_DECIDE,
+    TYPE_SETUP_BENCH_DISARM,
+    TYPE_SETUP_BENCH_GET,
+    TYPE_SETUP_BENCH_INSPECT,
+    TYPE_SETUP_BENCH_STATUS,
+    TYPE_SETUP_BENCH_STATUS_ACK,
     TYPE_SETUP_CLOSED_LOOP,
     TYPE_SETUP_CLOSED_LOOP_RESULT,
     TYPE_SETUP_COMPARE,
@@ -126,6 +123,8 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_SETUP_PRESCRIPTION_GET,
     TYPE_SETUP_PRESCRIPTION_RPC,
     TYPE_SETUP_PRESCRIPTION_RPC_RESULT,
+    TYPE_SETUP_SPINNER_AUDIT,
+    TYPE_SETUP_SPINNER_AUDIT_RESULT,
     TYPE_SETUP_SPINNER_LIST,
     TYPE_SETUP_SPINNER_LIST_RESULT,
     TYPE_SETUP_SPINNER_SET,
@@ -221,6 +220,7 @@ _screen_touch_authorized_peers: set[Any] = set()
 # `client_class="lua"` in JSON, but browser WebSocket APIs cannot set this header (#726).
 _lua_authorized_peers: set[Any] = set()
 _pressure_bench_authorized_peers: set[Any] = set()
+_pressure_bench_screen_peers: set[Any] = set()
 _pressure_bench_guard: Any = None
 _setup_experiment_store_path: Path | None = None
 _setup_experiment_store_seeded = False
@@ -230,6 +230,7 @@ _setup_exchange_broker = SetupExchangeBroker()
 _setup_exchange_tasks: dict[Any, asyncio.Task[Any]] = {}
 _prescription_broker = SetupExchangeBroker(timeout_s=5.0)
 _prescription_tasks: dict[Any, asyncio.Task[Any]] = {}
+_prescription_transaction_lock: asyncio.Lock | None = None
 _external_peer_classes: dict[Any, str] = {}
 # #86: the rig-screen framebuffer capture in flight, capture_id -> (requester, last activity).
 # The screen streams one capture at a time and ignores requests while busy, so the sidecar admits
@@ -606,9 +607,12 @@ def _with_snapshot_age(
 
 
 def _reset_external_state() -> None:
+    global _prescription_transaction_lock
+    _prescription_transaction_lock = None
     global _pressure_bench_guard
     _pressure_bench_guard = None
     _pressure_bench_authorized_peers.clear()
+    _pressure_bench_screen_peers.clear()
     global _observer_feed_peer, _observer_feed_warned, _map_comparison_generation
     global _map_corner_catalog, _map_latest_archive, _map_latest_lap_n
     _map_comparison_generation += 1
@@ -1463,18 +1467,20 @@ def _route_health(connection: Any, request: Any, tail: str) -> Any:
     return _http_response(
         connection,
         HTTPStatus.OK,
-        observability.build_health_json(
-            connected_peers,
-            screen_peers=screen_peers,
-            browser_peers=_browser_peer_count(),
-            endpoints=SERVED_ENDPOINTS,
-            voice=public_voice_runtime_status(),
-            inference={
-                **inference_status(),
-                "queue": _generation_queue.status()
-                if _generation_queue
-                else {"active": False, "pending": 0, "discarded": 0},
-            },
+        _bench_health_json(
+            observability.build_health_json(
+                connected_peers,
+                screen_peers=screen_peers,
+                browser_peers=_browser_peer_count(),
+                endpoints=SERVED_ENDPOINTS,
+                voice=public_voice_runtime_status(),
+                inference={
+                    **inference_status(),
+                    "queue": _generation_queue.status()
+                    if _generation_queue
+                    else {"active": False, "pending": 0, "discarded": 0},
+                },
+            )
         ),
         observability.HEALTH_CONTENT_TYPE,
     )
@@ -1701,10 +1707,22 @@ def make_process_request(token: str | None):
             _lua_authorized_peers.add(connection)
         else:
             _lua_authorized_peers.discard(connection)
-        if _is_loopback_peer(connection) and client_id == PRESSURE_BENCH_CLIENT_ID and token_authorized:
+        if (
+            _is_loopback_peer(connection)
+            and client_id == PRESSURE_BENCH_CLIENT_ID
+            and token_authorized
+        ):
             _pressure_bench_authorized_peers.add(connection)
         else:
             _pressure_bench_authorized_peers.discard(connection)
+        if (
+            isinstance(client_id, str)
+            and client_id.startswith(LEGACY_SCREEN_CLIENT_PREFIXES)
+            and token_authorized
+        ):
+            _pressure_bench_screen_peers.add(connection)
+        else:
+            _pressure_bench_screen_peers.discard(connection)
         if token_check is not None:
             return token_check(connection, request)
         return None
@@ -2140,6 +2158,8 @@ async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None
     websocket) may continue to; a second concurrent producer is ignored here.
     """
     global _observer_feed_peer, _observer_feed_warned
+    if os.environ.get("AC_COPILOT_PRESSURE_BENCH_PERMIT", "").strip():
+        return
     # Coach v2 (diagnosed, anticipatory, paced) replaces the legacy observer's corner cues when
     # wired. Race management rides alongside either producer because it depends on stint channels,
     # not reference-corner geometry.
@@ -2410,6 +2430,18 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
             )
             return
         archive_path = str(data.get("archive_path") or data.get("path") or "")
+        if os.environ.get("AC_COPILOT_PRESSURE_BENCH_PERMIT", "").strip():
+            await _safe_send(
+                websocket,
+                {
+                    "v": 1,
+                    "type": TYPE_SETUP_EXPERIMENT_RECORD_ACK,
+                    "ok": True,
+                    "archive_path": archive_path,
+                    "deferred": "AI bench qualification required",
+                },
+            )
+            return
         try:
             out = await asyncio.to_thread(_record_lap_archive_safe, archive_path)
         except Exception as e:
@@ -2848,6 +2880,16 @@ async def _handle_session_review_frame(websocket: Any, data: dict[str, Any]) -> 
 
 
 def _drop_setup_exchange_peer(peer: Any) -> None:
+    if _pressure_bench_guard is not None:
+        _pressure_bench_guard.disconnected(peer)
+        if _peer_class(peer) in ("screen", CLIENT_CLASS_LUA):
+            _pressure_bench_guard.disarm("Bench screen or trainer disconnected")
+        with contextlib.suppress(RuntimeError):
+            task = asyncio.get_running_loop().create_task(_broadcast_bench_status())
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+    _pressure_bench_authorized_peers.discard(peer)
+    _pressure_bench_screen_peers.discard(peer)
     task = _setup_exchange_tasks.pop(peer, None)
     if task is not None:
         task.cancel()
@@ -2957,7 +2999,19 @@ async def _prescription_rpc(
 def _prescription_wire(record: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
     # Private identity, paths and journal provenance never reach the screen.
     out = {"v": 1, "type": TYPE_SETUP_PRESCRIPTION_CARD}
-    for key in ("prescription_id", "status", "summary", "evidence", "reason", "changes"):
+    for key in (
+        "prescription_id",
+        "status",
+        "summary",
+        "evidence",
+        "reason",
+        "changes",
+        "mode",
+        "run_id",
+        "case_id",
+        "decision",
+        "decided_at",
+    ):
         if key in record:
             out[key] = record[key]
     if data.get("request_id") is not None:
@@ -2965,13 +3019,245 @@ def _prescription_wire(record: dict[str, Any], data: dict[str, Any]) -> dict[str
     return out
 
 
+def _bench_candidate_sha256() -> str:
+    if getattr(sys, "frozen", False):
+        return hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    for name in ("server.py", "setup_prescription.py", "pressure_bench.py", "external_protocol.py"):
+        digest.update(name.encode())
+        digest.update(Path(__file__).with_name(name).read_bytes())
+    return digest.hexdigest()
+
+
+def _bench_guard() -> Any:
+    global _pressure_bench_guard
+    if _pressure_bench_guard is None:
+        from tools.ai_sidecar.pressure_bench import PressureBenchGuard
+        from tools.pressure_bench_oracle import code_sha256
+
+        _pressure_bench_guard = PressureBenchGuard(_bench_candidate_sha256(), code_sha256())
+    return _pressure_bench_guard
+
+
+def _is_bench_screen(peer: Any) -> bool:
+    from tools.ai_sidecar.serial_transport import SerialPeer
+
+    return _peer_class(peer) == "screen" and (
+        isinstance(peer, SerialPeer) or peer in _pressure_bench_screen_peers
+    )
+
+
+def _bench_status() -> dict[str, Any]:
+    if not os.environ.get("AC_COPILOT_PRESSURE_BENCH_PERMIT", "").strip():
+        return {"active": False, "configured": False, "run_id": "", "reason": "AI bench disabled"}
+    try:
+        guard = _bench_guard()
+        status = {
+            "configured": True,
+            **guard.status(),
+            "candidate_sha256": guard.candidate_sha256,
+            "oracle_sha256": guard.oracle_sha256,
+        }
+        status["run_id"] = status.get("run_id") or ""
+        return status
+    except (OSError, ValueError) as exc:
+        return {"active": False, "configured": True, "run_id": "", "reason": str(exc)[:160]}
+
+
+def _bench_health_json(body: str | bytes) -> str:
+    payload = json.loads(body)
+    payload["pressure_bench"] = _bench_status()
+    payload["pressure_experiment_enabled"] = os.environ.get("AC_COPILOT_PRESSURE_EXPERIMENT") == "1"
+    return json.dumps(payload)
+
+
+async def _broadcast_bench_status() -> None:
+    status = _bench_status()
+    await _broadcast_targets(
+        {"v": 1, "type": TYPE_SETUP_BENCH_STATUS, **status},
+        targets=[
+            p
+            for p in _external_peers
+            if _peer_class(p) == "screen" or p in _pressure_bench_authorized_peers
+        ],
+    )
+
+
+def _bench_inputs(ctx: dict[str, Any], store: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    from tools.ac_content import CarDataSource
+    from tools.ai_sidecar.tyre_specs import _ARCHIVE_CACHE
+
+    car_dir = resolve_ac_root() / "content/cars" / ctx["identity"]["car_id"]
+    _ARCHIVE_CACHE.pop(str(car_dir), None)
+    _, targets = _prescription_inputs(ctx, store)
+    archives = [
+        json.loads(p.read_text(encoding="utf-8-sig")) for p in _bench_source_paths(ctx, store)
+    ]
+    source = CarDataSource(car_dir)
+    raw = source.read_member("tyres.ini")
+    if raw is None:
+        raise ValueError("Bench authored tyre content unavailable")
+    curves = {}
+    for name in re.findall(r"(?im)^\s*PERFORMANCE_CURVE\s*=\s*([^;\r\n]+)", raw.decode("latin1")):
+        name = name.strip().replace("\\", "/").rsplit("/", 1)[-1]
+        data = source.read_member(name)
+        if data is None:
+            raise ValueError("Bench authored curve unavailable")
+        curves[name] = hashlib.sha256(data).hexdigest()
+    targets["_provenance"] = {
+        "tyres_ini_sha256": hashlib.sha256(raw).hexdigest(),
+        "curve_sha256": curves,
+    }
+    return archives, targets
+
+
+def _bench_source_paths(ctx: dict[str, Any], store: Path) -> list[Path]:
+    lap_dir = _prescription_lap_dir(ctx, store)
+    session = ctx["identity"]["session_id"]
+    if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", session):
+        raise ValueError("Bench native session token unavailable")
+    rows = []
+    for path in lap_dir.glob(f"lap_*_{session[:8]}_*.json"):
+        if path.stat().st_size > 32 * 1024 * 1024:
+            raise ValueError("Bench source exceeds native archive limit")
+        archive = json.loads(path.read_text(encoding="utf-8-sig"))
+        if archive.get("session_uuid") == session:
+            rows.append((float(archive.get("lap", {}).get("lap_n", -1)), path.resolve()))
+    rows.sort(key=lambda item: item[0])
+    return [p for _, p in rows[-2:]]
+
+
+async def _bench_watchdog() -> None:
+    while _bench_status().get("active") is True:
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(asyncio.Event().wait(), timeout=0.25)
+    await _broadcast_bench_status()
+
+
+def _prescription_lock() -> asyncio.Lock:
+    global _prescription_transaction_lock
+    if _prescription_transaction_lock is None:
+        _prescription_transaction_lock = asyncio.Lock()
+    return _prescription_transaction_lock
+
+
+async def _handle_bench_control(websocket: Any, data: dict[str, Any]) -> None:
+    if (
+        data["type"] in (TYPE_SETUP_BENCH_ARM, TYPE_SETUP_BENCH_INSPECT)
+        and websocket in _pressure_bench_authorized_peers
+    ):
+        guard = _bench_guard()
+        if data["type"] == TYPE_SETUP_BENCH_ARM:
+            guard.disarm("Preparing a sealed bench case")
+        epoch = guard.disarm_epoch
+        async with _prescription_lock():
+            await _handle_bench_control_transaction(websocket, data, expected_epoch=epoch)
+    else:
+        # Disarm must preempt admissions, including ones waiting for this lock.
+        await _handle_bench_control_transaction(websocket, data)
+
+
+async def _handle_bench_control_transaction(
+    websocket: Any, data: dict[str, Any], *, expected_epoch: int | None = None
+) -> None:
+    if websocket not in _pressure_bench_authorized_peers:
+        await _safe_send(
+            websocket,
+            make_error(
+                "AI bench control requires authenticated pressure-bench loopback client",
+                ref_type=data["type"],
+            ),
+        )
+        return
+    try:
+        if not os.environ.get("AC_COPILOT_PRESSURE_BENCH_PERMIT", "").strip():
+            raise ValueError("AI bench disabled")
+        guard = _bench_guard()
+        if data["type"] == TYPE_SETUP_BENCH_DISARM:
+            guard.disarm("Explicit bench disarm")
+        elif data["type"] in (TYPE_SETUP_BENCH_ARM, TYPE_SETUP_BENCH_INSPECT):
+            arm_epoch = guard.disarm_epoch if expected_epoch is None else expected_epoch
+            if guard.disarm_epoch != arm_epoch:
+                raise ValueError("Bench admission invalidated while waiting for native context")
+            producers = [p for p in _lua_authorized_peers if p in _external_peers]
+            if len(producers) != 1 or _setup_experiment_store_path is None:
+                raise ValueError("One authenticated live trainer journal required")
+            ctx = await _prescription_rpc(websocket, producers[0], "context")
+            if ctx.get("is_in_pit") is not True or ctx.get("reset_allowed") is not True:
+                raise ValueError("Bench arm requires actual pit box")
+            if os.environ.get("AC_COPILOT_PRESSURE_EXPERIMENT") == "1":
+                raise ValueError("Normal experiment must remain disabled during bench")
+            store = _setup_experiment_store_path
+            archives, targets = await asyncio.to_thread(_bench_inputs, ctx, store)
+            if (
+                websocket not in _external_peers
+                or websocket not in _pressure_bench_authorized_peers
+                or websocket.close_code is not None
+                or producers[0] not in _external_peers
+                or producers[0] not in _lua_authorized_peers
+                or producers[0].close_code is not None
+                or _setup_experiment_store_path != store
+                or guard.disarm_epoch != arm_epoch
+            ):
+                raise ValueError("Bench admission invalidated while loading native evidence")
+            if data["type"] == TYPE_SETUP_BENCH_INSPECT:
+                paths = [str(p) for p in _bench_source_paths(ctx, _setup_experiment_store_path)]
+                await _safe_send(
+                    websocket,
+                    {
+                        "v": 1,
+                        "type": "setup.bench.context",
+                        "request_id": data.get("request_id"),
+                        "context": ctx,
+                        "targets": targets,
+                        "source_paths": paths,
+                    },
+                )
+                return
+            guard.arm(data["case_file"], ctx, archives, targets, websocket)
+            task = asyncio.create_task(_bench_watchdog())
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+        status = {"v": 1, "type": TYPE_SETUP_BENCH_STATUS, **_bench_status()}
+        if data.get("request_id"):
+            status["request_id"] = data["request_id"]
+        await _safe_send(websocket, status)
+        await _broadcast_bench_status()
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        if _pressure_bench_guard is not None:
+            _pressure_bench_guard.disarm(str(exc))
+        await _safe_send(websocket, make_error(str(exc)[:160], ref_type=data["type"]))
+        await _broadcast_bench_status()
+
+
 async def _handle_prescription(websocket: Any, data: dict[str, Any]) -> None:
+    # Lua pins one fresh context. Keep an actor's concurrent read from replacing
+    # the screen decision's context between validation and its one apply.
+    async with _prescription_lock():
+        await _handle_prescription_transaction(websocket, data)
+
+
+async def _handle_prescription_transaction(websocket: Any, data: dict[str, Any]) -> None:
     from tools.ai_sidecar.setup_prescription import PrescriptionJournal, build_prescription
 
     record: dict[str, Any] | None = None
+    bench = data["type"] in (TYPE_SETUP_BENCH_GET, TYPE_SETUP_BENCH_DECIDE)
+    getting = data["type"] in (TYPE_SETUP_PRESCRIPTION_GET, TYPE_SETUP_BENCH_GET)
+    reconciling = bench and getting and bool(data.get("prescription_id"))
     try:
-        armed = os.environ.get("AC_COPILOT_PRESSURE_EXPERIMENT") == "1"
-        if data["type"] == TYPE_SETUP_PRESCRIPTION_GET and not armed:
+        if bench:
+            if websocket not in _pressure_bench_authorized_peers and not _is_bench_screen(
+                websocket
+            ):
+                raise ValueError("Bench cards require the admitted screen or local bench actor")
+        armed = (
+            _bench_status().get("active") is True
+            if bench
+            else os.environ.get("AC_COPILOT_PRESSURE_EXPERIMENT") == "1"
+        )
+        if bench and (not armed or data.get("run_id") != _bench_status().get("run_id")):
+            raise ValueError("AI bench disarmed or run changed")
+        if getting and not armed:
             record = {
                 "status": "abstained",
                 "summary": "No pressure change",
@@ -2988,6 +3274,11 @@ async def _handle_prescription(websocket: Any, data: dict[str, Any]) -> None:
         ):
             # A safe refusal remains recordable after the trainer disconnects;
             # it needs no pit state, context RPC, archive reread or actuator.
+            previous = PrescriptionJournal(_setup_experiment_store_path).get(
+                data["prescription_id"]
+            )
+            if previous and previous.get("mode") == "ai_bench":
+                raise ValueError("Bench decisions require the active bench namespace")
             record = PrescriptionJournal(_setup_experiment_store_path).decide(
                 data["prescription_id"], "reject"
             )
@@ -3026,15 +3317,35 @@ async def _handle_prescription(websocket: Any, data: dict[str, Any]) -> None:
         # cannot redirect prescription reads or writes.
         _prescription_lap_dir(ctx, store)
         journal = PrescriptionJournal(store)
-        if data["type"] == TYPE_SETUP_PRESCRIPTION_GET:
+        if not getting or reconciling:
+            record = journal.get(data["prescription_id"])
+            if record is None:
+                raise ValueError("Prescription unavailable; refresh the card")
+            if (record.get("mode") == "ai_bench") != bench:
+                record = None
+                raise ValueError("Prescription namespace does not match its authority")
+        if bench:
+            archives, targets = await asyncio.to_thread(_bench_inputs, ctx, store)
+            _bench_guard().validate(ctx, archives, targets, websocket, card=record)
+        if reconciling:
+            if record.get("status") in ("accepted_unverified", "verified_applied"):
+                result = await _prescription_rpc(
+                    websocket, producer, "readback", identity=record["identity"]
+                )
+                record = journal.verify(record["prescription_id"], result.get("readback", {}))
+        elif getting:
             if ctx.get("is_in_pit") is not True or ctx.get("reset_allowed") is not True:
                 raise ValueError("Return to the pit box for pressure prescriptions")
-            archives, targets = await asyncio.to_thread(_prescription_inputs, ctx, store)
+            if not bench:
+                archives, targets = await asyncio.to_thread(_prescription_inputs, ctx, store)
             if websocket not in _external_peers:
                 return
-            card = build_prescription(
+            builder = _bench_guard().build_prescription if bench else build_prescription
+            card = builder(
                 archives, ctx.get("spinners", []), identity=ctx["identity"], targets=targets
             )
+            if bench and card.get("status") == "abstained":
+                card.update(decision="abstain", decided_at=time.time())
             record = journal.remember(card)
         else:
             record = journal.get(data["prescription_id"])
@@ -3043,7 +3354,8 @@ async def _handle_prescription(websocket: Any, data: dict[str, Any]) -> None:
             if record.get("identity") != ctx.get("identity"):
                 raise ValueError("Session, compound or setup changed; refresh the card")
             if (
-                os.environ.get("AC_COPILOT_PRESSURE_EXPERIMENT") != "1"
+                not bench
+                and os.environ.get("AC_COPILOT_PRESSURE_EXPERIMENT") != "1"
                 and record.get("status") != "accepted_unverified"
             ):
                 record = {**record, "status": "blocked"}
@@ -3051,6 +3363,8 @@ async def _handle_prescription(websocket: Any, data: dict[str, Any]) -> None:
             record = journal.decide(data["prescription_id"], data["decision"])
             if record.get("status") == "accepted_unverified":
                 if record.get("new_decision") is True:
+                    if bench:
+                        _bench_guard().validate(ctx, archives, targets, websocket, card=record)
                     # Persistence happens before this one permitted dispatch. If
                     # its result is lost, later Accept retries only read back.
                     result = await _prescription_rpc(
@@ -3071,6 +3385,11 @@ async def _handle_prescription(websocket: Any, data: dict[str, Any]) -> None:
         if record is None:
             record = {"status": "abstained", "summary": "No pressure change", "changes": []}
         record = {**record, "reason": str(exc)[:160]}
+        if bench:
+            record.update(mode="ai_bench", run_id=data.get("run_id", ""))
+            if _bench_status().get("active") is not True:
+                record.update(status="blocked", changes=[])
+                await _broadcast_bench_status()
     if websocket in _external_peers:
         await _safe_send(websocket, _prescription_wire(record, data))
 
@@ -3332,7 +3651,26 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
                 for capability in hello_ack["capabilities"]
                 if capability != TYPE_SESSION_START
             ]
+        if websocket not in _pressure_bench_authorized_peers:
+            hello_ack["capabilities"] = [
+                c
+                for c in hello_ack["capabilities"]
+                if c
+                not in {
+                    TYPE_SETUP_BENCH_ARM,
+                    TYPE_SETUP_BENCH_DISARM,
+                    TYPE_SETUP_BENCH_STATUS,
+                    TYPE_SETUP_BENCH_INSPECT,
+                }
+            ]
         await _safe_send(websocket, hello_ack)
+        if (
+            client_class == "screen"
+            and os.environ.get("AC_COPILOT_PRESSURE_BENCH_PERMIT", "").strip()
+        ):
+            await _safe_send(
+                websocket, {"v": 1, "type": TYPE_SETUP_BENCH_STATUS, **_bench_status()}
+            )
         return
     if websocket not in _external_peers:
         await _safe_send(
@@ -3458,13 +3796,53 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
                 ),
             )
         return
+    if t in (
+        TYPE_SETUP_BENCH_ARM,
+        TYPE_SETUP_BENCH_DISARM,
+        TYPE_SETUP_BENCH_STATUS,
+        TYPE_SETUP_BENCH_INSPECT,
+    ):
+        await _handle_bench_control(websocket, data)
+        return
+    if t == TYPE_SETUP_BENCH_STATUS_ACK:
+        if not _is_bench_screen(websocket):
+            await _safe_send(websocket, make_error("Bench status ACK requires screen", ref_type=t))
+        else:
+            status = _bench_status()
+            if status.get("active") is True and (
+                data.get("ok") is not True
+                or data.get("active") is not True
+                or data.get("run_id") != status.get("run_id")
+            ):
+                _bench_guard().disarm("Bench screen did not acknowledge the active run")
+                await _broadcast_bench_status()
+            await _broadcast_targets(
+                data, targets=[p for p in _pressure_bench_authorized_peers if p in _external_peers]
+            )
+        return
     if t in (TYPE_SETUP_PRESCRIPTION_RPC, TYPE_SETUP_PRESCRIPTION_CARD):
         await _safe_send(
             websocket, make_error("Prescription frame is sidecar-originated", ref_type=t)
         )
         return
-    if t in (TYPE_SETUP_PRESCRIPTION_GET, TYPE_SETUP_PRESCRIPTION_DECIDE):
+    if t in (
+        TYPE_SETUP_PRESCRIPTION_GET,
+        TYPE_SETUP_PRESCRIPTION_DECIDE,
+        TYPE_SETUP_BENCH_GET,
+        TYPE_SETUP_BENCH_DECIDE,
+    ):
         await _schedule_prescription(websocket, data)
+        return
+    if _bench_status().get("active") is True and (
+        t in (TYPE_SETUP_SPINNER_SET, TYPE_SETUP_LOAD)
+        or (t == TYPE_ACTION and data.get("name") in ("reloadSetup", "applySetupFromPath"))
+    ):
+        await _safe_send(
+            websocket, make_error("Use the bench card while AI bench is armed", ref_type=t)
+        )
+        return
+    if t == TYPE_SETUP_SPINNER_AUDIT_RESULT and websocket not in _lua_authorized_peers:
+        await _safe_send(websocket, make_error("Audit requires authenticated Lua", ref_type=t))
         return
     if t in (TYPE_SETUP_EXCHANGE_SEARCH_RESULT, TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK):
         await _safe_send(
@@ -3786,6 +4164,10 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                 continue
 
             event_name = data.get("event")
+            if os.environ.get("AC_COPILOT_PRESSURE_BENCH_PERMIT", "").strip():
+                # Isolation spans pre-arm driving as well as scored cases.
+                await _safe_send(websocket, {"event": "bench_capture", "status": "analysis_only"})
+                continue
             # Receipt is the origin of the deadline. Never trust a peer-supplied
             # private field or reset this budget after waiting in a queue.
             data["_inference_deadline"] = time.monotonic() + (

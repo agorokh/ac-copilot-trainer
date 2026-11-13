@@ -64,6 +64,8 @@ bool g_prescription_has_card = false;
 bool g_prescription_pending = false;
 char g_prescription_pending_epoch[PT_PRESCRIPTION_REQUEST_MAX] = {};
 bool g_prescription_refresh_pending = false;
+bool g_ai_bench_active = false;
+char g_ai_bench_run_id[PT_BENCH_RUN_ID_MAX] = {};
 char g_prescription_id[PT_PRESCRIPTION_ID_MAX] = {};
 char g_prescription_status[32] = {};
 char g_prescription_summary[96] = {};
@@ -526,6 +528,8 @@ void request_prescription() {
     for (int i = g_req_head; i != g_req_tail; i = (i + 1) % PT_MAX_REQUESTS) {
         if (g_req_q[i].kind == PT_REQ_PRESCRIPTION_GET) {
             snprintf(g_req_q[i].request_id, sizeof(g_req_q[i].request_id), "%s", request_id);
+            g_req_q[i].ai_bench = g_ai_bench_active;
+            snprintf(g_req_q[i].bench_run_id, sizeof(g_req_q[i].bench_run_id), "%s", g_ai_bench_run_id);
             adopt_prescription_epoch(request_id);
             g_prescription_refresh_pending = true;
             refresh_prescription_controls();
@@ -541,6 +545,8 @@ void request_prescription() {
     request = pt_request_t{};
     request.kind = PT_REQ_PRESCRIPTION_GET;
     snprintf(request.request_id, sizeof(request.request_id), "%s", request_id);
+    request.ai_bench = g_ai_bench_active;
+    snprintf(request.bench_run_id, sizeof(request.bench_run_id), "%s", g_ai_bench_run_id);
     adopt_prescription_epoch(request_id);
     g_req_tail = next;
     g_prescription_refresh_pending = true;
@@ -565,6 +571,8 @@ void on_prescription_decision(lv_event_t* e) {
     request.kind = accept ? PT_REQ_PRESCRIPTION_ACCEPT : PT_REQ_PRESCRIPTION_REJECT;
     snprintf(request.prescription_id, sizeof(request.prescription_id), "%s", g_prescription_id);
     snprintf(request.request_id, sizeof(request.request_id), "%s", g_prescription_request_id);
+    request.ai_bench = g_ai_bench_active;
+    snprintf(request.bench_run_id, sizeof(request.bench_run_id), "%s", g_ai_bench_run_id);
     g_req_tail = next;
     g_prescription_pending = true;
     snprintf(g_prescription_pending_epoch, sizeof(g_prescription_pending_epoch), "%s", request.request_id);
@@ -619,7 +627,7 @@ void make_prescription_card(lv_obj_t* parent) {
     lv_obj_set_style_pad_row(card, 2, LV_PART_MAIN);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    prescription_label(card, "COLD PRESSURE", 14);
+    prescription_label(card, g_ai_bench_active ? "956 AI BENCH" : "COLD PRESSURE", 14);
     prescription_label(card, g_prescription_summary, 28);
     prescription_label(card, g_prescription_evidence, 28);
     for (int i = 0; i < g_prescription_change_count; ++i) {
@@ -664,7 +672,7 @@ void make_prescription_card(lv_obj_t* parent) {
 void on_row_clicked(lv_event_t* e) {
     auto* ctx = g_active_ctx;
     if (!ctx) return;
-    if (!g_setup_allowed) return;
+    if (!g_setup_allowed || g_ai_bench_active) return;
     auto* row = lv_event_get_current_target(e);
     auto idx = (intptr_t)lv_event_get_user_data(e);
     if (idx < 0 || idx >= g_setup_count) return;
@@ -694,6 +702,7 @@ void on_row_clicked(lv_event_t* e) {
 }
 
 void queue_spinner_delta(int idx, int dir) {
+    if (g_ai_bench_active) return;
     if (idx < 0 || idx >= g_spinner_count) return;
     if (!g_pt_sidecar_link_up) {
         ui_toast_error("Setup controls offline");
@@ -726,14 +735,16 @@ void on_spinner_plus_clicked(lv_event_t* e) {
 void refresh_controls() {
     refresh_prescription_controls();
     if (g_active_ctx && g_active_ctx->meta_lock) {
-        const char* reason = g_pending_spinner[0] ? "Awaiting confirmed setup state"
+        const char* reason = g_ai_bench_active ? "Manual setup controls locked"
+            : g_pending_spinner[0] ? "Awaiting confirmed setup state"
             : (g_setup_allowed ? "Setup controls: pits/reset allowed" : g_lock_reason);
-        char safe_reason[80];
-        ui_ascii_fold(safe_reason, sizeof(safe_reason), reason);
+        char marked_reason[112], safe_reason[112];
+        snprintf(marked_reason, sizeof(marked_reason), "%s%s", g_ai_bench_active ? "956 AI BENCH | " : "", reason);
+        ui_ascii_fold(safe_reason, sizeof(safe_reason), marked_reason);
         lv_label_set_text(g_active_ctx->meta_lock, safe_reason);
     }
     for (int i = 0; i < g_spinner_count; ++i) {
-        bool enabled = g_setup_allowed && g_pt_sidecar_link_up && g_spinners[i].adjustable
+        bool enabled = !g_ai_bench_active && g_setup_allowed && g_pt_sidecar_link_up && g_spinners[i].adjustable
             && !g_pending_spinner[0];
         for (int b = 0; b < 2; ++b) {
             lv_obj_t* button = b == 0 ? g_minus_buttons[i] : g_plus_buttons[i];
@@ -848,7 +859,7 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
 
     lv_obj_t* minus = lv_btn_create(row);
     g_minus_buttons[idx] = minus;
-    if (!g_setup_allowed || !s.adjustable || g_pending_spinner[0]) lv_obj_add_state(minus, LV_STATE_DISABLED);
+    if (g_ai_bench_active || !g_setup_allowed || !s.adjustable || g_pending_spinner[0]) lv_obj_add_state(minus, LV_STATE_DISABLED);
     lv_obj_set_size(minus, 34, 32);
     lv_obj_align(minus, LV_ALIGN_RIGHT_MID, -112, 0);
     lv_obj_set_style_radius(minus, UI_RADIUS_TILE, LV_PART_MAIN);
@@ -876,7 +887,7 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
 
     lv_obj_t* plus = lv_btn_create(row);
     g_plus_buttons[idx] = plus;
-    if (!g_setup_allowed || !s.adjustable || g_pending_spinner[0]) lv_obj_add_state(plus, LV_STATE_DISABLED);
+    if (g_ai_bench_active || !g_setup_allowed || !s.adjustable || g_pending_spinner[0]) lv_obj_add_state(plus, LV_STATE_DISABLED);
     lv_obj_set_size(plus, 34, 32);
     lv_obj_align(plus, LV_ALIGN_RIGHT_MID, -4, 0);
     lv_obj_set_style_radius(plus, UI_RADIUS_TILE, LV_PART_MAIN);
@@ -922,6 +933,7 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
     lv_obj_set_style_pad_all(row, ROW_PAD, LV_PART_MAIN);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    if (g_ai_bench_active) lv_obj_add_state(row, LV_STATE_DISABLED);
     lv_obj_set_style_bg_color(row, UI_BG_HEADER, LV_PART_MAIN | LV_STATE_PRESSED);
     lv_obj_add_event_cb(row, on_row_clicked, LV_EVENT_CLICKED,
                         reinterpret_cast<void*>(static_cast<intptr_t>(idx)));
@@ -1127,6 +1139,8 @@ void on_screen_delete(lv_event_t* e) {
 extern "C" void screen_pocket_technician_set_sidecar_link_up(int link_up) {
     const bool reconnected = !g_pt_sidecar_link_up && link_up != 0;
     g_pt_sidecar_link_up = link_up != 0;
+    if (!g_pt_sidecar_link_up && g_ai_bench_active)
+        screen_pocket_technician_set_bench_status(false, "");
     if (!g_pt_sidecar_link_up || (g_live_known && (uint32_t)(millis() - g_live_at) > 1500)
         || (g_setup_allowed && (uint32_t)(millis() - g_capability_at) > 1500)) {
         g_live_known = false;
@@ -1175,6 +1189,7 @@ extern "C" void screen_pocket_technician_apply_live_electronics(float bias, int 
 }
 
 extern "C" void screen_pocket_technician_invalidate_live_state(void) {
+    if (g_ai_bench_active) screen_pocket_technician_set_bench_status(false, "");
     g_live_known = false;
     g_setup_allowed = false;
     discard_queued_mutations();
@@ -1544,6 +1559,8 @@ extern "C" void screen_pocket_technician_set_identity(const char* car_id, const 
     // (chatgpt-codex P2 on PR #91).
     if ((car_id && strcmp(prev_car, g_car_id) != 0) ||
         (track_id && strcmp(prev_track, g_track_id) != 0)) {
+        if (g_ai_bench_active && (prev_car[0] || prev_track[0]))
+            screen_pocket_technician_set_bench_status(false, "");
         g_active_name[0] = 0;
         set_active_path(nullptr);
         pending_load_clear();
@@ -1636,6 +1653,14 @@ extern "C" pt_request_t screen_pocket_technician_pop_request(void) {
     while (g_req_head != g_req_tail) {
         pt_request_t out = g_req_q[g_req_head];
         g_req_head = (g_req_head + 1) % PT_MAX_REQUESTS;
+        const bool prescription_request = out.kind == PT_REQ_PRESCRIPTION_GET ||
+            out.kind == PT_REQ_PRESCRIPTION_ACCEPT || out.kind == PT_REQ_PRESCRIPTION_REJECT;
+        if (prescription_request && out.ai_bench && (!g_ai_bench_active ||
+            strcmp(out.bench_run_id, g_ai_bench_run_id) != 0)) {
+            clear_prescription_decision(out.request_id);
+            refresh_prescription_controls();
+            continue;
+        }
         if (out.kind == PT_REQ_PRESCRIPTION_GET &&
             strcmp(out.request_id, g_prescription_request_id) != 0) continue;
         // Reject never actuates a setup. Deliver the explicit refusal with its
@@ -1660,6 +1685,56 @@ extern "C" void screen_pocket_technician_apply_prescription(
     const char* request_id, const char* prescription_id, const char* status,
     const char* summary, const char* evidence, const char* reason,
     const pt_prescription_change_t* changes, int change_count) {
+    screen_pocket_technician_apply_prescription_mode(request_id, prescription_id, status,
+        summary, evidence, reason, changes, change_count, "", "");
+}
+
+extern "C" bool screen_pocket_technician_bench_active(void) { return g_ai_bench_active; }
+extern "C" const char* screen_pocket_technician_bench_run_id(void) { return g_ai_bench_run_id; }
+
+extern "C" bool screen_pocket_technician_set_bench_status(bool active, const char* run_id) {
+    bool valid = true;
+    if (active) {
+        valid = run_id && run_id[0] && strlen(run_id) < sizeof(g_ai_bench_run_id);
+        if (valid) {
+            for (const char* p = run_id; *p; ++p)
+                if ((unsigned char)*p < 0x21 || (unsigned char)*p > 0x7e) valid = false;
+        }
+    }
+    const bool next_active = active && valid;
+    const char* next_run = next_active ? run_id : "";
+    if (next_active == g_ai_bench_active && strcmp(next_run, g_ai_bench_run_id) == 0) return valid;
+    g_ai_bench_active = next_active;
+    snprintf(g_ai_bench_run_id, sizeof(g_ai_bench_run_id), "%s", next_run);
+    discard_queued_mutations();
+    // A mode/run transition revokes every queued trial action and response
+    // epoch. It cannot turn an old bench card into an ordinary prescription.
+    pt_request_t kept[PT_MAX_REQUESTS];
+    int count = 0;
+    while (g_req_head != g_req_tail) {
+        const auto& request = g_req_q[g_req_head];
+        if (request.kind != PT_REQ_PRESCRIPTION_GET && request.kind != PT_REQ_PRESCRIPTION_ACCEPT &&
+            request.kind != PT_REQ_PRESCRIPTION_REJECT) kept[count++] = request;
+        g_req_head = (g_req_head + 1) % PT_MAX_REQUESTS;
+    }
+    g_req_head = 0; g_req_tail = count;
+    for (int i = 0; i < count; ++i) g_req_q[i] = kept[i];
+    invalidate_prescription();
+    if (g_active_ctx) rebuild_list_widgets(g_active_ctx);
+    refresh_controls();
+    request_prescription();
+    return valid;
+}
+
+extern "C" void screen_pocket_technician_apply_prescription_mode(
+    const char* request_id, const char* prescription_id, const char* status,
+    const char* summary, const char* evidence, const char* reason,
+    const pt_prescription_change_t* changes, int change_count,
+    const char* mode, const char* run_id) {
+    const bool bench_card = mode && strcmp(mode, "ai_bench") == 0;
+    if (g_ai_bench_active) {
+        if (!bench_card || !run_id || strcmp(run_id, g_ai_bench_run_id) != 0) return;
+    } else if (bench_card || (mode && mode[0] && strcmp(mode, "production") != 0)) return;
     if (!request_id || !g_prescription_request_id[0] ||
         strcmp(request_id, g_prescription_request_id) != 0) return;
     bool known_status = false;
