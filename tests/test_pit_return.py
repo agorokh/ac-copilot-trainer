@@ -82,6 +82,21 @@ def test_route_is_forward_open_and_terminates_at_actual_box():
     assert len(route) < 200  # No closure from pit exit back to entry.
 
 
+@pytest.mark.parametrize("offset", [-8.01, -8.0, 8.0, 8.01])
+def test_start_admission_matches_first_driver_corridor_check(offset):
+    fast, pit = lines()
+    box = PitBox.from_native(native(), "car", "track", "")
+    position = (20.0, 0.0, offset)
+    if abs(offset) > 8:
+        with pytest.raises(ValueError, match="not connected"):
+            build_route(fast, pit, position, box)
+    else:
+        route = build_route(fast, pit, position, box)
+        driver = PitReturnDriver(route, started_at=0)
+        frame = driver.step(position, (1.0, 0.0, 0.0), 10.0, 4000.0, 2, 0.0)
+        assert not frame.needs_recovery
+
+
 def test_route_that_cannot_finish_at_the_speed_cap_is_denied_before_navigation():
     fast = [(float(i), 0.0, 0.0) for i in range(4501)]
     fast += [(4500.0, 0.0, float(i)) for i in range(1, 101)]

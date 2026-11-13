@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from tools.ac_harness.ai_line import PurePursuit
 from tools.ac_harness.lap_driver import DriveFrame
 
+MAX_ROUTE_OFFSET_M = 8.0
+
 
 class PitReturnStop(threading.Event):
     """Keep abort distinct from the successful lap observer's return request."""
@@ -124,7 +126,7 @@ def build_route(fast: list, pit: list, position: tuple, box: PitBox) -> list:
     if any(distance(a, b) > 5 for a, b in zip(pit, pit[1:], strict=False)):
         raise ValueError("authored pit route is discontinuous")
     start, entry, end = nearest(fast, position), nearest(fast, pit[0]), nearest(pit, box.position)
-    if distance(fast[start], position) > 10 or distance(fast[entry], pit[0]) > 2:
+    if distance(fast[start], position) > MAX_ROUTE_OFFSET_M or distance(fast[entry], pit[0]) > 2:
         raise ValueError("pit entry is not connected to current racing route")
     if end < 40 or end >= len(pit) - 5 or distance(pit[end], box.position) > 15:
         raise ValueError("assigned box is not beside the interior of the pit route")
@@ -201,7 +203,7 @@ class PitReturnDriver:
         )
         if self.index > previous:
             self.last_progress = now
-        if distance(self.route[self.index], position) > 8:
+        if distance(self.route[self.index], position) > MAX_ROUTE_OFFSET_M:
             raise ValueError("natural pit return left authored corridor")
         if distance(position, self.route[-1]) <= 1.5 and abs(speed) <= 0.1:
             if self.stationary_since is None:
