@@ -5,6 +5,20 @@ function M.new()
   local seen, count = {}, 0
   local self = {}
 
+  -- Read-only navigation geometry. This is not pit admission or actuation authority.
+  function self.pitBox(sessionId)
+    local ok, result = pcall(function()
+      local c, s = ac.getCar(0), ac.getSim()
+      if not c or not s or s.isOnlineRace ~= false then return nil end
+      local transform = c.pitTransform
+      local p, d = transform.position, transform.look
+      return { session_id = sessionId, offline = true, car_id = ac.getCarID(0),
+        track_id = ac.getTrackID(), layout_id = ac.getTrackLayout() or "",
+        position = { p.x, p.y, p.z }, look = { d.x, d.y, d.z } }
+    end)
+    return ok and result or nil
+  end
+
   function self.handle(payload, sessionId)
     payload = type(payload) == "table" and payload or {}
     local reply = { request_id = payload.request_id, operation = "return_to_pits",
