@@ -226,7 +226,8 @@ end
 
 ---@param car ac.StateCar
 ---@param sim ac.StateSim
-function Telemetry:update(dt, car, sim)
+---@param recordLap boolean|nil false defers only lap sampling during an ambiguous finish wrap
+function Telemetry:update(dt, car, sim, recordLap)
   if not self.recording or sim.isInMainMenu then
     return
   end
@@ -269,7 +270,7 @@ function Telemetry:update(dt, car, sim)
   end
 
   -- Lap trace (separate from rolling window)
-  if self.lapT0 ~= nil then
+  if self.lapT0 ~= nil and recordLap ~= false then
     local eMs = (t - self.lapT0) * 1000
     self.lapN = self.lapN + 1
     -- Per-wheel channels (issue #266): angular speed is the canonical longitudinal signal the
