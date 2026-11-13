@@ -107,3 +107,22 @@ pass; touched-file secret scan and lint pass. Fresh Tier3 canonical prefetch aga
 succeeded with the same stale-endpoint warning. Full CI and exact-head round5
 precede merge; previous f78139c full CI passed5661/34skipped at87.42%.
 No live rig/hardware operation or scoring occurred; cumulative time unchanged.
+
+Round5 on8854347 found DISARM could publish inactive while an accepted native
+setter was still pending. Adopted with a unified guard-owned application lease:
+all revocation sources invalidate queued admissions immediately, retain active
+settling scope for a committed application, and clear it only after authoritative
+result persistence. Expiry, owner loss and screen NACK now share that boundary.
+Controller/requesting-screen disconnect cannot cancel backend-owned completion;
+a claimed screen role alone cannot revoke authority. Lost native results latch
+application_unresolved and accepted_unverified, refuse rearm/retry writes, and
+require the native session to stop before runtime restart. This supersedes the
+earlier DISARM-preemption implementation details above.
+
+All176 focused/existing external/E2E tests pass, including real WS stalled-setter
+DISARM, both participant drops, NACK, expiry, owner loss and lost-result controls.
+Independent timeout-before-setter probe retained the unknown outcome after late
+native completion with exactly1 total apply and no false inactive or verification.
+Ruff passes. Fresh full CI and automatic exact-head round6 still precede merge.
+Tier3 canonical fallback succeeded with the same stale-endpoint warning. Rig time
+remains3139.772911s cumulative,0 scored cases; normal experiment off and956 OPEN.

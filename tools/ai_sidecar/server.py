@@ -231,6 +231,7 @@ _setup_exchange_tasks: dict[Any, asyncio.Task[Any]] = {}
 _prescription_broker = SetupExchangeBroker(timeout_s=5.0)
 _prescription_tasks: dict[Any, asyncio.Task[Any]] = {}
 _prescription_transaction_lock: asyncio.Lock | None = None
+_prescription_committed_peers: set[Any] = set()
 _external_peer_classes: dict[Any, str] = {}
 # #86: the rig-screen framebuffer capture in flight, capture_id -> (requester, last activity).
 # The screen streams one capture at a time and ignores requests while busy, so the sidecar admits
@@ -627,6 +628,7 @@ def _reset_external_state() -> None:
     for task in list(_prescription_tasks.values()):
         task.cancel()
     _prescription_tasks.clear()
+    _prescription_committed_peers.clear()
     _prescription_broker.reset()
     _external_peers.clear()
     _session_start_authorized_peers.clear()
@@ -2880,14 +2882,24 @@ async def _handle_session_review_frame(websocket: Any, data: dict[str, Any]) -> 
 
 
 def _drop_setup_exchange_peer(peer: Any) -> None:
-    if _pressure_bench_guard is not None:
-        _pressure_bench_guard.disconnected(peer)
-        if _peer_class(peer) in ("screen", CLIENT_CLASS_LUA):
-            _pressure_bench_guard.disarm("Bench screen or trainer disconnected")
-        with contextlib.suppress(RuntimeError):
-            task = asyncio.get_running_loop().create_task(_broadcast_bench_status())
+    guard = _pressure_bench_guard
+    if guard is not None and (
+        guard.is_participant(peer) or _is_bench_screen(peer) or peer in _lua_authorized_peers
+    ):
+        guard.disarm("Bench participant disconnected")
+
+        async def settle_disconnect() -> None:
+            async with _prescription_lock():
+                if guard is _pressure_bench_guard:
+                    await _broadcast_bench_status()
+
+        try:
+            task = asyncio.get_running_loop().create_task(settle_disconnect())
             _background_tasks.add(task)
             task.add_done_callback(_background_tasks.discard)
+        except RuntimeError:
+            # Without an event loop no native transaction can be in flight.
+            guard.disarm("Bench participant disconnected")
     _pressure_bench_authorized_peers.discard(peer)
     _pressure_bench_screen_peers.discard(peer)
     task = _setup_exchange_tasks.pop(peer, None)
@@ -2895,7 +2907,7 @@ def _drop_setup_exchange_peer(peer: Any) -> None:
         task.cancel()
     _setup_exchange_broker.drop(peer)
     task = _prescription_tasks.pop(peer, None)
-    if task is not None:
+    if task is not None and peer not in _prescription_committed_peers:
         task.cancel()
     _prescription_broker.drop(peer)
 
@@ -2966,7 +2978,11 @@ async def _prescription_rpc(
 ) -> dict[str, Any]:
     if requester not in _external_peers or producer not in _lua_authorized_peers:
         raise ValueError("Prescription requester or trainer disconnected")
-    request_id = _prescription_broker.begin(requester, producer, operation)
+    # After a durable Accept the sidecar owns completion/readback, even if the
+    # requesting screen disconnects. Native-producer loss still cancels the RPC.
+    request_id = _prescription_broker.begin(
+        None if operation == "apply" else requester, producer, operation
+    )
     try:
         error = await asyncio.wait_for(
             _safe_send_raw(
@@ -3158,17 +3174,20 @@ def _prescription_lock() -> asyncio.Lock:
 
 async def _handle_bench_control(websocket: Any, data: dict[str, Any]) -> None:
     if (
-        data["type"] in (TYPE_SETUP_BENCH_ARM, TYPE_SETUP_BENCH_INSPECT)
+        data["type"] in (TYPE_SETUP_BENCH_ARM, TYPE_SETUP_BENCH_INSPECT, TYPE_SETUP_BENCH_DISARM)
         and websocket in _pressure_bench_authorized_peers
     ):
         guard = _bench_guard()
+        if data["type"] == TYPE_SETUP_BENCH_DISARM:
+            # Cancel queued admissions now. Publish inactive only after the
+            # already-held native transaction has settled under this lock.
+            guard.disarm("Explicit bench disarm")
         # Snapshot invalidation before waiting, but do not interrupt the
         # decision transaction already holding the native context lock.
         epoch = guard.disarm_epoch
         async with _prescription_lock():
             await _handle_bench_control_transaction(websocket, data, expected_epoch=epoch)
     else:
-        # Disarm must preempt admissions, including ones waiting for this lock.
         await _handle_bench_control_transaction(websocket, data)
 
 
@@ -3250,10 +3269,31 @@ async def _handle_bench_control_transaction(
         await _broadcast_bench_status()
 
 
-async def _handle_prescription(websocket: Any, data: dict[str, Any]) -> None:
+async def _handle_prescription(
+    websocket: Any, data: dict[str, Any], *, scheduled_epoch: int | None = None
+) -> None:
     # Lua pins one fresh context. Keep an actor's concurrent read from replacing
     # the screen decision's context between validation and its one apply.
+    bench = data["type"] in (TYPE_SETUP_BENCH_GET, TYPE_SETUP_BENCH_DECIDE)
+    epoch = scheduled_epoch
+    if epoch is None and bench and _pressure_bench_guard:
+        epoch = _pressure_bench_guard.disarm_epoch
     async with _prescription_lock():
+        if epoch is not None and _bench_guard().disarm_epoch != epoch:
+            await _safe_send(
+                websocket,
+                _prescription_wire(
+                    {
+                        "status": "blocked",
+                        "reason": "Bench request invalidated while waiting for native context",
+                        "changes": [],
+                        "mode": "ai_bench",
+                        "run_id": data.get("run_id", ""),
+                    },
+                    data,
+                ),
+            )
+            return
         await _handle_prescription_transaction(websocket, data)
 
 
@@ -3387,20 +3427,34 @@ async def _handle_prescription_transaction(websocket: Any, data: dict[str, Any])
                         _bench_guard().validate(ctx, archives, targets, websocket, card=record)
                     # Persistence happens before this one permitted dispatch. If
                     # its result is lost, later Accept retries only read back.
-                    result = await _prescription_rpc(
-                        websocket,
-                        producer,
-                        "apply",
-                        prescription_id=record["prescription_id"],
-                        context_id=ctx["context_id"],
-                        identity=record["identity"],
-                        changes=record["changes"],
-                    )
+                    guard = _bench_guard() if bench else None
+                    if guard is not None:
+                        guard.begin_application()
+                    settled = False
+                    _prescription_committed_peers.add(websocket)
+                    try:
+                        result = await _prescription_rpc(
+                            websocket,
+                            producer,
+                            "apply",
+                            prescription_id=record["prescription_id"],
+                            context_id=ctx["context_id"],
+                            identity=record["identity"],
+                            changes=record["changes"],
+                        )
+                        record = journal.verify(
+                            record["prescription_id"], result.get("readback", {})
+                        )
+                        settled = True
+                    finally:
+                        _prescription_committed_peers.discard(websocket)
+                        if guard is not None:
+                            guard.finish_application(settled=settled)
                 else:
                     result = await _prescription_rpc(
                         websocket, producer, "readback", identity=record["identity"]
                     )
-                record = journal.verify(record["prescription_id"], result.get("readback", {}))
+                    record = journal.verify(record["prescription_id"], result.get("readback", {}))
     except (ValueError, OSError, SetupExchangeError, KeyError, TypeError) as exc:
         if record is None:
             record = {"status": "abstained", "summary": "No pressure change", "changes": []}
@@ -3437,7 +3491,12 @@ async def _schedule_prescription(websocket: Any, data: dict[str, Any]) -> None:
             ),
         )
         return
-    task = asyncio.create_task(_handle_prescription(websocket, data))
+    epoch = (
+        _pressure_bench_guard.disarm_epoch
+        if data["type"] in (TYPE_SETUP_BENCH_GET, TYPE_SETUP_BENCH_DECIDE) and _pressure_bench_guard
+        else None
+    )
+    task = asyncio.create_task(_handle_prescription(websocket, data, scheduled_epoch=epoch))
     _prescription_tasks[websocket] = task
     _background_tasks.add(task)
 

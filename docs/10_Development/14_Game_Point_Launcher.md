@@ -409,7 +409,7 @@ configured, and the normal `hello`. No token or private receipt is logged.
 |`setup.bench.status`|Read the current disarmed runtime ID/fingerprints or active case status.|
 |`setup.bench.inspect`|Read-only authenticated trainer context, current native source paths, spinners and freshly hashed car targets. No candidate is evaluated.|
 |`setup.bench.arm {case_file}`|Explicitly admit one sealed current case inside the approved run root. Requires actual pit/reset state, source/identity/owner/expiry/code/AI-analysis bindings and capture isolation.|
-|`setup.bench.disarm`|Park the case and screen immediately.|
+|`setup.bench.disarm`|Invalidate queued admissions immediately; park the case/screen and acknowledge inactive after any in-flight prescription transaction settles.|
 |`setup.bench.get {mode:"ai_bench",run_id}`|The admitted screen/actor requests the case card after label sealing.|
 |`setup.bench.get {...,prescription_id}`|Reconcile that same immutable record; accepted decisions may only read back. Never dispatch another apply.|
 |`setup.bench.decide {...,prescription_id,decision}`|Physical Pocket Technician's explicit decision. Ordinary namespaces cannot redeem bench records.|
@@ -471,7 +471,12 @@ audit epoch/counters, and never retaps after uncertainty. Its deadline is90s per
 case; incomplete/expired workflows retain a failed result.
 
 Disconnect, clock regression, owner loss, scope/hash change, restart or expiry
-disarms. Physical screen shows **956 AI BENCH** and locks manual setup mutations
+closes new admission immediately. A committed native application retains an
+active `settling` status until its result is persisted; only then does the bench
+publish inactive. If its authoritative result is lost, `application_unresolved`
+stays true, rearming is refused, and the native session must be stopped before
+runtime restart. An inactive ACK never proves that an unknown setter completed.
+Physical screen shows **956 AI BENCH** and locks manual setup mutations
 while armed. Readback remains visible. Do not resume an uncertain apply by
 rearming; retain `accepted_unverified` until genuine complete readback exists.
 

@@ -396,6 +396,21 @@ def test_hello_class_alone_cannot_arm_or_redeem_a_bench_card(sealed, monkeypatch
     asyncio.run(run())
 
 
+def test_claimed_screen_disconnect_cannot_revoke_an_admitted_case(sealed, monkeypatch):
+    async def run():
+        async with running(sealed, monkeypatch) as (url, state):
+            async with peer(url, client=ep.PRESSURE_BENCH_CLIENT_ID) as owner:
+                await send(owner, ep.TYPE_SETUP_BENCH_ARM, case_file=str(sealed.case_path))
+                assert (await receive(owner, ep.TYPE_SETUP_BENCH_STATUS))["active"] is True
+                async with peer(url, screen=True):
+                    pass
+                for _ in range(3):
+                    await asyncio.sleep(0.01)
+                assert sealed.guard.status()["active"] is True and state.applies == 0
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("kind", [ep.TYPE_SETUP_SPINNER_SET, ep.TYPE_SETUP_LOAD])
 def test_other_setup_actuators_are_blocked_while_armed(sealed, monkeypatch, kind):
     async def run():
@@ -489,7 +504,14 @@ def test_pending_arm_cannot_survive_disconnect_or_later_disarm(sealed, monkeypat
                         )
                     else:
                         async with peer(url, client=ep.PRESSURE_BENCH_CLIENT_ID) as other:
+                            epoch = sealed.guard.disarm_epoch
                             await send(other, ep.TYPE_SETUP_BENCH_DISARM)
+                            for _ in range(100):
+                                if sealed.guard.disarm_epoch != epoch:
+                                    break
+                                await asyncio.sleep(0.01)
+                            assert sealed.guard.disarm_epoch != epoch
+                            release.set()
                             assert (await receive(other, ep.TYPE_SETUP_BENCH_STATUS))[
                                 "active"
                             ] is False
@@ -503,5 +525,305 @@ def test_pending_arm_cannot_survive_disconnect_or_later_disarm(sealed, monkeypat
                 finally:
                     release.set()
                     monkeypatch.setattr(sealed.guard, "arm", original_arm)
+
+    asyncio.run(run())
+
+
+def test_disarm_ack_waits_until_inflight_native_accept_has_settled(sealed, monkeypatch):
+    async def run():
+        async with running(sealed, monkeypatch) as (url, state):
+            async with peer(url, client=ep.PRESSURE_BENCH_CLIENT_ID) as owner:
+                async with peer(url, client="ac-copilot-screen-test", screen=True) as screen:
+                    await send(owner, ep.TYPE_SETUP_BENCH_ARM, case_file=str(sealed.case_path))
+                    assert (await receive(owner, ep.TYPE_SETUP_BENCH_STATUS))["active"] is True
+                    await send(owner, ep.TYPE_SETUP_BENCH_GET, mode="ai_bench", run_id="run-one")
+                    card = await receive(owner, ep.TYPE_SETUP_PRESCRIPTION_CARD)
+                    entered, release, queued = asyncio.Event(), asyncio.Event(), asyncio.Event()
+                    original = srv._handle_bench_control
+
+                    async def before_apply():
+                        entered.set()
+                        await asyncio.wait_for(release.wait(), 3)
+
+                    async def notice(ws, frame):
+                        if frame["type"] == ep.TYPE_SETUP_BENCH_DISARM:
+                            queued.set()
+                        await original(ws, frame)
+
+                    state.before_apply = before_apply
+                    monkeypatch.setattr(srv, "_handle_bench_control", notice)
+                    try:
+                        await send(
+                            screen,
+                            ep.TYPE_SETUP_BENCH_DECIDE,
+                            mode="ai_bench",
+                            run_id="run-one",
+                            prescription_id=card["prescription_id"],
+                            decision="accept",
+                        )
+                        await asyncio.wait_for(entered.wait(), 2)
+                        epoch = sealed.guard.disarm_epoch
+                        await send(owner, ep.TYPE_SETUP_BENCH_DISARM, request_id="disarm-waits")
+                        await asyncio.wait_for(queued.wait(), 2)
+                        await asyncio.sleep(0.01)
+                        assert sealed.guard.disarm_epoch != epoch
+                        assert sealed.guard.status()["active"] is True
+                        release.set()
+                        final = await receive(screen, ep.TYPE_SETUP_PRESCRIPTION_CARD)
+                        assert final["status"] == "verified_applied" and state.applies == 1
+                        for _ in range(10):
+                            status = await receive(owner, ep.TYPE_SETUP_BENCH_STATUS)
+                            if status.get("request_id") == "disarm-waits":
+                                break
+                        assert status["active"] is False and state.applies == 1
+                        await send(
+                            owner,
+                            ep.TYPE_SETUP_BENCH_DECIDE,
+                            mode="ai_bench",
+                            run_id="run-one",
+                            prescription_id=card["prescription_id"],
+                            decision="accept",
+                        )
+                        assert (await receive(owner, ep.TYPE_SETUP_PRESCRIPTION_CARD))[
+                            "status"
+                        ] == "blocked"
+                        assert state.applies == 1
+                    finally:
+                        release.set()
+
+    asyncio.run(run())
+
+
+def test_disarm_invalidates_accept_already_queued_for_native_context(sealed, monkeypatch):
+    async def run():
+        async with running(sealed, monkeypatch) as (url, state):
+            async with peer(url, client=ep.PRESSURE_BENCH_CLIENT_ID) as owner:
+                async with peer(url, client="ac-copilot-screen-test", screen=True) as screen:
+                    await send(owner, ep.TYPE_SETUP_BENCH_ARM, case_file=str(sealed.case_path))
+                    assert (await receive(owner, ep.TYPE_SETUP_BENCH_STATUS))["active"] is True
+                    await send(owner, ep.TYPE_SETUP_BENCH_GET, mode="ai_bench", run_id="run-one")
+                    card = await receive(owner, ep.TYPE_SETUP_PRESCRIPTION_CARD)
+                    queued = asyncio.Event()
+                    original = srv._handle_prescription
+
+                    async def notice(ws, frame, **kwargs):
+                        queued.set()
+                        await original(ws, frame, **kwargs)
+
+                    monkeypatch.setattr(srv, "_handle_prescription", notice)
+                    lock, held = srv._prescription_lock(), True
+                    await lock.acquire()
+                    try:
+                        await send(
+                            screen,
+                            ep.TYPE_SETUP_BENCH_DECIDE,
+                            mode="ai_bench",
+                            run_id="run-one",
+                            prescription_id=card["prescription_id"],
+                            decision="accept",
+                        )
+                        await asyncio.wait_for(queued.wait(), 2)
+                        epoch = sealed.guard.disarm_epoch
+                        await send(owner, ep.TYPE_SETUP_BENCH_DISARM, request_id="cancel-queued")
+                        for _ in range(100):
+                            if sealed.guard.disarm_epoch != epoch:
+                                break
+                            await asyncio.sleep(0.01)
+                        assert sealed.guard.disarm_epoch != epoch
+                        held = False
+                        lock.release()
+                        assert (await receive(screen, ep.TYPE_SETUP_PRESCRIPTION_CARD))[
+                            "status"
+                        ] == "blocked"
+                        for _ in range(10):
+                            status = await receive(owner, ep.TYPE_SETUP_BENCH_STATUS)
+                            if status.get("request_id") == "cancel-queued":
+                                break
+                        assert status["active"] is False and state.applies == 0
+                        assert (
+                            PrescriptionJournal(state.store)
+                            .get(card["prescription_id"])
+                            .get("decision")
+                            is None
+                        )
+                    finally:
+                        if held:
+                            lock.release()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("departed", ["controller", "requesting_screen"])
+def test_participant_disconnect_drains_committed_native_apply_before_inactive(
+    sealed, monkeypatch, departed
+):
+    async def run():
+        async with running(sealed, monkeypatch) as (url, state):
+            async with peer(url, client=ep.PRESSURE_BENCH_CLIENT_ID) as owner:
+                async with peer(url, client="ac-copilot-screen-test", screen=True) as screen:
+                    await send(owner, ep.TYPE_SETUP_BENCH_ARM, case_file=str(sealed.case_path))
+                    assert (await receive(owner, ep.TYPE_SETUP_BENCH_STATUS))["active"] is True
+                    await send(owner, ep.TYPE_SETUP_BENCH_GET, mode="ai_bench", run_id="run-one")
+                    card = await receive(owner, ep.TYPE_SETUP_PRESCRIPTION_CARD)
+                    async with peer(url, client=ep.PRESSURE_BENCH_CLIENT_ID) as observer:
+                        entered, release = asyncio.Event(), asyncio.Event()
+
+                        async def before_apply():
+                            entered.set()
+                            await asyncio.wait_for(release.wait(), 3)
+
+                        state.before_apply = before_apply
+                        try:
+                            await send(
+                                screen,
+                                ep.TYPE_SETUP_BENCH_DECIDE,
+                                mode="ai_bench",
+                                run_id="run-one",
+                                prescription_id=card["prescription_id"],
+                                decision="accept",
+                            )
+                            await asyncio.wait_for(entered.wait(), 2)
+                            count = len(srv._external_peers)
+                            await (owner if departed == "controller" else screen).close()
+                            for _ in range(100):
+                                if len(srv._external_peers) < count:
+                                    break
+                                await asyncio.sleep(0.01)
+                            assert len(srv._external_peers) < count
+                            assert sealed.guard.status()["active"] is True and state.applies == 0
+                            release.set()
+                            for _ in range(10):
+                                status = await receive(observer, ep.TYPE_SETUP_BENCH_STATUS)
+                                if status["active"] is False:
+                                    break
+                            assert status["active"] is False and state.applies == 1
+                            record = PrescriptionJournal(state.store).get(card["prescription_id"])
+                            assert (
+                                record["status"] == "verified_applied"
+                                and record["decision"] == "accept"
+                            )
+                        finally:
+                            release.set()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("revocation", ["screen_nack", "expiry", "owner_loss"])
+def test_all_revocation_sources_drain_committed_apply(sealed, monkeypatch, revocation):
+    async def run():
+        async with running(sealed, monkeypatch) as (url, state):
+            async with peer(url, client=ep.PRESSURE_BENCH_CLIENT_ID) as owner:
+                async with peer(url, client="ac-copilot-screen-test", screen=True) as screen:
+                    await send(owner, ep.TYPE_SETUP_BENCH_ARM, case_file=str(sealed.case_path))
+                    assert (await receive(owner, ep.TYPE_SETUP_BENCH_STATUS))["active"] is True
+                    await send(owner, ep.TYPE_SETUP_BENCH_GET, mode="ai_bench", run_id="run-one")
+                    card = await receive(owner, ep.TYPE_SETUP_PRESCRIPTION_CARD)
+                    entered, release = asyncio.Event(), asyncio.Event()
+
+                    async def before_apply():
+                        entered.set()
+                        await asyncio.wait_for(release.wait(), 3)
+
+                    state.before_apply = before_apply
+                    try:
+                        await send(
+                            screen,
+                            ep.TYPE_SETUP_BENCH_DECIDE,
+                            mode="ai_bench",
+                            run_id="run-one",
+                            prescription_id=card["prescription_id"],
+                            decision="accept",
+                        )
+                        await asyncio.wait_for(entered.wait(), 2)
+                        epoch = sealed.guard.disarm_epoch
+                        if revocation == "screen_nack":
+                            await send(
+                                screen,
+                                ep.TYPE_SETUP_BENCH_STATUS_ACK,
+                                ok=False,
+                                active=False,
+                                run_id="",
+                            )
+                        elif revocation == "expiry":
+                            sealed.now[0] = sealed.case["expires_at"] + 1
+                        else:
+                            monkeypatch.setattr(sealed.guard, "owner_reader", lambda _: None)
+                        for _ in range(100):
+                            if sealed.guard.disarm_epoch != epoch:
+                                break
+                            await asyncio.sleep(0.01)
+                        assert sealed.guard.disarm_epoch != epoch
+                        status = srv._bench_status()
+                        assert status["active"] is True and status["settling"] is True
+                        assert state.applies == 0
+                        # A new request during settling cannot acquire authority.
+                        await send(
+                            owner, ep.TYPE_SETUP_BENCH_GET, mode="ai_bench", run_id="run-one"
+                        )
+                        release.set()
+                        assert (await receive(screen, ep.TYPE_SETUP_PRESCRIPTION_CARD))[
+                            "status"
+                        ] == "verified_applied"
+                        for _ in range(10):
+                            status = await receive(owner, ep.TYPE_SETUP_BENCH_STATUS)
+                            if status["active"] is False:
+                                break
+                        assert status["active"] is False and state.applies == 1
+                        record = PrescriptionJournal(state.store).get(card["prescription_id"])
+                        assert record["status"] == "verified_applied"
+                    finally:
+                        release.set()
+
+    asyncio.run(run())
+
+
+def test_lost_native_result_keeps_uncertain_application_settling(sealed, monkeypatch):
+    async def run():
+        async with running(sealed, monkeypatch) as (url, state):
+            original = srv._prescription_rpc
+
+            async def lose_result(requester, producer, operation, **fields):
+                result = await original(requester, producer, operation, **fields)
+                if operation == "apply":
+                    raise ValueError("Synthetic lost authoritative native result")
+                return result
+
+            monkeypatch.setattr(srv, "_prescription_rpc", lose_result)
+            async with peer(url, client=ep.PRESSURE_BENCH_CLIENT_ID) as owner:
+                async with peer(url, client="ac-copilot-screen-test", screen=True) as screen:
+                    await send(owner, ep.TYPE_SETUP_BENCH_ARM, case_file=str(sealed.case_path))
+                    assert (await receive(owner, ep.TYPE_SETUP_BENCH_STATUS))["active"] is True
+                    await send(owner, ep.TYPE_SETUP_BENCH_GET, mode="ai_bench", run_id="run-one")
+                    card = await receive(owner, ep.TYPE_SETUP_PRESCRIPTION_CARD)
+                    await send(
+                        screen,
+                        ep.TYPE_SETUP_BENCH_DECIDE,
+                        mode="ai_bench",
+                        run_id="run-one",
+                        prescription_id=card["prescription_id"],
+                        decision="accept",
+                    )
+                    uncertain = await receive(screen, ep.TYPE_SETUP_PRESCRIPTION_CARD)
+                    assert uncertain["status"] == "accepted_unverified" and state.applies == 1
+                    await send(owner, ep.TYPE_SETUP_BENCH_DISARM)
+                    status = await receive(owner, ep.TYPE_SETUP_BENCH_STATUS)
+                    assert status["active"] is True and status["settling"] is True
+                    assert status["application_unresolved"] is True
+                    await send(owner, ep.TYPE_SETUP_BENCH_ARM, case_file=str(sealed.case_path))
+                    assert (await receive(owner, "error"))["type"] == "error"
+                    await send(
+                        screen,
+                        ep.TYPE_SETUP_BENCH_DECIDE,
+                        mode="ai_bench",
+                        run_id="run-one",
+                        prescription_id=card["prescription_id"],
+                        decision="accept",
+                    )
+                    await receive(screen, ep.TYPE_SETUP_PRESCRIPTION_CARD)
+                    assert state.applies == 1
+                    assert (
+                        PrescriptionJournal(state.store).get(card["prescription_id"])["status"]
+                        == "accepted_unverified"
+                    )
 
     asyncio.run(run())

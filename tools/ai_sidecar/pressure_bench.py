@@ -220,6 +220,9 @@ class PressureBenchGuard:
         self._seen_sources: dict[tuple[str, str], str] = {}
         self._reason = "Bench is disarmed"
         self._disarm_epoch = 0
+        self._revocation_pending = False
+        self._application_in_flight = False
+        self._application_unresolved = False
 
     @property
     def disarm_epoch(self) -> int:
@@ -227,7 +230,7 @@ class PressureBenchGuard:
         return self._disarm_epoch
 
     def status(self) -> dict[str, Any]:
-        if self._active is not None:
+        if self._active is not None and not self._revocation_pending:
             try:
                 self._check_active_clock()
                 _permit, digest = self._permit()
@@ -251,15 +254,46 @@ class PressureBenchGuard:
             "run_id": self._active["permit"]["run_id"] if self._active else None,
             "case_id": self._active["case"]["case_id"] if self._active else None,
             "reason": self._reason,
+            "settling": self._revocation_pending and self._active is not None,
+            "application_unresolved": self._application_unresolved,
         }
 
-    def disarm(self, reason: str = "Bench explicitly disarmed") -> None:
+    def invalidate_pending_admissions(self) -> None:
+        """Cancel lock waiters without revoking an in-flight transaction."""
         self._disarm_epoch += 1
-        self._active, self._peers, self._reason = None, [], str(reason)[:160]
+
+    def disarm(self, reason: str = "Bench explicitly disarmed") -> None:
+        self.invalidate_pending_admissions()
+        self._reason = str(reason)[:160]
+        if self._application_in_flight or self._application_unresolved:
+            # A dispatched native setter cannot be recalled. Close admission
+            # now, but retain its scope until an authoritative outcome exists.
+            self._revocation_pending = True
+            return
+        self._active, self._peers = None, []
+        self._revocation_pending = False
+
+    def begin_application(self) -> None:
+        if self._active is None or self._revocation_pending or self._application_in_flight:
+            raise BenchDenied("Bench application admission is closed")
+        self._application_in_flight = True
+
+    def finish_application(self, *, settled: bool) -> None:
+        self._application_in_flight = False
+        if not settled:
+            self._application_unresolved = True
+            self.disarm(
+                "Native application outcome unknown; stop the native session before restart"
+            )
+        elif self._revocation_pending:
+            self.disarm(self._reason)
 
     def disconnected(self, peer: Any) -> None:
-        if any(item is peer for item in self._peers):
+        if self.is_participant(peer):
             self.disarm("Bench participant disconnected")
+
+    def is_participant(self, peer: Any) -> bool:
+        return any(item is peer for item in self._peers)
 
     def _check_active_clock(self) -> None:
         active = self._active
@@ -346,6 +380,8 @@ class PressureBenchGuard:
         peer: Any,
     ) -> dict[str, Any]:
         self.disarm("Enrolling a sealed bench case")
+        if self._revocation_pending:
+            raise BenchDenied("Previous native application is still settling")
         try:
             permit, permit_hash = self._permit()
             run_root = Path(permit["run_root"]).resolve()
@@ -403,6 +439,8 @@ class PressureBenchGuard:
             active = self._active
             if active is None:
                 raise BenchDenied("Bench is disarmed; explicit arm is required")
+            if self._revocation_pending:
+                raise BenchDenied("Bench is stopping; new application admission is closed")
             self._check_active_clock()
             permit, permit_hash = self._permit()
             case, case_hash = _read_json(active["case_path"])
