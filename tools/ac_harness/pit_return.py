@@ -183,6 +183,7 @@ class PitReturnDriver:
         self.remaining = [0.0] * len(route)
         for i in range(len(route) - 2, -1, -1):
             self.remaining[i] = self.remaining[i + 1] + distance(route[i], route[i + 1])
+        self._progress_remaining = self.remaining[0]
 
     def step(
         self, position: tuple, look: tuple, speed: float, rpm: float, gear: int, now: float
@@ -201,18 +202,24 @@ class PitReturnDriver:
         self.index = min(
             range(self.index, search_end), key=lambda i: distance(self.route[i], position)
         )
-        if self.index > previous:
+        goal_distance = distance(position, self.route[-1])
+        # A nearest-waypoint index can snap to the final point while the car
+        # is still outside native arrival range. Keep approaching the actual
+        # box, and recognize forward motion even after the index stops moving.
+        remaining = max(self.remaining[self.index], goal_distance)
+        if self.index > previous or remaining < self._progress_remaining - 0.25:
             self.last_progress = now
+            self._progress_remaining = remaining
         if distance(self.route[self.index], position) > MAX_ROUTE_OFFSET_M:
             raise ValueError("natural pit return left authored corridor")
-        if distance(position, self.route[-1]) <= 1.5 and abs(speed) <= 0.1:
+        if goal_distance <= 1.5 and abs(speed) <= 0.1:
             if self.stationary_since is None:
                 self.stationary_since = now
             elif now - self.stationary_since > 5:
                 raise ValueError("native pit arrival not confirmed at geometric stop")
         else:
             self.stationary_since = None
-        if now - self.last_progress > 12 and distance(position, self.route[-1]) > 1:
+        if now - self.last_progress > 12 and goal_distance > 1:
             raise ValueError("natural pit return made no forward progress")
         aim = self.index
         horizon = min(10.0, max(3.0, speed / 6.0))
@@ -229,11 +236,10 @@ class PitReturnDriver:
         forward = (look[0] * dx + look[2] * dz) / heading_norm
         lateral = (look[0] * dz - look[2] * dx) / heading_norm
         steer = max(-0.65, min(0.65, self.pursuit._steer_from_offsets(forward, lateral)))
-        remaining = self.remaining[self.index]
         limit = min(60.0, math.sqrt(max(0.0, 2 * 1.2 * (remaining - 0.8))) * 3.6)
         if remaining < 15:
             limit = min(limit, 12.0)
-        if distance(position, self.route[-1]) < 1.2:
+        if goal_distance < 1.2:
             limit = 0.0
         error = limit - speed
         gas = min(0.3, max(0.0, error / 20.0))

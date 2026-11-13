@@ -135,6 +135,38 @@ def test_steering_reuses_canonical_right_sign_and_stop_has_no_throttle():
     assert frame.gas == 0 and frame.brake > 0 and not frame.needs_recovery
 
 
+def test_sparse_final_segment_keeps_approaching_and_counts_distance_progress():
+    fast, _ = lines()
+    pit = [(float(i), 0.0, 2.0) for i in range(50, 220) if i not in range(146, 150)]
+    box = PitBox.from_native(native(), "car", "track", "")
+    box = replace(box, position=(150.0, 0.0, 2.0))
+    route = build_route(fast, pit, fast[20], box)
+    assert distance(route[-2], route[-1]) == 5
+    driver = PitReturnDriver(route, started_at=0)
+    driver.index = len(route) - 2
+    for now, gap in ((0, 2.4), (11, 2.1), (22, 1.8)):
+        position = (box.position[0] - gap, 0.0, box.position[2])
+        frame = driver.step(position, (1.0, 0.0, 0.0), 0.0, 4000.0, 2, now)
+        assert driver.index == len(route) - 1
+        assert frame.gas > 0 and frame.brake == 0
+        assert driver.last_progress == now
+    frame = driver.step(
+        (box.position[0] - 1.1, 0.0, box.position[2]), (1.0, 0.0, 0.0), 0.0, 4000.0, 2, 33
+    )
+    assert frame.gas == 0 and frame.brake > 0
+
+
+def test_final_approach_accumulates_small_motion_without_refreshing_a_stall():
+    driver = PitReturnDriver([(float(i * 5), 0.0, 0.0) for i in range(101)], started_at=0)
+    driver.index = 99
+    for now, gap, progress_at in ((0, 2.4, 0), (4, 2.3, 0), (8, 2.2, 0), (11, 2.1, 11)):
+        frame = driver.step((500.0 - gap, 0.0, 0.0), (1.0, 0.0, 0.0), 0.0, 4000.0, 2, now)
+        assert frame.gas > 0 and frame.brake == 0
+        assert driver.last_progress == progress_at
+    with pytest.raises(ValueError, match="no forward progress"):
+        driver.step((497.9, 0.0, 0.0), (1.0, 0.0, 0.0), 0.0, 4000.0, 2, 24)
+
+
 @pytest.mark.parametrize(
     "position,now", [((0.0, 0.0, 20.0), 1), ((0.0, 0.0, 0.0), 13), ((0.0, 0.0, 0.0), 241)]
 )
