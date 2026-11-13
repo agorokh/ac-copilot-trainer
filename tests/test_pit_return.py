@@ -17,15 +17,80 @@ from tools.ac_harness.auto_drive import (
     run_auto_drive,
 )
 from tools.ac_harness.pit_return import (
+    BrakeHoldProof,
     PitArrivalProof,
     PitBox,
     PitReturnDriver,
     PitReturnStop,
+    await_brake_hold,
     build_route,
     distance,
+    measured_window_session,
     observe_until_drive_ends,
 )
 from tools.ac_harness.shared_memory import AcGameStatus, GraphicsSnapshot
+
+
+def session(sid):
+    return {"type": "state.snapshot", "topic": "session", "payload": {"session_uuid": sid}}
+
+
+def lap(n=1, ms=90000):
+    return {"type": "state.snapshot", "topic": "lap", "payload": {"lap": n, "last_lap_ms": ms}}
+
+
+def test_window_binding_preserves_startup_transition_before_counted_laps():
+    frames = [session("startup"), session("measured"), lap(), lap(2), session("measured")]
+    assert measured_window_session(frames, 2) == "measured"
+    assert frames[0]["payload"]["session_uuid"] == "startup"
+
+
+@pytest.mark.parametrize(
+    "frames",
+    [
+        [lap()],
+        [session(""), lap()],
+        [session(None), lap()],
+        [session("one"), lap(), session("two"), lap(2)],
+        [session("one"), lap(), session("two")],
+        [session("one"), lap(), lap()],
+        [session("one"), lap(2), lap()],
+        [session("one"), lap(), lap(3)],
+        [session("one"), lap(True)],
+        [session("one"), lap(ms=math.nan)],
+        [session("one"), lap(ms="90000")],
+    ],
+)
+def test_window_binding_denies_missing_mixed_replayed_or_malformed_identity(frames):
+    with pytest.raises(ValueError):
+        measured_window_session(frames, 2)
+
+
+def test_brake_hold_requires_fresh_stationary_native_packets_and_lap_counter():
+    proof = BrakeHoldProof()
+    assert not proof.observe(graphics(1), 1, 10, 0)
+    assert not proof.observe(graphics(2), 2, 0, 0.2)
+    assert not proof.observe(graphics(2), 3, 0, 0.4)
+    assert not proof.observe(graphics(3), 3, 0, 0.6)
+    assert proof.observe(graphics(4), 4, 0, 0.8)
+    assert not proof.observe(graphics(5), 5, 0.11, 1)
+    with pytest.raises(ValueError, match="lap counter"):
+        proof.observe(graphics(6, laps=1), 6, 0, 1.2)
+
+
+def test_brake_ack_wait_is_bounded_and_rejects_finished_driver():
+    async def run():
+        stop = PitReturnStop()
+        task = asyncio.create_task(asyncio.sleep(10))
+        with pytest.raises(TimeoutError, match="acknowledgment"):
+            await await_brake_hold(stop, task, timeout=0.01)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        stop.brake_ack.set()
+        with pytest.raises(ValueError, match="ended"):
+            await await_brake_hold(stop, task)
+
+    asyncio.run(run())
 
 
 def native(**changes):

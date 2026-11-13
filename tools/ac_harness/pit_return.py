@@ -25,7 +25,96 @@ class PitReturnStop(threading.Event):
     def __init__(self) -> None:
         super().__init__()
         self.return_requested = threading.Event()
+        self.brake_ack = threading.Event()
+        self.return_ready = threading.Event()
         self.pit_box: PitBox | None = None
+        self.return_box: PitBox | None = None
+
+
+def measured_window_session(frames: list[dict], required_laps: int) -> str:
+    """Bind counted laps to ordered native identity, never the latest replay alone."""
+    current = captured = None
+    ordinals = []
+    for frame in frames:
+        if not isinstance(frame, dict) or frame.get("type") != "state.snapshot":
+            continue
+        payload = frame.get("payload")
+        if frame.get("topic") == "session":
+            value = payload.get("session_uuid") if isinstance(payload, dict) else None
+            if not isinstance(value, str) or not value or value != value.strip():
+                raise ValueError("measured window has missing native session identity")
+            if captured is not None and value != captured:
+                raise ValueError("native session changed inside the measured window")
+            current = value
+        elif frame.get("topic") == "lap":
+            if not isinstance(payload, dict):
+                raise ValueError("malformed native lap snapshot")
+            duration = payload.get("last_lap_ms")
+            if duration is None or (type(duration) in (int, float) and duration == 0):
+                continue  # Untimed outlap boundaries do not count.
+            ordinal = payload.get("lap")
+            if (
+                type(duration) not in (int, float)
+                or not math.isfinite(duration)
+                or duration <= 0
+                or not float(duration).is_integer()
+                or type(ordinal) is not int
+                or ordinal < 1
+            ):
+                raise ValueError("malformed timed native lap identity")
+            if not current:
+                raise ValueError("timed lap preceded native session identity")
+            if captured is None:
+                captured = current
+            if current != captured or (ordinals and ordinal != ordinals[-1] + 1):
+                raise ValueError("mixed, replayed or rolled-back native lap window")
+            ordinals.append(ordinal)
+    if type(required_laps) is not int or required_laps < 1 or len(ordinals) != required_laps:
+        raise ValueError("incomplete or excess timed native lap window")
+    if not captured or current != captured:
+        raise ValueError("measured native session unavailable")
+    return captured
+
+
+class BrakeHoldProof:
+    """Fresh stationary packets for the parent read; never navigation authority."""
+
+    def __init__(self) -> None:
+        self.samples = 0
+        self.previous = None
+        self.last_at = -math.inf
+        self.laps = None
+
+    def observe(self, graphics, physics_packet, speed: float, now: float) -> bool:
+        if graphics is None or not graphics.is_live or not math.isfinite(speed):
+            raise ValueError("brake hold requires live native telemetry")
+        if self.laps is None:
+            self.laps = graphics.completed_laps
+        if graphics.completed_laps != self.laps:
+            raise ValueError("native lap counter changed during brake hold")
+        if abs(speed) > 0.1:
+            self.samples = 0
+        pair = (graphics.packet_id, physics_packet)
+        fresh = self.previous is None or (
+            pair[0] != self.previous[0] and pair[1] != self.previous[1]
+        )
+        if fresh and now - self.last_at >= 0.15:
+            self.previous, self.last_at = pair, now
+            self.samples = self.samples + 1 if abs(speed) <= 0.1 else 0
+        return self.samples >= 3
+
+
+async def await_brake_hold(stop: PitReturnStop, drive_task, *, timeout: float = 10) -> None:
+    """A bounded async wait keeps the network loop and cooperative abort live."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not stop.brake_ack.is_set():
+        if stop.is_set() or drive_task.done():
+            raise ValueError("drive ended before stationary brake acknowledgment")
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError("stationary brake acknowledgment timed out")
+        await asyncio.sleep(0.01)
+    if stop.is_set() or drive_task.done():
+        raise ValueError("drive ended during stationary brake acknowledgment")
 
 
 async def observe_until_drive_ends(observer, drive_task):
