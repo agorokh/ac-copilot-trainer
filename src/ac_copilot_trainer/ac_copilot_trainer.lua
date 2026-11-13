@@ -1091,6 +1091,7 @@ end
 if wsBridge.registerConfigBridge then
   wsBridge.registerConfigBridge(
     function(key)
+      if key == "harnessPitBox" then return wsBridge.sessionControl.pitBox(SESSION_UUID) end
       if key == "pressureBenchCapture" then return pressureBenchCapture end
       return config[key]
     end,

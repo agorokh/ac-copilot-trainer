@@ -225,6 +225,8 @@ class AutoDriveConfig:
     # (or the drive budget expires — whichever first). 0 = legacy single-lap --wait-lap
     # semantics. Setting it >0 implies wait_lap (the CLI enforces this coupling).
     target_laps: int = 0
+    # Opt-in physical pit return after the observed lap window; never teleport.
+    natural_pit_return: bool = False
     strict: bool = False
     # Launch / hijack robustness (the early-LIVE race plus CM's setup race.ini regeneration).
     # A setup run keeps race.ini re-baked through the CM launch window; if the session still fails
@@ -283,6 +285,7 @@ class DriveStats:
     recovery_capped: bool = False  # True when max_recoveries was exhausted (vetoes success)
     spawn_teleport: str = ""  # "" (not attempted) | "ok" | "failed" | "skipped (on line)"
     reason: str = ""
+    pit_return_status: str = ""  # empty for ordinary drives; arrived or failed for opt-in
     # #596 Part A: bounded 2 Hz state+command trace, with every recovery forced into the stream.
     # This makes a capped stall diagnosable from report.json (gear/RPM/controls/position/action)
     # instead of leaving only the final distance and a screenshot.
@@ -337,6 +340,8 @@ def drive_veto_reason(stats: DriveStats | None) -> str:
             f"drive: recovery cap exceeded after {stats.recoveries} recoveries "
             f"at {stats.total_distance_m:.0f}m"
         )
+    if stats.pit_return_status and stats.pit_return_status != "arrived":
+        return stats.reason or "drive: natural pit return unverified"
     if not stats.drove:
         return stats.reason or (
             f"drive: car never cleared the distance/speed floor "
@@ -979,6 +984,18 @@ async def run_auto_drive(
     this exists to prevent (#459 Part A).
     """
     attempt_started_epoch = time.time()
+    if config.natural_pit_return and (
+        not config.wait_lap
+        or config.target_laps < 1
+        or config.driver not in ("ggv", "racing")
+        or config.spawn_to_line
+        or config.max_recoveries != 0
+        or config.sim_death_retries != 0
+        or config.setup_verify_retries != 0
+    ):
+        raise ValueError(
+            "natural pit return requires a fixed racing lap window with no teleports/retries"
+        )
     identity = dict(car_id=config.car_id, track_id=config.track_id or None)
     setup_requested = Path(config.setup).stem if config.setup else None
     setup_ack: dict | None = None
@@ -1402,6 +1419,11 @@ async def run_auto_drive(
             config,
             drive_seconds=tap_settle_s + lap_deadline + config.lap_finalize_grace_s,
         )
+    if config.natural_pit_return:
+        from tools.ac_harness.pit_return import PitReturnStop
+
+        stop = PitReturnStop()
+        drive_config = replace(drive_config, drive_seconds=drive_config.drive_seconds + 250)
     drive_task = asyncio.create_task(asyncio.to_thread(drive, controller, drive_config, stop))
     handshake_drive_done = asyncio.Event()
     if config.driver == "handshake":
@@ -1537,6 +1559,11 @@ async def run_auto_drive(
             # loses the trace (#515 / the #305 "not followed by another lap" class). The evidence
             # poll gates on report.lap_grace_applied, this exact boolean, so the two never diverge.
             await asyncio.sleep(config.lap_finalize_grace_s)
+        if config.natural_pit_return and seq_ok is True:
+            # Reuse the same control owner and thread. Abort remains a separate event;
+            # pipeline failure/cancellation cannot be mistaken for a return request.
+            stop.return_requested.set()
+            await asyncio.wait_for(asyncio.shield(drive_task), timeout=250)
     except Exception as exc:  # noqa: BLE001 - surface any tap/eval failure as a FAIL report
         stage, error = "pipeline", f"{type(exc).__name__}: {exc}"
     finally:
@@ -3669,6 +3696,22 @@ def rig_drive(  # pragma: no cover - rig-only
         speed_profile = load_speed_profile(fast_path)
     driver = _build_driver(config, line, speed_profile)
     stats = DriveStats()
+    pit_box = None
+    pit_line = None
+    pit_driver = None
+    pit_proof = None
+    if config.natural_pit_return:
+        from tools.ac_harness.pit_return import PitReturnStop, read_pit_box
+
+        if not isinstance(stop, PitReturnStop):
+            raise ValueError("natural pit return requires the composed stop/request boundary")
+        pit_line = load_ai_line(fast_path.with_name("pit_lane.ai"))
+        pit_box = asyncio.run(
+            read_pit_box(
+                config.sidecar_url, config.car_id or "", config.track_id, config.track_layout or ""
+            )
+        )
+        stats.pit_return_status = "failed"
     watchdog = ProgressWatchdog(stall_seconds=config.progress_stall_seconds)
     last_control_trace_s = -math.inf
     line_teleport_works: bool | None = None
@@ -3905,25 +3948,76 @@ def rig_drive(  # pragma: no cover - rig-only
             # Sim-death: the main acpmf_physics packet_id stagnant for sim_dead_seconds means
             # acs.exe died. A None (physics mmap gone) does NOT reset the timer (#460 review) —
             # sustained None or a frozen packet both trip. Rule owned by PhysicsStallDetector.
-            if stall.update(time.monotonic(), _main_packet_id()):
+            physics_packet = _main_packet_id()
+            if stall.update(time.monotonic(), physics_packet):
                 stats.sim_dead = True
                 stats.reason = "acpmf_physics packet_id stagnant (acs.exe died)"
                 break
             now = time.monotonic() - t0
-            frame = driver.step(
-                cd["position"],
-                cd["look"],
-                cd["speed_kmh"],
-                cd["rpm"],
-                cd["gear"],
-                now,
-            )
+            if pit_box is not None and stop.return_requested.is_set() and pit_driver is None:
+                from tools.ac_harness.pit_return import (
+                    PitArrivalProof,
+                    PitReturnDriver,
+                    build_route,
+                )
+
+                try:
+                    pit_driver = PitReturnDriver(
+                        build_route(line, pit_line, cd["position"], pit_box),
+                        started_at=now,
+                    )
+                    pit_proof = PitArrivalProof()
+                except ValueError as exc:
+                    stats.reason = str(exc)
+                    break
+            active_driver = pit_driver if pit_driver is not None else driver
+            try:
+                frame = active_driver.step(
+                    cd["position"],
+                    cd["look"],
+                    cd["speed_kmh"],
+                    cd["rpm"],
+                    cd["gear"],
+                    now,
+                )
+                if pit_driver is not None:
+                    from tools.ac_harness.pit_return import distance, read_pit_box
+
+                    graphics = phys_reader.read_graphics() if phys_reader is not None else None
+                    if pit_proof.observe(
+                        graphics,
+                        physics_packet,
+                        cd["speed_kmh"],
+                        distance(cd["position"], pit_box.position),
+                        now,
+                    ):
+                        after = asyncio.run(
+                            read_pit_box(
+                                config.sidecar_url,
+                                config.car_id or "",
+                                config.track_id,
+                                config.track_layout or "",
+                            )
+                        )
+                        if after != pit_box:
+                            raise ValueError("native pit identity/geometry changed during return")
+                        stats.pit_return_status = "arrived"
+                        stats.payload["pit_return"] = {
+                            "native_box": asdict(pit_box),
+                            "fresh_native_samples": pit_proof.samples,
+                            "elapsed_s": now - pit_driver.started_at,
+                            "route_points": len(pit_driver.route),
+                        }
+                        break
+            except (ValueError, TimeoutError) as exc:
+                stats.reason = f"natural pit return: {exc}"
+                break
             if getattr(driver, "finished", False):
                 # A self-terminating driver (the #532 handshake) reports completion; stop the
                 # loop instead of burning the remaining drive budget (teardown brakes the car).
                 stats.reason = stats.reason or "driver finished"
                 break
-            stalled = watchdog.update(stats.total_distance_m, now)
+            stalled = watchdog.update(stats.total_distance_m, now) if pit_driver is None else False
             if frame.needs_recovery or stalled:
                 trigger = "driver_stuck" if frame.needs_recovery else "progress_watchdog"
                 recovered, action = _recover(now)
@@ -4322,6 +4416,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="do not teleport a pit-box spawn onto the racing line (use the OUT-phase pit exit)",
     )
     p.add_argument(
+        "--natural-pit-return",
+        action="store_true",
+        help="physically return to the assigned pit box after a fixed lap window; "
+        "requires --no-spawn-line and zero recovery/retry counts",
+    )
+    p.add_argument(
         "--no-cm-dialog-skip",
         action="store_true",
         help="do not auto-skip CM's pre-drive 'Custom Shaders Patch data' dialog (#738)",
@@ -4383,6 +4483,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         # fixed 30 s and never see lap 2 (#577).
         wait_lap=args.wait_lap or args.laps > 0,
         target_laps=max(0, args.laps),
+        natural_pit_return=args.natural_pit_return,
         alien_overspeed=args.alien_allow_overspeed,
         alien_l3=args.l3,
         strict=args.strict,
