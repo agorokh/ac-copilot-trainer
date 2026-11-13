@@ -104,6 +104,15 @@ TYPE_SETUP_PRESCRIPTION_DECIDE = "setup.prescription.decide"
 TYPE_SETUP_PRESCRIPTION_RPC = "setup.prescription.rpc"
 TYPE_SETUP_PRESCRIPTION_RPC_RESULT = "setup.prescription.rpc.result"
 TYPE_SETUP_PRESCRIPTION_CARD = "setup.prescription.card"
+TYPE_SETUP_BENCH_ARM = "setup.bench.arm"
+TYPE_SETUP_BENCH_DISARM = "setup.bench.disarm"
+TYPE_SETUP_BENCH_STATUS = "setup.bench.status"
+TYPE_SETUP_BENCH_STATUS_ACK = "setup.bench.status.ack"
+TYPE_SETUP_BENCH_GET = "setup.bench.get"
+TYPE_SETUP_BENCH_DECIDE = "setup.bench.decide"
+TYPE_SETUP_SPINNER_AUDIT = "setup.spinner.audit"
+TYPE_SETUP_SPINNER_AUDIT_RESULT = "setup.spinner.audit.result"
+PRESSURE_BENCH_CLIENT_ID = "pressure-bench"
 TYPE_SETUP_DIFF = "setup.diff"
 TYPE_SETUP_CLOSED_LOOP = "setup.closed_loop"
 TYPE_SETUP_EXCHANGE_SEARCH = "se.search"
@@ -911,9 +920,30 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         # No required fields — empty payload is valid (lists all setups for
         # the active car). The Lua handler reads ac.getCarID(0) directly.
         return None
-    if t in (TYPE_SETUP_PRESCRIPTION_GET, TYPE_SETUP_PRESCRIPTION_DECIDE):
+    if t in (TYPE_SETUP_BENCH_ARM, TYPE_SETUP_BENCH_DISARM, TYPE_SETUP_BENCH_STATUS):
+        if set(frame) - {"v", "type", "request_id"}:
+            return "bench control takes no client evidence or paths"
+        rid = frame.get("request_id")
+        if rid is not None and (not isinstance(rid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,24}", rid)):
+            return "bench request_id must be a bounded token"
+        return None
+    if t == TYPE_SETUP_BENCH_STATUS_ACK:
+        if type(frame.get("active")) is not bool:
+            return "bench status ack requires boolean active"
+        if not isinstance(frame.get("run_id", ""), str) or len(frame.get("run_id", "")) > 64:
+            return "bench status ack requires bounded run_id"
+        return None
+    if t == TYPE_SETUP_SPINNER_AUDIT:
+        return None if set(frame) <= {"v", "type", "request_id"} else "audit is read-only"
+    if t == TYPE_SETUP_SPINNER_AUDIT_RESULT:
+        return None if len(json.dumps(frame).encode()) <= 4096 else "audit result exceeds limit"
+    if t in (TYPE_SETUP_PRESCRIPTION_GET, TYPE_SETUP_PRESCRIPTION_DECIDE, TYPE_SETUP_BENCH_GET, TYPE_SETUP_BENCH_DECIDE):
         allowed = {"v", "type", "request_id"}
-        if t == TYPE_SETUP_PRESCRIPTION_DECIDE:
+        if t in (TYPE_SETUP_BENCH_GET, TYPE_SETUP_BENCH_DECIDE):
+            allowed |= {"mode", "run_id"}
+            if frame.get("mode") != "ai_bench" or not isinstance(frame.get("run_id"), str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", frame["run_id"]):
+                return "bench requests require explicit mode and bounded run_id"
+        if t in (TYPE_SETUP_PRESCRIPTION_DECIDE, TYPE_SETUP_BENCH_DECIDE):
             allowed |= {"prescription_id", "decision"}
             pid = frame.get("prescription_id")
             if not isinstance(pid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", pid):

@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import contextlib
 import errno
+import hashlib
 import ipaddress
 import json
 import logging
@@ -22,6 +23,7 @@ import math
 import os
 import re
 import secrets
+import sys
 import time
 import urllib.parse
 from collections import deque
@@ -33,6 +35,17 @@ from types import SimpleNamespace
 from typing import Any
 
 from tools.ai_sidecar import observability
+from tools.ai_sidecar.external_protocol import (
+    PRESSURE_BENCH_CLIENT_ID,
+    TYPE_SETUP_BENCH_ARM,
+    TYPE_SETUP_BENCH_DECIDE,
+    TYPE_SETUP_BENCH_DISARM,
+    TYPE_SETUP_BENCH_GET,
+    TYPE_SETUP_BENCH_STATUS,
+    TYPE_SETUP_BENCH_STATUS_ACK,
+    TYPE_SETUP_SPINNER_AUDIT,
+    TYPE_SETUP_SPINNER_AUDIT_RESULT,
+)
 from tools.ai_sidecar.car_class import CarClassResolution, resolve_ac_root, resolve_installed_car
 from tools.ai_sidecar.coaching.generation import LatestGenerationQueue
 from tools.ai_sidecar.coaching.llm_coach import (
@@ -207,6 +220,8 @@ _screen_touch_authorized_peers: set[Any] = set()
 # CSP Lua peers earn their class from a dedicated loopback upgrade header. A browser can claim
 # `client_class="lua"` in JSON, but browser WebSocket APIs cannot set this header (#726).
 _lua_authorized_peers: set[Any] = set()
+_pressure_bench_authorized_peers: set[Any] = set()
+_pressure_bench_guard: Any = None
 _setup_experiment_store_path: Path | None = None
 _setup_experiment_store_seeded = False
 _setup_exchange_endpoint: str | None = None
@@ -490,6 +505,7 @@ CLIENT_TO_SERVER_TYPES = frozenset(
         TYPE_SETUP_LOAD,
         TYPE_SETUP_SPINNER_LIST,
         TYPE_SETUP_SPINNER_SET,
+        TYPE_SETUP_SPINNER_AUDIT,
         TYPE_SETUP_PRESCRIPTION_GET,
         TYPE_SETUP_PRESCRIPTION_DECIDE,
         TYPE_SETUP_EXPERIMENT_STORE,
@@ -525,6 +541,7 @@ SERVER_TO_CLIENT_TYPES = frozenset(
         TYPE_SETUP_LOAD_ACK,
         TYPE_SETUP_SPINNER_LIST_RESULT,
         TYPE_SETUP_SPINNER_SET_ACK,
+        TYPE_SETUP_SPINNER_AUDIT_RESULT,
         TYPE_SETUP_EXPERIMENT_STORE_ACK,
         TYPE_SETUP_EXPERIMENT_RECORD_ACK,
         TYPE_SETUP_COMPARE_RESULT,
@@ -589,6 +606,9 @@ def _with_snapshot_age(
 
 
 def _reset_external_state() -> None:
+    global _pressure_bench_guard
+    _pressure_bench_guard = None
+    _pressure_bench_authorized_peers.clear()
     global _observer_feed_peer, _observer_feed_warned, _map_comparison_generation
     global _map_corner_catalog, _map_latest_archive, _map_latest_lap_n
     _map_comparison_generation += 1
@@ -1681,6 +1701,10 @@ def make_process_request(token: str | None):
             _lua_authorized_peers.add(connection)
         else:
             _lua_authorized_peers.discard(connection)
+        if _is_loopback_peer(connection) and client_id == PRESSURE_BENCH_CLIENT_ID and token_authorized:
+            _pressure_bench_authorized_peers.add(connection)
+        else:
+            _pressure_bench_authorized_peers.discard(connection)
         if token_check is not None:
             return token_check(connection, request)
         return None
