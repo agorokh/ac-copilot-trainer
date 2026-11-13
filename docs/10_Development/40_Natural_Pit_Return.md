@@ -10,6 +10,9 @@ It follows the authored `fast_lane.ai` forward to `pit_lane.ai`, then smoothly
 offsets into the actual assigned `ac.getCar(0).pitTransform`. The existing config
 bridge exposes that transform as read-only `harnessPitBox`, with offline,
 session and combo metadata. It is navigation data, never setup-write permission.
+The parent event loop reads it through a distinct read-only connection before
+starting the driving thread and confirms it again after native arrival while
+retaining the braked controller. The driving loop performs no network reads.
 
 The opt-in requires `--laps N`, `--driver ggv` or `racing`, `--no-spawn-line`,
 `--max-recoveries 0`, `--sim-death-retries 0` and `--setup-verify-retries 0`.
@@ -17,8 +20,10 @@ Ordinary drives retain their current behavior. Existing lease ownership, process
 takeover, packet-stagnation, abort and controller-cleanup guards still apply.
 
 The return phase has a 240-second cap, a 60 km/h speed target ceiling, an
-8-meter route-deviation bound, and a 12-second progress bound. Missing or
-disconnected authored geometry, incompatible box heading/elevation, missing
+8-meter route-deviation bound, and a 12-second progress bound. Overlong
+geometry is rejected before navigation: a route longer than 3.5 km
+cannot fit the speed/deadline envelope with 30 seconds reserved for approach.
+Missing or disconnected authored geometry, incompatible box heading/elevation, missing
 native state or any failed observer pipeline stops the attempt. No teleport,
 recovery, setup mutation or handoff to AC's built-in AI occurs in this phase.
 

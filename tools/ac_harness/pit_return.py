@@ -23,6 +23,7 @@ class PitReturnStop(threading.Event):
     def __init__(self) -> None:
         super().__init__()
         self.return_requested = threading.Event()
+        self.pit_box: PitBox | None = None
 
 
 async def observe_until_drive_ends(observer, drive_task):
@@ -88,12 +89,13 @@ class PitBox:
 
 async def read_pit_box(url: str, car_id: str, track_id: str, layout: str) -> PitBox:
     """Read the actual car's assigned pit transform through the existing config bridge."""
-    from tools.ai_sidecar.external_protocol import SESSION_START_CLIENT_ID
     from tools.ai_sidecar.harness_client import HarnessClient
 
     async with asyncio.timeout(8):
         async with HarnessClient(
-            url, token=os.environ.get("AC_COPILOT_SIDECAR_TOKEN"), client_id=SESSION_START_CLIENT_ID
+            url,
+            token=os.environ.get("AC_COPILOT_SIDECAR_TOKEN"),
+            client_id="ac-harness-pit-geometry",
         ) as client:
             if not await client.hello():
                 raise ValueError("pit geometry hello unavailable")
@@ -151,6 +153,11 @@ def build_route(fast: list, pit: list, position: tuple, box: PitBox) -> list:
             route.append(moved)
     if any(distance(a, b) > 5 for a, b in zip(route, route[1:], strict=False)):
         raise ValueError("natural pit route contains a gap")
+    # Even ideal motion at the speed cap cannot finish a longer route within
+    # the return deadline. Reserve 30s for braking, the box approach and proof.
+    route_length = sum(distance(a, b) for a, b in zip(route, route[1:], strict=False))
+    if route_length > (60 / 3.6) * 210:
+        raise ValueError("authored pit route cannot fit the bounded return budget")
     return route
 
 

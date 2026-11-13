@@ -1424,7 +1424,47 @@ async def run_auto_drive(
 
         stop = PitReturnStop()
         drive_config = replace(drive_config, drive_seconds=drive_config.drive_seconds + 250)
-    drive_task = asyncio.create_task(asyncio.to_thread(drive, controller, drive_config, stop))
+
+    async def drive_with_geometry() -> DriveStats:
+        # Network reads belong to the parent event loop. Hold the existing
+        # controller braked before initialization and after the drive's native
+        # arrival proof; the actuation thread never waits on a WebSocket.
+        if config.natural_pit_return:
+            from tools.ac_harness.pit_return import read_pit_box
+
+            try:
+                controller.write_controls(0.0, 0.6, 0.0)
+                stop.pit_box = await read_pit_box(
+                    config.sidecar_url,
+                    config.car_id or "",
+                    config.track_id,
+                    config.track_layout or "",
+                )
+                if stop.is_set():
+                    raise ValueError("pit initialization aborted")
+            except Exception as exc:  # noqa: BLE001 - report all connection failures
+                return DriveStats(
+                    pit_return_status="failed",
+                    reason=f"natural pit initialization: {type(exc).__name__}: {exc}",
+                )
+        driven = await asyncio.to_thread(drive, controller, drive_config, stop)
+        if config.natural_pit_return and driven.pit_return_status == "arrived_pending_identity":
+            try:
+                after = await read_pit_box(
+                    config.sidecar_url,
+                    config.car_id or "",
+                    config.track_id,
+                    config.track_layout or "",
+                )
+                if after != stop.pit_box:
+                    raise ValueError("native pit identity/geometry changed during return")
+                driven.pit_return_status = "arrived"
+            except Exception as exc:  # noqa: BLE001 - retain socket/runtime failures in stats
+                driven.pit_return_status = "failed"
+                driven.reason = f"natural pit confirmation: {type(exc).__name__}: {exc}"
+        return driven
+
+    drive_task = asyncio.create_task(drive_with_geometry())
     handshake_drive_done = asyncio.Event()
     if config.driver == "handshake":
         # The handshake self-terminates after its final probe/timed lap. Keep the observer tap
@@ -3711,16 +3751,14 @@ def rig_drive(  # pragma: no cover - rig-only
     pit_driver = None
     pit_proof = None
     if config.natural_pit_return:
-        from tools.ac_harness.pit_return import PitReturnStop, read_pit_box
+        from tools.ac_harness.pit_return import PitBox, PitReturnStop
 
         if not isinstance(stop, PitReturnStop):
             raise ValueError("natural pit return requires the composed stop/request boundary")
+        if not isinstance(stop.pit_box, PitBox):
+            raise ValueError("natural pit return requires parent-read native pit geometry")
         pit_line = load_ai_line(fast_path.with_name("pit_lane.ai"))
-        pit_box = asyncio.run(
-            read_pit_box(
-                config.sidecar_url, config.car_id or "", config.track_id, config.track_layout or ""
-            )
-        )
+        pit_box = stop.pit_box
         stats.pit_return_status = "failed"
     watchdog = ProgressWatchdog(stall_seconds=config.progress_stall_seconds)
     last_control_trace_s = -math.inf
@@ -3991,7 +4029,7 @@ def rig_drive(  # pragma: no cover - rig-only
                     now,
                 )
                 if pit_driver is not None:
-                    from tools.ac_harness.pit_return import distance, read_pit_box
+                    from tools.ac_harness.pit_return import distance
 
                     graphics = phys_reader.read_graphics() if phys_reader is not None else None
                     if pit_proof.observe(
@@ -4001,17 +4039,9 @@ def rig_drive(  # pragma: no cover - rig-only
                         distance(cd["position"], pit_box.position),
                         now,
                     ):
-                        after = asyncio.run(
-                            read_pit_box(
-                                config.sidecar_url,
-                                config.car_id or "",
-                                config.track_id,
-                                config.track_layout or "",
-                            )
-                        )
-                        if after != pit_box:
-                            raise ValueError("native pit identity/geometry changed during return")
-                        stats.pit_return_status = "arrived"
+                        # Parent confirms native identity asynchronously while
+                        # this thread's normal teardown holds the car braked.
+                        stats.pit_return_status = "arrived_pending_identity"
                         stats.payload["pit_return"] = {
                             "native_box": asdict(pit_box),
                             "fresh_native_samples": pit_proof.samples,

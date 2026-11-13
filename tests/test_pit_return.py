@@ -82,6 +82,16 @@ def test_route_is_forward_open_and_terminates_at_actual_box():
     assert len(route) < 200  # No closure from pit exit back to entry.
 
 
+def test_route_that_cannot_finish_at_the_speed_cap_is_denied_before_navigation():
+    fast = [(float(i), 0.0, 0.0) for i in range(4501)]
+    fast += [(4500.0, 0.0, float(i)) for i in range(1, 101)]
+    fast += [(float(i), 0.0, 100.0) for i in range(4499, -1, -1)]
+    fast += [(0.0, 0.0, float(i)) for i in range(99, 0, -1)]
+    _, pit = lines()
+    with pytest.raises(ValueError, match="return budget"):
+        build_route(fast, pit, fast[200], PitBox.from_native(native(), "car", "track", ""))
+
+
 @pytest.mark.parametrize("failure", ["gap", "reversed", "box_far", "elevation", "disconnected"])
 def test_invalid_authored_route_denied(failure):
     fast, pit = lines()
@@ -160,9 +170,18 @@ def test_arrival_proof_denies_bad_native_evidence(failure):
 
 def test_return_is_requested_only_after_good_pipeline_and_cleanup_always_runs(monkeypatch):
     import tools.ac_harness.auto_drive as ad
+    import tools.ac_harness.pit_return as pr
+
+    async def geometry(*args):
+        return PitBox.from_native(native(), "car", "track", "")
+
+    monkeypatch.setattr(pr, "read_pit_box", geometry)
 
     class Controller:
         closed = False
+
+        def write_controls(self, gas, brake, steer):
+            assert gas == 0 and brake > 0
 
         def close(self):
             self.closed = True
@@ -203,7 +222,7 @@ def test_return_is_requested_only_after_good_pipeline_and_cleanup_always_runs(mo
         assert isinstance(stop, PitReturnStop)
         assert stop.return_requested.wait(2) and not stop.is_set()
         assert cfg.drive_seconds > config.drive_seconds + 250
-        return DriveStats(drove=True, pit_return_status="arrived")
+        return DriveStats(drove=True, pit_return_status="arrived_pending_identity")
 
     controller = Controller()
     report = asyncio.run(
@@ -232,6 +251,105 @@ def test_return_is_requested_only_after_good_pipeline_and_cleanup_always_runs(mo
     )
     assert not report.ok and controller.closed
     assert drive_veto_reason(DriveStats(drove=True, pit_return_status="failed"))
+
+
+@pytest.mark.parametrize(
+    "failure", [OSError("socket lost"), RuntimeError("connection closed"), "identity"]
+)
+def test_arrival_connection_failure_is_retained_and_controller_released(monkeypatch, failure):
+    import tools.ac_harness.auto_drive as ad
+    import tools.ac_harness.pit_return as pr
+
+    calls = 0
+
+    async def geometry(*args):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0)
+        if calls == 2:
+            if failure == "identity":
+                return replace(PitBox.from_native(native(), "car", "track", ""), session_id="other")
+            raise failure
+        return PitBox.from_native(native(), "car", "track", "")
+
+    monkeypatch.setattr(pr, "read_pit_box", geometry)
+    monkeypatch.setattr(
+        ad,
+        "evaluate_sequence",
+        lambda *a, **k: type("Result", (), {"ok": True, "counts": {}, "checks": [], "notes": []})(),
+    )
+
+    class Controller:
+        closed = False
+
+        def write_controls(self, gas, brake, steer):
+            assert gas == 0 and brake > 0
+
+        def close(self):
+            self.closed = True
+
+    config = AutoDriveConfig(
+        natural_pit_return=True,
+        wait_lap=True,
+        target_laps=1,
+        driver="ggv",
+        spawn_to_line=False,
+        max_recoveries=0,
+        sim_death_retries=0,
+        setup_verify_retries=0,
+        lap_finalize_grace_s=0,
+        skip_launch=True,
+    )
+
+    async def tap(*args, **kwargs):
+        return [
+            {"v": 1, "type": "state.snapshot", "topic": "lap", "payload": {"last_lap_ms": 90000}}
+        ]
+
+    def drive(controller, cfg, stop):
+        assert stop.pit_box is not None and stop.return_requested.wait(2)
+        return DriveStats(drove=True, pit_return_status="arrived_pending_identity")
+
+    controller = Controller()
+    report = asyncio.run(
+        run_auto_drive(
+            config, launch=lambda _: (True, ""), hijack=lambda _: controller, drive=drive, tap=tap
+        )
+    )
+    assert not report.ok and controller.closed and calls == 2
+    assert report.drive.pit_return_status == "failed"
+    assert str(failure) in report.drive.reason
+
+
+def test_geometry_reader_uses_a_distinct_non_control_identity(monkeypatch):
+    import tools.ai_sidecar.harness_client as hc
+    from tools.ac_harness.pit_return import read_pit_box
+    from tools.ai_sidecar.external_protocol import SESSION_START_CLIENT_ID
+
+    class Client:
+        def __init__(self, url, *, token, client_id):
+            assert client_id != SESSION_START_CLIENT_ID
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def hello(self):
+            return True
+
+        async def send(self, frame):
+            assert frame == {"v": 1, "type": "config.get", "key": "harnessPitBox"}
+
+        async def wait_for(self, predicate, *, timeout):  # noqa: ASYNC109 - client protocol
+            await asyncio.sleep(0)
+            reply = {"type": "config.value", "key": "harnessPitBox", "value": native()}
+            assert predicate(reply)
+            return reply
+
+    monkeypatch.setattr(hc, "HarnessClient", Client)
+    assert asyncio.run(read_pit_box("ws://fixture", "car", "track", "")).session_id == "native1"
 
 
 def test_actual_lua_geometry_is_read_only_and_offline():
