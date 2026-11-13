@@ -396,6 +396,87 @@ def test_early_driver_failure_cancels_the_lap_observer():
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("timeout", [False, True])
+def test_initialization_reason_and_timeout_thread_join_are_reported(monkeypatch, timeout):
+    import threading
+
+    import tools.ac_harness.auto_drive as ad
+    import tools.ac_harness.pit_return as pr
+
+    events = []
+    exited = threading.Event()
+
+    async def geometry(*args):
+        if not timeout:
+            raise OSError("native geometry socket lost")
+        return PitBox.from_native(native(), "car", "track", "")
+
+    monkeypatch.setattr(pr, "read_pit_box", geometry)
+    monkeypatch.setattr(
+        ad,
+        "evaluate_sequence",
+        lambda *a, **k: type("Result", (), {"ok": True, "counts": {}, "checks": [], "notes": []})(),
+    )
+    original_wait_for = asyncio.wait_for
+
+    async def bounded_wait(awaitable, *, timeout):  # noqa: ASYNC109 - asyncio interface
+        assert timeout == 250
+        return await original_wait_for(awaitable, timeout=0.02)
+
+    if timeout:
+        monkeypatch.setattr(ad.asyncio, "wait_for", bounded_wait)
+
+    class Controller:
+        def write_controls(self, gas, brake, steer):
+            assert gas == 0 and brake > 0
+
+        def close(self):
+            if timeout:
+                assert exited.is_set(), "controller released before actuation thread joined"
+            events.append("close")
+
+    async def tap(*args, **kwargs):
+        if not timeout:
+            await asyncio.sleep(20)
+        return [
+            {"v": 1, "type": "state.snapshot", "topic": "lap", "payload": {"last_lap_ms": 90000}}
+        ]
+
+    def drive(controller, cfg, stop):
+        assert timeout, "initialization failure must not start actuation"
+        assert stop.return_requested.wait(2)
+        assert stop.wait(2), "return deadline did not abort actuation"
+        events.append("stopped")
+        exited.set()
+        return DriveStats(drove=True, pit_return_status="failed", reason="return aborted")
+
+    config = AutoDriveConfig(
+        natural_pit_return=True,
+        wait_lap=True,
+        target_laps=1,
+        driver="ggv",
+        spawn_to_line=False,
+        max_recoveries=0,
+        sim_death_retries=0,
+        setup_verify_retries=0,
+        lap_finalize_grace_s=0,
+        skip_launch=True,
+    )
+    report = asyncio.run(
+        run_auto_drive(
+            config, launch=lambda _: (True, ""), hijack=lambda _: Controller(), drive=drive, tap=tap
+        )
+    )
+    assert not report.ok
+    assert report.drive.pit_return_status == "failed"
+    if timeout:
+        assert "TimeoutError" in report.reason
+        assert events == ["stopped", "close"]
+    else:
+        assert "natural pit initialization: OSError: native geometry socket lost" in report.reason
+        assert events == ["close"]
+
+
 def test_geometric_stop_without_native_arrival_is_bounded():
     driver = PitReturnDriver([(float(i), 0.0, 0.0) for i in range(101)], started_at=0)
     driver.index = 99

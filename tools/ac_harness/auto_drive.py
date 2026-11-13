@@ -1613,7 +1613,14 @@ async def run_auto_drive(
             # Reuse the same control owner and thread. Abort remains a separate event;
             # pipeline failure/cancellation cannot be mistaken for a return request.
             stop.return_requested.set()
-            await asyncio.wait_for(asyncio.shield(drive_task), timeout=250)
+            try:
+                await asyncio.wait_for(asyncio.shield(drive_task), timeout=250)
+            except TimeoutError:
+                # Cancelling an asyncio.to_thread wrapper does not stop its thread.
+                # Abort cooperatively, then let finally JOIN the shielded task
+                # before releasing its controller or publishing the failed report.
+                stop.set()
+                raise
     except Exception as exc:  # noqa: BLE001 - surface any tap/eval failure as a FAIL report
         stage, error = "pipeline", f"{type(exc).__name__}: {exc}"
     finally:

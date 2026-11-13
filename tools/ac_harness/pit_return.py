@@ -37,8 +37,10 @@ async def observe_until_drive_ends(observer, drive_task):
             return await observer_task
         # A natural-return drive can only finish cleanly after its observer has
         # requested return. An early exit therefore cannot establish a lap window.
-        await drive_task  # Preserve an actual driver exception when present.
-        raise ValueError("drive ended before the requested lap observation completed")
+        driven = await drive_task  # Preserve an actual driver exception when present.
+        reason = getattr(driven, "reason", "")
+        detail = f": {reason}" if reason else ""
+        raise ValueError(f"drive ended before the requested lap observation completed{detail}")
     finally:
         if not observer_task.done():
             observer_task.cancel()
