@@ -79,3 +79,12 @@ coverage holds a journaled Accept in flight, queues ARM and proves no intervenin
 disarm, exactly1 verified apply, then safe refusal of the stale baseline. Boundary
 tests cover64/65/80 IDs across guard and wire. All84 guard/transport tests pass.
 Fresh full CI and automatic exact-head round2 remain required; no rig time used.
+
+Round2 on d1eb81d found native filename-token normalization differed from Lua
+for accepted session IDs containing separators. Discovery now strips non-alnum
+before shortening and uses the writer's sess fallback. Four literal filename
+vectors cover underscore/hyphen/hex/empty-normalization, numeric lap ordering and
+full-session collision exclusion. All88 guard/transport tests pass. d1eb81d full
+CI passed5657/34skipped at87.39%; the normalization fix starts a fresh exact-head
+CI/review round. Candidate normal GUI showed AI BENCH DISARMED and exited cleanly;
+packaged oracle matched reviewed source. Still no live trial or rig time used.

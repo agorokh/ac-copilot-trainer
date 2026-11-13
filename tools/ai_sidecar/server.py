@@ -3116,8 +3116,11 @@ def _bench_source_paths(ctx: dict[str, Any], store: Path) -> list[Path]:
     session = ctx["identity"]["session_id"]
     if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", session):
         raise ValueError("Bench native session token unavailable")
+    # lap_archive.lua strips non-alphanumeric bytes before shortening, and
+    # uses "sess" when the native session token contains no alphanumerics.
+    session_short = re.sub(r"[^A-Za-z0-9]", "", session)[:8] or "sess"
     rows = []
-    for path in lap_dir.glob(f"lap_*_{session[:8]}_*.json"):
+    for path in lap_dir.glob(f"lap_*_{session_short}_*.json"):
         if path.stat().st_size > 32 * 1024 * 1024:
             raise ValueError("Bench source exceeds native archive limit")
         archive = json.loads(path.read_text(encoding="utf-8-sig"))

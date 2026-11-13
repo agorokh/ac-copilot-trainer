@@ -21,6 +21,30 @@ from tools.ai_sidecar.setup_prescription import PrescriptionJournal
 sealed = sealed_fixture
 
 
+@pytest.mark.parametrize(
+    "session,filename_token",
+    [
+        ("test_session", "testsess"),
+        ("abc-defghi", "abcdefgh"),
+        ("975c1b0c3af9", "975c1b0c"),
+        ("_-------", "sess"),
+    ],
+)
+def test_native_source_discovery_matches_lua_filename_contract(sealed, session, filename_token):
+    ctx = copy.deepcopy(sealed.ctx)
+    ctx["identity"]["session_id"] = session
+    selected = []
+    for n in (1, 2, 10):
+        path = sealed.lap_dir / f"lap_20261113-010000_{filename_token}_{n}_90000_key{n}.json"
+        path.write_text(json.dumps({"session_uuid": session, "lap": {"lap_n": n}}))
+        if n > 1:
+            selected.append(path.resolve())
+    collision = sealed.lap_dir / f"lap_20261113-010000_{filename_token}_99_90000_other.json"
+    collision.write_text(json.dumps({"session_uuid": session + "other", "lap": {"lap_n": 99}}))
+    store = sealed.lap_dir.parent / "setup_experiments/experiments.jsonl"
+    assert srv._bench_source_paths(ctx, store) == selected
+
+
 async def receive(ws, kind):
     for _ in range(30):
         frame = json.loads(await asyncio.wait_for(ws.recv(), 2))
