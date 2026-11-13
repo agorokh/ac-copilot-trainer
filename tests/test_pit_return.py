@@ -73,9 +73,10 @@ def test_brake_hold_requires_fresh_stationary_native_packets_and_lap_counter():
     assert not proof.observe(graphics(2), 3, 0, 0.4)
     assert not proof.observe(graphics(3), 3, 0, 0.6)
     assert proof.observe(graphics(4), 4, 0, 0.8)
-    assert not proof.observe(graphics(5), 5, 0.11, 1)
+    assert not proof.observe(graphics(4), 4, 0, 1.31)
+    assert not proof.observe(graphics(5), 5, 0.11, 1.4)
     with pytest.raises(ValueError, match="lap counter"):
-        proof.observe(graphics(6, laps=1), 6, 0, 1.2)
+        proof.observe(graphics(6, laps=1), 6, 0, 1.6)
 
 
 def test_brake_ack_wait_is_bounded_and_rejects_finished_driver():
@@ -325,6 +326,11 @@ def test_live_step_errors_propagate_outside_active_return(monkeypatch, phase, fa
     stop.pit_box = PitBox.from_native(native(), "car", "track", "")
     if phase == "return":
         stop.return_requested.set()
+        stop.return_box = stop.pit_box
+        stop.return_ready.set()
+        # This regression isolates driver exception propagation after admission;
+        # the real brake/native handoff is covered separately below.
+        monkeypatch.setattr(pr.BrakeHoldProof, "observe", lambda *args: True)
     config = AutoDriveConfig(
         driver="ggv", spawn_to_line=False, drive_seconds=1, natural_pit_return=phase != "ordinary"
     )
@@ -421,13 +427,14 @@ def test_return_is_requested_only_after_good_pipeline_and_cleanup_always_runs(mo
     )
 
     async def tap(*args, **kwargs):
-        return [
-            {"v": 1, "type": "state.snapshot", "topic": "lap", "payload": {"last_lap_ms": 90000}}
-        ]
+        return [session("native1"), lap()]
 
     def drive(controller, cfg, stop):
         assert isinstance(stop, PitReturnStop)
         assert stop.return_requested.wait(2) and not stop.is_set()
+        stop.braked_laps = 1
+        stop.brake_ack.set()
+        assert stop.return_ready.wait(2) and not stop.is_set()
         assert cfg.drive_seconds > config.drive_seconds + 250
         return DriveStats(drove=True, pit_return_status="arrived_pending_identity")
 
@@ -473,7 +480,7 @@ def test_arrival_connection_failure_is_retained_and_controller_released(monkeypa
         nonlocal calls
         calls += 1
         await asyncio.sleep(0)
-        if calls == 2:
+        if calls == 3:
             if failure == "identity":
                 return replace(PitBox.from_native(native(), "car", "track", ""), session_id="other")
             raise failure
@@ -509,12 +516,13 @@ def test_arrival_connection_failure_is_retained_and_controller_released(monkeypa
     )
 
     async def tap(*args, **kwargs):
-        return [
-            {"v": 1, "type": "state.snapshot", "topic": "lap", "payload": {"last_lap_ms": 90000}}
-        ]
+        return [session("native1"), lap()]
 
     def drive(controller, cfg, stop):
         assert stop.pit_box is not None and stop.return_requested.wait(2)
+        stop.braked_laps = 1
+        stop.brake_ack.set()
+        assert stop.return_ready.wait(2)
         return DriveStats(drove=True, pit_return_status="arrived_pending_identity")
 
     controller = Controller()
@@ -523,7 +531,7 @@ def test_arrival_connection_failure_is_retained_and_controller_released(monkeypa
             config, launch=lambda _: (True, ""), hijack=lambda _: controller, drive=drive, tap=tap
         )
     )
-    assert not report.ok and controller.closed and calls == 2
+    assert not report.ok and controller.closed and calls == 3
     assert report.drive.pit_return_status == "failed"
     assert str(failure) in report.drive.reason
 
@@ -645,9 +653,7 @@ def test_initialization_reason_and_timeout_thread_join_are_reported(monkeypatch,
     async def tap(*args, **kwargs):
         if not timeout:
             await asyncio.sleep(20)
-        return [
-            {"v": 1, "type": "state.snapshot", "topic": "lap", "payload": {"last_lap_ms": 90000}}
-        ]
+        return [session("native1"), lap()]
 
     def drive(controller, cfg, stop):
         assert timeout, "initialization failure must not start actuation"
@@ -690,3 +696,229 @@ def test_geometric_stop_without_native_arrival_is_bounded():
     driver.step((99.5, 0.0, 0.0), (1.0, 0.0, 0.0), 0.0, 4000.0, 2, 0.0)
     with pytest.raises(ValueError, match="not confirmed"):
         driver.step((99.5, 0.0, 0.0), (1.0, 0.0, 0.0), 0.0, 4000.0, 2, 6.0)
+
+
+async def threaded_return(monkeypatch, failure):
+    """Run the real parent/actuation loop against fake native IO, without hardware."""
+    import threading
+
+    import tools.ac_harness.ai_line as ai
+    import tools.ac_harness.auto_drive as ad
+    import tools.ac_harness.entry_launcher as launcher
+    import tools.ac_harness.pit_return as pr
+    import tools.ac_harness.shared_memory as shared
+    from tools.ac_harness.lap_driver import DriveFrame
+
+    parent_thread = threading.get_ident()
+    exited, navigating = threading.Event(), threading.Event()
+    snapshot_entered = asyncio.Event()
+    lap_ready = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    events, controls, stops = [], [], []
+    fast, pit = lines()
+
+    class RaceDriver:
+        calls = 0
+
+        def step(self, *args):
+            self.calls += 1
+            if self.calls == 30:
+                loop.call_soon_threadsafe(lap_ready.set)
+            return DriveFrame(0.3, 0, 0, False, False, "race", False, False)
+
+    race = RaceDriver()
+
+    class Reader:
+        packet = graphic_reads = 0
+        closed = False
+
+        def read_physics(self):
+            self.packet += 1
+            return SimpleNamespace(packet_id=None if failure == "missing_packet" else self.packet)
+
+        def read_graphics(self):
+            self.graphic_reads += 1
+            count = 2 if failure == "hold_lap_change" and self.graphic_reads > 1 else 1
+            return graphics(self.packet, laps=count, pit=navigating.is_set())
+
+        def close(self):
+            self.closed = True
+
+    class Controller:
+        speed = 0
+        closed = force_motion = False
+
+        def read_car_data(self):
+            position = (150.0, 0.0, 5.0) if navigating.is_set() else fast[min(race.calls * 10, 400)]
+            return dict(
+                position=position, look=(1.0, 0.0, 0.0), speed_kmh=self.speed, rpm=4000.0, gear=2
+            )
+
+        def write_controls(self, gas, brake, steer, **kwargs):
+            controls.append((threading.get_ident(), gas, brake))
+            self.speed = 50.0 if gas or self.force_motion else 0.0
+
+        def close(self):
+            assert exited.is_set(), "controller closed before real actuation thread exited"
+            assert reader.closed
+            self.closed = True
+            events.append("close")
+
+    class ReturnDriver:
+        def __init__(self, route, *, started_at):
+            self.route, self.started_at = route, started_at
+            events.append("navigation")
+
+        def step(self, *args):
+            assert stops[0].return_ready.is_set() and stops[0].return_box.session_id == "measured"
+            navigating.set()
+            return DriveFrame(0, 0.6, 0, False, False, "pit", False, False)
+
+    reader, controller = Reader(), Controller()
+    monkeypatch.setattr(ad, "resolve_fast_lane", lambda *args: Path("fast_lane.ai"))
+    monkeypatch.setattr(
+        ai, "load_ai_line", lambda path: pit if path.name == "pit_lane.ai" else fast
+    )
+    monkeypatch.setattr(ad, "_build_driver", lambda *args: race)
+    monkeypatch.setattr(pr, "PitReturnDriver", ReturnDriver)
+    monkeypatch.setattr(shared, "SharedMemoryReader", lambda: reader)
+    monkeypatch.setattr(launcher, "running_process_ids", lambda name: frozenset({101}))
+    monkeypatch.setattr(
+        ad,
+        "evaluate_sequence",
+        lambda *a, **k: SimpleNamespace(ok=True, counts={"lap": 1}, checks=[], notes=[]),
+    )
+    original_ack = pr.await_brake_hold
+
+    async def bounded_ack(stop, task):
+        if failure == "hold_timeout":
+            controller.force_motion = True
+        await original_ack(stop, task, budget_s=0.12 if failure == "hold_timeout" else 2)
+
+    monkeypatch.setattr(pr, "await_brake_hold", bounded_ack)
+    reads = 0
+
+    async def geometry(*args):
+        nonlocal reads
+        reads += 1
+        assert threading.get_ident() == parent_thread
+        if reads == 1:
+            assert not stops and controls == [(parent_thread, 0.0, 0.6)]
+            return replace(PitBox.from_native(native(), "car", "track", ""), session_id="startup")
+        stop = stops[0]
+        assert controller.speed == 0 and controls[-1][1:] == (0.0, 0.6)
+        assert stop.brake_ack.is_set()
+        if reads == 2:
+            assert not stop.return_ready.is_set() and not navigating.is_set()
+            events.append("braked_read")
+            calls = race.calls
+            if failure == "cancel_snapshot":
+                snapshot_entered.set()
+                await asyncio.sleep(10)
+            if failure == "ack_lost":
+                controller.force_motion = True
+                await asyncio.sleep(0.05)
+            else:
+                await asyncio.sleep(0.02)
+            assert race.calls == calls, "GGV advanced during the parent network read"
+            if failure == "snapshot_socket":
+                raise OSError("snapshot socket lost")
+        else:
+            assert exited.is_set() and stop.return_ready.is_set()
+            events.append("final_read")
+        box = replace(PitBox.from_native(native(), "car", "track", ""), session_id="measured")
+        if (failure == "snapshot_sid" and reads == 2) or (failure == "final_sid" and reads == 3):
+            return replace(box, session_id="other")
+        if (failure == "snapshot_geometry" and reads == 2) or (
+            failure == "final_geometry" and reads == 3
+        ):
+            return replace(box, position=(151.0, 0.0, 5.0))
+        return box
+
+    monkeypatch.setattr(pr, "read_pit_box", geometry)
+
+    async def tap(*args, **kwargs):
+        async with asyncio.timeout(2):
+            await lap_ready.wait()
+        frames = [session("startup"), session("measured"), lap()]
+        if failure == "mixed_window":
+            frames.append(session("other"))
+        return [lap()] if failure == "missing_identity" else frames
+
+    def drive(ctrl, cfg, stop):
+        assert threading.get_ident() != parent_thread
+        stops.append(stop)
+        try:
+            return ad.rig_drive(ctrl, cfg, stop)
+        finally:
+            exited.set()
+            events.append("thread_exit")
+
+    config = AutoDriveConfig(
+        natural_pit_return=True,
+        wait_lap=True,
+        target_laps=1,
+        car_id="car",
+        track_id="track",
+        driver="ggv",
+        spawn_to_line=False,
+        max_recoveries=0,
+        sim_death_retries=0,
+        setup_verify_retries=0,
+        lap_finalize_grace_s=0,
+        skip_launch=True,
+    )
+    task = asyncio.create_task(
+        run_auto_drive(
+            config, launch=lambda _: (True, ""), hijack=lambda _: controller, drive=drive, tap=tap
+        )
+    )
+    if failure == "cancel_snapshot":
+        await asyncio.wait_for(snapshot_entered.wait(), timeout=3)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        report = None
+    else:
+        report = await task
+    assert controller.closed and reader.closed and exited.is_set()
+    assert events[-1] == "close" and events.index("thread_exit") < events.index("close")
+    assert sum(thread == parent_thread for thread, _, _ in controls) == 1
+    return report, stops[0], events, reads
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "",
+        "mixed_window",
+        "missing_identity",
+        "snapshot_sid",
+        "snapshot_geometry",
+        "snapshot_socket",
+        "final_sid",
+        "final_geometry",
+        "missing_packet",
+        "hold_lap_change",
+        "hold_timeout",
+        "ack_lost",
+        "cancel_snapshot",
+    ],
+)
+def test_real_actuation_thread_brakes_before_native_snapshot_and_joins_on_all_exits(
+    monkeypatch, failure
+):
+    report, stop, events, reads = asyncio.run(threaded_return(monkeypatch, failure))
+    if not failure:
+        assert report.ok and report.drive.pit_return_status == "arrived" and reads == 3
+        assert events.index("braked_read") < events.index("navigation") < events.index("final_read")
+        proof = report.drive.payload["pit_return"]
+        assert proof["startup_box"]["session_id"] == "startup"
+        assert proof["native_box"]["session_id"] == report.session_uuid == "measured"
+        assert report.drive.payload["pit_brake_hold"]["fresh_stationary_samples"] >= 3
+    else:
+        assert report is None or not report.ok
+        if failure not in {"final_sid", "final_geometry"}:
+            assert "navigation" not in events and not stop.return_ready.is_set()
+        else:
+            assert report.drive.pit_return_status == "failed"

@@ -29,6 +29,7 @@ class PitReturnStop(threading.Event):
         self.return_ready = threading.Event()
         self.pit_box: PitBox | None = None
         self.return_box: PitBox | None = None
+        self.braked_laps: int | None = None
 
 
 def measured_window_session(frames: list[dict], required_laps: int) -> str:
@@ -109,7 +110,7 @@ class BrakeHoldProof:
         if fresh and now - self.last_at >= 0.15:
             self.previous, self.last_at = pair, now
             self.samples = self.samples + 1 if abs(speed) <= 0.1 else 0
-        return self.samples >= 3
+        return self.samples >= 3 and now - self.last_at <= 0.5
 
 
 async def await_brake_hold(stop: PitReturnStop, drive_task, *, budget_s: float = 10) -> None:

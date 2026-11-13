@@ -1456,7 +1456,7 @@ async def run_auto_drive(
                     config.track_id,
                     config.track_layout or "",
                 )
-                if after != stop.pit_box:
+                if after != stop.return_box:
                     raise ValueError("native pit identity/geometry changed during return")
                 driven.pit_return_status = "arrived"
             except Exception as exc:  # noqa: BLE001 - retain socket/runtime failures in stats
@@ -1608,13 +1608,49 @@ async def run_auto_drive(
             # poll gates on report.lap_grace_applied, this exact boolean, so the two never diverge.
             await asyncio.sleep(config.lap_finalize_grace_s)
         if config.natural_pit_return and seq_ok is True:
+            from tools.ac_harness.pit_return import (
+                await_brake_hold,
+                measured_window_session,
+                read_pit_box,
+            )
+
             if len(lap_times_ms) < config.target_laps:
                 raise ValueError("natural pit return requires the complete requested timed window")
-            # Reuse the same control owner and thread. Abort remains a separate event;
-            # pipeline failure/cancellation cannot be mistaken for a return request.
-            stop.return_requested.set()
+            measured_sid = measured_window_session(frames, config.target_laps)
+
+            async def complete_return():
+                # Initial geometry is preflight provenance. A startup/outlap may
+                # legitimately start another native stint BEFORE measured laps.
+                # Bind a separate immutable snapshot to their actual identity;
+                # neither raw history nor the native reset detector is rewritten.
+                stop.return_requested.set()
+                await await_brake_hold(stop, drive_task)
+                fresh = await read_pit_box(
+                    config.sidecar_url,
+                    config.car_id or "",
+                    config.track_id,
+                    config.track_layout or "",
+                )
+                if (
+                    stop.is_set()
+                    or drive_task.done()
+                    or not stop.brake_ack.is_set()
+                    or stop.braked_laps != timed_laps[-1]["lap_n"]
+                    or fresh.session_id != measured_sid
+                    or fresh.position != stop.pit_box.position
+                    or fresh.look != stop.pit_box.look
+                ):
+                    raise ValueError(
+                        "braked native pit snapshot differs from measured session/geometry"
+                    )
+                stop.return_box = fresh
+                stop.return_ready.set()  # Publish only after every binding passes.
+                return await asyncio.shield(drive_task)
+
             try:
-                await asyncio.wait_for(asyncio.shield(drive_task), timeout=250)
+                # Existing total return allowance includes braking, snapshot read,
+                # navigation AND final confirmation. No drive/capture cap expands.
+                await asyncio.wait_for(complete_return(), timeout=250)
             except TimeoutError:
                 # Cancelling an asyncio.to_thread wrapper does not stop its thread.
                 # Abort cooperatively, then let finally JOIN the shielded task
@@ -3757,6 +3793,8 @@ def rig_drive(  # pragma: no cover - rig-only
     pit_line = None
     pit_driver = None
     pit_proof = None
+    hold_started = None
+    hold_proof = None
     if config.natural_pit_return:
         from tools.ac_harness.pit_return import PitBox, PitReturnStop
 
@@ -4011,18 +4049,50 @@ def rig_drive(  # pragma: no cover - rig-only
             now = time.monotonic() - t0
             if pit_box is not None and stop.return_requested.is_set() and pit_driver is None:
                 from tools.ac_harness.pit_return import (
+                    BrakeHoldProof,
                     PitArrivalProof,
+                    PitBox,
                     PitReturnDriver,
                     build_route,
                 )
 
                 try:
+                    if hold_started is None:
+                        hold_started, hold_proof = now, BrakeHoldProof()
+                    if now - hold_started > 20:
+                        raise TimeoutError("braked return snapshot handoff timed out")
+                    # This thread remains the only active controller writer. It
+                    # stops advancing GGV before acknowledging a parent read.
+                    controller.write_controls(0.0, 0.6, 0.0)
+                    graphics = phys_reader.read_graphics() if phys_reader is not None else None
+                    stationary = hold_proof.observe(graphics, physics_packet, cd["speed_kmh"], now)
+                    if stationary:
+                        stop.braked_laps = hold_proof.laps
+                        stop.brake_ack.set()
+                    else:
+                        stop.brake_ack.clear()
+                        stop.braked_laps = None
+                    stats.payload["pit_brake_hold"] = {
+                        "started_at_s": hold_started,
+                        "elapsed_s": now - hold_started,
+                        "fresh_stationary_samples": hold_proof.samples,
+                        "last_fresh_at_s": hold_proof.last_at,
+                        "native_completed_laps": hold_proof.laps,
+                    }
+                    if not stop.return_ready.is_set():
+                        time.sleep(0.012)
+                        continue
+                    if not stationary or not isinstance(stop.return_box, PitBox):
+                        raise ValueError(
+                            "return released without a fresh stationary native snapshot"
+                        )
+                    pit_box = stop.return_box
                     pit_driver = PitReturnDriver(
                         build_route(line, pit_line, cd["position"], pit_box),
                         started_at=now,
                     )
                     pit_proof = PitArrivalProof()
-                except ValueError as exc:
+                except (ValueError, TimeoutError) as exc:
                     stats.reason = str(exc)
                     break
             active_driver = pit_driver if pit_driver is not None else driver
@@ -4051,6 +4121,7 @@ def rig_drive(  # pragma: no cover - rig-only
                         stats.pit_return_status = "arrived_pending_identity"
                         stats.payload["pit_return"] = {
                             "native_box": asdict(pit_box),
+                            "startup_box": asdict(stop.pit_box),
                             "fresh_native_samples": pit_proof.samples,
                             "elapsed_s": now - pit_driver.started_at,
                             "route_points": len(pit_driver.route),
