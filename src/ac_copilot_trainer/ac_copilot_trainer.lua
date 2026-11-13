@@ -3142,8 +3142,22 @@ function script.update(dt)
     state.lastSplineSector = sp
   end
 
+  -- CSP can expose the next lap's spline before its lap counter advances. Use
+  -- the same bounded confirmation decision as the rolling reset below, before
+  -- appending this frame: ambiguous next-lap samples must not enter the old
+  -- trace. Live rolling telemetry continues; only a native counter advance
+  -- finalizes a lap and starts its clock. Timeout/teleport still discards it.
+  local resetDecision = delta.rollingResetDecision({
+    pendingWrapLapCount = state.pendingWrapResetLapCount,
+    pendingWrapFrames = state.pendingWrapResetFrames,
+    lastLapCount = state.lastLapCount,
+    lapCount = lc,
+    prevSpline = state.lastSplinePos,
+    spline = sp,
+    teleported = teleported,
+  })
   tel:setRecording(state.recording)
-  tel:update(dt, car, sim)
+  tel:update(dt, car, sim, resetDecision.pendingWrapLapCount == nil)
 
   if not sim.isInMainMenu and state.lastLapCount >= 0 and lc == state.lastLapCount then
     if carLapInvalidatedFlag(car) then
@@ -3205,15 +3219,6 @@ function script.update(dt)
     state.focusPracticeHudSummarySig = nil
   end
 
-  local resetDecision = delta.rollingResetDecision({
-    pendingWrapLapCount = state.pendingWrapResetLapCount,
-    pendingWrapFrames = state.pendingWrapResetFrames,
-    lastLapCount = state.lastLapCount,
-    lapCount = lc,
-    prevSpline = state.lastSplinePos,
-    spline = sp,
-    teleported = teleported,
-  })
   state.pendingWrapResetLapCount = resetDecision.pendingWrapLapCount
   state.pendingWrapResetFrames = resetDecision.pendingWrapFrames or 0
   if resetDecision.reset then
