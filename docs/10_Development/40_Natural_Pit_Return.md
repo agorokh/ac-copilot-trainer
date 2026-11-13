@@ -23,6 +23,11 @@ The return phase has a 240-second cap, a 60 km/h speed target ceiling, an
 8-meter route-deviation bound, and a 12-second progress bound. Overlong
 geometry is rejected before navigation: a route longer than 3.5 km
 cannot fit the speed/deadline envelope with 30 seconds reserved for approach.
+This is a bounded return capability for #956's Magione campaign. Its authored
+return route is about 2.23 km; that geometry check provides no native arrival
+credit. General long-track return is outside this change's supported envelope.
+For example, a post-lap forward wrap on Spa can exceed 3.5 km and is deliberately
+denied before navigation. The 240-second cap is not enlarged to admit it.
 Missing or disconnected authored geometry, incompatible box heading/elevation, missing
 native state or any failed observer pipeline stops the attempt. No teleport,
 recovery, setup mutation or handoff to AC's built-in AI occurs in this phase.

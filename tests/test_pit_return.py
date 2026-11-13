@@ -6,6 +6,7 @@ import asyncio
 import math
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -178,6 +179,100 @@ def test_route_deviation_stall_and_deadline_stop(position, now):
 
 def graphics(packet, *, pit=True, laps=2, status=AcGameStatus.LIVE):
     return GraphicsSnapshot(packet, status, pit, laps)
+
+
+@pytest.mark.parametrize("phase", ["ordinary", "before_return", "return"])
+@pytest.mark.parametrize("failure", [ValueError, TimeoutError])
+def test_live_step_errors_propagate_outside_active_return(monkeypatch, phase, failure):
+    import tools.ac_harness.ai_line as ai
+    import tools.ac_harness.auto_drive as ad
+    import tools.ac_harness.entry_launcher as launcher
+    import tools.ac_harness.pit_return as pr
+    import tools.ac_harness.shared_memory as shared
+    from tools.ac_harness.lap_driver import DriveFrame
+
+    class NoopThread:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def join(self, **kwargs):
+            pass
+
+    class Reader:
+        packet = 0
+        closed = False
+
+        def read_physics(self):
+            self.packet += 1
+            return SimpleNamespace(packet_id=self.packet)
+
+        def read_graphics(self):
+            return graphics(self.packet, pit=False)
+
+        def close(self):
+            self.closed = True
+
+    class Controller:
+        reads = 0
+
+        def __init__(self):
+            self.controls = []
+
+        def read_car_data(self):
+            self.reads += 1
+            return dict(
+                position=(float(self.reads * 10), 0.0, 0.0),
+                look=(1.0, 0.0, 0.0),
+                speed_kmh=50.0,
+                rpm=4000.0,
+                gear=2,
+            )
+
+        def write_controls(self, gas, brake, steer, **kwargs):
+            self.controls.append((gas, brake, steer))
+
+    class Driver:
+        def __init__(self, *args, **kwargs):
+            self.calls = 0
+
+        def step(self, *args):
+            self.calls += 1
+            if self.calls == 27:
+                raise failure("step failed after sustained motion")
+            return DriveFrame(0.3, 0.0, 0.0, False, False, "test", False, False)
+
+    fast, pit = lines()
+    reader, controller = Reader(), Controller()
+    monkeypatch.setattr(ad, "resolve_fast_lane", lambda *args: Path("fast_lane.ai"))
+    monkeypatch.setattr(
+        ai, "load_ai_line", lambda path: pit if path.name == "pit_lane.ai" else fast
+    )
+    monkeypatch.setattr(ad, "_build_driver", lambda *args: Driver())
+    monkeypatch.setattr(pr, "PitReturnDriver", Driver)
+    monkeypatch.setattr(shared, "SharedMemoryReader", lambda: reader)
+    monkeypatch.setattr(launcher, "running_process_ids", lambda name: frozenset({101}))
+    monkeypatch.setattr(ad.threading, "Thread", NoopThread)
+    monkeypatch.setattr(ad.time, "sleep", lambda seconds: None)
+    stop = PitReturnStop()
+    stop.pit_box = PitBox.from_native(native(), "car", "track", "")
+    if phase == "return":
+        stop.return_requested.set()
+    config = AutoDriveConfig(
+        driver="ggv", spawn_to_line=False, drive_seconds=1, natural_pit_return=phase != "ordinary"
+    )
+    if phase == "return":
+        stats = ad.rig_drive(controller, config, stop)
+        assert stats.drove and stats.total_distance_m == 250
+        assert stats.pit_return_status == "failed" and drive_veto_reason(stats)
+        assert "step failed after sustained motion" in stats.reason
+    else:
+        with pytest.raises(failure, match="step failed after sustained motion"):
+            ad.rig_drive(controller, config, stop)
+    assert reader.closed
+    assert controller.reads == 27 and controller.controls[-20:] == [(0.0, 0.6, 0.0)] * 20
 
 
 def test_geometric_arrival_is_not_native_proof_and_both_packets_must_advance():

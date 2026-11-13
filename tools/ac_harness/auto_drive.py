@@ -4057,6 +4057,9 @@ def rig_drive(  # pragma: no cover - rig-only
                         }
                         break
             except (ValueError, TimeoutError) as exc:
+                if active_driver is not pit_driver:
+                    raise
+                stats.pit_return_status = "failed"
                 stats.reason = f"natural pit return: {exc}"
                 break
             if getattr(driver, "finished", False):
