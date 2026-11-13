@@ -1635,7 +1635,11 @@ async def run_auto_drive(
                     stop.is_set()
                     or drive_task.done()
                     or not stop.brake_ack.is_set()
-                    or stop.braked_laps != timed_laps[-1]["lap_n"]
+                    # Shared-memory completed_laps and the app's lap_n are
+                    # separate counters. The brake proof pins its own native
+                    # counter; never equate it to the app's ordinal.
+                    or type(stop.braked_laps) is not int
+                    or stop.braked_laps < 0
                     or fresh.session_id != measured_sid
                     or fresh.position != stop.pit_box.position
                     or fresh.look != stop.pit_box.look
@@ -4122,6 +4126,7 @@ def rig_drive(  # pragma: no cover - rig-only
                         stats.payload["pit_return"] = {
                             "native_box": asdict(pit_box),
                             "startup_box": asdict(stop.pit_box),
+                            "native_completed_laps_at_hold": stop.braked_laps,
                             "fresh_native_samples": pit_proof.samples,
                             "elapsed_s": now - pit_driver.started_at,
                             "route_points": len(pit_driver.route),

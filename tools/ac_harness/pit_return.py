@@ -101,7 +101,7 @@ class BrakeHoldProof:
             self.laps = graphics.completed_laps
         if graphics.completed_laps != self.laps:
             raise ValueError("native lap counter changed during brake hold")
-        if abs(speed) > 0.1:
+        if abs(speed) > 0.1 or now - self.last_at > 0.5:
             self.samples = 0
         pair = (graphics.packet_id, physics_packet)
         fresh = self.previous is None or (

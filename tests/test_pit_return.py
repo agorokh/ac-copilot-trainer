@@ -74,9 +74,14 @@ def test_brake_hold_requires_fresh_stationary_native_packets_and_lap_counter():
     assert not proof.observe(graphics(3), 3, 0, 0.6)
     assert proof.observe(graphics(4), 4, 0, 0.8)
     assert not proof.observe(graphics(4), 4, 0, 1.31)
-    assert not proof.observe(graphics(5), 5, 0.11, 1.4)
+    assert proof.samples == 0
+    assert not proof.observe(graphics(5), 5, 0, 1.4)
+    assert proof.samples == 1
+    assert not proof.observe(graphics(6), 6, 0, 1.6)
+    assert proof.observe(graphics(7), 7, 0, 1.8)
+    assert not proof.observe(graphics(8), 8, 0.11, 2.0)
     with pytest.raises(ValueError, match="lap counter"):
-        proof.observe(graphics(6, laps=1), 6, 0, 1.6)
+        proof.observe(graphics(9, laps=1), 9, 0, 2.2)
 
 
 def test_brake_ack_wait_is_bounded_and_rejects_finished_driver():
@@ -730,10 +735,11 @@ async def threaded_return(monkeypatch, failure):
 
     class Reader:
         packet = graphic_reads = 0
-        closed = False
+        closed = frozen = False
 
         def read_physics(self):
-            self.packet += 1
+            if not self.frozen:
+                self.packet += 1
             return SimpleNamespace(packet_id=None if failure == "missing_packet" else self.packet)
 
         def read_graphics(self):
@@ -818,6 +824,12 @@ async def threaded_return(monkeypatch, failure):
             if failure == "ack_lost":
                 controller.force_motion = True
                 await asyncio.sleep(0.05)
+            elif failure == "ack_gap":
+                reader.frozen = True
+                await asyncio.sleep(0.55)
+                reader.frozen = False
+                await asyncio.sleep(0.03)
+                assert not stop.brake_ack.is_set(), "one fresh sample rearmed stale proof"
             else:
                 await asyncio.sleep(0.02)
             assert race.calls == calls, "GGV advanced during the parent network read"
@@ -840,7 +852,11 @@ async def threaded_return(monkeypatch, failure):
     async def tap(*args, **kwargs):
         async with asyncio.timeout(2):
             await lap_ready.wait()
-        frames = [session("startup"), session("measured"), lap()]
+        frames = [
+            session("startup"),
+            session("measured"),
+            lap(7 if failure == "different_counter_domains" else 1),
+        ]
         if failure == "mixed_window":
             frames.append(session("other"))
         return [lap()] if failure == "missing_identity" else frames
@@ -891,6 +907,7 @@ async def threaded_return(monkeypatch, failure):
     "failure",
     [
         "",
+        "different_counter_domains",
         "mixed_window",
         "missing_identity",
         "snapshot_sid",
@@ -902,6 +919,7 @@ async def threaded_return(monkeypatch, failure):
         "hold_lap_change",
         "hold_timeout",
         "ack_lost",
+        "ack_gap",
         "cancel_snapshot",
     ],
 )
@@ -909,12 +927,16 @@ def test_real_actuation_thread_brakes_before_native_snapshot_and_joins_on_all_ex
     monkeypatch, failure
 ):
     report, stop, events, reads = asyncio.run(threaded_return(monkeypatch, failure))
-    if not failure:
+    if failure in {"", "different_counter_domains"}:
         assert report.ok and report.drive.pit_return_status == "arrived" and reads == 3
         assert events.index("braked_read") < events.index("navigation") < events.index("final_read")
         proof = report.drive.payload["pit_return"]
         assert proof["startup_box"]["session_id"] == "startup"
         assert proof["native_box"]["session_id"] == report.session_uuid == "measured"
+        assert proof["native_completed_laps_at_hold"] == 1
+        assert report.timed_laps[-1]["lap_n"] == (
+            7 if failure == "different_counter_domains" else 1
+        )
         assert report.drive.payload["pit_brake_hold"]["fresh_stationary_samples"] >= 3
     else:
         assert report is None or not report.ok
