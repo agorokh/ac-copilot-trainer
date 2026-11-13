@@ -148,6 +148,8 @@ SCREEN_TOUCH_DEFAULT_HOLD_MS = 80
 SCREEN_TOUCH_DEFAULT_DRAG_HOLD_MS = 260
 # Issue #726: resilient-launch harness → trainer Lua request that presses CSP's supported
 # in-sim Start control while AC is rendering at the pre-drive menu but Car0 does not exist yet.
+TYPE_SESSION_RETURN_TO_PITS = "session.return_to_pits"
+TYPE_SESSION_RETURN_TO_PITS_ACK = "session.return_to_pits.ack"
 TYPE_SESSION_START = "session.start"
 # Upgrade identity authorized to send the physical-rig control above. Keep the server and every
 # supported sender on one constant so an otherwise valid request cannot drift out of authority.
@@ -263,6 +265,7 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_SETUP_EXCHANGE_DOWNLOAD,
     TYPE_SESSION_REVIEW_GENERATE,
     TYPE_SESSION_START,
+    TYPE_SESSION_RETURN_TO_PITS,
     TYPE_SETUP_SPINNER_LIST,
     TYPE_SETUP_SPINNER_SET,
     TYPE_SETUP_SPINNER_AUDIT,
@@ -273,6 +276,7 @@ LOOPBACK_ONLY_CAPABILITIES: frozenset[str] = frozenset(
     {
         TYPE_SETUP_CLOSED_LOOP,
         TYPE_SESSION_START,
+        TYPE_SESSION_RETURN_TO_PITS,
         TYPE_SETUP_BENCH_ARM,
         TYPE_SETUP_BENCH_DISARM,
         TYPE_SETUP_BENCH_STATUS,
@@ -1205,6 +1209,48 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
                     "reference_source must be one of: auto, your-best, pro, tt, "
                     "generated, imported, none"
                 )
+        return None
+    if t == TYPE_SESSION_RETURN_TO_PITS:
+        allowed = {"v", "type", "request_id", "session_id", "rig_owner_pid", "rig_owner_started_at"}
+        if set(frame) - allowed:
+            return "pit return contains unsupported fields"
+        if not isinstance(frame.get("request_id"), str) or not SCREEN_CAPTURE_ID_RE.fullmatch(
+            frame["request_id"]
+        ):
+            return "pit return requires a bounded request_id"
+        if not isinstance(frame.get("session_id"), str) or not re.fullmatch(
+            r"[A-Za-z0-9_-]{8,80}", frame["session_id"]
+        ):
+            return "pit return requires the native session_id"
+        if _strict_int(frame.get("rig_owner_pid")) is None or frame["rig_owner_pid"] <= 0:
+            return "pit return requires a positive rig_owner_pid"
+        stamp = frame.get("rig_owner_started_at")
+        if not isinstance(stamp, str) or not 1 <= len(stamp) <= 64:
+            return "pit return requires the canonical owner start stamp"
+        return None
+    if t == TYPE_SESSION_RETURN_TO_PITS_ACK:
+        if not isinstance(frame.get("request_id"), str) or not SCREEN_CAPTURE_ID_RE.fullmatch(
+            frame["request_id"]
+        ):
+            return "pit return ACK requires request_id"
+        if (
+            frame.get("operation") != "return_to_pits"
+            or not isinstance(frame.get("session_id"), str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", frame["session_id"])
+        ):
+            return "pit return ACK requires native operation/session"
+        if type(frame.get("ok")) is not bool or frame.get("native_result") not in {
+            "accepted",
+            "refused",
+            "unavailable",
+            "exception",
+            "unknown",
+        }:
+            return "pit return ACK requires command result"
+        if frame["ok"] != (frame["native_result"] == "accepted"):
+            return "pit return ACK has contradictory command result"
+        if "error" in frame and (not isinstance(frame["error"], str) or len(frame["error"]) > 160):
+            return "pit return ACK error must be bounded"
         return None
     if t == TYPE_SESSION_START:
         instant = frame.get("instant")

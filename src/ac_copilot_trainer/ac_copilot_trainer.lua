@@ -50,6 +50,7 @@ local chassisRead = require("chassis_read")
 local setupLibrary = require("setup_library")
 local setupPrescription = require("setup_prescription")
 -- Reuse script.update's existing wsBridge capture to avoid adding more upvalues.
+wsBridge.sessionControl = require("session_control").new()
 wsBridge.setupExchange = require("setup_exchange")
 wsBridge.registerAsyncRequestHandler("se.csp.request", "se.csp.result", wsBridge.setupExchange.handle)
 
@@ -853,6 +854,10 @@ if wsBridge.registerRequestHandler then
   -- button in pits menu". CSP binds it to the `__CM_START_SESSION` control; nothing in CSP calls
   -- it directly, because it exists for third-party scripts. This app is already loaded in the
   -- sim, so it can press it — no synthetic input, no hardcoded coordinates, no Car0 required.
+  wsBridge.registerRequestHandler("session.return_to_pits", "session.return_to_pits.ack", function(payload)
+    return wsBridge.sessionControl.handle(payload, SESSION_UUID)
+  end)
+
   wsBridge.registerRequestHandler("session.start", "session.start.ack", function(payload)
     -- `instant` skips the fade-in transition. Default true: an autonomous run wants the sim
     -- driving now, and the transition only delays the first usable telemetry.
