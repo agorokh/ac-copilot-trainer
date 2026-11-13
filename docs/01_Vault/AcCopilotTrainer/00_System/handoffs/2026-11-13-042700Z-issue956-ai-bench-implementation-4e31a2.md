@@ -69,3 +69,13 @@ lock, with DISARM preemption. Real WS regressions reproduce both original paths;
 80 guard/transport tests and75 existing external/E2E tests pass. Both reviewers
 rechecked the repairs and found no residual concrete defect. A fresh full CI on
 this final source and the automatic exact-head review still precede deployment.
+
+External round1 on361e1c7 reviewed with2 concrete medium findings: permit run IDs
+allowed80 characters while wire/screen support64, and preparatory ARM disarm ran
+before the transaction lock, interrupting an existing Accept. Both adopted.
+Run IDs now share64-character admission; ARM captures invalidation before waiting
+but performs its preparatory disarm only after acquiring the lock. Real WS
+coverage holds a journaled Accept in flight, queues ARM and proves no intervening
+disarm, exactly1 verified apply, then safe refusal of the stale baseline. Boundary
+tests cover64/65/80 IDs across guard and wire. All84 guard/transport tests pass.
+Fresh full CI and automatic exact-head round2 remain required; no rig time used.

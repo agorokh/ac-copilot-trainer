@@ -224,6 +224,27 @@ def test_invalid_run_permission_fails_closed(sealed, key, value):
     assert not f.guard.status()["active"]
 
 
+@pytest.mark.parametrize("length", [64, 65, 80])
+def test_permit_run_id_bound_matches_screen_wire_admission(sealed, length):
+    from tools.ai_sidecar.external_protocol import validate_inbound
+
+    run_id = "r" * length
+    sealed.permit["run_id"] = sealed.case["run_id"] = sealed.oracle_receipt["run_id"] = run_id
+    write(sealed.permit_path, sealed.permit)
+    refresh_seal(sealed)
+    wire = {"v": 1, "type": "setup.bench.get", "mode": "ai_bench", "run_id": run_id}
+    if length == 64:
+        arm(sealed)
+        assert sealed.guard.status()["active"] is True
+        assert validate_inbound(wire) is None
+    else:
+        with pytest.raises(
+            BenchDenied, match="Bench run authority or implementation binding is invalid"
+        ):
+            arm(sealed)
+        assert validate_inbound(wire) is not None
+
+
 @pytest.mark.parametrize(
     "mutation",
     [

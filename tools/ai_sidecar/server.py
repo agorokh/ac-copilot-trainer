@@ -3147,8 +3147,8 @@ async def _handle_bench_control(websocket: Any, data: dict[str, Any]) -> None:
         and websocket in _pressure_bench_authorized_peers
     ):
         guard = _bench_guard()
-        if data["type"] == TYPE_SETUP_BENCH_ARM:
-            guard.disarm("Preparing a sealed bench case")
+        # Snapshot invalidation before waiting, but do not interrupt the
+        # decision transaction already holding the native context lock.
         epoch = guard.disarm_epoch
         async with _prescription_lock():
             await _handle_bench_control_transaction(websocket, data, expected_epoch=epoch)
@@ -3179,6 +3179,9 @@ async def _handle_bench_control_transaction(
             arm_epoch = guard.disarm_epoch if expected_epoch is None else expected_epoch
             if guard.disarm_epoch != arm_epoch:
                 raise ValueError("Bench admission invalidated while waiting for native context")
+            if data["type"] == TYPE_SETUP_BENCH_ARM:
+                guard.disarm("Preparing a sealed bench case")
+                arm_epoch = guard.disarm_epoch
             producers = [p for p in _lua_authorized_peers if p in _external_peers]
             if len(producers) != 1 or _setup_experiment_store_path is None:
                 raise ValueError("One authenticated live trainer journal required")

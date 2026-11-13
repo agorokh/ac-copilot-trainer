@@ -61,6 +61,7 @@ async def running(fixture, monkeypatch):
         store=store,
         context_requests=0,
         latest_context=None,
+        before_apply=None,
     )
     async with serve(
         lambda ws: srv._handler(ws, reply_coaching=False),
@@ -86,6 +87,8 @@ async def running(fixture, monkeypatch):
                         reply.update(copy.deepcopy(state.ctx), context_id=request["request_id"])
                     else:
                         if op == "apply":
+                            if state.before_apply is not None:
+                                await state.before_apply()
                             if request.get("context_id") != state.latest_context:
                                 reply.update(ok=False, error="Prescription context expired")
                             elif state.ctx["is_in_pit"] is not True:
@@ -222,6 +225,60 @@ def test_actor_poll_cannot_replace_screen_decision_native_context(sealed, monkey
                         assert (await receive(owner, ep.TYPE_SETUP_PRESCRIPTION_CARD))[
                             "status"
                         ] == "verified_applied"
+                        assert state.applies == 1
+                    finally:
+                        release.set()
+
+    asyncio.run(run())
+
+
+def test_arm_waits_for_inflight_accept_before_disarming(sealed, monkeypatch):
+    async def run():
+        async with running(sealed, monkeypatch) as (url, state):
+            async with peer(url, client=ep.PRESSURE_BENCH_CLIENT_ID) as owner:
+                async with peer(url, client="ac-copilot-screen-test", screen=True) as screen:
+                    await send(owner, ep.TYPE_SETUP_BENCH_ARM, case_file=str(sealed.case_path))
+                    assert (await receive(owner, ep.TYPE_SETUP_BENCH_STATUS))["active"] is True
+                    await send(owner, ep.TYPE_SETUP_BENCH_GET, mode="ai_bench", run_id="run-one")
+                    card = await receive(owner, ep.TYPE_SETUP_PRESCRIPTION_CARD)
+                    entered, release, queued = asyncio.Event(), asyncio.Event(), asyncio.Event()
+                    original = srv._handle_bench_control
+
+                    async def before_apply():
+                        entered.set()
+                        await asyncio.wait_for(release.wait(), 3)
+
+                    async def notice_control(ws, data):
+                        if data["type"] == ep.TYPE_SETUP_BENCH_ARM:
+                            queued.set()
+                        await original(ws, data)
+
+                    state.before_apply = before_apply
+                    monkeypatch.setattr(srv, "_handle_bench_control", notice_control)
+                    try:
+                        await send(
+                            screen,
+                            ep.TYPE_SETUP_BENCH_DECIDE,
+                            mode="ai_bench",
+                            run_id="run-one",
+                            prescription_id=card["prescription_id"],
+                            decision="accept",
+                        )
+                        await asyncio.wait_for(entered.wait(), 2)
+                        assert (
+                            PrescriptionJournal(state.store).get(card["prescription_id"])["status"]
+                            == "accepted_unverified"
+                        )
+                        epoch = sealed.guard.disarm_epoch
+                        await send(owner, ep.TYPE_SETUP_BENCH_ARM, case_file=str(sealed.case_path))
+                        await asyncio.wait_for(queued.wait(), 2)
+                        await asyncio.sleep(0.01)
+                        assert sealed.guard.disarm_epoch == epoch
+                        assert sealed.guard.status()["active"] is True
+                        release.set()
+                        final = await receive(screen, ep.TYPE_SETUP_PRESCRIPTION_CARD)
+                        assert final["status"] == "verified_applied" and state.applies == 1
+                        assert (await receive(owner, "error"))["type"] == "error"
                         assert state.applies == 1
                     finally:
                         release.set()

@@ -33,7 +33,7 @@ AUTHORITY = "operator_adopted_pr970_native_ai_bench"
 MAX_RUN_SECONDS = 4 * 60 * 60
 MAX_RECEIPT_BYTES = 256 * 1024
 _HASH = re.compile(r"^[a-f0-9]{64}$")
-_TOKEN = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+_TOKEN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _IDENTITY_KEYS = ("car_id", "track_id", "layout_id", "compound_index", "setup_path", "session_id")
 _SPINNER_KEYS = (
     "section",
