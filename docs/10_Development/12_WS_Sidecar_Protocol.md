@@ -2,6 +2,35 @@
 
 Issue **#45** — versioned JSON over the same WebSocket the Lua app already uses for `lap_complete`.
 
+## Harness pit return (external v1 envelope)
+
+`session.return_to_pits` is restricted to the authenticated loopback
+`resilient-launch` client, with exactly one authenticated trainer Lua producer.
+Send `{v:1,type:"session.return_to_pits",request_id,session_id,rig_owner_pid,
+rig_owner_started_at}`. Use a unique 1–64 character alphanumeric/underscore/hyphen
+request ID and the current native session ID and canonical rig-lock owner start
+stamp. The PID is only a claim: the sidecar checks the OS-held canonical rig
+lease after acquiring the existing native transaction lock and again on reply.
+The pressure bench must be disarmed. Hold the lease until the command and fresh
+native observation have settled; do not release or transfer it during a request.
+
+The sidecar pins the private response to its native producer and sends a short
+deadline. Lua requires the matching current native session and explicit offline
+state, then calls CSP's `ac.tryToTeleportToPits(true)` (preserve damage). It reserves
+the original command ID before invocation and caches successes, refusals and
+exceptions. Its bounded cache refuses new work when full, without eviction.
+`session.return_to_pits.ack` reports `operation:"return_to_pits"`, `request_id`,
+`session_id`, `ok` and `native_result` (`accepted`, `refused`, `unavailable`,
+`exception`, or `unknown`). This is a command result, not proof of pit arrival.
+Timeout, disconnect or uncertain result stops the attempt: never automatically
+replay with a new ID or reconnect/reload the app to reset deduplication.
+
+Before enrolling a bench case, independently require advancing native packets,
+the same session, actual pit state, unchanged lap count and fresh context plus all
+four cold-pressure values. A failed observation means no bench arming or setup
+application. This control does not restart sessions, load setups, change normal
+experiment flags or alter AI qualification.
+
 ## Constants
 
 | Field        | Value | Meaning                          |

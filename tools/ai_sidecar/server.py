@@ -85,6 +85,8 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_SCREEN_CAPTURE_CHUNK,
     TYPE_SCREEN_TOUCH,
     TYPE_SCREEN_TOUCH_ACK,
+    TYPE_SESSION_RETURN_TO_PITS,
+    TYPE_SESSION_RETURN_TO_PITS_ACK,
     TYPE_SESSION_REVIEW_GENERATE,
     TYPE_SESSION_REVIEW_RESULT,
     TYPE_SESSION_START,
@@ -229,6 +231,7 @@ _setup_exchange_user_setups_root: Path | None = None
 _setup_exchange_broker = SetupExchangeBroker()
 _setup_exchange_tasks: dict[Any, asyncio.Task[Any]] = {}
 _prescription_broker = SetupExchangeBroker(timeout_s=5.0)
+_pit_return_broker = SetupExchangeBroker(timeout_s=5.0)
 _prescription_tasks: dict[Any, asyncio.Task[Any]] = {}
 _prescription_transaction_lock: asyncio.Lock | None = None
 _prescription_committed_peers: set[Any] = set()
@@ -630,6 +633,7 @@ def _reset_external_state() -> None:
     _prescription_tasks.clear()
     _prescription_committed_peers.clear()
     _prescription_broker.reset()
+    _pit_return_broker.reset()
     _external_peers.clear()
     _session_start_authorized_peers.clear()
     _screen_touch_authorized_peers.clear()
@@ -2910,6 +2914,7 @@ def _drop_setup_exchange_peer(peer: Any) -> None:
     if task is not None and peer not in _prescription_committed_peers:
         task.cancel()
     _prescription_broker.drop(peer)
+    _pit_return_broker.drop(peer)
 
 
 def _prescription_lap_dir(ctx: dict[str, Any], store_path: Path) -> Path:
@@ -3710,6 +3715,84 @@ async def _handle_setup_exchange_frame(websocket: Any, data: dict[str, Any]) -> 
         return
 
 
+async def _handle_pit_return(websocket: Any, data: dict[str, Any]) -> None:
+    """One pinned native command; timeout/disconnect is unknown, never retried."""
+    from tools.ac_harness.rig_lock import (
+        RigOwnerMismatch,
+        default_rig_session_lock_path,
+        require_rig_session_owner,
+    )
+
+    if websocket not in _session_start_authorized_peers or websocket not in _external_peers:
+        await _safe_send(
+            websocket,
+            make_error("Pit return requires the authenticated harness", ref_type=data["type"]),
+        )
+        return
+    request_id = None
+    try:
+        async with _prescription_lock():
+            producers = [p for p in _lua_authorized_peers if p in _external_peers]
+            if len(producers) != 1:
+                raise ValueError("Exactly one authenticated trainer required")
+            if _bench_status().get("active") is not False:
+                raise ValueError("Disarm the pressure bench before pit return")
+            producer = producers[0]
+            request_id = _pit_return_broker.begin(websocket, producer, "return_to_pits")
+            # Recheck after acquiring the existing native transaction lock. Payload
+            # PID is a claim, never authentication; the OS-held canonical lease proves it.
+            owner = require_rig_session_owner(
+                data["rig_owner_pid"], default_rig_session_lock_path()
+            )
+            if owner.get("started_at") != data["rig_owner_started_at"]:
+                raise ValueError("Rig owner incarnation changed")
+            if (
+                websocket not in _session_start_authorized_peers
+                or producer not in _lua_authorized_peers
+            ):
+                raise ValueError("Native control participant disconnected")
+            frame = {
+                **data,
+                "request_id": request_id,
+                "command_id": data["request_id"],
+                "deadline_epoch": int(time.time()) + 5,
+            }
+            error = await asyncio.wait_for(_safe_send_raw(producer, json.dumps(frame)), timeout=5)
+            if error is not None:
+                raise ValueError("Native command outcome unknown; no retry")
+            result = await _pit_return_broker.wait(request_id)
+            owner = require_rig_session_owner(
+                data["rig_owner_pid"], default_rig_session_lock_path()
+            )
+            if owner.get("started_at") != data["rig_owner_started_at"]:
+                raise ValueError("Rig owner incarnation changed; outcome unknown")
+            if (
+                result.get("session_id") != data["session_id"]
+                or producer not in _lua_authorized_peers
+                or producer not in _external_peers
+            ):
+                raise ValueError("Native session or producer changed; no retry")
+            await _safe_send(websocket, {**result, "request_id": data["request_id"]})
+    except (
+        ValueError,
+        OSError,
+        KeyError,
+        TimeoutError,
+        RigOwnerMismatch,
+        SetupExchangeError,
+    ) as exc:
+        logger.warning("Pit return refused or unverified: %s", type(exc).__name__)
+        await _safe_send(
+            websocket,
+            make_error("Pit return refused or outcome unknown; no retry", ref_type=data["type"]),
+        )
+    finally:
+        if request_id is not None:
+            pending = _pit_return_broker.pending.pop(request_id, None)
+            if pending is not None and not pending.future.done():
+                pending.future.cancel()
+
+
 async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     """Process one ``{v,type}`` frame: validate, ack, fan-out as needed."""
     peer = getattr(websocket, "remote_address", None)
@@ -3748,7 +3831,7 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             hello_ack["capabilities"] = [
                 capability
                 for capability in hello_ack["capabilities"]
-                if capability != TYPE_SESSION_START
+                if capability not in {TYPE_SESSION_START, TYPE_SESSION_RETURN_TO_PITS}
             ]
         if websocket not in _pressure_bench_authorized_peers:
             hello_ack["capabilities"] = [
@@ -3832,6 +3915,19 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             and _peer_class(p) == CLIENT_CLASS_VOICE
         ]
         await _broadcast_targets(payload, targets=targets)
+        return
+    if t == TYPE_SESSION_RETURN_TO_PITS:
+        await _handle_pit_return(websocket, data)
+        return
+    if t == TYPE_SESSION_RETURN_TO_PITS_ACK:
+        if (
+            websocket not in _lua_authorized_peers
+            or websocket not in _external_peers
+            or not _pit_return_broker.accept(websocket, data)
+        ):
+            await _safe_send(
+                websocket, make_error("Unknown or unauthenticated pit-return ACK", ref_type=t)
+            )
         return
     if t == TYPE_SESSION_START and websocket not in _session_start_authorized_peers:
         await _safe_send(
