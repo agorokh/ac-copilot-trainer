@@ -145,8 +145,11 @@ def send_key(key: str, down: bool):
 
 
 class Actions:
-    def __init__(self, sender=send_key):
+    def __init__(self, sender=send_key, declare=None):
         self.sender = sender
+        # None resolves the #988 declaration journal lazily on each press, so the
+        # default-off opt-in is honoured without restarting the worker.
+        self.declare = declare
         self.counts = {}
         self.last_error = ""
         self.last_unavailable = ""
@@ -157,6 +160,22 @@ class Actions:
         if binding.action == "rig":
             if pressed:
                 self.last_unavailable = f"{binding.name}: target integration not activated"
+            return
+        if binding.action == "attest":
+            if pressed and not impulse:
+                sink = self.declare
+                if sink is None:
+                    from tools.human_control_attestation import declaration_sink
+
+                    sink = declaration_sink()
+                if sink is None:
+                    self.last_unavailable = f"{binding.name}: attestation not enabled"
+                else:
+                    try:
+                        sink(binding.name)
+                    except (OSError, ValueError) as exc:
+                        # A lost declaration must be visible; the lap then abstains.
+                        self.last_error = f"{binding.name}: declaration not recorded ({exc})"
             return
         keys = binding.keys if pressed else tuple(reversed(binding.keys))
         for key in keys:

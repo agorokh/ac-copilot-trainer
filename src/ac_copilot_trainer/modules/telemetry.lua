@@ -183,6 +183,7 @@ end
 
 function Telemetry:setRecording(on)
   if not on and self._offTrackObservation then self._offTrackObservation.complete = false end
+  if not on and self._controlObservation then self._controlObservation.complete = false end
   self.recording = on and true or false
 end
 
@@ -211,6 +212,11 @@ function Telemetry:beginLapClock(simTime, fullLapBoundary)
     max_wheels_outside=-1, event_count=0, complete=fullLapBoundary == true, source="car.wheelsOutside",
     event_count_basis="positive_runs_unknown_breaks_run" }
   self._lastWheelsOutside = nil
+  -- Issue #988: per-frame CSP control-authority facts, summarized before any
+  -- downsampling. Raw counts only; readers decide. Unknown is never "not AI".
+  self._controlObservation = { schema_version=1, source="car.isAIControlled", sample_count=0,
+    unknown_count=0, ai_controlled_count=0, user_controlled_count=0,
+    complete=fullLapBoundary == true }
 end
 
 --- Drop samples older than (now - bufferSeconds).
@@ -237,6 +243,7 @@ end
 function Telemetry:update(dt, car, sim, recordLap)
   if not self.recording or sim.isInMainMenu then
     if self._offTrackObservation then self._offTrackObservation.complete = false end
+    if self._controlObservation then self._controlObservation.complete = false end
     return
   end
   local t = ch.simSeconds(sim)
@@ -287,6 +294,9 @@ function Telemetry:update(dt, car, sim, recordLap)
   if recordLap == false and self._offTrackObservation then
     self._offTrackObservation.complete = false
   end
+  if recordLap == false and self._controlObservation then
+    self._controlObservation.complete = false
+  end
   if self.lapT0 ~= nil and recordLap ~= false then
     -- Accumulate BEFORE either raw-buffer or final-trace downsampling. A short
     -- excursion must not disappear when uniform sampling omits its trace row.
@@ -302,6 +312,18 @@ function Telemetry:update(dt, car, sim, recordLap)
         end
       end
       self._lastWheelsOutside = wheelsOutside
+    end
+    local control = self._controlObservation
+    if control then
+      local aiControlled = ch.safeCarField(car, "isAIControlled", nil)
+      local userControlled = ch.safeCarField(car, "isUserControlled", nil)
+      control.sample_count = control.sample_count+1
+      if type(aiControlled) ~= "boolean" or type(userControlled) ~= "boolean" then
+        control.unknown_count = control.unknown_count+1
+      else
+        if aiControlled then control.ai_controlled_count = control.ai_controlled_count+1 end
+        if userControlled then control.user_controlled_count = control.user_controlled_count+1 end
+      end
     end
     local eMs = (t - self.lapT0) * 1000
     self.lapN = self.lapN + 1
@@ -458,6 +480,7 @@ end
 ---@param includeOffTrackObservation boolean|nil return the separate summary only when requested
 ---@return LapTraceSample[]
 ---@return table|nil offTrackObservation
+---@return table|nil controlObservation issue #988 control-authority summary, same opt-in
 function Telemetry:finalizeLapTrace(includeOffTrackObservation)
   local out = self.lapN > 0 and downsampleUniform(self.lapBuf, self.lapN, MAX_LAP_TRACE) or {}
   local observation
@@ -467,11 +490,17 @@ function Telemetry:finalizeLapTrace(includeOffTrackObservation)
   end
   self.lapBuf = {}
   self.lapN = 0
+  local control
+  if self._controlObservation then
+    control = {}
+    for key,value in pairs(self._controlObservation) do control[key] = value end
+  end
   self._offTrackObservation = nil
+  self._controlObservation = nil
   self._lastWheelsOutside = nil
   -- Preserve the one-array return contract for existing callers, including
   -- native replay bindings that expose multiple Lua returns as a Python tuple.
-  if includeOffTrackObservation == true then return out, observation end
+  if includeOffTrackObservation == true then return out, observation, control end
   return out
 end
 

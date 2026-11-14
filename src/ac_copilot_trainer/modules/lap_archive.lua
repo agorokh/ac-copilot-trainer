@@ -229,6 +229,7 @@ end
 ---  opts.lap_n (int), opts.lap_ms (int), opts.is_pb (bool), opts.is_valid (bool),
 ---  opts.trace (per-sample objects), opts.corners (corner_features list),
 ---  opts.offTrackObservation (pre-downsampling native observation summary|nil),
+---  opts.controlObservation (pre-downsampling control-authority summary|nil, issue #988),
 ---  opts.setup_snap (setupReader snap), opts.setup_hash (string),
 ---  opts.setup_ini_path (string|nil) absolute active INI path (preferred over snap.path),
 ---  opts.rules_hints (string list), opts.sidecar_debrief (string|nil),
@@ -248,6 +249,26 @@ local function offTrackObservation(raw)
   end
   if out.max_wheels_outside > 4 or out.unknown_count > out.sample_count
       or out.event_count > out.sample_count then return nil end
+  return out
+end
+
+--- Issue #988: carry the native control-authority counts verbatim or not at all.
+--- No verdict is derived here; an absent or malformed summary is never zero-filled.
+local function controlObservation(raw)
+  if type(raw) ~= "table" or raw.schema_version ~= 1 or raw.source ~= "car.isAIControlled"
+      or type(raw.complete) ~= "boolean" then return nil end
+  local out = { schema_version=1, source=raw.source, complete=raw.complete }
+  for _, key in ipairs({"sample_count", "unknown_count", "ai_controlled_count",
+      "user_controlled_count"}) do
+    local v = raw[key]
+    if type(v) ~= "number" or v ~= v or v == math.huge or v ~= math.floor(v) or v < 0 then
+      return nil
+    end
+    out[key] = v
+  end
+  if out.unknown_count > out.sample_count
+      or out.ai_controlled_count + out.unknown_count > out.sample_count
+      or out.user_controlled_count + out.unknown_count > out.sample_count then return nil end
   return out
 end
 
@@ -454,6 +475,7 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
       fields = traceFieldNames,
       samples = samplesColumnar,
       off_track_observation = offTrackObservation(opts.offTrackObservation),
+      control_observation = controlObservation(opts.controlObservation),
     },
     corners = cornersOut,
     coaching = {
@@ -762,6 +784,12 @@ function M.createWriteJob(opts, capMB)
       encoded, err = jsonValue(self._rec.trace.off_track_observation, "trace.off_track_observation")
       if not encoded then return self:_fail(err) end
       observationRaw = ",\"off_track_observation\":" .. encoded
+    end
+    if self._rec.trace.control_observation then
+      local encoded
+      encoded, err = jsonValue(self._rec.trace.control_observation, "trace.control_observation")
+      if not encoded then return self:_fail(err) end
+      observationRaw = observationRaw .. ",\"control_observation\":" .. encoded
     end
     local prefix = self._fieldWritten and "," or ""
     ok, err = self:_write(prefix
