@@ -343,6 +343,7 @@ def set_coach_runtime(coach: Any | None) -> None:
     producer. When set (``AC_COPILOT_COACH_V2=1``) it replaces the legacy observer's cue output."""
     global _coach_runtime
     _coach_runtime = coach
+    _install_practice_voice_guard()
 
 
 def set_race_manager(manager: Any | None) -> None:
@@ -361,6 +362,26 @@ def set_voice_coach(coach: Any | None) -> None:
     """Install (or clear) the in-process voice coach that speaks advisories on the rig (#341)."""
     global _voice_coach
     _voice_coach = coach
+    _install_practice_voice_guard()
+
+
+def _install_practice_voice_guard() -> None:
+    setter = getattr(_voice_coach, "set_instructional_guard", None)
+    if not callable(setter):
+        return
+    coach = _coach_runtime
+    practice = getattr(coach, "practice", None)
+    setter(
+        (lambda: _coach_runtime is coach and practice.instruction_allowed)
+        if practice is not None
+        else None
+    )
+
+
+def _refresh_practice_voice_guard() -> None:
+    refresh = getattr(_voice_coach, "refresh_instructional_guard", None)
+    if getattr(_coach_runtime, "practice", None) is not None and callable(refresh):
+        refresh()
 
 
 def set_voice_runtime_status(**updates: object) -> None:
@@ -384,6 +405,14 @@ def voice_runtime_status() -> dict[str, object]:
 def public_voice_runtime_status() -> dict[str, object]:
     """Return voice runtime state safe for unauthenticated health responses."""
     status = voice_runtime_status()
+    practice_status = getattr(_coach_runtime, "practice_status", None)
+    if callable(practice_status):
+        private = practice_status()
+        public = {key: private.get(key) for key in ("configured", "active", "phase", "reason")}
+        for key in ("phase", "reason"):
+            if not isinstance(public[key], str) or not re.fullmatch(r"[a-z0-9_]+", public[key]):
+                public[key] = "practice_unavailable"
+        status["practice_drill"] = public
     reason = str(status.get("disabled_reason") or "")
     if reason:
         status["disabled_reason"] = _ABSOLUTE_PATH_RE.sub("<path>", reason)
@@ -1002,6 +1031,20 @@ async def _coach_v2_between_lap(
                 qualification = await asyncio.to_thread(
                     qualify_archive, loaded, use="human_progression"
                 )
+                if (
+                    getattr(coach, "practice", None) is not None
+                    and is_current()
+                    and _coach_runtime is coach
+                ):
+                    coach.record_practice_archive(
+                        loaded,
+                        qualification,
+                        voice_ready=(
+                            _voice_runtime_status.get("enabled") is True
+                            and getattr(_voice_coach, "practice_evidence_ready", False) is True
+                        ),
+                    )
+                    _refresh_practice_voice_guard()
                 if not qualification.allowed:
                     logger.info("coach v2 between-lap skipped: %s", qualification.reason)
                     return
@@ -1277,12 +1320,19 @@ def _on_voice_dispatch(dispatch: Any) -> None:
     try:
         payload = dispatch.to_payload()
         _voice_dispatch_log.append(payload)
+        coach = _coach_runtime
         loop = _event_loop
         if loop is None or loop.is_closed():
             return
         frame = make_coaching_voice(payload)
 
         def _schedule() -> None:
+            if (
+                coach is not None
+                and _coach_runtime is coach
+                and getattr(coach, "practice", None) is not None
+            ):
+                coach.note_practice_voice(payload)
             task = asyncio.ensure_future(_broadcast_external(frame, exclude=None))
             _background_tasks.add(task)
             task.add_done_callback(_background_tasks.discard)
@@ -1293,6 +1343,29 @@ def _on_voice_dispatch(dispatch: Any) -> None:
         logger.debug("voice: dispatch broadcast skipped (event loop closed)")
     except Exception:  # noqa: BLE001 — never propagate into the scheduler thread
         logger.exception("voice: failed to record/broadcast dispatch")
+
+
+def _on_voice_cancel(payload: dict[str, Any]) -> None:
+    """Record interruption evidence on the main loop, without replaying a voice event."""
+    try:
+        coach, loop = _coach_runtime, _event_loop
+        if loop is None or loop.is_closed():
+            return
+        snapshot = dict(payload)
+
+        def _schedule() -> None:
+            if (
+                coach is not None
+                and _coach_runtime is coach
+                and getattr(coach, "practice", None) is not None
+            ):
+                coach.note_practice_voice_cancel(snapshot)
+
+        loop.call_soon_threadsafe(_schedule)
+    except RuntimeError:
+        logger.debug("voice: cancellation evidence skipped (event loop closed)")
+    except Exception:  # noqa: BLE001 — never propagate into the scheduler thread
+        logger.exception("voice: failed to record cancellation evidence")
 
 
 def _disarm_voice_web_bank() -> None:
@@ -1584,6 +1657,16 @@ def _route_voice_dispatches(connection: Any, request: Any, tail: str) -> Any:
     )
 
 
+def _route_practice_status(connection: Any, request: Any, tail: str) -> Any:
+    status = getattr(_coach_runtime, "practice_status", None)
+    payload = (
+        status()
+        if callable(status)
+        else {"configured": False, "active": False, "phase": "disabled", "reason": "not_configured"}
+    )
+    return _http_response(connection, HTTPStatus.OK, json.dumps(payload), "application/json")
+
+
 def _route_voice_echoes(connection: Any, request: Any, tail: str) -> Any:
     return _http_response(
         connection,
@@ -1606,6 +1689,7 @@ _ROUTES: tuple[_Route, ...] = (
     _Route("/voice/manifest.json", _route_voice_manifest, token_gated=True),
     _Route("/voice/clips/", _route_voice_clip, prefix=True, token_gated=True),
     _Route("/voice/dispatches", _route_voice_dispatches, token_gated=True),
+    _Route("/coach/practice", _route_practice_status, token_gated=True),
     _Route("/voice/echoes", _route_voice_echoes, token_gated=True),
 )
 
@@ -2193,6 +2277,7 @@ async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None
         try:
             observed = observer.observe(frame)
             if observer is _coach_runtime:
+                _refresh_practice_voice_guard()
                 # All Coach v2 names (voice AND coaching.cue) use the same geometry gate.
                 # Keep diagnoses/internal indexes unchanged; ambiguous regions stay silent.
                 observed = [
@@ -4817,7 +4902,11 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                     tts_enabled=bool(voice_settings.tts_enabled),
                 )
                 logger.info("voice: realtime observer wired from reference %s", reference_path)
-            if os.environ.get("AC_COPILOT_COACH_V2") == "1" or alien_line_path:
+            if (
+                os.environ.get("AC_COPILOT_COACH_V2") == "1"
+                or alien_line_path
+                or os.environ.get("AC_COPILOT_COACH_DRILLS") == "1"
+            ):
                 from tools.ai_sidecar.coaching_runtime import build_coach_runtime
 
                 coach_rt = build_coach_runtime(
@@ -4890,7 +4979,11 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                 ),
             )
             coach = VoiceCoach.from_bank(
-                bank_dir, config, backend=backend, dispatch_listener=_on_voice_dispatch
+                bank_dir,
+                config,
+                backend=backend,
+                dispatch_listener=_on_voice_dispatch,
+                cancellation_listener=_on_voice_cancel,
             )
             if not coach.enabled:
                 set_voice_coach(coach)

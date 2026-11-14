@@ -64,6 +64,114 @@ def _step(rt: lupa.LuaRuntime, rows: int) -> dict[str, Any]:
     return _lua_to_py(result)
 
 
+def test_native_telemetry_offtrack_measurements_and_unknown_survive_archive(tmp_path):
+    rt = _runtime(tmp_path)
+    record = _lua_to_py(
+        rt.execute("""
+      local t=require('telemetry').new()
+      t:beginLapClock(0,true)
+      local car={speedKmh=100,splinePosition=.1,position={x=1,y=0,z=1}}
+      for i=1,3 do
+        car.wheelsOutside=({0,2})[i]
+        car.splinePosition=i/3
+        t:update(.05,car,{gameTime=i*.05})
+      end
+      local trace=t:finalizeLapTrace()
+      return require('lap_archive').buildRecord({session_uuid='native',lap_n=1,
+        lap_ms=1000,car={},sim={},trace=trace})
+    """)
+    )
+    fields = record["trace"]["fields"]
+    assert fields[-2:] == ["dy_rr", "wheelsOutside"]
+    assert [row[-1] for row in record["trace"]["samples"]] == [0, 2, -1]
+    observation = record["trace"]["off_track_observation"]
+    assert observation["sample_count"] == 3 and observation["unknown_count"] == 1
+    assert observation["max_wheels_outside"] == 2 and observation["event_count"] == 1
+    assert observation["source"] == "car.wheelsOutside"
+
+
+def test_legacy_native_trace_does_not_manufacture_zero_offtrack_proof(tmp_path):
+    rt = _runtime(tmp_path)
+    record = _lua_to_py(
+        rt.execute("""
+      return require('lap_archive').buildRecord({session_uuid='legacy',lap_n=1,
+        lap_ms=1000,car={},sim={},trace={{spline=0,speed=100},{spline=1,speed=100}}})
+    """)
+    )
+    assert [row[-1] for row in record["trace"]["samples"]] == [-1, -1]
+    assert "off_track_observation" not in record["trace"]
+
+
+def test_pre_downsample_excursion_summary_survives_real_bounded_json_writer(tmp_path):
+    rt = _runtime(tmp_path)
+    path = rt.execute("""
+      local t=require('telemetry').new()
+      t:beginLapClock(0,true)
+      local car={speedKmh=100,position={x=1,y=0,z=1}}
+      for i=1,3001 do
+        car.wheelsOutside=i==2 and 2 or 0
+        car.splinePosition=(i-1)/3000
+        t:update(.01,car,{gameTime=i*.01})
+      end
+      local trace=t:finalizeLapTrace()
+      assert(#trace==2000)
+      for i=1,#trace do assert(trace[i].wheelsOutside==0) end
+      local job=assert(require('lap_archive').createWriteJob({session_uuid='downsampled',
+        lap_n=1,lap_ms=30010,car={},sim={},trace=trace},50))
+      for i=1,100 do
+        local done,ok,path=job:step(128)
+        if done then assert(ok,path); return path end
+      end
+      error('bounded writer did not finish')
+    """)
+    record = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    assert all(row[-1] == 0 for row in record["trace"]["samples"])
+    observation = record["trace"]["off_track_observation"]
+    assert observation["complete"] is True
+    assert observation["sample_count"] == 3001 and observation["unknown_count"] == 0
+    assert observation["max_wheels_outside"] == 2 and observation["event_count"] == 1
+    assert observation["event_count_basis"] == "positive_runs_unknown_breaks_run"
+
+
+@pytest.mark.parametrize("gap", ["recording", "ambiguous_wrap", "menu"])
+def test_lap_observation_gap_is_not_a_complete_zero_event_proof(tmp_path, gap):
+    rt = _runtime(tmp_path)
+    rt.globals()["gap"] = gap
+    result = _lua_to_py(
+        rt.execute("""
+      local t=require('telemetry').new()
+      t:beginLapClock(0,true)
+      local car={speedKmh=100,splinePosition=.1,wheelsOutside=0}
+      t:update(.05,car,{gameTime=.05})
+      if gap=='recording' then t:setRecording(false); t:setRecording(true)
+      elseif gap=='ambiguous_wrap' then t:update(.05,car,{gameTime=.1},false)
+      else t:update(.05,car,{gameTime=.1,isInMainMenu=true}) end
+      t:update(.05,car,{gameTime=.15})
+      local trace=t:finalizeLapTrace()
+      local first=trace.off_track_observation
+      t:beginLapClock(.15,true)
+      t:update(.05,car,{gameTime=.2})
+      return {first=first,next=t:finalizeLapTrace().off_track_observation}
+    """)
+    )
+    assert result["first"]["complete"] is False
+    assert result["next"]["complete"] is True and result["next"]["sample_count"] == 1
+
+
+def test_mid_lap_clock_start_cannot_claim_a_complete_zero_event_lap(tmp_path):
+    rt = _runtime(tmp_path)
+    observation = _lua_to_py(
+        rt.execute("""
+      local t=require('telemetry').new()
+      t:beginLapClock(100)
+      t:update(.05,{speedKmh=100,splinePosition=.6,wheelsOutside=0},{gameTime=100.05})
+      return t:finalizeLapTrace().off_track_observation
+    """)
+    )
+    assert observation["sample_count"] == 1 and observation["max_wheels_outside"] == 0
+    assert observation["complete"] is False
+
+
 def test_async_archive_retains_traffic_through_bounded_writer(tmp_path):
     rt = _runtime(tmp_path)
     path = rt.execute("""

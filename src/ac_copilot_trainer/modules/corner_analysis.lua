@@ -9,6 +9,111 @@ local SPLINE_NEAR = 0.012
 -- When no brake points: offset speed minima backward so sectors anchor before apex, not apex-to-apex.
 local PRE_APEX_SPLINE = 0.045
 
+--- Identity-only fallback from the derived midpoint of authored track boundaries.
+--- Curvature is geometric (1/metre), independent of driving speed and brake events.
+--- Entry anchors identify a region; they are NOT measured braking technique/targets.
+function M.segmentsFromCenterline(geometry)
+  if type(geometry) ~= "table" or geometry.source ~= "csp_authored_boundaries_midpoint"
+      or geometry.derived ~= true or geometry.closed ~= true
+      or type(geometry.track_id) ~= "string" or geometry.track_id == ""
+      or type(geometry.layout) ~= "string" or type(geometry.points) ~= "table" then
+    return nil, "validated authored centerline unavailable"
+  end
+  local pts, n = geometry.points, #geometry.points
+  local length = tonumber(geometry.length_m)
+  if n < 96 or n > 2048 or not length or length ~= length or length == math.huge or length < 100 then
+    return nil, "invalid authored centerline sample grid"
+  end
+  local function finite(v)
+    return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge
+  end
+  local count, arc = 0, 0
+  for key in pairs(pts) do
+    if type(key) ~= "number" or key ~= math.floor(key) or key < 1 or key > n then
+      return nil, "invalid authored centerline sample grid"
+    end
+    count = count+1
+  end
+  if count ~= n then return nil, "incomplete authored centerline sample grid" end
+  for i, p in ipairs(pts) do
+    if type(p) ~= "table" or not finite(p.x) or not finite(p.y) or not finite(p.z)
+        or not finite(p.spline) or math.abs(p.spline-(i-1)/n) > 1e-7
+        or not finite(p.width_m) or p.width_m < 1 or p.width_m > 100 then
+      return nil, "invalid authored centerline sample"
+    end
+  end
+  for i = 1, n do
+    local a, b = pts[i], pts[i % n+1]
+    local distance = math.sqrt((a.x-b.x)^2+(a.y-b.y)^2+(a.z-b.z)^2)
+    if distance < 0.05 or distance > length/n*4 then
+      return nil, "discontinuous authored centerline"
+    end
+    arc = arc+distance
+  end
+  if math.abs(arc-length) > length*0.01 then
+    return nil, "authored centerline arc-length mismatch"
+  end
+  local function index(i) return (i-1) % n + 1 end
+  local span = math.max(1, math.floor(8*n/length))
+  local raw, curvature = {}, {}
+  for i = 1, n do
+    local a, b, c = pts[index(i-span)], pts[i], pts[index(i+span)]
+    local ax, az, bx, bz = b.x-a.x, b.z-a.z, c.x-b.x, c.z-b.z
+    local da, db = math.sqrt(ax*ax+az*az), math.sqrt(bx*bx+bz*bz)
+    if da < 0.05 or db < 0.05 then return nil, "degenerate authored centerline" end
+    local cosine = math.max(-1, math.min(1, (ax*bx+az*bz)/(da*db)))
+    local angle = math.acos(cosine)
+    raw[i] = angle * (ax*bz-az*bx < 0 and -1 or 1) / ((da+db)*0.5)
+  end
+  local inactive
+  for i = 1, n do
+    curvature[i] = (raw[index(i-1)]+raw[i]+raw[index(i+1)])/3
+    if math.abs(curvature[i]) < 0.002 then inactive = i end
+  end
+  -- With no separating straight there is no defensible start/end corner identity.
+  if not inactive then return nil, "authored centerline has no separating straight" end
+  local groups, group = {}, nil
+  local function finish()
+    if group then groups[#groups+1] = group; group = nil end
+  end
+  for offset = 1, n do
+    local i = index(inactive+offset)
+    local k = curvature[i]
+    local sign = k < 0 and -1 or 1
+    if math.abs(k) < 0.002 then
+      finish()
+    else
+      if group and group.sign ~= sign then finish() end
+      if not group then group = { first=i, last=i, apex=i, peak=0, turn=0, count=0, sign=sign } end
+      group.last, group.count = i, group.count+1
+      group.turn = group.turn + math.abs(k)*length/n
+      if math.abs(k) > group.peak then group.peak, group.apex = math.abs(k), i end
+    end
+  end
+  finish()
+  local retained = {}
+  for _, g in ipairs(groups) do
+    if g.count >= 3 and g.count*length/n >= 12 and g.peak >= 0.004
+        and g.turn >= math.rad(10) then retained[#retained+1] = g end
+  end
+  if #retained == 0 then return nil, "no distinct authored centerline curves" end
+  if #retained > 32 then return nil, "authored centerline corner limit exceeded" end
+  table.sort(retained, function(a,b) return pts[a.apex].spline < pts[b.apex].spline end)
+  local segments = {}
+  for i, g in ipairs(retained) do
+    local prev, following = retained[(i-2) % #retained+1], retained[i % #retained+1]
+    local start, stop = pts[g.first].spline, pts[g.last].spline
+    local before = (start-pts[prev.last].spline) % 1
+    local after = (pts[following.first].spline-stop) % 1
+    local lo = (start-math.min(25/length, before/3)) % 1
+    local hi = (stop+math.min(25/length, after/3)) % 1
+    segments[#segments+1] = { kind="corner", label="T"..tostring(i), s0=lo, s1=hi,
+      brakeSpline=lo, anchorSource="geometry_entry_boundary", geometrySource=geometry.source,
+      apexSpline=pts[g.apex].spline, derived=true }
+  end
+  return segments, "derived authored-boundary centerline; identity only"
+end
+
 local function wrap01(x)
   local s = x % 1
   if s < 0 then

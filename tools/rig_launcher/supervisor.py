@@ -226,6 +226,7 @@ class GamePointConfig:
     setup_store: str | None = None
     simhub_exe: str | None = None
     start_simhub: bool = False
+    coach_drills: bool = False
     resilient_car: str | None = None
     resilient_track: str | None = None
     resilient_layout: str | None = None
@@ -329,6 +330,9 @@ class GamePointConfig:
             ),
             simhub_exe=_configured_text(env_map.get("AC_COPILOT_SIMHUB_EXE"), settings.simhub_exe),
             start_simhub=start_simhub,
+            coach_drills=_env_bool_or(
+                env_map.get("AC_COPILOT_COACH_DRILLS"), default=bool(settings.coach_drills)
+            ),
             keypad_profiles=_configured_text(
                 env_map.get("AC_COPILOT_KEYPAD_PROFILES"), settings.keypad_profiles
             ),
@@ -401,6 +405,9 @@ class GamePointStatus:
     moza_review: ProbeResult = field(
         default_factory=lambda: ProbeResult("moza_review", True, "not_run", "Offline report only")
     )
+    practice_drill: ProbeResult = field(
+        default_factory=lambda: ProbeResult("practice_drill", True, "disabled")
+    )
 
     @property
     def stable_ac_in_use(self) -> bool:
@@ -433,6 +440,7 @@ class GamePointStatus:
             "resilient": self.resilient.to_dict(),
             "keypad": self.keypad.to_dict(),
             "moza_review": self.moza_review.to_dict(),
+            "practice_drill": self.practice_drill.to_dict(),
             "log_path": self.log_path,
             "status_path": self.status_path,
             "checks": [check.to_dict() for check in self.checks],
@@ -470,6 +478,7 @@ class GamePointSupervisor:
         self._python = python_executable or sys.executable
         self._frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
         self._sidecar_process: Any | None = None
+        self._coach_drills_restart_pending = False
         self._resilient_process: Any | None = None
         self._resilient_log_handle: Any | None = None
         self._log_handles: list[Any] = []
@@ -726,6 +735,9 @@ class GamePointSupervisor:
             # Normal reference selection must reach the diagnosed post-lap consumer.
             # Runtime qualification still rejects unusable references; an explicit off wins.
             env.setdefault("AC_COPILOT_COACH_V2", "1")
+        env["AC_COPILOT_COACH_DRILLS"] = "1" if self.config.coach_drills else "0"
+        if self.config.coach_drills:
+            env["AC_COPILOT_COACH_V2"] = "1"
         # The launcher's RESOLVED config must win over whatever it inherited. `env` starts as a
         # copy of the parent environment, and `_put_if_present` only ever *sets* — so a
         # set-but-blank AC_COPILOT_VOICE_BANK (which `_configured_text` resolves to None, i.e.
@@ -1260,6 +1272,7 @@ class GamePointSupervisor:
             sidecar=sidecar,
             screen=screen,
             voice=self.probe_voice(health_payload),
+            practice_drill=self.probe_practice_drill(health_payload),
             simhub=self.probe_simhub(start=start_sim),
             tablet=self.probe_tablet(health_payload),
             resilient=self._resilient_process_status(),
@@ -1626,6 +1639,99 @@ class GamePointSupervisor:
                 file=sys.stderr,
             )
         return self.config.start_simhub
+
+    def set_coach_drills(self, enabled: bool) -> bool:
+        """Save the preference for the normal next sidecar start, preserving sessions.
+
+        Explicit environment values remain authoritative. A running/adopted
+        sidecar is never stopped or reconfigured from this preference toggle.
+        """
+        from tools.rig_launcher.settings import update_settings
+
+        with self._proc_lock:
+            update_settings(self.paths, coach_drills=bool(enabled))
+            applied = _env_bool_or(
+                self._environ.get("AC_COPILOT_COACH_DRILLS"), default=bool(enabled)
+            )
+            if applied != self.config.coach_drills:
+                self._coach_drills_restart_pending = True
+            self.config = replace(self.config, coach_drills=applied)
+        return applied
+
+    def probe_practice_drill(
+        self, health_payload: Mapping[str, object] | None = None
+    ) -> ProbeResult:
+        """Render only the sidecar's operational practice state, without personal data."""
+        voice = health_payload.get("voice") if isinstance(health_payload, Mapping) else None
+        drill = voice.get("practice_drill") if isinstance(voice, Mapping) else None
+        if (
+            not isinstance(drill, Mapping)
+            or type(drill.get("configured")) is not bool
+            or type(drill.get("active")) is not bool
+            or (drill.get("active") is True and drill.get("configured") is not True)
+        ):
+            return ProbeResult(
+                "practice_drill", True, "unavailable", "Practice drill status is not available yet."
+            )
+        if self._coach_drills_restart_pending:
+            if drill["configured"] != self.config.coach_drills:
+                return ProbeResult(
+                    "practice_drill",
+                    True,
+                    "restart_required",
+                    "Saved. Restart Game Point after your driving session to apply.",
+                )
+            self._coach_drills_restart_pending = False
+        if not drill["configured"]:
+            return ProbeResult("practice_drill", True, "disabled", "Practice drill is off.")
+        phase = str(drill.get("phase") or "")
+        reason = str(drill.get("reason") or "")
+        reasons = {
+            "drill_requires_qualified_human_archives": "Select qualified human reference and lap.",
+            "qualified_human_reference_required": "Choose a qualified human reference and session.",
+            "awaiting_qualified_human_baseline": "Drive valid human laps to set a baseline.",
+            "completed_qualified_human_lap_required": "Waiting for a valid, qualified human lap.",
+            "condition_ineligible": "Practice is on hold until driving conditions are suitable.",
+            "instruction_not_delivered": "Waiting for a practice instruction to be delivered.",
+            "retention_instruction_contamination": "An instruction interrupted the uncued check.",
+            "drill_baseline_already_in_target_band": "Your baseline already meets this target.",
+            "exit_speed_degraded": "Practice stopped because corner exit speed fell.",
+            "corner_time_degraded": "Practice stopped because the whole corner became slower.",
+            "off_track": "Practice stopped after an off-track event.",
+            "lap_budget_exhausted": "Practice stopped at the session lap limit.",
+            "retention_target_reverted": "The target did not hold during the uncued check.",
+            "cued_target_not_demonstrated": "The practice target was not consistent.",
+            "overheat": "Practice stopped because the tyres are too hot.",
+            "critical": "Practice stopped because driving conditions are unsafe.",
+        }
+        if phase in {"failed", "aborted", "stopped"}:
+            return ProbeResult(
+                "practice_drill",
+                False,
+                "stopped",
+                reasons.get(reason, "Practice stopped; review your session."),
+            )
+        if phase == "passed":
+            return ProbeResult(
+                "practice_drill", True, "passed", "Practice and uncued checks completed."
+            )
+        if drill.get("active") is True and phase == "retention":
+            return ProbeResult(
+                "practice_drill",
+                True,
+                "retention",
+                "Drive this check without practice instructions.",
+            )
+        if drill.get("active") is True and phase == "cued":
+            return ProbeResult(
+                "practice_drill", True, "practice", "Follow the practice target for one corner."
+            )
+        return ProbeResult(
+            "practice_drill",
+            True,
+            "waiting",
+            reasons.get(reason, "Waiting for a qualified human reference and session."),
+        )
 
     def close(self) -> None:
         with self._proc_lock:
@@ -2237,6 +2343,7 @@ def render_status_lines(status: GamePointStatus) -> list[str]:
         status.sidecar,
         status.screen,
         status.voice,
+        status.practice_drill,
         status.simhub,
         status.tablet,
         status.resilient,

@@ -34,6 +34,7 @@ class LauncherSettings:
     setup_store: str | None = None
     simhub_exe: str | None = None
     start_simhub: bool | None = None
+    coach_drills: bool | None = None
     resilient_car: str | None = None
     resilient_track: str | None = None
     resilient_layout: str | None = None
@@ -69,6 +70,7 @@ class LauncherSettings:
             setup_store=_optional_text(payload.get("setup_store")),
             simhub_exe=_optional_text(payload.get("simhub_exe")),
             start_simhub=_optional_bool(payload.get("start_simhub")),
+            coach_drills=_optional_bool(payload.get("coach_drills")),
             resilient_car=_optional_text(payload.get("resilient_car")),
             resilient_track=_optional_text(payload.get("resilient_track")),
             resilient_layout=_optional_text(payload.get("resilient_layout")),
@@ -186,6 +188,7 @@ def default_settings_payload() -> dict[str, object]:
         "sidecar_port": DEFAULT_PORT,
         "simhub_exe": "",
         "start_simhub": False,
+        "coach_drills": False,
         "voice_bank": "",
         "voice_channel_map": None,
         "voice_tts": False,

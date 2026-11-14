@@ -142,6 +142,7 @@ def config_from_args(args: argparse.Namespace) -> GamePointConfig:
         setup_store=config.setup_store,
         simhub_exe=config.simhub_exe,
         start_simhub=args.start_simhub or config.start_simhub,
+        coach_drills=config.coach_drills,
         resilient_car=args.resilient_car or config.resilient_car,
         resilient_track=args.resilient_track or config.resilient_track,
         resilient_layout=args.resilient_layout
@@ -519,6 +520,19 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
             _launch_simhub_and_report()
         refresh()
 
+    def toggle_practice_drill(enabled: bool) -> bool:
+        try:
+            applied = supervisor.set_coach_drills(enabled)
+        except (OSError, ValueError) as exc:
+            from tkinter import messagebox
+
+            messagebox.showerror(
+                "Practice drill", f"Could not save your preference: {exc}", parent=root
+            )
+            return supervisor.config.coach_drills
+        refresh()
+        return applied
+
     def open_offline_report() -> None:
         nonlocal offline_view
         if offline_view is not None and offline_view.window.winfo_exists():
@@ -560,6 +574,8 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
             port=supervisor.config.port,
             simhub_autostart=supervisor.config.start_simhub,
             on_toggle_simhub=toggle_simhub,
+            coach_drills=supervisor.config.coach_drills,
+            on_toggle_drills=toggle_practice_drill,
         )
         view.mark_pending()  # neutral state until the first async poll lands (#568 review)
         view.fit_window()

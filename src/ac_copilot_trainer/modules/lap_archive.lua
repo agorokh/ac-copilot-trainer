@@ -96,6 +96,8 @@ local TRACE_FIELDS = {
   "fx_fl", "fx_fr", "fx_rl", "fx_rr",
   "fy_fl", "fy_fr", "fy_rl", "fy_rr",
   "dy_fl", "dy_fr", "dy_rl", "dy_rr",
+  -- Optional count added after every existing column (#529 G3). Missing is UNKNOWN (-1).
+  "wheelsOutside",
 }
 
 local function lapArchiveDir()
@@ -116,6 +118,10 @@ local function traceSampleToColumnRow(s)
     local fname = TRACE_FIELDS[fi]
     if fname == "spline" then
       row[fi] = s.spline
+    elseif fname == "wheelsOutside" then
+      local v = s[fname]
+      row[fi] = type(v) == "number" and v == v and v >= 0 and v <= 4
+        and v == math.floor(v) and v or -1
     else
       row[fi] = tonumber(s[fname]) or 0
     end
@@ -227,6 +233,24 @@ end
 ---  opts.rules_hints (string list), opts.sidecar_debrief (string|nil),
 ---  opts.corner_advice (table label->text|nil)
 ---@return table|nil
+local function offTrackObservation(trace)
+  local raw = type(trace) == "table" and trace.off_track_observation or nil
+  if type(raw) ~= "table" or raw.schema_version ~= 1 or raw.source ~= "car.wheelsOutside"
+      or raw.event_count_basis ~= "positive_runs_unknown_breaks_run"
+      or type(raw.complete) ~= "boolean" then return nil end
+  local out = { schema_version=1, source=raw.source, complete=raw.complete,
+    event_count_basis=raw.event_count_basis }
+  for _, key in ipairs({"sample_count", "unknown_count", "max_wheels_outside", "event_count"}) do
+    local v = raw[key]
+    if type(v) ~= "number" or v ~= v or v == math.huge or v ~= math.floor(v)
+        or v < (key == "max_wheels_outside" and -1 or 0) then return nil end
+    out[key] = v
+  end
+  if out.max_wheels_outside > 4 or out.unknown_count > out.sample_count
+      or out.event_count > out.sample_count then return nil end
+  return out
+end
+
 local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
   if type(opts) ~= "table" then return nil end
   if not opts.lap_n or not opts.lap_ms or opts.lap_ms <= 0 then return nil end
@@ -429,6 +453,7 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
       samples_count = samplesCount,
       fields = traceFieldNames,
       samples = samplesColumnar,
+      off_track_observation = offTrackObservation(opts.trace),
     },
     corners = cornersOut,
     coaching = {
@@ -731,9 +756,17 @@ function M.createWriteJob(opts, capMB)
     local traceFieldsRaw
     traceFieldsRaw, err = jsonValue(self._rec.trace.fields, "trace.fields")
     if not traceFieldsRaw then return self:_fail(err) end
+    local observationRaw = ""
+    if self._rec.trace.off_track_observation then
+      local encoded
+      encoded, err = jsonValue(self._rec.trace.off_track_observation, "trace.off_track_observation")
+      if not encoded then return self:_fail(err) end
+      observationRaw = ",\"off_track_observation\":" .. encoded
+    end
     local prefix = self._fieldWritten and "," or ""
     ok, err = self:_write(prefix
       .. "\"trace\":{\"samples_count\":" .. tostring(self.samplesCount)
+      .. observationRaw
       .. ",\"fields\":" .. traceFieldsRaw
       .. ",\"samples\":[")
     if not ok then return self:_fail(err) end

@@ -12,12 +12,13 @@ import json
 import math
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from tools.ai_sidecar.lap_dynamics import LapTrace
+from tools.ai_sidecar.lap_dynamics import CornerSignature, LapTrace
 from tools.ai_sidecar.track_reference import CornerReference, build_references
+from tools.lap_qualification import Qualification
 
 _SCHEMA_VERSION = 1
 _ENVELOPE_TOL = 1e-3
@@ -44,6 +45,220 @@ class AlienCorner:
     reference_index: int
     alien_apex_spline: float
     ceiling_kmh: float
+
+
+@dataclass(frozen=True)
+class HumanDrillTarget:
+    """Frozen, human-demonstrated phase targets and whole-corner guardrails.
+
+    Only ``metric`` is an instruction. The remaining reference values preserve
+    the existing human anchors; exit speed and time guard against trading a
+    better-looking primary metric for a worse whole corner.
+    """
+
+    combo: tuple[str, str, str]
+    corner: int
+    drill_id: str
+    root: str
+    metric: str
+    brake_point_spline: float | None
+    trail_brake_frac: float
+    min_speed_kmh: float
+    throttle_on_spline: float | None
+    exit_speed_kmh: float
+    baseline_exit_speed_kmh: float
+    baseline_corner_time_s: float
+    tolerance: float
+    exit_speed_tolerance_kmh: float
+    corner_time_tolerance_s: float
+    reference_identity: str
+    baseline_identity: str
+
+    def to_dict(self) -> dict[str, Any]:
+        result = asdict(self)
+        result["combo"] = list(self.combo)
+        result["source"] = "qualified_human_reference"
+        return result
+
+    def assess(self, signature: CornerSignature, *, corner_time_s: float) -> dict[str, Any]:
+        """Assess a completed observation against the frozen band and guardrails."""
+        observed = _finite(getattr(signature, self.metric, None))
+        exit_speed = _finite(signature.exit_speed_kmh, positive=True)
+        elapsed = _finite(corner_time_s, positive=True)
+        if (
+            signature.index != self.corner
+            or observed is None
+            or exit_speed is None
+            or elapsed is None
+        ):
+            return {"eligible": False, "success": False, "reason": "trial_metrics_unavailable"}
+        if self.metric.endswith("_spline") and not 0.0 <= observed <= 1.0:
+            return {"eligible": False, "success": False, "reason": "trial_metrics_unavailable"}
+        if self.metric == "trail_brake_frac" and not 0.0 <= observed <= 1.0:
+            return {"eligible": False, "success": False, "reason": "trial_metrics_unavailable"}
+        if self.metric == "min_speed_kmh" and observed <= 0.0:
+            return {"eligible": False, "success": False, "reason": "trial_metrics_unavailable"}
+        if exit_speed < self.baseline_exit_speed_kmh - self.exit_speed_tolerance_kmh:
+            return {"eligible": True, "success": False, "reason": "exit_speed_degraded"}
+        if elapsed > self.baseline_corner_time_s + self.corner_time_tolerance_s:
+            return {"eligible": True, "success": False, "reason": "corner_time_degraded"}
+        expected = getattr(self, self.metric)
+        delta = (
+            _circular_distance(observed, expected)
+            if self.metric.endswith("_spline")
+            else abs(observed - expected)
+        )
+        success = delta <= self.tolerance
+        return {
+            "eligible": True,
+            "success": success,
+            "reason": "target_band_met" if success else "target_band_missed",
+            "observed": observed,
+            "target": expected,
+        }
+
+
+def build_human_drill_target(
+    reference: CornerSignature,
+    baseline: CornerSignature,
+    *,
+    reference_qualification: Qualification,
+    baseline_qualification: Qualification,
+    drill_id: str,
+    combo: tuple[str, str, str],
+    baseline_corner_time_s: float,
+    reference_identity: str,
+    baseline_identity: str,
+    exit_speed_tolerance_kmh: float = 2.0,
+    corner_time_tolerance_s: float = 0.1,
+) -> HumanDrillTarget:
+    """Freeze one curriculum target from already-qualified human observations.
+
+    Qualification and exact archive/geometry matching belong to the caller's
+    normal consumer boundary. Legacy-unknown/assisted records cannot enter here.
+    Mutating a later reference or EMA cannot move the returned target.
+    """
+    from tools.ai_sidecar.coaching_diagnosis import (
+        APEX_KMH_FLOOR,
+        BRAKE_SPLINE_FLOOR,
+        THROTTLE_SPLINE_FLOOR,
+        TRAIL_FRAC_FLOOR,
+        RootError,
+    )
+    from tools.ai_sidecar.driver_progression import drill_definition, drill_primary_metric
+
+    if any(
+        getattr(decision, "allowed", False) is not True
+        or getattr(decision, "authority", None) != "human"
+        for decision in (reference_qualification, baseline_qualification)
+    ):
+        raise FrontierError("drill_requires_qualified_human_archives")
+    if (
+        not isinstance(combo, (tuple, list))
+        or len(combo) != 3
+        or any(not isinstance(value, str) for value in combo)
+        or not combo[0]
+        or not combo[1]
+        or not isinstance(reference.index, int)
+        or isinstance(reference.index, bool)
+        or reference.index < 0
+        or type(baseline.index) is not int
+        or reference.index != baseline.index
+        or not isinstance(reference_identity, str)
+        or not reference_identity
+        or not isinstance(baseline_identity, str)
+        or not baseline_identity
+    ):
+        raise FrontierError("drill_identity_unavailable")
+    drill = drill_definition(drill_id)
+    metric = drill_primary_metric(drill_id)
+    for name in ("brake_point_spline", "throttle_on_spline"):
+        value = getattr(reference, name)
+        if value is not None and (_finite(value) is None or not 0.0 <= value <= 1.0):
+            raise FrontierError("drill_reference_metrics_unavailable")
+    if getattr(reference, metric) is None:
+        raise FrontierError("drill_primary_metric_unavailable")
+    numeric = (
+        reference.min_speed_kmh,
+        reference.exit_speed_kmh,
+        baseline.exit_speed_kmh,
+        baseline_corner_time_s,
+    )
+    if any(_finite(value, positive=True) is None for value in numeric):
+        raise FrontierError("drill_reference_metrics_unavailable")
+    if _finite(reference.trail_brake_frac) is None or not 0.0 <= reference.trail_brake_frac <= 1.0:
+        raise FrontierError("drill_reference_metrics_unavailable")
+    if any(
+        _finite(value) is None or value < 0.0
+        for value in (exit_speed_tolerance_kmh, corner_time_tolerance_s)
+    ):
+        raise FrontierError("drill_guardrail_tolerance_invalid")
+    tolerances = {
+        "min_speed_kmh": APEX_KMH_FLOOR,
+        "brake_point_spline": BRAKE_SPLINE_FLOOR,
+        "throttle_on_spline": THROTTLE_SPLINE_FLOOR,
+        "trail_brake_frac": TRAIL_FRAC_FLOOR,
+    }
+    baseline_primary = _finite(getattr(baseline, metric, None))
+    if (
+        baseline_primary is None
+        or (metric.endswith("_spline") and not 0.0 <= baseline_primary <= 1.0)
+        or (metric == "trail_brake_frac" and not 0.0 <= baseline_primary <= 1.0)
+        or (metric == "min_speed_kmh" and baseline_primary <= 0.0)
+    ):
+        raise FrontierError("drill_baseline_metric_unavailable")
+    reference_primary = float(getattr(reference, metric))
+    root = drill.roots[0]
+    if metric.endswith("_spline"):
+        circular_delta = (reference_primary - baseline_primary) % 1.0
+        if math.isclose(circular_delta, 0.5, rel_tol=0.0, abs_tol=1e-9):
+            raise FrontierError("drill_phase_ambiguous")
+        signed_delta = (circular_delta + 0.5) % 1.0 - 0.5
+        phases = []
+        for signature, point in ((reference, reference_primary), (baseline, baseline_primary)):
+            apex = _finite(signature.apex_spline)
+            if apex is None or not 0.0 <= apex <= 1.0:
+                raise FrontierError("drill_stage_phase_unavailable")
+            phase = (apex - point) % 1.0 if metric == "brake_point_spline" else (point - apex) % 1.0
+            if math.isclose(phase, 0.5, rel_tol=0.0, abs_tol=1e-9):
+                raise FrontierError("drill_phase_ambiguous")
+            if phase > 0.5:
+                raise FrontierError("drill_stage_phase_unavailable")
+            phases.append(phase)
+        if metric == "brake_point_spline":
+            delta = abs(signed_delta)
+            root = RootError.EARLY_BRAKE if signed_delta > 0.0 else RootError.LATE_BRAKE
+        else:
+            # Throttle technique is relative to the apex, including corners at
+            # start/finish; a smaller raw spline is not necessarily earlier.
+            delta = phases[1] - phases[0]
+    else:
+        # Carry-more and trail-more roots only make sense when the reference
+        # demonstrates MORE than this baseline, not merely a different value.
+        delta = reference_primary - baseline_primary
+    if abs(delta) <= tolerances[metric]:
+        raise FrontierError("drill_baseline_already_in_target_band")
+    if delta < 0.0:
+        raise FrontierError("drill_reference_not_a_directional_improvement")
+    return HumanDrillTarget(
+        combo=tuple(combo),
+        corner=reference.index,
+        drill_id=drill.id,
+        root=root.value,
+        metric=metric,
+        brake_point_spline=reference.brake_point_spline,
+        trail_brake_frac=float(reference.trail_brake_frac),
+        min_speed_kmh=float(reference.min_speed_kmh),
+        throttle_on_spline=reference.throttle_on_spline,
+        exit_speed_kmh=float(reference.exit_speed_kmh),
+        baseline_exit_speed_kmh=float(baseline.exit_speed_kmh),
+        baseline_corner_time_s=float(baseline_corner_time_s),
+        tolerance=tolerances[metric],
+        exit_speed_tolerance_kmh=float(exit_speed_tolerance_kmh),
+        corner_time_tolerance_s=float(corner_time_tolerance_s),
+        reference_identity=reference_identity,
+        baseline_identity=baseline_identity,
+    )
 
 
 def _finite(value: Any, *, positive: bool = False) -> float | None:

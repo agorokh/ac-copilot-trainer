@@ -96,6 +96,36 @@ class VoiceCoach:
         """JSON-safe selected-device/layout details for sidecar and launcher status."""
         return dict(self._playback_details)
 
+    @property
+    def cancellation_error_count(self) -> int:
+        """Nonzero means interruption evidence was incomplete; never certify a full cue."""
+        return getattr(self._playback, "cancellation_error_count", 0)
+
+    @property
+    def practice_evidence_ready(self) -> bool:
+        """Whether this voice path can provide guarded dispatch/interruption evidence.
+
+        This checks in-process instrumentation, not physical audibility. Any evidence or
+        guard fault remains disqualifying for this coach's lifetime.
+        """
+        from tools.ai_sidecar.voice.dispatch import DispatchTapPlayback
+
+        scheduler = self._scheduler
+        playback = self._playback
+        return (
+            self._enabled
+            and isinstance(playback, DispatchTapPlayback)
+            and callable(playback._listener)
+            and callable(playback._cancellation_listener)
+            and scheduler is not None
+            and scheduler._playback is playback
+            and scheduler._instructional_guard is not None
+            and playback.dispatch_error_count == 0
+            and playback.cancellation_error_count == 0
+            and scheduler.instructional_guard_error_count == 0
+            and scheduler.instructional_cancel_error_count == 0
+        )
+
     def subscribe(self, advisory: object) -> None:
         """Enqueue one advisory to be spoken. Non-blocking; a no-op when the coach is disabled."""
         if not self._enabled or self._scheduler is None:
@@ -111,6 +141,16 @@ class VoiceCoach:
         """Start the scheduler worker thread (no-op when disabled)."""
         if self._enabled and self._scheduler is not None:
             self._scheduler.start()
+
+    def set_instructional_guard(self, guard: Callable[[], bool] | None) -> None:
+        """Set the drill's cheap, in-process permission check; never arm voice itself."""
+        if self._scheduler is not None:
+            self._scheduler.set_instructional_guard(guard)
+
+    def refresh_instructional_guard(self) -> None:
+        """Apply a changed drill phase to queued/current instructions, preserving SAVE."""
+        if self._scheduler is not None:
+            self._scheduler.refresh_instructional_guard()
 
     def stop(self) -> None:
         """Stop the scheduler and release audio resources."""
@@ -138,6 +178,7 @@ class VoiceCoach:
         clock: Callable[[], float] = time.monotonic,
         backend: str = "rtmixer",
         dispatch_listener: Callable[..., None] | None = None,
+        cancellation_listener: Callable[[dict[str, object]], None] | None = None,
     ) -> VoiceCoach:
         """Build a coach from a baked bank directory.
 
@@ -151,7 +192,9 @@ class VoiceCoach:
         ``dispatch_listener`` (issue #511 Part D) is called with one
         :class:`~tools.ai_sidecar.voice.dispatch.VoiceDispatch` per clip the scheduler actually
         dispatches — the seam the sidecar uses to broadcast ``coaching.voice`` frames to remote
-        audio endpoints. ``None`` (the default) leaves the playback unwrapped.
+        audio endpoints. ``cancellation_listener`` receives a separate diagnostic keyed by
+        that dispatch's sequence/clip when playback is interrupted; it is never a new
+        speech event. Both listeners default to ``None``, leaving playback unwrapped.
         """
         config = config or VoiceConfig()
         base = Path(bank_dir)
@@ -193,12 +236,13 @@ class VoiceCoach:
             playback_details = {}
         playback_details = dict(playback_details)
 
-        if dispatch_listener is not None:
+        if dispatch_listener is not None or cancellation_listener is not None:
             from tools.ai_sidecar.voice.dispatch import DispatchTapPlayback
 
             playback = DispatchTapPlayback(
                 playback,
                 dispatch_listener,
+                cancellation_listener=cancellation_listener,
                 duration_lookup=_bank_duration_lookup(playback),
             )
 

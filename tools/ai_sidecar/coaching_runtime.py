@@ -35,6 +35,7 @@ from tools.ac_harness.ggv_profile import (
     GGVModel,
     ggv_from_telemetry,
 )
+from tools.ai_sidecar.coaching.practice import PracticeSession
 from tools.ai_sidecar.coaching_diagnosis import (
     ANCHOR,
     APEX_KMH_FLOOR,
@@ -51,6 +52,7 @@ from tools.ai_sidecar.driver_progression import (
     DriverCuePolicy,
     cue_policy_from_profile,
     default_cue_policy,
+    next_drill,
 )
 from tools.ai_sidecar.lap_dynamics import (
     CornerSignature,
@@ -72,7 +74,7 @@ from tools.ai_sidecar.track_reference import (
 )
 from tools.ai_sidecar.traffic_eligibility import TrafficEligibility, traffic_eligibility
 from tools.ai_sidecar.tyre_model import analyze_tyres
-from tools.lap_qualification import qualify_archive
+from tools.lap_qualification import Qualification, qualify_archive
 
 #: Roots that demand more speed / later braking — suppressed at the grip ceiling (P3) or when
 #: thermal / track-condition eligibility gates abstain (#938).
@@ -234,6 +236,111 @@ class CoachRuntime:
     _lap: int = 1
     _pending_wrap_finals: bool = False
     _pending_pre_lap: float | None = None
+    practice_requested: bool = False
+    practice_unavailable_reason: str = "not_configured"
+    practice: PracticeSession | None = None
+    _practice_anchors: dict[int, _Anchors] = field(default_factory=dict)
+    _practice_optimal_temp_c: float | None = None
+
+    def practice_status(self) -> dict[str, Any]:
+        if self.practice is not None:
+            return self.practice.status()
+        return {
+            "configured": self.practice_requested,
+            "active": False,
+            "phase": "unavailable" if self.practice_requested else "disabled",
+            "reason": self.practice_unavailable_reason,
+        }
+
+    def note_practice_voice(self, payload: dict[str, Any]) -> None:
+        if self.practice is not None:
+            self.practice.note_voice_dispatch(payload)
+
+    def note_practice_voice_cancel(self, payload: dict[str, Any]) -> None:
+        if self.practice is not None:
+            self.practice.note_voice_cancel(payload)
+
+    def _practice_observations(
+        self, record: dict[str, Any]
+    ) -> dict[int, tuple[CornerSignature, float]]:
+        trace = record.get("trace") or {}
+        fields, samples = trace.get("fields", []), trace.get("samples", [])
+        index = {name: i for i, name in enumerate(fields)}
+        if not {"spline", "eMs", "speed", "brake", "throttle", "steer"}.issubset(index):
+            return {}
+        frames = [{name: row[index[name]] for name in index} for row in samples]
+        signatures = _reference_signatures(self.refs, self._practice_anchors, frames)
+        result = {}
+        for ref in self.refs:
+            # A wrapped physical corner needs adjacent-lap evidence; never join two different
+            # passes at the ends of one archive and call that a completed trial.
+            if not 0 <= ref.spline_lo < ref.spline_hi <= 1 or ref.index not in signatures:
+                continue
+            times = [fr["eMs"] for fr in frames if ref.spline_lo <= fr["spline"] <= ref.spline_hi]
+            if len(times) >= 2 and times[-1] > times[0]:
+                result[ref.index] = (signatures[ref.index], (times[-1] - times[0]) / 1000.0)
+        return result
+
+    def _practice_archive_conditions(self, record: dict[str, Any]) -> bool:
+        trace = record.get("trace") or {}
+        fields, samples = trace.get("fields", []), trace.get("samples", [])
+        index = {name: i for i, name in enumerate(fields)}
+        names = [f"tyreCoreTemp_{wheel}" for wheel in _WHEELS]
+        brake_names = [f"brakeTemp_{wheel}" for wheel in _WHEELS]
+        if not samples or any(name not in index for name in names + brake_names):
+            return False
+        tyres = record.get("tyres") or {}
+        optimal = _finite_float(tyres.get("optimalTempC")) or self._practice_optimal_temp_c
+        if optimal is None or optimal <= 0:
+            return False
+        for row in samples:
+            if not isinstance(row, (list, tuple)) or len(row) != len(fields):
+                return False
+            values = [_finite_float(row[index[name]]) for name in names + brake_names]
+            if any(value is None or value <= 0 for value in values[:4]) or any(
+                value is None or value < 0 for value in values[4:]
+            ):
+                return False
+            frame = {
+                "tyre_temps_c": dict(zip(_WHEELS, values[:4], strict=True)),
+                "brake_temps_c": dict(zip(_WHEELS, values[4:], strict=True)),
+                "conditions": record.get("conditions") or {},
+                "optimalTempC": optimal,
+            }
+            cap = _evaluate_frame_capability(frame, speed_kmh=0.0, ggv_model=self.ggv_model)
+            if (
+                cap.tyre_reason in {"tyre_temp_overheat", "tyre_temp_critical"}
+                and self.practice is not None
+            ):
+                self.practice.abort(cap.tyre_reason)
+            if cap.ineligible_reason or not cap.has_cond_evidence:
+                return False
+        return True
+
+    def record_practice_archive(
+        self, record: dict[str, Any], qualification: Qualification, *, voice_ready: bool
+    ) -> dict[str, Any]:
+        if self.practice is None:
+            return self.practice_status()
+        before = self.ledger.drill_target
+        qualified_human = qualification.allowed and qualification.authority == "human"
+        eligible = self._practice_archive_conditions(record) if qualified_human else False
+        observations = self._practice_observations(record) if qualified_human else {}
+        status = self.practice.complete_archive(
+            record,
+            qualification,
+            observations,
+            labels=dict(self.corner_identity.get("labels", {})),
+            condition_eligible=eligible,
+            voice_ready=voice_ready,
+        )
+        target = self.ledger.drill_target
+        if before is None and target is not None:
+            self.anchors[target.corner] = replace(self._practice_anchors[target.corner])
+            self.ref_sigs[target.corner] = replace(
+                self.practice.reference_signatures[target.corner]
+            )
+        return status
 
     def __post_init__(self) -> None:
         if self.traffic_gate_mode not in {"shadow", "replay"}:
@@ -267,6 +374,8 @@ class CoachRuntime:
         Per-driver brake calibration and the rolling-best / off-pace gate persist
         (driver knowledge).
         """
+        if self.practice is not None and self.practice._context is not None:
+            self.practice.abort("drill_session_restarted")
         self.ledger.clear_session()
         self.set_corner_identity(
             {
@@ -295,6 +404,8 @@ class CoachRuntime:
 
     def set_corner_identity(self, binding: dict[str, Any]) -> None:
         if binding != self.corner_identity:
+            if self.practice is not None and self.ledger.drill_active:
+                self.practice.abort("canonical_identity_changed")
             self.corner_identity = binding
             self.corner_identity_generation += 1
 
@@ -351,6 +462,11 @@ class CoachRuntime:
         tol = CAL_MATCH_TOL_M / max(self.track_length_m, 1.0)
         updated = 0
         for ref in self.refs:
+            if (
+                self.ledger.drill_target is not None
+                and ref.index == self.ledger.drill_target.corner
+            ):
+                continue  # The practice target and action-point anchor remain frozen.
             sig = self.ref_sigs.get(ref.index)
             if sig is None or sig.brake_point_spline is None:
                 continue
@@ -436,6 +552,21 @@ class CoachRuntime:
             self._active_ineligible_reason = (
                 self._active_cond_reason or self._active_brake_reason or self._active_tyre_reason
             )
+        if self.practice is not None:
+            proof = _evaluate_frame_capability(
+                frame,
+                speed_kmh=speed,
+                ggv_model=self.ggv_model,
+                default_compound=self.reference_compound,
+                default_optimal_temp_c=self._practice_optimal_temp_c,
+            )
+            self.practice.observe_native(
+                dict(payload),
+                condition_eligible=proof.has_tyre_evidence
+                and not proof.ineligible_reason
+                and self._practice_optimal_temp_c is not None,
+                ineligible_reason=proof.ineligible_reason,
+            )
         out: list[Advisory] = []
 
         # Deferred wrap finalization when lapCount lags the spline drop by a frame (codex #294).
@@ -506,6 +637,9 @@ class CoachRuntime:
                     and root in _GRIP_GATED_ROOTS
                     and bool(ineligible_reason)
                 )
+                if self.practice is not None and not self.practice.instruction_allowed:
+                    prime_gated = True
+                    ineligible_reason = "practice_instruction_held"
                 if self.traffic_gate_mode == "replay" and (
                     not self.last_traffic_eligibility.eligible or st.traffic_reason
                 ):
@@ -1225,6 +1359,8 @@ def build_coach_runtime(
     ggv_model: GGVModel | None = None,
     capability_gate_mode: str = "condition_indexed",
     traffic_gate_mode: str = "shadow",
+    practice_drills: bool | None = None,
+    practice_drill_id: str | None = None,
 ) -> CoachRuntime | None:
     """Build a :class:`CoachRuntime` from a reference archive (same input as the observer).
 
@@ -1290,6 +1426,7 @@ def build_coach_runtime(
         for row in tr.get("samples") or []
     ]
     ref_sigs = _reference_signatures(refs, anchors, ref_frames)
+    human_ref_sigs = {key: replace(value) for key, value in ref_sigs.items()}
     # Pacing thresholds are env-tunable so the autonomous harness can verify PRIMEs in a few laps
     # (lower assess/hysteresis); production defaults stay conservative.
     profile = _profile_for_reference_combo(
@@ -1424,7 +1561,7 @@ def build_coach_runtime(
     )
     if diagnostics is not None:
         diagnostics.update(allowed=True, reason=qualification.reason)
-    return CoachRuntime(
+    runtime = CoachRuntime(
         refs=refs,
         ref_sigs=ref_sigs,
         anchors=anchors,
@@ -1442,6 +1579,33 @@ def build_coach_runtime(
         reference_compound=ref_compound,
         reference_optimal_temp_c=ref_opt_temp,
     )
+    requested = (
+        practice_drills
+        if practice_drills is not None
+        else (use_environment and os.environ.get("AC_COPILOT_COACH_DRILLS") == "1")
+    )
+    runtime.practice_requested = bool(requested)
+    if requested:
+        selected = next_drill(profile)
+        drill_id = practice_drill_id or (selected or {}).get("id")
+        combo = _archive_combo(reference_archive)
+        if not drill_id or combo is None or capability_gate_mode != "condition_indexed":
+            runtime.practice_unavailable_reason = "qualified_curriculum_reference_required"
+        else:
+            runtime._practice_anchors = {key: replace(value) for key, value in anchors.items()}
+            runtime._practice_optimal_temp_c = (
+                _finite_float((reference_archive.get("tyres") or {}).get("optimalTempC"))
+                or ref_opt_temp
+            )
+            runtime.practice = PracticeSession(
+                ledger=ledger,
+                combo=combo,
+                reference_signatures=human_ref_sigs,
+                reference_qualification=qualification,
+                reference_identity=str(reference_archive.get("lap_uuid") or ""),
+                drill_id=drill_id,
+            )
+    return runtime
 
 
 def _archive_lap_ms(archive: Mapping[str, Any]) -> float | None:

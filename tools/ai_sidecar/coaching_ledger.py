@@ -20,10 +20,14 @@ Pure stdlib, no telemetry, no I/O — fully unit-tested in isolation. The realti
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from typing import Any
 
+from tools.ai_sidecar.coachable_frontier import HumanDrillTarget
 from tools.ai_sidecar.coaching_diagnosis import Diagnosis, RootError, severity
+from tools.ai_sidecar.lap_dynamics import CornerSignature
+from tools.lap_qualification import Qualification
 
 HYSTERESIS_PASSES = 2  # consecutive valid passes a root must lead before it earns a PRIME
 LAP_CUE_BUDGET = 4  # max non-SAVE cues spoken per lap
@@ -62,15 +66,229 @@ class CueEvent:
 
 
 @dataclass
+class DrillBlock:
+    """One frozen corner/stage, three cued trials then two retention trials.
+
+    Staging is not a valid trial. Only a distinct completed, qualified human lap
+    can commit it. Every distinct completion consumes the bounded lap budget,
+    including invalid, undelivered, missing and otherwise rejected observations.
+    """
+
+    target: HumanDrillTarget
+    max_laps: int = 10
+    phase: str = "cued"
+    reason: str = "awaiting_completed_human_lap"
+    attempted_laps: int = 0
+    cued_trials: list[bool] = field(default_factory=list)
+    retention_trials: list[bool] = field(default_factory=list)
+    _session_uuid: str | None = None
+    _seen_laps: set[str] = field(default_factory=set)
+    _pending: dict[str, tuple[CornerSignature, float, bool] | None] = field(default_factory=dict)
+
+    @property
+    def active(self) -> bool:
+        return self.phase in {"cued", "retention"}
+
+    @property
+    def retention(self) -> bool:
+        return self.phase == "retention"
+
+    @property
+    def suppress_instructional_cues(self) -> bool:
+        # A finished/aborted experiment stays silent until its owner resets it.
+        return self.phase != "cued"
+
+    def abort(self, reason: str) -> None:
+        if self.active:
+            self.phase, self.reason = "aborted", reason
+            self._pending.clear()
+
+    def stage(
+        self,
+        signature: CornerSignature,
+        *,
+        corner_time_s: float,
+        lap_uuid: str,
+        off_track: bool = False,
+    ) -> bool:
+        if not self.active or signature.index != self.target.corner or not lap_uuid:
+            return False
+        if lap_uuid in self._seen_laps:
+            return False
+        if lap_uuid in self._pending:
+            self._pending[lap_uuid] = None
+            self.reason = "duplicate_corner_observation"
+            return False
+        self._pending[lap_uuid] = (replace(signature), corner_time_s, off_track)
+        return True
+
+    def _result(self, reason: str, *, advanced: bool = False) -> dict[str, Any]:
+        self.reason = reason
+        if self.active and self.attempted_laps >= self.max_laps:
+            self.abort("lap_budget_exhausted")
+        return {"advanced": advanced, **self.to_dict()}
+
+    def complete_lap(
+        self,
+        *,
+        lap_uuid: str,
+        session_uuid: str,
+        combo: tuple[str, str, str],
+        qualification: Qualification,
+        valid: bool,
+        off_track: bool = False,
+        cued: bool = False,
+        condition_eligible: bool = False,
+    ) -> dict[str, Any]:
+        if not self.active:
+            return {"advanced": False, **self.to_dict()}
+        if not isinstance(lap_uuid, str) or not lap_uuid:
+            self.attempted_laps += 1
+            return self._result("lap_identity_unavailable")
+        if lap_uuid in self._seen_laps:
+            return self._result("duplicate_lap")
+        self._seen_laps.add(lap_uuid)
+        self.attempted_laps += 1
+        pending = self._pending.pop(lap_uuid, None)
+        if not isinstance(combo, (tuple, list)) or tuple(combo) != self.target.combo:
+            return self._result("drill_combo_mismatch")
+        if (
+            not isinstance(session_uuid, str)
+            or not session_uuid
+            or (self._session_uuid is not None and session_uuid != self._session_uuid)
+        ):
+            self.abort("drill_session_changed")
+            return self._result(self.reason)
+        if off_track is True or (pending is not None and pending[2] is True):
+            self.phase = "failed"
+            return self._result("off_track")
+        if off_track is not False or (pending is not None and pending[2] is not False):
+            return self._result("off_track_evidence_unavailable")
+        if (
+            getattr(qualification, "allowed", False) is not True
+            or getattr(qualification, "authority", None) != "human"
+            or valid is not True
+        ):
+            return self._result("completed_qualified_human_lap_required")
+        if condition_eligible is not True:
+            return self._result("condition_ineligible")
+        if pending is None:
+            return self._result("target_corner_observation_missing_or_duplicate")
+        if self.phase == "cued" and cued is not True:
+            return self._result("instruction_not_delivered")
+        if self.phase == "retention" and cued is not False:
+            return self._result("retention_instruction_contamination")
+        self._session_uuid = session_uuid
+        signature, corner_time_s, _ = pending
+        assessment = self.target.assess(signature, corner_time_s=corner_time_s)
+        if not assessment["eligible"]:
+            return self._result(assessment["reason"])
+        if assessment["reason"] in {"exit_speed_degraded", "corner_time_degraded"}:
+            self.phase = "failed"
+            return self._result(assessment["reason"])
+        if self.phase == "cued":
+            self.cued_trials.append(bool(assessment["success"]))
+            if len(self.cued_trials) == 3:
+                if sum(self.cued_trials) < 2:
+                    self.phase = "failed"
+                    return self._result("cued_target_not_demonstrated", advanced=True)
+                self.phase = "retention"
+        else:
+            self.retention_trials.append(bool(assessment["success"]))
+            if len(self.retention_trials) == 2:
+                self.phase = "passed" if all(self.retention_trials) else "failed"
+                return self._result(
+                    "retention_demonstrated"
+                    if self.phase == "passed"
+                    else "retention_target_reverted",
+                    advanced=True,
+                )
+        return self._result(assessment["reason"], advanced=True)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "configured": True,
+            "active": self.active,
+            "phase": self.phase,
+            "reason": self.reason,
+            "target": self.target.to_dict(),
+            "attempted_laps": self.attempted_laps,
+            "max_laps": self.max_laps,
+            "cued_attempts": len(self.cued_trials),
+            "cued_successes": sum(self.cued_trials),
+            "retention_attempts": len(self.retention_trials),
+            "retention_successes": sum(self.retention_trials),
+            "instructional_cues_suppressed": self.suppress_instructional_cues,
+        }
+
+
+@dataclass
 class CoachingLedger:
     hysteresis: int = HYSTERESIS_PASSES
     lap_budget: int = LAP_CUE_BUDGET
     retire_after: int = RETIRE_AFTER_FIXES
     assess_laps: int = ASSESS_LAPS
+    drills_enabled: bool = False
     _states: dict[int, CornerState] = field(default_factory=dict)
     _lap: int = 0
     _spoken_this_lap: int = 0
     _speak_set: set[int] = field(default_factory=set)
+    drill: DrillBlock | None = field(default=None, init=False)
+
+    @property
+    def drill_active(self) -> bool:
+        return self.drill is not None and self.drill.active
+
+    @property
+    def drill_retention(self) -> bool:
+        return self.drill is not None and self.drill.retention
+
+    @property
+    def drill_target(self) -> HumanDrillTarget | None:
+        return self.drill.target if self.drill is not None else None
+
+    @property
+    def suppress_instructional_cues(self) -> bool:
+        return self.drill is not None and self.drill.suppress_instructional_cues
+
+    def drill_status(self) -> dict[str, Any]:
+        if self.drill is None:
+            return {
+                "configured": self.drills_enabled,
+                "active": False,
+                "reason": "no_drill_started",
+            }
+        return self.drill.to_dict()
+
+    def start_drill(self, target: HumanDrillTarget, *, max_laps: int = 10) -> DrillBlock:
+        if not self.drills_enabled:
+            raise ValueError("drills_disabled")
+        if self.drill is not None:
+            raise ValueError("drill_already_started")
+        if type(max_laps) is not int or not 1 <= max_laps <= 10:
+            raise ValueError("drill_lap_budget_invalid")
+        self.drill = DrillBlock(target, max_laps=max_laps)
+        self._states[target.corner] = CornerState(
+            target.corner, root=RootError(target.root), status=Status.ARMED
+        )
+        return self.drill
+
+    def stage_drill_pass(
+        self,
+        signature: CornerSignature,
+        *,
+        corner_time_s: float,
+        lap_uuid: str,
+        off_track: bool = False,
+    ) -> bool:
+        return self.drill is not None and self.drill.stage(
+            signature, corner_time_s=corner_time_s, lap_uuid=lap_uuid, off_track=off_track
+        )
+
+    def complete_drill_lap(self, **kwargs: Any) -> dict[str, Any]:
+        if self.drill is None:
+            return self.drill_status()
+        return self.drill.complete_lap(**kwargs)
 
     def clear_session(self) -> None:
         """Reset on pit-exit / session restart — the driver and conditions are starting fresh."""
@@ -78,11 +296,16 @@ class CoachingLedger:
         self._lap = 0
         self._spoken_this_lap = 0
         self._speak_set.clear()
+        if self.drill is not None:
+            self.drill.abort("session_reset")
 
     def begin_lap(self, lap: int) -> None:
         """Start a lap: reset the per-lap budget and pick the speak-set (top armed corners)."""
         self._lap = lap
         self._spoken_this_lap = 0
+        if self.drill is not None:
+            self._speak_set = {self.drill.target.corner} if self.drill.phase == "cued" else set()
+            return
         # this lap we will SPEAK only corners that are armed or still-unfixed-primed, ranked by loss
         speakable = [
             s
@@ -99,7 +322,7 @@ class CoachingLedger:
         off-track / out-lap / much-slower pass must not poison the ledger (council Gemini §1).
         Returns acknowledge cues to speak on the following straight.
         """
-        if not valid:
+        if self.drill is not None or not valid:
             return []
         st = self._states.setdefault(corner, CornerState(corner))
         events: list[CueEvent] = []
@@ -152,6 +375,15 @@ class CoachingLedger:
         """Call when the car reaches a corner's PRIME anchor. Returns the root to SPEAK now (and
         marks it spoken, spending lap budget), or ``None`` to stay silent.
         """
+        if self.drill is not None:
+            if (
+                self.drill.phase != "cued"
+                or corner != self.drill.target.corner
+                or self._spoken_this_lap >= 1
+            ):
+                return None
+            self._spoken_this_lap += 1
+            return RootError(self.drill.target.root)
         if self._lap <= self.assess_laps:  # watch-first laps
             return None
         if corner not in self._speak_set or self._spoken_this_lap >= self.lap_budget:
@@ -168,6 +400,10 @@ class CoachingLedger:
         """Peek the root this corner would PRIME this lap (no side effect) — the observer uses it to
         know WHICH action-point anchor to fire at before committing via :meth:`due_prime`.
         """
+        if self.drill is not None:
+            if self.drill.phase == "cued" and corner == self.drill.target.corner:
+                return RootError(self.drill.target.root)
+            return None
         if self._lap <= self.assess_laps or corner not in self._speak_set:
             return None
         st = self._states.get(corner)
@@ -181,6 +417,8 @@ class CoachingLedger:
 
     def focus_corner(self) -> int | None:
         """The single biggest remaining un-retired root — the lap's headline focus (ARC cue)."""
+        if self.drill is not None:
+            return self.drill.target.corner if self.drill.active else None
         live = [
             s
             for s in self._states.values()

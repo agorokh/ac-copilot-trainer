@@ -36,6 +36,7 @@ _ROWS: tuple[tuple[str, str], ...] = (
     ("Sidecar", "sidecar"),
     ("Screen", "screen"),
     ("Voice", "voice"),
+    ("Practice drill", "practice_drill"),
     ("SimHub", "simhub"),
     ("Tablet", "tablet"),
     ("Keypad", "keypad"),
@@ -77,6 +78,8 @@ class LauncherView:
         port: int = 8765,
         simhub_autostart: bool = False,
         on_toggle_simhub: Callable[[bool], None] | None = None,
+        coach_drills: bool = False,
+        on_toggle_drills: Callable[[bool], bool | None] | None = None,
     ) -> None:
         self._root = root
         self._port = port
@@ -129,6 +132,11 @@ class LauncherView:
         self._simhub_var: tk.BooleanVar | None = None
         if on_toggle_simhub is not None:
             self._build_simhub_toggle(body, on_toggle_simhub, simhub_autostart)
+        self._coach_drills_var: tk.BooleanVar | None = None
+        if on_toggle_drills is not None:
+            self._coach_drills_var = self._build_preference_toggle(
+                body, on_toggle_drills, coach_drills, label="Practice drill"
+            )
 
         self._add_corner_brackets(panel)
 
@@ -295,15 +303,32 @@ class LauncherView:
         to ``command`` so the model follows the UI (single source of truth) rather
         than the caller re-deriving it (see ``app.run_gui``).
         """
+        self._simhub_var = self._build_preference_toggle(
+            parent, command, initial, label="AUTO-START SIMHUB"
+        )
+
+    def _build_preference_toggle(
+        self,
+        parent: tk.Frame,
+        command: Callable[[bool], bool | None],
+        initial: bool,
+        *,
+        label: str,
+    ) -> tk.BooleanVar:
         var = tk.BooleanVar(master=self._root, value=bool(initial))
-        self._simhub_var = var
+
+        def apply() -> None:
+            applied = command(bool(var.get()))
+            if isinstance(applied, bool):
+                var.set(applied)
+
         row = tk.Frame(parent, bg=theme.GRAPHITE)
         row.pack(fill="x", pady=(6, 2))
         tk.Checkbutton(
             row,
-            text="AUTO-START SIMHUB",
+            text=label,
             variable=var,
-            command=lambda: command(bool(var.get())),
+            command=apply,
             onvalue=True,
             offvalue=False,
             bg=theme.GRAPHITE,
@@ -317,6 +342,7 @@ class LauncherView:
             highlightthickness=0,
             cursor="hand2",
         ).pack(side="left")
+        return var
 
     # -- refresh --------------------------------------------------------------
 
@@ -598,6 +624,8 @@ def build_launcher_view(
     port: int = 8765,
     simhub_autostart: bool = False,
     on_toggle_simhub: Callable[[bool], None] | None = None,
+    coach_drills: bool = False,
+    on_toggle_drills: Callable[[bool], bool | None] | None = None,
 ) -> LauncherView:
     """Construct the themed launcher panel inside ``root`` and return its handle."""
     return LauncherView(
@@ -607,4 +635,6 @@ def build_launcher_view(
         port=port,
         simhub_autostart=simhub_autostart,
         on_toggle_simhub=on_toggle_simhub,
+        coach_drills=coach_drills,
+        on_toggle_drills=on_toggle_drills,
     )

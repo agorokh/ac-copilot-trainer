@@ -486,3 +486,49 @@ configuration, disarm/remove process-local permission, close owned rig apps,
 verify original hashes/ports/lock, and preserve other owners. No issue closure,
 normal trial activation, human benefit or successful acceptance is inferred from
 implementation, simulator output or a partial set of cases.
+
+## Bounded human practice drill (#529 G3)
+
+**Practice drill** is off by default. The Game Point checkbox persists `coach_drills`;
+`AC_COPILOT_COACH_DRILLS=1` enables it and an explicit `0` overrides the saved setting.
+It applies at the next normal sidecar start. Changing it while a sidecar is running
+shows a restart hint; it never interrupts a driving session. The checkbox enables
+Coach V2 but does not arm audio, select a voice bank, start AC or enable an AI bench.
+
+Practice uses the existing driver's next curriculum stage and one canonical corner.
+It requires a qualified human reference for the exact combo, condition-indexed
+capability gating, complete native lap identity and off-track observations, four-wheel
+tyre/brake evidence, and an instrumented phrase-bank voice backend. Legacy-unknown,
+MOZA/imported or assisted archives cannot become practice baselines or trials. An alien
+line may still supply bounded apex-speed coaching; all drill technique targets and
+action anchors stay tied to the frozen human reference. A malformed named corner catalog
+is refused; a zero-corner catalog may use deterministic intervals from the authored
+CSP track-boundary midpoint, without importing AI racing-line technique or turn names.
+
+One sidecar session admits at most ten laps: two warm-up, three valid baselines, three
+cued attempts on the locked target, then two uncued retention attempts. At least two
+of the three cued attempts and both retention attempts must hit the frozen phase band
+without degrading exit speed or whole-corner time. Distinct invalid or undelivered
+attempts consume the cap. Any observed off-track event fails the block. Tyre core
+overheat/critical aborts immediately; uncertain identity, missing evidence or transport
+gaps cannot certify a trial. The block never silently resets or starts a second drill.
+
+Retention suppresses current, queued and deferred instructional clips at the actual
+voice dispatch boundary. Safety SAVE remains available. A cancellation attempt invalidates
+full-cue delivery proof; an unknown clip classification or duration cannot prove silence.
+Backend acknowledgement is software evidence only, not proof of physical audibility.
+
+The advisory **Practice drill** status row reports configured/active state, phase and
+reason. Public `/health` contains only those operational fields. Existing token
+authentication protects `GET /coach/practice`, which returns the frozen target, baseline
+identities, bounded completed-lap receipt and actual dispatch/cancellation evidence.
+Save that private response alongside immutable native lap archives and the existing
+CoachingLedger trace before closing a selected experiment session. There is no automatic
+profile promotion from a drill result.
+
+For the promoted `REX-20261024-03` trial, select operator-approved human sessions and a
+`trail-brake-entry` or `throttle-to-apex` curriculum stage. Its cap remains one human
+session and ten laps; compare with the existing unlocked coach. The software's synthetic
+pass is not #529 G3 acceptance: that gate still requires measured human improvement across
+sessions. Historical archives lacking native full-lap/off-track evidence remain unavailable
+for this live protocol. Do not relabel them or infer missing observations as zero.
