@@ -60,16 +60,19 @@ operator-attended bench session has not run and 0 of 1 rig sessions is used. Do 
 
 ## Seam with PR #995 (#529)
 
-#995 edits the same policy file and adds `attested_human` for permit-bound practice uses. #988
-stays narrow (`human` for `human_progression` and `analysis`). PR #997 stays in draft until
-#995 merges or closes, then rebases; the one conflicting file is `tools/lap_qualification.py`
-and the resolution adopts #995's ledger-append helper while keeping the revocation rule. The
-two labels are mutually exclusive per lap.
+#995 merged at 2026-11-14T20:03Z (`e17f5a54`) and added `attested_human` for permit-bound
+practice uses. `main` is merged into this branch. The one conflict was
+`tools/lap_qualification.py`; the resolution keeps #995's `attested_human` branch and its
+`_append_attribution` ledger helper, and carries the #988 human branch and the revocation rule
+into them. #988 stays narrow (`human` for `human_progression` and `analysis`). The two labels
+are mutually exclusive per lap, with a test: a practice-attested lap is never certified, and a
+verified-human lap gains no practice use. Practice registration happens live and attestation
+after the session, so on a shared lap the practice label is the one that lands.
 
 ## Next actions
 
-1. When #995 merges or closes: rebase #997, re-check the seam, rerun the suite, then hand the
-   PR to `/resolve-pr` for the ready transition and review quorum.
+1. Hand PR #997 to `/resolve-pr` for the ready transition and review quorum.
 2. After the operator picks a surface and a slot: follow the bench procedure, post the manifest
    hash before running `attest`, record the verdict on #988.
-3. Unowned finding: the macOS development venv fails those 10 tests on `main`.
+3. Unowned finding: the macOS development venv fails those 10 tests on `main`. It also lacked
+   `psutil`, which #995 declared; that was installed into the shared venv during this session.

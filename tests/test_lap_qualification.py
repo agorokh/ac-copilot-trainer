@@ -888,3 +888,66 @@ def test_hand_written_human_ledger_entry_without_a_witness_is_an_invalid_store(
     assert not decision.allowed and decision.reason == "attribution_store_invalid"
     with pytest.raises(AttributionError, match="human_control_evidence_invalid"):
         register_human_attestation(path, forged)
+
+
+def test_operator_attested_practice_lap_and_verified_human_are_mutually_exclusive(
+    tmp_path, ledger, attestation_on
+):
+    """Seam with #529: neither label can be laid over the other for one lap."""
+    from tools.lap_qualification import PRACTICE_ORIGIN, SCOPED_USES
+
+    record = native_record()
+    path = write_native(tmp_path, record)
+    envelope = certified_envelope(record)
+    source = hashlib.sha256(path.read_bytes()).hexdigest()
+    witness = {
+        "identity": archive_identity(record),
+        "payload_sha256": payload_sha256(record),
+        "source_sha256": source,
+        "permit_id": "synthetic-permit",
+        "declaration_sha256": EVIDENCE_HASH,
+        "native_window_sha256": EVIDENCE_HASH,
+        "reference_eligible": False,
+    }
+    encoded = json.dumps(witness, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    practice = build_qualification(
+        record,
+        authority="attested_human",
+        origin=PRACTICE_ORIGIN,
+        supported_uses={use: use in SCOPED_USES | {"analysis"} for use in USES},
+        channels={name: {"unit": unit, "basis": "measured"} for name, unit in UNITS.items()},
+        evidence=[
+            {
+                "kind": "operator_attested_human_control",
+                "sha256": hashlib.sha256(encoded).hexdigest(),
+                "witness": witness,
+            }
+        ],
+    )
+    entry = {
+        "identity": archive_identity(record),
+        "source_sha256": source,
+        "payload_sha256": payload_sha256(record),
+        "qualification": practice,
+    }
+    ledger.write_text(json.dumps({"schema_version": 1, "entries": [entry]}), encoding="utf-8")
+    before = ledger.read_bytes()
+    # The practice label is not verified-human evidence and is never promoted to it.
+    denied = qualify_archive(record, use="human_progression")
+    assert not denied.allowed and denied.authority == "attested_human"
+    from tests.human_attestation_helpers import attest
+
+    assert attest(record).reasons == ("existing_attribution:attested_human",)
+    with pytest.raises(AttributionError, match="conflicting_attribution_identity"):
+        register_human_attestation(path, envelope)
+    assert ledger.read_bytes() == before
+
+    # And a verified-human lap gains no practice use.
+    ledger.write_text(json.dumps({"schema_version": 1, "entries": []}), encoding="utf-8")
+    register_human_attestation(path, envelope)
+    assert qualify_archive(record, use="human_progression").allowed
+    for use in SCOPED_USES:
+        scoped = qualify_archive(
+            record, use=use, expected_combo=("synthetic-car", "synthetic-track", None)
+        )
+        assert not scoped.allowed and "practice_context_required" in scoped.reasons

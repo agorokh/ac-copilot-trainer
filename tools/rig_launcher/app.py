@@ -381,6 +381,55 @@ def main(argv: list[str] | None = None) -> int:
         supervisor.close()
 
 
+def _open_human_session_window(supervisor: GamePointSupervisor, *, parent: Any) -> Any:
+    """Wire the private declaration form; preparing it never starts processes."""
+    from tools.rig_launcher.view import HumanSessionView
+
+    errors = {
+        "running_sidecar_requires_restart": "Close the current sidecar after driving, then arm.",
+        "sidecar_stop_failed": "The previous sidecar has not stopped; resolve its shutdown first.",
+        "campaign_already_exists": "This campaign already exists and cannot be armed again.",
+        "human_session_voice_bank_invalid": "Choose a valid, current study phrase bank.",
+        "human_session_voice_bank_selection_required": "Choose one valid study phrase bank.",
+        "human_session_token_required": "Configure a sidecar token before arming this session.",
+    }
+
+    def apply(action: str, declaration: dict[str, Any] | None = None) -> None:
+        try:
+            if action == "prepare":
+                assert declaration is not None
+                status = supervisor.prepare_human_session(**declaration)
+                view.clear_declaration()  # the later end declaration must be fresh and explicit.
+            elif action == "end":
+                assert declaration is not None
+                status = supervisor.close_human_session(declaration)
+            else:
+                status = supervisor.revoke_human_session()
+            view.show_status(status)
+        except (OSError, ValueError) as exc:
+            view.show_error(
+                errors.get(str(exc), "The declaration could not be accepted. Check every field.")
+            )
+
+    try:
+        bank = supervisor.human_session_voice_bank()
+    except (OSError, ValueError):
+        bank = None
+    view = HumanSessionView(
+        parent,
+        on_prepare=lambda declaration: apply("prepare", declaration),
+        on_end=lambda declaration: apply("end", declaration),
+        on_revoke=lambda: apply("revoke"),
+        voice_bank=bank,
+    )
+    try:
+        view.show_status(supervisor.human_session_status(private=True))
+    except (OSError, ValueError):
+        view.show_status({"configured": True, "phase": "unavailable"})
+        view.show_error("The saved session record is unavailable; arming is disabled.")
+    return view
+
+
 def run_gui(supervisor: GamePointSupervisor) -> int:
     from tools.rig_launcher.chrome import (
         apply_dark_title_bar,
@@ -408,6 +457,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
     last_status: dict[str, GamePointStatus | None] = {"status": None}
     _poll_busy: dict[str, bool] = {"v": False}
     offline_view: Any | None = None
+    human_view: Any | None = None
 
     def _poll_worker() -> None:
         try:
@@ -422,6 +472,11 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
                 if root.winfo_exists():
                     last_status["status"] = status
                     view.update(status)
+                    if human_view is not None and human_view.window.winfo_exists():
+                        try:
+                            human_view.show_status(supervisor.human_session_status(private=True))
+                        except (OSError, ValueError):
+                            human_view.show_error("The saved session record is unavailable.")
             except tk.TclError:
                 return
 
@@ -451,7 +506,13 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
             messagebox.showwarning("SimHub", res.detail or "SimHub failed to start", parent=root)
 
     def start() -> None:
-        supervisor.start_sidecar()
+        result = supervisor.start_sidecar()
+        if not result.ok:
+            from tkinter import messagebox
+
+            messagebox.showwarning("Game Point", result.detail or "Could not start.", parent=root)
+            refresh()
+            return
         if supervisor.config.start_simhub:
             _launch_simhub_and_report()
         refresh()
@@ -540,6 +601,13 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
             return
         offline_view = _open_moza_report_window(supervisor, parent=root)
 
+    def open_human_session() -> None:
+        nonlocal human_view
+        if human_view is not None and human_view.window.winfo_exists():
+            human_view.window.lift()
+            return
+        human_view = _open_human_session_window(supervisor, parent=root)
+
     def poll_tick() -> None:
         # Continuous re-poll so the tablet tunnel keeper (and every other probe) self-heals
         # while the launcher is open — an unplug / tablet sleep / `adb kill-server` after launch
@@ -569,6 +637,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
                 "settings": open_settings,
                 "setup_diff": open_setup_diff,
                 "moza_offline_report": open_offline_report,
+                "human_session": open_human_session,
             },
             status_path=str(supervisor.paths.status_path),
             port=supervisor.config.port,

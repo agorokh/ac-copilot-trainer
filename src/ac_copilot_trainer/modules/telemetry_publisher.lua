@@ -359,6 +359,19 @@ function M.publishTelemetryTickIfDue(opts)
   if type(wsBridge.isExternalReady) == "function" and not wsBridge.isExternalReady() then
     return false
   end
+  local archiveSession = opts.archiveSessionUuid
+  local archiveSessionValid = type(archiveSession) == "string" and #archiveSession > 0
+      and #archiveSession <= 128 and archiveSession:match("^[%w_%.%-]+$") ~= nil
+  local archiveLap = opts.archiveLapN
+  local archiveLapValid = type(archiveLap) == "number" and _finite(archiveLap) ~= nil
+      and archiveLap >= 1 and archiveLap == math.floor(archiveLap)
+  if archiveSessionValid and not archiveLapValid then
+    -- A finish/reset frame can precede the archive counter update. Defer it,
+    -- rather than send an unbound tick or guess either lap. Carry one owed
+    -- interval so the first bound frame sends immediately, without a burst.
+    _tickAccum = math.min(TICK_INTERVAL_SEC, _tickAccum + TICK_INTERVAL_SEC)
+    return false
+  end
   _tickSeq = _tickSeq + 1
   local gear = 0
   local rawGear = _field(car, "gear")
@@ -382,14 +395,30 @@ function M.publishTelemetryTickIfDue(opts)
     spline = _clamp(_field(car, "splinePosition") or 0, 0, 1),
     lap = math.max(0, math.floor(tonumber(_field(car, "lapCount")) or 0)),
   }
-  local archiveSession = opts.archiveSessionUuid
-  if type(archiveSession) == "string" and #archiveSession > 0 and #archiveSession <= 128
-      and archiveSession:match("^[%w_%.%-]+$") then
+  -- Native control/replay observations constrain an explicit operator-attested
+  -- practice session. They never certify exclusive physical human control.
+  for key, source in pairs({ is_live = "isLive", is_replay = "isReplayActive" }) do
+    local value = _field(opts.sim, source)
+    if type(value) == "boolean" then payload[key] = value end
+  end
+  local isAI = _field(car, "isAIControlled")
+  if type(isAI) == "boolean" then payload.is_ai = isAI end
+  local conditions = {}
+  for key, source in pairs({
+    ambientTempC = "ambientTemperature", trackTempC = "roadTemperature",
+    weatherType = "weatherType", trackGripLevel = "roadGrip",
+  }) do
+    local value = _finite(_field(opts.sim, source))
+    if value ~= nil then conditions[key] = value end
+  end
+  if next(conditions) ~= nil then payload.conditions = conditions end
+  local wheel0 = _field(_field(car, "wheels"), 0)
+  local optimal = _finite(_field(wheel0, "tyreOptimumTemperature"))
+  if optimal ~= nil and optimal > 0 then payload.tyre_optimal_temp_c = optimal end
+  if archiveSessionValid then
     payload.archive_session_uuid = archiveSession
   end
-  local archiveLap = opts.archiveLapN
-  if type(archiveLap) == "number" and _finite(archiveLap) ~= nil
-      and archiveLap >= 1 and archiveLap == math.floor(archiveLap) then
+  if archiveLapValid then
     payload.archive_lap_n = archiveLap
   end
   -- Installed SDK ac_apps/lib.lua:5024: integer number of wheels outside allowed area.
