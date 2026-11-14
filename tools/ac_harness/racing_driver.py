@@ -25,12 +25,14 @@ import csv
 import math
 import struct
 from bisect import bisect_right
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from tools.ac_harness.ai_line import PurePursuit, StanleySteering, _horizontal
 from tools.ac_harness.ggv_profile import CurvatureFeedforwardSteering
 from tools.ac_harness.lap_driver import PHASE_LAP, PHASE_OUT, DriveFrame
+from tools.ac_harness.racing_telemetry import PhysFrame
 
 # fast_lane.ai AiPointExtra block: speed@0, gas@4, brake@8 — 72-byte stride. Ground-truthed live
 # against magione (count 1754, speeds 0->61.9 m/s) and the actools AiPoint layout.
@@ -301,6 +303,101 @@ def slip_limited_controls(
     return _clamp(gas, 0.0, 1.0), _clamp(brake, 0.0, 1.0)
 
 
+class WheelSlipGovernor:
+    """Reduce pedal demands using fresh wheel speeds, with slow recovery after release.
+
+    This is a controller, not an archive/admission filter. All four wheels govern
+    brake release; either rear wheel can limit throttle. Axle radii come from the
+    declared compound's authored tyre data, never a fitted plant or guessed radius.
+    """
+
+    def __init__(self, radii_m: tuple[float, float, float, float]) -> None:
+        if len(radii_m) != 4 or any(
+            isinstance(r, bool) or not math.isfinite(r) or not 0.1 <= r <= 1.0 for r in radii_m
+        ):
+            raise ValueError("Slip feedback requires four finite authored wheel radii")
+        self.radii = radii_m
+        self.read: Callable[[], PhysFrame | None] | None = None
+        self.packet: int | None = None
+        self.fresh_at: float | None = None
+        self.last_now = -math.inf
+        self.gas_ceiling = self.brake_ceiling = 1.0
+        self.previous_slips: tuple[float, float] | None = None
+        self.slips = (0.0, 0.0)
+        self.samples = self.gas_cuts = self.brake_cuts = self.shift_vetoes = 0
+
+    def apply(self, gas: float, brake: float, downshift: bool, now: float):
+        if not math.isfinite(now) or now < self.last_now:
+            raise ValueError("Slip feedback clock is invalid")
+        self.last_now = now
+        p = self.read() if self.read is not None else None
+        if (
+            p is None
+            or type(p.packet_id) is not int
+            or len(p.wheel_omega) != 4
+            or not all(math.isfinite(v) for v in (p.speed_kmh, *p.wheel_omega))
+            or p.speed_kmh < 0
+        ):
+            raise ValueError("Slip feedback native physics unavailable or invalid")
+        if self.packet is not None and p.packet_id < self.packet:
+            raise ValueError("Slip feedback native packet moved backwards")
+        if p.packet_id != self.packet:
+            dt = 0.0 if self.fresh_at is None else now - self.fresh_at
+            if self.fresh_at is not None and dt > 0.1:
+                raise ValueError("Slip feedback native physics stale")
+            self.packet, self.fresh_at = p.packet_id, now
+            self.samples += 1
+            speed = p.speed_kmh / 3.6
+            ratios = [
+                slip_ratio(abs(w), r, speed) for w, r in zip(p.wheel_omega, self.radii, strict=True)
+            ]
+            # At walking speed circumference-based slip is dominated by startup noise.
+            drive, minimum = (max(ratios[2:]), min(ratios)) if speed >= 5 else (0.0, 0.0)
+            projected_drive, projected_minimum = drive, minimum
+            if self.previous_slips is not None and dt > 0 and speed >= 5:
+                # A short projection releases before a rapidly developing lock/spin;
+                # it can only lower the current demand, never anticipate extra grip.
+                old_drive, old_minimum = self.previous_slips
+                projected_drive += min(0.12, max(0.0, (drive - old_drive) / dt) * 0.03)
+                projected_minimum += max(-0.12, min(0.0, (minimum - old_minimum) / dt) * 0.03)
+            self.previous_slips, self.slips = (drive, minimum), (drive, minimum)
+            gas_cap, brake_cap = slip_limited_controls(
+                1.0,
+                1.0,
+                projected_drive,
+                projected_minimum,
+                accel_slip_target=0.06,
+                brake_slip_target=0.06,
+                cut_gain=12.5,
+            )
+            self.gas_ceiling = min(self.gas_ceiling, gas_cap)
+            self.brake_ceiling = min(self.brake_ceiling, brake_cap)
+            # Recovery requires actual slip to clear the hysteresis band and a NEW
+            # native packet. Repeated reads of one packet cannot restore pedal demand.
+            if drive < 0.03:
+                self.gas_ceiling = min(1.0, self.gas_ceiling + 0.5 * dt)
+            if minimum > -0.03:
+                self.brake_ceiling = min(1.0, self.brake_ceiling + 0.5 * dt)
+        elif self.fresh_at is None or now - self.fresh_at > 0.1:
+            raise ValueError("Slip feedback native physics stale")
+        limited_gas, limited_brake = gas * self.gas_ceiling, brake * self.brake_ceiling
+        self.gas_cuts += limited_gas < gas
+        self.brake_cuts += limited_brake < brake
+        # A downshift can add engine braking that pedal ABS cannot release.
+        veto = downshift and (self.slips[1] < -0.03 or self.brake_ceiling < 1.0)
+        self.shift_vetoes += veto
+        return limited_gas, limited_brake, downshift and not veto
+
+    def summary(self) -> dict:
+        return {
+            "radii_m": list(self.radii),
+            "native_packets": self.samples,
+            "gas_cuts": self.gas_cuts,
+            "brake_cuts": self.brake_cuts,
+            "downshift_vetoes": self.shift_vetoes,
+        }
+
+
 class RacingDriver:
     """Drive ``fast_line`` at racing dynamics from any starting state (pits, off-line, on-line).
 
@@ -425,6 +522,7 @@ class RacingDriver:
         cff_preview_m: float = 6.0,
         cff_fb_weight: float = 0.6,
         cff_ay_cap_mps2: float = 14.0,
+        slip_radii_m: tuple[float, float, float, float] | None = None,
     ) -> None:
         if len(fast_line) != len(speed_profile):
             raise ValueError(
@@ -501,6 +599,7 @@ class RacingDriver:
         self.stuck_throttle = stuck_throttle
         self.min_lap_m = min_lap_m
         self.return_radius_m = return_radius_m
+        self.slip_feedback = None if slip_radii_m is None else WheelSlipGovernor(slip_radii_m)
 
         # Target speed (m/s) per point. In GGV mode the profile is ALREADY the friction-circle
         # minimum-time target (braking/apex baked in by tools.ac_harness.ggv_profile), so we use it
@@ -632,6 +731,11 @@ class RacingDriver:
             return (False, True)
         return (False, False)
 
+    def set_phys_read(self, read: Callable[[], PhysFrame | None]) -> None:
+        """Bind the harness-owned native physics reader; no second memory map."""
+        if self.slip_feedback is not None:
+            self.slip_feedback.read = read
+
     def _accumulate_lap(self, car_plane: tuple[float, float]) -> bool:
         """Distance travelled + position-return lap closure (anchored at first LAP position)."""
         if self._lap_anchor is None:
@@ -688,6 +792,8 @@ class RacingDriver:
             gas, brake = self._longitudinal(idx, speed_kmh, steer)
 
         gear_up, gear_dn = self._gear_pulse(rpm, gear, speed_kmh, now)
+        if self.slip_feedback is not None:
+            gas, brake, gear_dn = self.slip_feedback.apply(gas, brake, gear_dn, now)
 
         needs_recovery = False
         if speed_kmh < self.stuck_speed_kmh and gas > self.stuck_throttle:

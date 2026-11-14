@@ -193,6 +193,7 @@ class AutoDriveConfig:
         240.0  # racing/ggv: cap (above any GT speed; lets it use top gears)
     )
     ggv_scale: float = 0.9  # ggv: safety margin on the min-time profile (flat-out * scale)
+    slip_compound_index: int | None = None  # opt-in native wheel-speed feedback for this compound
     # #577 progressive-envelope self-play: allow the alien path to run a deliberate, bounded
     # overspeed probe (ggv_scale in (1, ALIEN_MAX_OVERSPEED_SCALE]) — the uncertainty-safe QSS
     # floor is a lower-confidence bound, and driving slightly above it is how the self-play loop
@@ -3545,6 +3546,24 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
     """
     from tools.ac_harness.lap_driver import LapDriver
 
+    slip_radii = None
+    if config.slip_compound_index is not None:
+        from tools.ai_sidecar.tyre_specs import read_tyre_specs
+
+        if (
+            config.driver != "ggv"
+            or not config.car_id
+            or type(config.slip_compound_index) is not int
+            or config.slip_compound_index < 0
+        ):
+            raise ValueError("Slip feedback requires GGV, an explicit car and compound index")
+        car_dir = config.ac_root / "content" / "cars" / config.car_id
+        front = read_tyre_specs(car_dir, config.slip_compound_index, axle="front")
+        rear = read_tyre_specs(car_dir, config.slip_compound_index, axle="rear")
+        if front is None or rear is None or front.radius_m is None or rear.radius_m is None:
+            raise ValueError("Slip feedback requires authored radii for both compound axles")
+        slip_radii = (front.radius_m, front.radius_m, rear.radius_m, rear.radius_m)
+
     if config.driver == "cruise":
         return LapDriver(
             fast_line,
@@ -3575,7 +3594,9 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
         v_target = [v * config.ggv_scale for v in v_target]
         # #532: consume the combo's machine-measured plant constants when the CLI resolved an
         # artifact (shift points always; measured curvature-FF steering with --use-plant full).
-        return RacingDriver.from_ggv_profile(fast_line, v_target, **(config.plant_kwargs or {}))
+        return RacingDriver.from_ggv_profile(
+            fast_line, v_target, slip_radii_m=slip_radii, **(config.plant_kwargs or {})
+        )
     if config.driver == "alien":
         from tools.ac_harness.racing_driver import RacingDriver
 
@@ -4206,6 +4227,9 @@ def rig_drive(  # pragma: no cover - rig-only
         driver_sink = getattr(driver, "sink", None)
         if isinstance(driver_sink, dict) and driver_sink:
             stats.payload = dict(driver_sink)
+        slip_feedback = getattr(driver, "slip_feedback", None)
+        if slip_feedback is not None:
+            stats.payload["slip_feedback"] = slip_feedback.summary()
         if phys_reader is not None:
             phys_reader.close()
         for _ in range(20):
@@ -4441,6 +4465,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--pace", type=float, default=0.9, help="racing: fraction of AI-line speed")
     p.add_argument("--ggv-scale", type=float, default=0.9, help="ggv: safety margin on min-time")
+    p.add_argument(
+        "--slip-compound-index",
+        type=int,
+        default=None,
+        help="ggv: enable fresh wheel-speed pedal feedback using this declared compound's "
+        "authored axle radii; caller must verify the active native compound before Drive",
+    )
     p.add_argument("--max-speed", type=float, default=240.0, help="racing/ggv: speed cap (km/h)")
     p.add_argument(
         "--drive-seconds",
@@ -4599,6 +4630,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         driver=args.driver,
         pace=args.pace,
         ggv_scale=args.ggv_scale,
+        slip_compound_index=args.slip_compound_index,
         racing_max_speed_kmh=args.max_speed,
         drive_seconds=resolve_lap_window_drive_seconds(args.drive_seconds, args.laps),
         lap_finalize_grace_s=args.lap_finalize_grace_s,

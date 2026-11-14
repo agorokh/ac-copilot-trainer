@@ -102,6 +102,16 @@ python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track ma
 - `--use-plant auto` (default) applies measured shift points when an artifact exists;
   `full` also enables the measured curvature-feedforward steering; `off` forces the generic
   GT3 plant. `full` without an artifact fails fast — run the handshake first.
+- GGV optionally accepts `--slip-compound-index N` for wheel-speed pedal feedback.
+  Verify the active native compound is N before Drive. Both axle radii must resolve
+  from that compound's authored tyre data; no guessed or fitted radius is used.
+  Any wheel can release the shared brake; either rear wheel can reduce throttle.
+  Bounded short prediction, hysteresis and slow recovery limit repeated lock/spin,
+  and braking slip suppresses new downshifts. Missing, stale or invalid physics
+  interrupts the run through the harness's existing stop/cleanup path. The option
+  defaults off, changes no archive qualification policy, and reports actual packet
+  and intervention counts in `drive.payload.slip_feedback`. It does not guarantee
+  a valid lap or make recorded-replay physics respond to new commands.
 - Schema v3 promotes the GGV fit only after the run's immutable lap archive supplies all four
   tyre-core temperatures, all four hot pressures, the car-true optimum, a setup identity, at least 80%
   channel coverage, and at least 80% per-wheel stability within ±5 °C of each wheel's median. The
