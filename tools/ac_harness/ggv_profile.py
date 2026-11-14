@@ -709,9 +709,10 @@ def merge_selfplay_model(current: GGVModel, batch: GGVModel) -> tuple[GGVModel, 
       Grip once proven stays proven within the combo's cohort; the keep-last-valid falsification
       oracle in ``auto_alien`` is the safety valve when a raised envelope turns out wrong on
       track.
-    * **brake / drive** — always the current model's bins: longitudinal bins only learn from
-      controlled probes (``brake_probe`` / ``accel_sweep`` rows), which a non-handshake self-play
-      drive never produces, so a batch refit can only regress them to the prior.
+    * **brake / drive** — adopt only a measured batch bin that raises ``safe_g``. These bins
+      require controlled longitudinal evidence in the fitter; ordinary passive telemetry and
+      an unvisited prior cannot replace an existing observation. Point-model coefficients and
+      caps remain unchanged, so a bin never authorizes acceleration beyond the existing plant.
 
     Top-level lateral grip takes ``max(current, batch)`` (the point model is the operating
     ceiling the bins derate — proven-harder cornering may raise it, a soft batch never lowers
@@ -729,6 +730,11 @@ def merge_selfplay_model(current: GGVModel, batch: GGVModel) -> tuple[GGVModel, 
     merged_bins: list[dict] = []
     lateral_adopted = 0
     lateral_raised = 0
+    longitudinal_stats = {
+        f"{kind}_bins_{action}": 0
+        for kind in ("brake", "drive")
+        for action in ("adopted", "raised")
+    }
     for cur_bin, new_bin in zip(current.uncertainty_bins, batch.uncertainty_bins, strict=True):
         if not math.isclose(
             float(cur_bin["speed_min_kmh"]), float(new_bin["speed_min_kmh"])
@@ -753,13 +759,23 @@ def merge_selfplay_model(current: GGVModel, batch: GGVModel) -> tuple[GGVModel, 
                 lateral_adopted += 1
         else:
             lateral = cur_lat
+        longitudinal = {}
+        for kind in ("brake", "drive"):
+            previous, candidate = dict(cur_bin[kind]), dict(new_bin[kind])
+            if candidate.get("source") == "measured" and float(candidate["safe_g"]) > float(
+                previous["safe_g"]
+            ):
+                longitudinal[kind] = candidate
+                action = "raised" if previous.get("source") == "measured" else "adopted"
+                longitudinal_stats[f"{kind}_bins_{action}"] += 1
+            else:
+                longitudinal[kind] = previous
         merged_bins.append(
             {
                 "speed_min_kmh": float(cur_bin["speed_min_kmh"]),
                 "speed_max_kmh": float(cur_bin["speed_max_kmh"]),
                 "lateral": lateral,
-                "brake": dict(cur_bin["brake"]),
-                "drive": dict(cur_bin["drive"]),
+                **longitudinal,
             }
         )
     mu_before = current.mu_lat_g
@@ -769,6 +785,7 @@ def merge_selfplay_model(current: GGVModel, batch: GGVModel) -> tuple[GGVModel, 
     stats = {
         "lateral_bins_adopted": lateral_adopted,
         "lateral_bins_raised": lateral_raised,
+        **longitudinal_stats,
         "mu_lat_g_before": round(mu_before, 6),
         "mu_lat_g_after": round(mu_after, 6),
         "batch_mu_lat_g": round(batch.mu_lat_g, 6),
