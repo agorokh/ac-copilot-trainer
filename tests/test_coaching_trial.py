@@ -147,6 +147,8 @@ def test_every_armed_approach_and_commit_is_journaled(monkeypatch):
         assert approach["eligibility"] == "eligible"
         assert approach["committed"] and approach["emitted"]
         assert approach["outcome"] is not None  # the pass that followed is attached
+        # Shadow-mode traffic context is advisory: it must not be reported as a gate.
+        assert approach["outcome"]["gate_reason"] == ""
 
 
 def test_outcome_carries_targeted_error_magnitude_and_corner_time():

@@ -316,6 +316,8 @@ class RecordingLedger(CoachingLedger):
             if self._runtime is not None
             else {}
         )
+        # The traffic gate only enforces in replay mode; in shadow mode its reason is advisory.
+        traffic_enforced = getattr(self._runtime, "traffic_gate_mode", "shadow") == "replay"
         self._write(
             "outcome",
             approach_id=approach.approach_id,
@@ -331,8 +333,11 @@ class RecordingLedger(CoachingLedger):
             corner_time_s=_finite(self._corner_time_s.get(corner)),
             apex_deficit_proxy_kmh=_finite(time_lost_s),
             gate_reason=str(
-                capability.get("ineligible_reason") or capability.get("traffic_reason") or ""
+                capability.get("ineligible_reason")
+                or (capability.get("traffic_reason") if traffic_enforced else "")
+                or ""
             ),
+            traffic_shadow_reason=str(capability.get("traffic_reason") or ""),
             confirm=any(e.kind == "confirm" for e in events),
             ledger_status_after=str(state.status) if state is not None else None,
         )
