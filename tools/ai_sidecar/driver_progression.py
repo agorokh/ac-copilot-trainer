@@ -137,6 +137,28 @@ CURRICULUM: tuple[Drill, ...] = (
     ),
 )
 
+# One control variable per locked practice block; technique comes from a
+# qualified human reference, never from an alien line's control trace.
+_DRILL_METRICS = {
+    "apex-foundation": "min_speed_kmh",
+    "throttle-to-apex": "throttle_on_spline",
+    "trail-brake-entry": "trail_brake_frac",
+    "brake-later-with-control": "brake_point_spline",
+}
+
+
+def drill_definition(drill_id: str) -> Drill:
+    """Resolve an existing curriculum stage, refusing an invented practice task."""
+    for drill in CURRICULUM:
+        if drill.id == drill_id:
+            return drill
+    raise ValueError("unknown_curriculum_drill")
+
+
+def drill_primary_metric(drill_id: str) -> str:
+    drill_definition(drill_id)
+    return _DRILL_METRICS[drill_id]
+
 
 def default_cue_policy() -> DriverCuePolicy:
     """The historic Coach v2 pacing for unknown/new drivers."""

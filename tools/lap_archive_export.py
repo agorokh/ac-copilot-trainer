@@ -121,7 +121,7 @@ CSV_COLUMNS: tuple[str, ...] = (
     "fuel",
     "accG_vert",
     # Tier-2 CSP force/slip channels (issue #488 Part A) — blank for archives that lack them.
-    # Identity CSV names; in sync with reference_lap.TRACE_FIELDS[76:] (test_lap_archive_export).
+    # Identity CSV names; in sync with reference_lap.TRACE_FIELDS[76:100] (test_lap_archive_export).
     "slipRatio_fl",
     "slipRatio_fr",
     "slipRatio_rl",
@@ -146,6 +146,8 @@ CSV_COLUMNS: tuple[str, ...] = (
     "dy_fr",
     "dy_rl",
     "dy_rr",
+    # Optional measured off-track count. Unknown old/imported samples export -1.
+    "wheelsOutside",
 )
 
 _PER_WHEEL_TRACE_FIELDS: tuple[str, ...] = (
@@ -226,7 +228,7 @@ _TIER1_DYNAMIC_TRACE_FIELDS: tuple[str, ...] = (
 )
 
 # Tier-2 CSP force/slip channels (issue #488 Part A); blank for archives that lack them. MUST stay
-# in sync with reference_lap.TRACE_FIELDS[76:] — asserted by test_lap_archive_export.
+# in sync with reference_lap.TRACE_FIELDS[76:100] — asserted by test_lap_archive_export.
 _TIER2_DYNAMIC_TRACE_FIELDS: tuple[str, ...] = (
     "slipRatio_fl",
     "slipRatio_fr",
@@ -274,6 +276,7 @@ _TRACE_TO_CSV: dict[str, str] = {
     **{name: name for name in _TIER1_DYNAMIC_TRACE_FIELDS},
     # Tier-2 CSP force/slip channels (issue #488 Part A) map to identically-named CSV columns
     **{name: name for name in _TIER2_DYNAMIC_TRACE_FIELDS},
+    "wheelsOutside": "wheelsOutside",
 }
 
 _MOTEC_CHANNELS: tuple[tuple[str, str, str], ...] = (
@@ -450,6 +453,22 @@ def iter_csv_rows(
             row["sample_index"] = index
             for trace_name, column in _TRACE_TO_CSV.items():
                 row[column] = _sample_value(sample, fields, trace_name)
+            outside_index = fields.get("wheelsOutside")
+            outside = (
+                sample[outside_index]
+                if isinstance(sample, (list, tuple))
+                and outside_index is not None
+                and outside_index < len(sample)
+                else None
+            )
+            row["wheelsOutside"] = (
+                outside
+                if type(outside) in (int, float)
+                and math.isfinite(outside)
+                and 0 <= outside <= 4
+                and outside == int(outside)
+                else -1
+            )
             elapsed_ms = row["elapsed_ms"]
             if elapsed_ms is not None:
                 row["time_s"] = elapsed_ms / 1000.0

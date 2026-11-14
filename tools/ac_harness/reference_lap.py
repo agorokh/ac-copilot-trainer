@@ -145,6 +145,8 @@ TRACE_FIELDS: tuple[str, ...] = (
     "dy_fr",
     "dy_rl",
     "dy_rr",
+    # Optional measured count (#529 G3). Missing/invalid input is unknown (-1), never zero.
+    "wheelsOutside",
 )
 
 _LEGACY_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:10]
@@ -165,7 +167,8 @@ _TIER1_DYNAMIC_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[30:76]
 _PRE_TIER2_DYNAMIC_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:76]
 # The 24 Tier-2 CSP force/slip channels appended by #488 Part A (per-wheel slipRatio/slipAngle/mz/
 # fx/fy/dy).
-_TIER2_DYNAMIC_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[76:]
+_TIER2_DYNAMIC_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[76:100]
+_PRE_WHEELS_OUTSIDE_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:100]
 _TRACE_FIELD_VARIANTS: tuple[tuple[str, ...], ...] = (
     _LEGACY_TRACE_FIELDS,
     _LEGACY_RPM_TRACE_FIELDS,
@@ -173,6 +176,7 @@ _TRACE_FIELD_VARIANTS: tuple[tuple[str, ...], ...] = (
     _PRE_TIER_B_TRACE_FIELDS,
     _PRE_TIER1_DYNAMIC_TRACE_FIELDS,
     _PRE_TIER2_DYNAMIC_TRACE_FIELDS,
+    _PRE_WHEELS_OUTSIDE_TRACE_FIELDS,
     TRACE_FIELDS,
 )
 
@@ -214,6 +218,16 @@ def _normalize_trace_frame(frame: Mapping[str, Any], index: int) -> dict[str, fl
     out: dict[str, float] = {}
     for field in TRACE_FIELDS:
         raw = frame.get(field)
+        if field == "wheelsOutside":
+            out[field] = (
+                float(raw)
+                if type(raw) in (int, float)
+                and math.isfinite(raw)
+                and 0 <= raw <= 4
+                and raw == int(raw)
+                else -1.0
+            )
+            continue
         # Optional per-wheel channels default to 0.0 whether absent OR explicitly null — both mean
         # "no reading this frame", the desired graceful degradation. A REQUIRED field that is
         # absent/None still falls through to _finite_float, which raises (a real schema violation).

@@ -53,6 +53,11 @@ def select_focus_corner(
     allowed = set(valid_corners) if valid_corners is not None else None
 
     if ledger is not None:
+        if ledger.drill is not None:
+            if ledger.suppress_instructional_cues:
+                return None
+            corner = ledger.drill.target.corner
+            return corner if allowed is None or corner in allowed else None
         focus = ledger.focus_corner()
         if focus is not None and (allowed is None or focus in allowed):
             return focus

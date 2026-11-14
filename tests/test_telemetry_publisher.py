@@ -453,6 +453,63 @@ def test_telemetry_tick_rate_limited_to_20hz():
     assert out["lap"] == 2
 
 
+@pytest.mark.parametrize("outside", ["0", "3", "nil", "-1", "5", "0.5", "0/0", "true", '"0"'])
+def test_tick_joins_archive_clock_and_keeps_unknown_offtrack_unknown(outside):
+    rt = _runtime()
+    payload = rt.execute(
+        f"""
+        local ws=make_ws()
+        require('telemetry_publisher').publishTelemetryTickIfDue({{dt=.06,wsBridge=ws,
+          archiveSessionUuid='native-session-123',archiveLapN=9,
+          car={{speedKmh=80,lapCount=2,wheelsOutside={outside}}}}})
+        return ws._calls[1].send.payload
+        """
+    )
+    assert payload["archive_session_uuid"] == "native-session-123"
+    assert payload["archive_lap_n"] == 9 and payload["lap"] == 2
+    assert payload["wheels_outside"] == ({"0": 0, "3": 3}.get(outside))
+
+
+@pytest.mark.parametrize(
+    "session,lap", [('"bad/session"', "1"), ("123", "0"), ('""', "1.2"), ("nil", "0/0")]
+)
+def test_tick_omits_invalid_native_archive_identity(session, lap):
+    rt = _runtime()
+    payload = rt.execute(
+        f"""
+        local ws=make_ws()
+        require('telemetry_publisher').publishTelemetryTickIfDue({{dt=.06,wsBridge=ws,
+          archiveSessionUuid={session},archiveLapN={lap},car={{speedKmh=80,lapCount=2}}}})
+        return ws._calls[1].send.payload
+        """
+    )
+    assert payload["archive_session_uuid"] is None
+    if lap != "1":
+        assert payload["archive_lap_n"] is None
+
+
+@pytest.mark.parametrize(
+    "previous_count,current_count,previous_spline,current_spline,teleported,expected",
+    [
+        (2, 2, 0.4, 0.41, False, 10),
+        (2, 3, 0.99, 0.01, False, None),
+        (2, 2, 0.99, 0.01, False, None),
+        (2, 2, 0.4, 0.41, True, None),
+        (-1, 2, 0.4, 0.41, False, None),
+        (None, 2, 0.4, 0.41, False, None),
+    ],
+)
+def test_archive_ordinal_uses_all_boundary_counter_only_on_unambiguous_frames(
+    previous_count, current_count, previous_spline, current_spline, teleported, expected
+):
+    rt = _runtime()
+    helper = rt.execute('local m=require("telemetry_publisher"); return m.archiveLapOrdinal')
+    assert (
+        helper(9, previous_count, current_count, previous_spline, current_spline, teleported)
+        == expected
+    )
+
+
 def test_telemetry_tick_suppressed_until_external_hello_acked():
     # #671: due ticks must return false and leave the socket untouched while
     # isExternalReady is false — even when raw sendJson would succeed.

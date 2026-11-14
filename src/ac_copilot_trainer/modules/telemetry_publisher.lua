@@ -223,6 +223,24 @@ function M.publishTireTempsIfDue(opts)
 end
 
 
+--- The tick precedes archive-boundary processing in script.update. Do not assign
+--- the previous ordinal to a new-lap/teleport frame while that processing is pending.
+function M.archiveLapOrdinal(completed, previousCount, currentCount, previousSpline, currentSpline, teleported)
+  for _, value in ipairs({ completed, previousCount, currentCount }) do
+    if type(value) ~= "number" or _finite(value) == nil or value < 0 or value ~= math.floor(value) then
+      return nil
+    end
+  end
+  -- ipairs cannot validate a hole in the argument tuple.
+  if completed == nil or previousCount == nil or currentCount == nil then return nil end
+  if teleported or currentCount ~= previousCount then return nil end
+  if type(previousSpline) ~= "number" or type(currentSpline) ~= "number"
+      or _finite(previousSpline) == nil or _finite(currentSpline) == nil
+      or previousSpline < 0 or previousSpline > 1 or currentSpline < 0 or currentSpline > 1
+      or previousSpline-currentSpline > 0.5 then return nil end
+  return completed+1
+end
+
 local function _clamp(v, lo, hi)
   v = tonumber(v)
   if v == nil or v ~= v or v == math.huge or v == -math.huge then
@@ -364,6 +382,23 @@ function M.publishTelemetryTickIfDue(opts)
     spline = _clamp(_field(car, "splinePosition") or 0, 0, 1),
     lap = math.max(0, math.floor(tonumber(_field(car, "lapCount")) or 0)),
   }
+  local archiveSession = opts.archiveSessionUuid
+  if type(archiveSession) == "string" and #archiveSession > 0 and #archiveSession <= 128
+      and archiveSession:match("^[%w_%.%-]+$") then
+    payload.archive_session_uuid = archiveSession
+  end
+  local archiveLap = opts.archiveLapN
+  if type(archiveLap) == "number" and _finite(archiveLap) ~= nil
+      and archiveLap >= 1 and archiveLap == math.floor(archiveLap) then
+    payload.archive_lap_n = archiveLap
+  end
+  -- Installed SDK ac_apps/lib.lua:5024: integer number of wheels outside allowed area.
+  -- Unknown is omitted from a live tick, never silently interpreted as zero.
+  local outside = _field(car, "wheelsOutside")
+  if type(outside) == "number" and _finite(outside) ~= nil
+      and outside >= 0 and outside <= 4 and outside == math.floor(outside) then
+    payload.wheels_outside = outside
+  end
   -- Installed CSP ac_apps/lib.lua: these are physics-only settings, distinct
   -- from the intervention booleans below. Never substitute a saved setup value.
   if _field(car, "physicsAvailable") == true then

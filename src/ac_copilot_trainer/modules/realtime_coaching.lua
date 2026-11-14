@@ -100,7 +100,7 @@ end
 
 --- Canonical labels/bounds come directly from the active Lua segment graph.
 --- Reject the whole catalog on ambiguity: partial catalogs renumber a track.
-function M.buildCornerCatalog(segments)
+function M.buildCornerCatalog(segments, centerline)
   if type(segments) ~= "table" then return nil, false, "segments unavailable" end
   local rows, seen = {}, {}
   local count = 0
@@ -131,7 +131,25 @@ function M.buildCornerCatalog(segments)
       return nil, false, "malformed canonical segment"
     end
   end
-  if #rows == 0 then return nil, false, "canonical corners unavailable" end
+  if #rows == 0 then
+    local geometry, sourceReason = centerline
+    if geometry == nil then
+      geometry, sourceReason = require("spline_parser").loadTrackCenterline()
+    end
+    if not geometry then
+      return nil, false, sourceReason or "authored centerline unavailable"
+    end
+    local derived, reason = require("corner_analysis").segmentsFromCenterline(geometry)
+    if not derived then return nil, false, reason end
+    -- Only the catalogue borrows geometric identities. Do not feed these entry
+    -- boundaries to findNextBrake(), create reference speeds, or fabricate technique.
+    for _, seg in ipairs(derived) do
+      rows[#rows+1] = { corner_id=seg.label, s0=seg.s0, s1=seg.s1,
+        brake_spline=seg.brakeSpline, anchor_source=seg.anchorSource,
+        geometry_source=seg.geometrySource, derived=true }
+    end
+    return rows, true, reason
+  end
   return rows, true, "active Lua reference segments"
 end
 

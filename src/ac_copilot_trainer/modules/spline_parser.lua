@@ -117,6 +117,86 @@ function M.loadForTrack(sim)
   return nil
 end
 
+local centerlineCacheKey, centerlineCache
+
+--- Derived midpoint of CSP's authored track boundaries, NOT the AI racing line.
+--- SDK ac_apps/lib.lua:3114-3143: spline sides are authored boundary distances;
+--- trackCoordinateToWorld X=-1/+1 selects the left/right boundary at progress Z.
+--- No guessing of fast_lane.ai record strides, widths, or normals is involved.
+function M.loadTrackCenterline()
+  if not ac or type(ac.getTrackAISplineSides) ~= "function"
+      or type(ac.trackCoordinateToWorld) ~= "function" or type(ac.getSim) ~= "function"
+      or vec3 == nil then
+    return nil, "authored track-boundary API unavailable"
+  end
+  local trackId = ch.safeTrackIdRaw()
+  local layout = ch.safeTrackLayoutRaw()
+  local ok, sim = pcall(ac.getSim)
+  local length = ok and sim and tonumber(sim.trackLengthM) or nil
+  if type(trackId) ~= "string" or trackId == "" or type(layout) ~= "string"
+      or not length or not isFiniteF32(length) or length < 100 or length > 100000 then
+    return nil, "authored track-boundary identity/length unavailable"
+  end
+  local key = trackId .. "/" .. tostring(layout) .. ":" .. tostring(length)
+  if key == centerlineCacheKey and centerlineCache then return centerlineCache end
+  -- Never retain a different track's geometry after an unsuccessful replacement.
+  centerlineCacheKey, centerlineCache = nil, nil
+  local count = math.max(96, math.min(2048, math.ceil(length / 4)))
+  local points = {}
+  local function sample(progress)
+    local good, p = pcall(function()
+      local sides = ac.getTrackAISplineSides(progress)
+      if not sides or not isFiniteF32(sides.x) or not isFiniteF32(sides.y)
+          or sides.x <= 0 or sides.y <= 0 then return nil end
+      local left = ac.trackCoordinateToWorld(vec3(-1, 0, progress))
+      local right = ac.trackCoordinateToWorld(vec3(1, 0, progress))
+      if not left or not right then return nil end
+      for _, axis in ipairs({ "x", "y", "z" }) do
+        if not isFiniteF32(left[axis]) or not isFiniteF32(right[axis]) then return nil end
+      end
+      local dx, dy, dz = right.x-left.x, right.y-left.y, right.z-left.z
+      local width = math.sqrt(dx*dx + dy*dy + dz*dz)
+      local authoredWidth = sides.x + sides.y
+      if width < 1 or width > 100 or width < authoredWidth * 0.5
+          or width > authoredWidth * 1.5 then return nil end
+      return { x=(left.x+right.x)*0.5, y=(left.y+right.y)*0.5,
+        z=(left.z+right.z)*0.5, spline=progress, width_m=width }
+    end)
+    return good and p or nil
+  end
+  for i = 1, count do
+    local p = sample((i-1)/count)
+    if not p then return nil, "invalid authored track boundary" end
+    points[i] = p
+  end
+  local finish = sample(1)
+  local first = points[1]
+  if not finish or (finish.x-first.x)^2 + (finish.y-first.y)^2
+      + (finish.z-first.z)^2 > 4 then
+    return nil, "authored track boundaries are not a closed circuit"
+  end
+  local arc = 0
+  for i = 1, count do
+    local a, b = points[i], points[i % count + 1]
+    local distance = math.sqrt((a.x-b.x)^2 + (a.y-b.y)^2 + (a.z-b.z)^2)
+    if distance < 0.05 or distance > length/count*4 then
+      return nil, "discontinuous authored track boundaries"
+    end
+    arc = arc + distance
+  end
+  if arc < length*0.5 or arc > length*2 then
+    return nil, "authored track-boundary length mismatch"
+  end
+  centerlineCacheKey = key
+  centerlineCache = { source="csp_authored_boundaries_midpoint", derived=true,
+    closed=true, track_id=trackId, layout=tostring(layout), length_m=arc, points=points }
+  return centerlineCache
+end
+
+function M.clearTrackCenterlineCache()
+  centerlineCacheKey, centerlineCache = nil, nil
+end
+
 --- Squared XZ distance from point to segment AB (ground plane).
 local function distSqPointSegXZ(px, pz, ax, az, bx, bz)
   local dx, dz = bx - ax, bz - az

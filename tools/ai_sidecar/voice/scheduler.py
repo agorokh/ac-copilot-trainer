@@ -37,9 +37,10 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
 
+from tools.ai_sidecar.coaching_diagnosis import RootError
 from tools.ai_sidecar.voice.config import Verbosity, VoiceConfig
 from tools.ai_sidecar.voice.playback import Playback
 from tools.ai_sidecar.voice.resolver import Resolver
@@ -52,6 +53,26 @@ _ACT_RANK = URGENCY_RANK["act"]
 #: tone-register ordering (low -> high) — used only to break a same-urgency barge-in tie so a
 #: critical escalation can interrupt a still-playing urgent clip (issue #381).
 _REGISTER_RANK = REGISTER_RANK
+_INSTRUCTIONAL_KINDS = frozenset(root.value for root in RootError if root is not RootError.NONE) | {
+    "confirm",
+    "corner_advice",
+}
+
+
+def _instructional(advisory: object) -> bool | None:
+    """Classify semantics, never urgency: an apex PRIME may itself be an act cue."""
+    detail = getattr(advisory, "detail", None)
+    coach = detail.get("coach") if isinstance(detail, Mapping) else None
+    kind = getattr(advisory, "kind", None)
+    if coach == "save" or kind == "save":
+        return False
+    if (isinstance(coach, str) and coach in {"prime", "confirm"}) or (
+        isinstance(kind, str) and kind in _INSTRUCTIONAL_KINDS
+    ):
+        return True
+    # Preserve legacy/race-management warnings whose semantics were not supplied. Their
+    # dispatch is observable, but it must not become positive proof of an uncued trial.
+    return None
 
 
 @dataclass
@@ -91,6 +112,12 @@ class Scheduler:
         self._clock = clock
         self._on_decision = on_decision
         self.decision_error_count = 0
+        self.instructional_guard_error_count = 0
+        self.instructional_cancel_error_count = 0
+        self._instructional_guard: Callable[[], bool] | None = None
+        # Serialize refresh/cancel with the final playback current-check and play. The
+        # ordinary queue lock remains separate so a callback never blocks submissions.
+        self._dispatch_lock = threading.RLock()
 
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
@@ -106,6 +133,64 @@ class Scheduler:
         # last dedup_key spoken per kind — a DIFFERENT brake zone of a merged corner (#522)
         # must not be swallowed by the same-kind cooldown as if it repeated the previous cue.
         self._last_spoke_kind_key: dict[str, str] = {}
+
+    def _instructions_allowed(self) -> bool:
+        guard = self._instructional_guard
+        if guard is None:
+            return True
+        try:
+            return guard() is True
+        except Exception:  # noqa: BLE001 — a drill callback must not break emergency audio
+            self.instructional_guard_error_count += 1
+            _log.exception("voice: instructional guard failed; instructions remain silent")
+            return False
+
+    def set_instructional_guard(self, guard: Callable[[], bool] | None) -> None:
+        """Install an optional cheap permission check; no guard preserves normal arbitration.
+
+        The callback must be nonblocking and must not call the scheduler. Recheck it at
+        dispatch, then explicitly refresh after a phase/condition change to stop an
+        already-playing instruction. SAVE and unknown safety warnings are never cancelled.
+        """
+        if guard is not None and not callable(guard):
+            raise TypeError("instructional guard must be callable or None")
+        with self._dispatch_lock:
+            self._instructional_guard = guard
+            self._refresh_instructional_guard_locked()
+        with self._cond:
+            self._cond.notify_all()
+
+    def refresh_instructional_guard(self) -> None:
+        """Apply a changed phase without deleting the historical dispatch evidence."""
+        with self._dispatch_lock:
+            self._refresh_instructional_guard_locked()
+        with self._cond:
+            self._cond.notify_all()
+
+    def _refresh_instructional_guard_locked(self) -> None:
+        if self._instructions_allowed():
+            return
+        with self._lock:
+            dropped_pending = [p for p in self._pending if _instructional(p.advisory) is True]
+            self._pending = [p for p in self._pending if _instructional(p.advisory) is not True]
+            dropped_deferred = [p for p in self._deferred if p[0].instructional is True]
+            self._deferred = [p for p in self._deferred if p[0].instructional is not True]
+        now = self._clock()
+        for pending in dropped_pending:
+            self._decision(
+                "instructional_guard", now, pending.enqueued_at, advisory=pending.advisory
+            )
+        for utterance, enqueued_at in dropped_deferred:
+            self._decision("instructional_guard", now, enqueued_at, utterance=utterance)
+        current = self._playback.current
+        if current is not None and current.instructional is True:
+            try:
+                self._playback.cancel()
+            except Exception:  # noqa: BLE001 — keep the scheduler and SAVE path alive
+                self.instructional_cancel_error_count += 1
+                _log.exception("voice: could not cancel an active drill instruction")
+            else:
+                self._decision("instructional_guard_cancelled", now, now, utterance=current)
 
     def _decision(
         self,
@@ -185,6 +270,9 @@ class Scheduler:
     def _consider(self, item: _Pending, now: float) -> Utterance | None:
         """Resolve + filter one pending advisory; return a playable utterance or ``None``."""
         utt = self._resolver.resolve(item.advisory)  # type: ignore[arg-type]
+        semantic = _instructional(item.advisory)
+        if utt is not None and semantic is not None:
+            utt = replace(utt, instructional=semantic)
         self._decision(
             "resolved" if utt is not None else "unresolved_phrase",
             now,
@@ -193,6 +281,9 @@ class Scheduler:
             utterance=utt,
         )
         if utt is None:
+            return None
+        if utt.instructional is True and not self._instructions_allowed():
+            self._decision("instructional_guard", now, item.enqueued_at, utterance=utt)
             return None
         if self._config.verbosity == Verbosity.OFF:
             self._decision("verbosity_off", now, item.enqueued_at, utterance=utt)
@@ -234,6 +325,20 @@ class Scheduler:
         return utt
 
     def _dispatch(
+        self, winner: Utterance, now: float, *, enqueued_at: float | None = None
+    ) -> Utterance | None:
+        with self._dispatch_lock:
+            if winner.instructional is True and not self._instructions_allowed():
+                self._decision(
+                    "instructional_guard",
+                    now,
+                    enqueued_at if enqueued_at is not None else now,
+                    utterance=winner,
+                )
+                return None
+            return self._dispatch_allowed(winner, now, enqueued_at=enqueued_at)
+
+    def _dispatch_allowed(
         self, winner: Utterance, now: float, *, enqueued_at: float | None = None
     ) -> Utterance | None:
         """Play ``winner`` with barge-in semantics, or drop it if the channel is busy with >=

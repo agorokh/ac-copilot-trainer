@@ -46,6 +46,9 @@ class Utterance:
     corner: int | None
     text: str
     dedup_key: str
+    # Coach semantics survive resolver fallback and phase-slot deferral. Unknown legacy
+    # advisories remain None rather than being mistaken for proof of an uncued lap.
+    instructional: bool | None = None
 
     @property
     def rank(self) -> int:

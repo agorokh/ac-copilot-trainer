@@ -127,6 +127,62 @@ def _subprocess_kwargs(**kwargs: Any) -> dict[str, Any]:
     return kwargs
 
 
+def _windows_process_parents() -> dict[int, int]:
+    """Strict native snapshot of PID -> parent PID, as in the harness Toolhelp probes."""
+    import ctypes
+    from ctypes import wintypes
+
+    class ProcessEntry(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+    kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    for name in ("Process32FirstW", "Process32NextW"):
+        function = getattr(kernel, name)
+        function.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry))
+        function.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel.CloseHandle.restype = wintypes.BOOL
+    snapshot = kernel.CreateToolhelp32Snapshot(0x00000002, 0)
+    if snapshot == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        entry = ProcessEntry()
+        entry.dwSize = ctypes.sizeof(entry)
+        if not kernel.Process32FirstW(snapshot, ctypes.byref(entry)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        parents = {}
+        while True:
+            parents[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+            ctypes.set_last_error(0)
+            if not kernel.Process32NextW(snapshot, ctypes.byref(entry)):
+                error = ctypes.get_last_error()
+                if error not in (0, 18):  # ERROR_NO_MORE_FILES
+                    raise ctypes.WinError(error)
+                return parents
+    finally:
+        kernel.CloseHandle(snapshot)
+
+
+def _bind_windows_process(pid: int) -> Any:
+    # Reuse the harness's retained kernel handle rather than inventing PID-only kill logic.
+    from tools.ac_harness.rig_watchdog import WindowsProcess
+
+    return WindowsProcess(pid, can_terminate=True)
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -226,6 +282,7 @@ class GamePointConfig:
     setup_store: str | None = None
     simhub_exe: str | None = None
     start_simhub: bool = False
+    coach_drills: bool = False
     resilient_car: str | None = None
     resilient_track: str | None = None
     resilient_layout: str | None = None
@@ -329,6 +386,9 @@ class GamePointConfig:
             ),
             simhub_exe=_configured_text(env_map.get("AC_COPILOT_SIMHUB_EXE"), settings.simhub_exe),
             start_simhub=start_simhub,
+            coach_drills=_env_bool_or(
+                env_map.get("AC_COPILOT_COACH_DRILLS"), default=bool(settings.coach_drills)
+            ),
             keypad_profiles=_configured_text(
                 env_map.get("AC_COPILOT_KEYPAD_PROFILES"), settings.keypad_profiles
             ),
@@ -401,6 +461,9 @@ class GamePointStatus:
     moza_review: ProbeResult = field(
         default_factory=lambda: ProbeResult("moza_review", True, "not_run", "Offline report only")
     )
+    practice_drill: ProbeResult = field(
+        default_factory=lambda: ProbeResult("practice_drill", True, "disabled")
+    )
 
     @property
     def stable_ac_in_use(self) -> bool:
@@ -433,6 +496,7 @@ class GamePointStatus:
             "resilient": self.resilient.to_dict(),
             "keypad": self.keypad.to_dict(),
             "moza_review": self.moza_review.to_dict(),
+            "practice_drill": self.practice_drill.to_dict(),
             "log_path": self.log_path,
             "status_path": self.status_path,
             "checks": [check.to_dict() for check in self.checks],
@@ -470,6 +534,10 @@ class GamePointSupervisor:
         self._python = python_executable or sys.executable
         self._frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
         self._sidecar_process: Any | None = None
+        self._sidecar_family: dict[int, Any] = {}
+        self._sidecar_family_identities: dict[int, Any] = {}
+        self._sidecar_stop_error = ""
+        self._coach_drills_restart_pending = False
         self._resilient_process: Any | None = None
         self._resilient_log_handle: Any | None = None
         self._log_handles: list[Any] = []
@@ -726,6 +794,9 @@ class GamePointSupervisor:
             # Normal reference selection must reach the diagnosed post-lap consumer.
             # Runtime qualification still rejects unusable references; an explicit off wins.
             env.setdefault("AC_COPILOT_COACH_V2", "1")
+        env["AC_COPILOT_COACH_DRILLS"] = "1" if self.config.coach_drills else "0"
+        if self.config.coach_drills:
+            env["AC_COPILOT_COACH_V2"] = "1"
         # The launcher's RESOLVED config must win over whatever it inherited. `env` starts as a
         # copy of the parent environment, and `_put_if_present` only ever *sets* — so a
         # set-but-blank AC_COPILOT_VOICE_BANK (which `_configured_text` resolves to None, i.e.
@@ -832,6 +903,8 @@ class GamePointSupervisor:
             detail = "; ".join(check.detail or check.name for check in blocking)
             return ProbeResult("sidecar", False, "blocked", detail)
         with self._proc_lock:
+            if self._sidecar_stop_error:
+                return ProbeResult("sidecar", False, "stop_failed", self._sidecar_stop_error)
             if self._sidecar_process is not None and self._sidecar_process.poll() is None:
                 return ProbeResult("sidecar", True, "running", f"pid={self._sidecar_process.pid}")
             if self._sidecar_process is not None and self._sidecar_process.poll() is not None:
@@ -1222,6 +1295,8 @@ class GamePointSupervisor:
             if proc is None:
                 self._close_log_handles()
                 return ProbeResult("sidecar", True, "stopped")
+            if self._frozen and sys.platform == "win32":
+                return self._stop_frozen_sidecar(proc, timeout=timeout)
             if proc.poll() is not None:
                 self._sidecar_process = None
                 self._close_log_handles()
@@ -1238,6 +1313,91 @@ class GamePointSupervisor:
             self._close_log_handles()
             return ProbeResult("sidecar", True, "stopped")
 
+    def _capture_frozen_sidecar_family(self, proc: Any) -> None:
+        """Bind the owned bootloader and descendants BEFORE the parent can be terminated."""
+        if proc.pid not in self._sidecar_family:
+            root = _bind_windows_process(proc.pid)
+            try:
+                identity = root.identity()
+                expected = os.path.normcase(os.path.abspath(self._python))
+                if os.path.normcase(os.path.abspath(identity.exe)) != expected:
+                    raise OSError(
+                        "owned frozen sidecar image does not match the spawned executable"
+                    )
+            except Exception:
+                root.close()
+                raise
+            self._sidecar_family[proc.pid] = root
+            self._sidecar_family_identities[proc.pid] = identity
+        parents = _windows_process_parents()
+        pending = list(self._sidecar_family)
+        while pending:
+            parent_pid = pending.pop(0)
+            parent_identity = self._sidecar_family_identities[parent_pid]
+            for pid, parent in parents.items():
+                if parent != parent_pid or pid in self._sidecar_family:
+                    continue
+                child = _bind_windows_process(pid)
+                try:
+                    identity = child.identity()
+                    if identity.created_filetime < parent_identity.created_filetime:
+                        # A stale parent PID from another process generation is not ownership.
+                        raise OSError(
+                            f"cannot prove frozen sidecar descendant ownership: pid={pid}"
+                        )
+                except Exception:
+                    child.close()
+                    raise
+                self._sidecar_family[pid] = child
+                self._sidecar_family_identities[pid] = identity
+                pending.append(pid)
+
+    def _stop_frozen_sidecar(self, proc: Any, *, timeout: float) -> ProbeResult:
+        try:
+            self._capture_frozen_sidecar_family(proc)
+        except Exception as exc:  # noqa: BLE001 - unknown ownership must not kill foreign audio/UI
+            self._sidecar_stop_error = f"could not capture owned frozen process family: {exc}"
+            return ProbeResult("sidecar", False, "stop_failed", self._sidecar_stop_error)
+        errors = []
+        if proc.poll() is None:
+            try:
+                self._run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    **_subprocess_kwargs(capture_output=True, text=True, timeout=timeout),
+                )
+            except Exception as exc:  # noqa: BLE001 - retained handles provide a narrow fallback
+                errors.append(str(exc))
+        # taskkill success is not exit proof. A failed invocation, parent-only exit, or an
+        # already-exited bootloader still leaves the exact captured child handles available.
+        for process in reversed(list(self._sidecar_family.values())):
+            try:
+                if not process.exited():
+                    process.terminate()
+            except Exception as exc:  # noqa: BLE001 - try every owned member before reporting
+                errors.append(str(exc))
+        deadline = time.monotonic() + max(0.0, timeout)
+        try:
+            while True:
+                remaining = [
+                    pid for pid, member in self._sidecar_family.items() if not member.exited()
+                ]
+                if not remaining and proc.poll() is not None:
+                    break
+                if time.monotonic() >= deadline:
+                    raise OSError(f"owned frozen sidecar processes still alive: {remaining}")
+                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+        except Exception as exc:  # noqa: BLE001 - retain handles and ownership for a retry
+            self._sidecar_stop_error = "; ".join([*errors, str(exc)])
+            return ProbeResult("sidecar", False, "stop_failed", self._sidecar_stop_error)
+        for process in self._sidecar_family.values():
+            process.close()
+        self._sidecar_family.clear()
+        self._sidecar_family_identities.clear()
+        self._sidecar_stop_error = ""
+        self._sidecar_process = None
+        self._close_log_handles()
+        return ProbeResult("sidecar", True, "stopped")
+
     def poll_status(self, *, start_simhub: bool | None = None) -> GamePointStatus:
         """Snapshot every probe and persist status.json.
 
@@ -1252,7 +1412,7 @@ class GamePointSupervisor:
         # Health first: the `voice_endpoint` check (#672 Part A) needs the sidecar's live
         # device name, which only the health payload carries.
         checks = self.preflight(health_payload)
-        if health.ok:
+        if health.ok and sidecar.state != "stop_failed":
             sidecar = health
         screen = _screen_from_health(health)
         status = GamePointStatus(
@@ -1260,6 +1420,7 @@ class GamePointSupervisor:
             sidecar=sidecar,
             screen=screen,
             voice=self.probe_voice(health_payload),
+            practice_drill=self.probe_practice_drill(health_payload),
             simhub=self.probe_simhub(start=start_sim),
             tablet=self.probe_tablet(health_payload),
             resilient=self._resilient_process_status(),
@@ -1627,6 +1788,99 @@ class GamePointSupervisor:
             )
         return self.config.start_simhub
 
+    def set_coach_drills(self, enabled: bool) -> bool:
+        """Save the preference for the normal next sidecar start, preserving sessions.
+
+        Explicit environment values remain authoritative. A running/adopted
+        sidecar is never stopped or reconfigured from this preference toggle.
+        """
+        from tools.rig_launcher.settings import update_settings
+
+        with self._proc_lock:
+            update_settings(self.paths, coach_drills=bool(enabled))
+            applied = _env_bool_or(
+                self._environ.get("AC_COPILOT_COACH_DRILLS"), default=bool(enabled)
+            )
+            if applied != self.config.coach_drills:
+                self._coach_drills_restart_pending = True
+            self.config = replace(self.config, coach_drills=applied)
+        return applied
+
+    def probe_practice_drill(
+        self, health_payload: Mapping[str, object] | None = None
+    ) -> ProbeResult:
+        """Render only the sidecar's operational practice state, without personal data."""
+        voice = health_payload.get("voice") if isinstance(health_payload, Mapping) else None
+        drill = voice.get("practice_drill") if isinstance(voice, Mapping) else None
+        if (
+            not isinstance(drill, Mapping)
+            or type(drill.get("configured")) is not bool
+            or type(drill.get("active")) is not bool
+            or (drill.get("active") is True and drill.get("configured") is not True)
+        ):
+            return ProbeResult(
+                "practice_drill", True, "unavailable", "Practice drill status is not available yet."
+            )
+        if self._coach_drills_restart_pending:
+            if drill["configured"] != self.config.coach_drills:
+                return ProbeResult(
+                    "practice_drill",
+                    True,
+                    "restart_required",
+                    "Saved. Restart Game Point after your driving session to apply.",
+                )
+            self._coach_drills_restart_pending = False
+        if not drill["configured"]:
+            return ProbeResult("practice_drill", True, "disabled", "Practice drill is off.")
+        phase = str(drill.get("phase") or "")
+        reason = str(drill.get("reason") or "")
+        reasons = {
+            "drill_requires_qualified_human_archives": "Select qualified human reference and lap.",
+            "qualified_human_reference_required": "Choose a qualified human reference and session.",
+            "awaiting_qualified_human_baseline": "Drive valid human laps to set a baseline.",
+            "completed_qualified_human_lap_required": "Waiting for a valid, qualified human lap.",
+            "condition_ineligible": "Practice is on hold until driving conditions are suitable.",
+            "instruction_not_delivered": "Waiting for a practice instruction to be delivered.",
+            "retention_instruction_contamination": "An instruction interrupted the uncued check.",
+            "drill_baseline_already_in_target_band": "Your baseline already meets this target.",
+            "exit_speed_degraded": "Practice stopped because corner exit speed fell.",
+            "corner_time_degraded": "Practice stopped because the whole corner became slower.",
+            "off_track": "Practice stopped after an off-track event.",
+            "lap_budget_exhausted": "Practice stopped at the session lap limit.",
+            "retention_target_reverted": "The target did not hold during the uncued check.",
+            "cued_target_not_demonstrated": "The practice target was not consistent.",
+            "overheat": "Practice stopped because the tyres are too hot.",
+            "critical": "Practice stopped because driving conditions are unsafe.",
+        }
+        if phase in {"failed", "aborted", "stopped"}:
+            return ProbeResult(
+                "practice_drill",
+                False,
+                "stopped",
+                reasons.get(reason, "Practice stopped; review your session."),
+            )
+        if phase == "passed":
+            return ProbeResult(
+                "practice_drill", True, "passed", "Practice and uncued checks completed."
+            )
+        if drill.get("active") is True and phase == "retention":
+            return ProbeResult(
+                "practice_drill",
+                True,
+                "retention",
+                "Drive this check without practice instructions.",
+            )
+        if drill.get("active") is True and phase == "cued":
+            return ProbeResult(
+                "practice_drill", True, "practice", "Follow the practice target for one corner."
+            )
+        return ProbeResult(
+            "practice_drill",
+            True,
+            "waiting",
+            reasons.get(reason, "Waiting for a qualified human reference and session."),
+        )
+
     def close(self) -> None:
         with self._proc_lock:
             if self._keypad_worker is not None:
@@ -1680,6 +1934,8 @@ class GamePointSupervisor:
         # swap it out between the None-check and the .poll()/.pid reads (#568 review).
         with self._proc_lock:
             proc = self._sidecar_process
+            if self._sidecar_stop_error:
+                return ProbeResult("sidecar", False, "stop_failed", self._sidecar_stop_error)
             if proc is None:
                 return ProbeResult("sidecar", False, "stopped")
             code = proc.poll()
@@ -2237,6 +2493,7 @@ def render_status_lines(status: GamePointStatus) -> list[str]:
         status.sidecar,
         status.screen,
         status.voice,
+        status.practice_drill,
         status.simhub,
         status.tablet,
         status.resilient,

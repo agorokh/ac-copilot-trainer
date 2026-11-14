@@ -69,8 +69,8 @@ def test_generated_archive_carries_per_wheel_channels() -> None:
         assert name in fields
     assert "rpm" in fields
     # Append-only history: #478 pressure block, then #490 Tier-1 (last was accG_vert at idx 75),
-    # then #488 Part A Tier-2 force/slip — so the final column is now dy_rr.
-    assert fields[-1] == "dy_rr"
+    # then #488 force/slip and #529's optional measured off-track count.
+    assert fields[-2:] == ["dy_rr", "wheelsOutside"]
     frames = archive_trace_to_object_trace(record)
     f0 = frames[0]
     speed_ms = f0["speed"] / 3.6
@@ -183,11 +183,39 @@ def test_generated_archive_carries_tier2_dynamic_channels() -> None:
         "dy_rr",
     ):
         assert name in fields
-    assert fields[-1] == "dy_rr"
-    assert len(fields) == 100
+    assert fields[-2:] == ["dy_rr", "wheelsOutside"]
+    assert len(fields) == 101
+    assert archive_trace_to_object_trace(record)[0]["wheelsOutside"] == -1
     f0 = archive_trace_to_object_trace(record)[0]
     for name in ("slipRatio_fl", "slipAngle_rr", "mz_fl", "fx_rr", "dy_rr"):
         assert f0[name] == pytest.approx(0.0)
+
+
+def test_validator_accepts_full_legacy_100_columns_without_offtrack_claim() -> None:
+    record = build_archive_record_from_scenario("brake_too_late")
+    record["trace"]["fields"] = list(TRACE_FIELDS[:100])
+    record["trace"]["samples"] = [row[:100] for row in record["trace"]["samples"]]
+    validate_lap_archive_record(record)
+    assert "wheelsOutside" not in archive_trace_to_object_trace(record)[0]
+
+
+@pytest.mark.parametrize(
+    "outside,expected", [(0, 0), (3, 3), (None, -1), (-1, -1), (True, -1), ("0", -1), (5, -1)]
+)
+def test_generated_optional_offtrack_channel_is_never_defaulted_to_zero(outside, expected):
+    from tools.ac_harness.reference_lap import trace_to_columns
+
+    frames = [
+        {
+            name: value
+            for name, value in zip(
+                TRACE_FIELDS[:10], [i, 100, i * 1000, 0, 0, 0, 3, i, 0, 0], strict=True
+            )
+        }
+        | {"wheelsOutside": outside}
+        for i in (0, 1)
+    ]
+    assert [row[-1] for row in trace_to_columns(frames)] == [expected, expected]
 
 
 def test_validator_accepts_pre_488_76_field_trace() -> None:

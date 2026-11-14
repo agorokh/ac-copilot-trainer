@@ -132,6 +132,7 @@ local MAX_LAP_TRACE = 2000
 ---@field dy_fr number|nil
 ---@field dy_rl number|nil
 ---@field dy_rr number|nil
+---@field wheelsOutside number measured integer 0..4, or -1 when unavailable
 
 local Telemetry = {}
 Telemetry.__index = Telemetry
@@ -181,6 +182,7 @@ function M.new(cfg)
 end
 
 function Telemetry:setRecording(on)
+  if not on and self._offTrackObservation then self._offTrackObservation.complete = false end
   self.recording = on and true or false
 end
 
@@ -200,10 +202,15 @@ end
 
 --- Begin a new lap trace clock (call on lap boundary or session start).
 ---@param simTime number
-function Telemetry:beginLapClock(simTime)
+---@param fullLapBoundary boolean|nil true only after a confirmed native finish boundary
+function Telemetry:beginLapClock(simTime, fullLapBoundary)
   self.lapT0 = simTime
   self.lapBuf = {}
   self.lapN = 0
+  self._offTrackObservation = { schema_version=1, sample_count=0, unknown_count=0,
+    max_wheels_outside=-1, event_count=0, complete=fullLapBoundary == true, source="car.wheelsOutside",
+    event_count_basis="positive_runs_unknown_breaks_run" }
+  self._lastWheelsOutside = nil
 end
 
 --- Drop samples older than (now - bufferSeconds).
@@ -229,6 +236,7 @@ end
 ---@param recordLap boolean|nil false defers only lap sampling during an ambiguous finish wrap
 function Telemetry:update(dt, car, sim, recordLap)
   if not self.recording or sim.isInMainMenu then
+    if self._offTrackObservation then self._offTrackObservation.complete = false end
     return
   end
   local t = ch.simSeconds(sim)
@@ -244,6 +252,11 @@ function Telemetry:update(dt, car, sim, recordLap)
     gear = math.floor(tonumber(car.gear) or 0)
   end
   local rpm = tonumber(car.rpm) or 0
+  local wheelsOutside = ch.safeCarField(car, "wheelsOutside", nil)
+  if type(wheelsOutside) ~= "number" or wheelsOutside ~= wheelsOutside
+      or wheelsOutside < 0 or wheelsOutside > 4 or wheelsOutside ~= math.floor(wheelsOutside) then
+    wheelsOutside = -1
+  end
   ---@type TelemetrySample
   local s = {
     t = t,
@@ -257,6 +270,7 @@ function Telemetry:update(dt, car, sim, recordLap)
     px = px,
     py = py,
     pz = pz,
+    wheelsOutside = wheelsOutside,
   }
   self.n = self.n + 1
   self.samples[self.n] = s
@@ -270,7 +284,25 @@ function Telemetry:update(dt, car, sim, recordLap)
   end
 
   -- Lap trace (separate from rolling window)
+  if recordLap == false and self._offTrackObservation then
+    self._offTrackObservation.complete = false
+  end
   if self.lapT0 ~= nil and recordLap ~= false then
+    -- Accumulate BEFORE either raw-buffer or final-trace downsampling. A short
+    -- excursion must not disappear when uniform sampling omits its trace row.
+    local observation = self._offTrackObservation
+    if observation then
+      observation.sample_count = observation.sample_count+1
+      if wheelsOutside < 0 then
+        observation.unknown_count = observation.unknown_count+1
+      else
+        observation.max_wheels_outside = math.max(observation.max_wheels_outside, wheelsOutside)
+        if wheelsOutside > 0 and (self._lastWheelsOutside == nil or self._lastWheelsOutside <= 0) then
+          observation.event_count = observation.event_count+1
+        end
+      end
+      self._lastWheelsOutside = wheelsOutside
+    end
     local eMs = (t - self.lapT0) * 1000
     self.lapN = self.lapN + 1
     -- Per-wheel channels (issue #266): angular speed is the canonical longitudinal signal the
@@ -410,6 +442,7 @@ function Telemetry:update(dt, car, sim, recordLap)
       dy_fr = w.dy.fr,
       dy_rl = w.dy.rl,
       dy_rr = w.dy.rr,
+      wheelsOutside = wheelsOutside,
     }
     self.lapBuf[self.lapN] = lp
     if self.lapN > MAX_LAP_RAW then
@@ -422,16 +455,23 @@ end
 
 --- Finalize the just-finished lap: downsample to MAX_LAP_TRACE, clear lap buffer, return trace.
 --- Caller should call beginLapClock(simTime) for the next lap immediately after.
+---@param includeOffTrackObservation boolean|nil return the separate summary only when requested
 ---@return LapTraceSample[]
-function Telemetry:finalizeLapTrace()
-  if self.lapN <= 0 then
-    self.lapBuf = {}
-    self.lapN = 0
-    return {}
+---@return table|nil offTrackObservation
+function Telemetry:finalizeLapTrace(includeOffTrackObservation)
+  local out = self.lapN > 0 and downsampleUniform(self.lapBuf, self.lapN, MAX_LAP_TRACE) or {}
+  local observation
+  if self._offTrackObservation then
+    observation = {}
+    for key,value in pairs(self._offTrackObservation) do observation[key] = value end
   end
-  local out = downsampleUniform(self.lapBuf, self.lapN, MAX_LAP_TRACE)
   self.lapBuf = {}
   self.lapN = 0
+  self._offTrackObservation = nil
+  self._lastWheelsOutside = nil
+  -- Preserve the one-array return contract for existing callers, including
+  -- native replay bindings that expose multiple Lua returns as a Python tuple.
+  if includeOffTrackObservation == true then return out, observation end
   return out
 end
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
@@ -52,10 +53,14 @@ class VoiceDispatch:
     duration_ms: float | None
     t_wall_ms: float
     t_mono_ms: float
+    instructional: bool | None = None
 
     def to_payload(self) -> dict[str, object]:
         """The ``coaching.voice`` wire payload (plain JSON-safe dict)."""
         payload = asdict(self)
+        if self.instructional is None:
+            # Preserve the wire shape for an older/unknown semantic producer.
+            payload.pop("instructional")
         # #531 Part E: every frame on this stream is a clip the in-process PC playback has
         # ALREADY sounded (the tap fires post-play), so the audio owner is the PC by
         # construction — regardless of register. A register-based hint here would invite a
@@ -76,18 +81,25 @@ class DispatchTapPlayback:
     def __init__(
         self,
         inner: Playback,
-        listener: Callable[[VoiceDispatch], None],
+        listener: Callable[[VoiceDispatch], None] | None,
         *,
+        cancellation_listener: Callable[[dict[str, object]], None] | None = None,
         duration_lookup: Callable[[str], float | None] | None = None,
         wall_clock: Callable[[], float] = time.time,
         mono_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._inner = inner
         self._listener = listener
+        self._cancellation_listener = cancellation_listener
         self._duration_lookup = duration_lookup
         self._wall_clock = wall_clock
         self._mono_clock = mono_clock
         self._seq = itertools.count(1)
+        self._event_lock = threading.RLock()
+        self._active_dispatch: VoiceDispatch | None = None
+        self._active_utterance: Utterance | None = None
+        self.dispatch_error_count = 0
+        self.cancellation_error_count = 0
 
     @property
     def current(self) -> Utterance | None:
@@ -98,6 +110,10 @@ class DispatchTapPlayback:
         return self._inner.output_details
 
     def play(self, utterance: Utterance) -> None:
+        with self._event_lock:
+            self._play(utterance)
+
+    def _play(self, utterance: Utterance) -> None:
         # Stamp the clocks BEFORE the backend call: on the sounddevice fallback, play()
         # opens a fresh output stream (tens of ms on WASAPI), and a post-play stamp would
         # silently exclude that interval from every downstream latency measurement — a
@@ -130,17 +146,77 @@ class DispatchTapPlayback:
             duration_ms=duration_ms,
             t_wall_ms=t_wall_ms,
             t_mono_ms=t_mono_ms,
+            instructional=utterance.instructional,
         )
+        if self._cancellation_listener is not None:
+            # The real backends retain the exact utterance while it is sounding. An
+            # already-finished/skipped clip, or another current cue, is not this dispatch.
+            if self._inner.current is utterance:
+                self._active_dispatch = dispatch
+                self._active_utterance = utterance
+            else:
+                self._active_dispatch = None
+                self._active_utterance = None
         try:
-            self._listener(dispatch)
+            if self._listener is not None:
+                self._listener(dispatch)
         except Exception:  # noqa: BLE001 — the tap must never break the audio path
+            self.dispatch_error_count += 1
             _log.exception("voice: dispatch listener failed for %s", utterance.clip_id)
 
     def cancel(self) -> None:
-        self._inner.cancel()
+        with self._event_lock:
+            active = self._active_dispatch
+            if active is None or self._inner.current is not self._active_utterance:
+                # Still forward ordinary cancellation, but never invent a correlation for
+                # audio that finished or was replaced outside the tapped play call.
+                self._active_dispatch = None
+                self._active_utterance = None
+                self._inner.cancel()
+                return
+            attempted_at = self._mono_clock() * 1000.0
+            try:
+                self._inner.cancel()
+            except Exception:
+                self.cancellation_error_count += 1
+                self._notify_cancellation(active, attempted_at=attempted_at, stopped_at=None)
+                raise
+            if self._inner.current is self._active_utterance:
+                # A no-op backend is not positive proof of a completed cancellation.
+                self.cancellation_error_count += 1
+                self._notify_cancellation(active, attempted_at=attempted_at, stopped_at=None)
+                return
+            stopped_at = self._mono_clock() * 1000.0
+            self._active_dispatch = None
+            self._active_utterance = None
+            self._notify_cancellation(active, attempted_at=attempted_at, stopped_at=stopped_at)
+
+    def _notify_cancellation(
+        self, dispatch: VoiceDispatch, *, attempted_at: float, stopped_at: float | None
+    ) -> None:
+        listener = self._cancellation_listener
+        if listener is None:
+            return
+        try:
+            listener(
+                {
+                    "seq": dispatch.seq,
+                    "clip_id": dispatch.clip_id,
+                    "dispatch_t_mono_ms": dispatch.t_mono_ms,
+                    "cancel_attempted_at_mono_ms": attempted_at,
+                    "canceled_at_mono_ms": stopped_at,
+                    "cancel_succeeded": stopped_at is not None,
+                }
+            )
+        except Exception:  # noqa: BLE001 — cancellation diagnostics must not alter audio safety
+            self.cancellation_error_count += 1
+            _log.exception("voice: cancellation listener failed for %s", dispatch.clip_id)
 
     def close(self) -> None:
-        self._inner.close()
+        with self._event_lock:
+            self._inner.close()
+            self._active_dispatch = None
+            self._active_utterance = None
 
     def _duration(self, clip_id: str) -> float | None:
         if self._duration_lookup is None:
