@@ -93,6 +93,11 @@ if any already-attributed lap would be certified.
 - **Vendor lap numbering.** The join assumes the vendor's lap number equals the archive's, as in
   the one observed session and as `tools/moza_ingest` already requires. If they differ on the
   rig, every lap abstains.
+- **Vendor save timing.** A record counts only if it was saved at least a full second after the
+  archive's (second-resolution) finish time. If the vendor saves once at each lap completion, a
+  lap becomes certifiable only after the next save, so the last lap of a stint never certifies.
+  The verdict also depends on the capture as recorded: a failed look at the vendor file after
+  the deciding read, or a later read that no longer lists the lap, abstains.
 - **Frames the app never sees.** Frames where the app returns before sampling (no car, main
   menu) are not counted; only the frame-rate floor and the wall-clock rule bound them.
 - **Tamper resistance.** Evidence is structural and hash-bound, not signed. The ledger file is
@@ -129,7 +134,7 @@ only, never machine-wide. Note the wall-clock time of every arm change on paper.
 
 | Order | Arm | Laps | How | Expected |
 |---|---|---|---|---|
-| 1 | `human` | 6 or more | Out-lap, press the declare button, then drive | Certified (at least 5 of 6) |
+| 1 | `human` | 6 or more, plus one extra | Out-lap, press the declare button, then drive. The extra lap lets the vendor save again after the sixth | Certified (at least 5 of 6) |
 | 2 | `vendor_ai_mid_lap` | 2 or more | Declaration left active; switch vendor AI on part-way through one lap and off part-way through another | Abstain |
 | 3 | `vendor_ai` | 1 or more | Vendor AI on for the whole lap | Abstain |
 | 4 | `vendor_ai_record_missing` | 1 or more | Restart the monitor into `capture-b` without `--vendor-snapshot`, then a full vendor-AI lap | Abstain (`vendor_record_missing`) |

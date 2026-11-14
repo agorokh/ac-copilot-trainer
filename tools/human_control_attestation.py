@@ -312,10 +312,10 @@ def _vendor_candidate(
     for row in rows:
         # Any row carrying this lap's number with an AI label counts against the lap,
         # whatever duration that row currently shows.
-        if (
-            type(row.get("lapNumber")) is int
-            and row["lapNumber"] == lap_n
-            and (row.get("aiIntervened") is True or row.get("eligibility") == "ai-debug-only")
+        # Deliberately loose on the number's type: 2, 2.0 and "2" all name this lap.
+        number = row.get("lapNumber")
+        if (number == lap_n or str(number) == str(lap_n)) and (
+            row.get("aiIntervened") is True or row.get("eligibility") == "ai-debug-only"
         ):
             flagged = True
         seconds = row.get("lapTimeSeconds")
@@ -367,9 +367,9 @@ def _vendor_facts(
     The last look at the vendor file must have succeeded, and every record read after
     the finish must be readable: a failed or malformed later read is never skipped in
     favour of an earlier, cleaner one. A record saved before the latest possible
-    finish cannot be relied on to contain the lap and is not a candidate. Any read
-    of the same vendor session, from the lap start on, that marks this lap number as
-    AI-intervened counts as a disagreement even if a later read no longer does.
+    finish cannot be relied on to contain the lap and is not a candidate. A read that
+    marks this lap number as AI-intervened, or an in-lap read that cannot be parsed,
+    counts as a disagreement even if a later read shows the lap clean.
     """
     lap_start, lap_end = exported_ms - lap_ms, exported_ms + 1000
     snapshots = [event for event in events if event["kind"] == "vendor_snapshot"]
@@ -407,18 +407,42 @@ def _vendor_facts(
     if not covering:
         return {**ordered[-1][0], "covering_reads": 0, "disagreeing_reads": 0}
     decision, session, _ = covering[-1]
-    disagreeing = sum(
-        1
-        for facts, _, _ in covering[:-1]
-        if facts["matched_laps"] > 1 or (facts["matched_laps"] and facts["lap"] != decision["lap"])
-    )
-    # Reads taken while the lap was still running are evidence too, when readable.
+    # A look at the file that failed after the deciding content was last read may
+    # have hidden a change to it, even if a newer session's record was read later.
+    if any(
+        not _is_hash(event.get("sha256")) and event["t_ms"] > decision["read_ms"] for event in after
+    ):
+        reasons.append("vendor_record_unreadable")
+        return None
+    # Every record that contradicts the deciding read, counted once per content.
+    contradicting = {
+        facts["record_sha256"]
+        for facts, other, flagged in covering[:-1]
+        if flagged
+        or other != session
+        or facts["matched_laps"] > 1
+        or (facts["matched_laps"] and facts["lap"] != decision["lap"])
+    }
+    # Reads taken while the lap was running (from the earliest start the wall-clock
+    # rule allows) are evidence too; one that cannot be parsed counts against the lap.
+    in_lap_start = lap_start - HUMAN_ATTESTATION_WINDOW_MARGIN_MS
     for event in reads:
-        if lap_start <= event["t_ms"] < lap_end and event["sha256"] not in parsed:
-            candidate(event)
-    disagreeing += sum(
-        1 for item in parsed.values() if item is not None and item[1] == session and item[2]
-    )
+        digest = event["sha256"]
+        if in_lap_start <= event["t_ms"] < lap_end and digest not in parsed:
+            if candidate(event) is None:
+                contradicting.add(digest)
+    # A record that marks this lap number as AI contradicts a clean verdict when it
+    # belongs to the deciding vendor session, or to any session overlapping the lap
+    # that was saved after the lap began.
+    for digest, item in parsed.items():
+        if item is None or not item[2]:
+            continue
+        facts, other, _ = item
+        if other == session or (
+            facts["saved_ms"] >= in_lap_start and facts["session_started_ms"] <= lap_end
+        ):
+            contradicting.add(digest)
+    disagreeing = len(contradicting)
     return {**decision, "covering_reads": len(covering), "disagreeing_reads": disagreeing}
 
 

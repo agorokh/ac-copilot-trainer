@@ -451,6 +451,70 @@ def test_any_read_of_the_session_that_flags_this_lap_number_blocks_it():
     assert "vendor_record_unreadable" in attest(**_reads((LAP_END + 2000, nameless))).reasons
 
 
+def test_mid_lap_ai_flag_survives_a_mangled_or_renamed_vendor_record():
+    """The vendor flags the lap while it runs, then publishes it clean."""
+    clean = vendor_payload()
+    mid_lap_ms = LAP_START + 31_000
+
+    def flagged(**changes):
+        payload = vendor_payload(aiIntervened=True, lapTimeSeconds=None, finalized=False)
+        payload["savedAtMs"] = LAP_START + 30_000
+        payload.update(changes)
+        return payload
+
+    mistyped_row = flagged()
+    mistyped_row["summary"]["laps"].append({"id": "x", "recordUid": "x", "lapTimeSeconds": "--"})
+    loose_number = flagged()
+    loose_number["summary"]["laps"][0]["lapNumber"] = "2"
+    float_number = flagged()
+    float_number["summary"]["laps"][0]["lapNumber"] = 2.0
+    for record in (
+        flagged(),
+        flagged(sessionId="renamed-session"),
+        flagged(sessionId=""),
+        mistyped_row,
+        loose_number,
+        float_number,
+    ):
+        result = attest(**_reads((mid_lap_ms, record), (LAP_END + 2000, clean)))
+        assert not result.verified and "vendor_join_ambiguous" in result.reasons
+        # Also within the slack the wall-clock rule leaves before the estimated start.
+        early = attest(**_reads((LAP_START - 3000, record), (LAP_END + 2000, clean)))
+        assert not early.verified
+    # The preserved bytes of a mid-lap read are gone: unknown is not clean.
+    inputs = _reads((mid_lap_ms, flagged()), (LAP_END + 2000, clean))
+    flagged_digest = hashlib.sha256(encode(flagged())).hexdigest()
+    del inputs["vendor"][flagged_digest]
+    assert "vendor_join_ambiguous" in attest(**inputs).reasons
+    # A stale record from before the lap, even one that flags the same lap number in
+    # an older session, says nothing about this lap.
+    stale = vendor_payload(aiIntervened=True)
+    stale.update(
+        sessionId="older-session",
+        sessionStartedAtMs=LAP_START - 900_000,
+        savedAtMs=LAP_START - 600_000,
+    )
+    assert attest(**_reads((mid_lap_ms, stale), (LAP_END + 2000, clean))).verified
+    # An earlier covering read under another session id is a contradiction.
+    renamed = vendor_payload(aiIntervened=True, lapTimeSeconds=LAP_MS / 1000 + 0.002)
+    renamed["sessionId"] = "S1"
+    result = attest(**_reads((LAP_END + 500, renamed), (LAP_END + 2000, clean)))
+    assert not result.verified and "vendor_join_ambiguous" in result.reasons
+
+
+def test_failed_read_before_a_session_rollover_is_not_forgotten():
+    clean = vendor_payload()
+    rollover = vendor_payload()
+    rollover.update(
+        sessionId="new-session", sessionStartedAtMs=LAP_END + 1500, savedAtMs=LAP_END + 3500
+    )
+    inputs = _reads((LAP_END + 500, clean), (LAP_END + 4000, rollover))
+    assert attest(**inputs).verified
+    failed = {"kind": "vendor_snapshot", "t_ms": LAP_END + 2000, "status": "unreadable"}
+    result = attest(**_with_snapshot_event(inputs, failed))
+    assert not result.verified and "vendor_record_unreadable" in result.reasons
+
+
 def test_unreadable_vendor_bytes_abstain_instead_of_meaning_no_ai():
     inputs = capture_inputs()
     [digest] = inputs["vendor"]

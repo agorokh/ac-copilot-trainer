@@ -35,11 +35,15 @@ operator-attended bench session has not run and 0 of 1 rig sessions is used. Do 
   of the 156 archives still present from the 174 named laps; 18 have rotated out and were not
   evaluated; 0 of 175 across the 193-entry ledger. The ledger hash and archive listing were
   identical before and after. This is a rejection-only result by construction.
-- An independent adversarial review ran twice. Round one found real false-certification paths
-  (a vendor record saved before the finish vouching for a lap, a paused mixed lap starting
-  before the probed window, a `null` qualification bypassing the never-relabel guard). Round
-  two re-ran every reproduction against the fixes and found narrower residuals, also fixed.
-  The third state of the code has not had a third review.
+- An independent adversarial review ran three times. Round one found real false-certification
+  paths (a vendor record saved before the finish vouching for a lap, a paused mixed lap
+  starting before the probed window, a `null` qualification bypassing the never-relabel
+  guard). Rounds two and three re-ran every reproduction against the fixes and found
+  progressively narrower residuals, each needing the vendor record to contradict itself; all
+  were fixed and tested. The fixes for round three have not themselves been re-reviewed.
+- The fixes trade yield for safety. In particular a vendor record must be saved a full second
+  after the finish, so a lap may certify only after the following lap's save. Whether a clean
+  human lap certifies at all on the rig is unknown until the bench.
 - Local `make ci-fast` on the macOS development venv (Python 3.14) is not green: 10 tests in
   `test_pressure_bench*` and `test_traffic_eligibility` fail there. The same 10 fail identically
   on unmodified `origin/main` in that environment (no `/proc`, no LuaJIT build of lupa, Python
