@@ -98,7 +98,18 @@ def _code_material(value: Any) -> Any:
         return {"bytes": value.hex()}
     if value is Ellipsis:
         return {"ellipsis": True}
-    return {type(value).__name__: value}
+    if isinstance(value, slice):
+        # Python 3.14 folds constant slices such as ``x[1:]`` into co_consts.
+        return {"slice": [_code_material(x) for x in (value.start, value.stop, value.step)]}
+    if isinstance(value, complex):
+        return {"complex": [value.real.hex(), value.imag.hex()]}
+    if isinstance(value, float):
+        # hex() is exact and also covers inf/nan, which canonical JSON rejects.
+        return {"float": value.hex()}
+    if value is None or type(value) in (str, int, bool):
+        return {type(value).__name__: value}
+    # Fail closed: an unknown type must never reach json.dumps or be coerced.
+    raise TypeError(f"Oracle fingerprint cannot serialize {type(value).__name__}")
 
 
 def _state_material(value: Any) -> Any:

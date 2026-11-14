@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -439,6 +440,13 @@ def test_native_windows_owner_creation_reader_matches_current_process():
 
 
 def test_actual_temporary_os_lock_loss_disarms_without_any_process_start(sealed):
+    # The real creation-time reader exists for Windows (the rig) and Linux procfs
+    # (hermetic CI). Only hosts with neither, such as macOS, may skip.
+    if sys.platform not in ("win32", "linux"):
+        pytest.skip(
+            f"Process creation time reader needs Windows or Linux /proc, not {sys.platform}; "
+            "exercised by Linux CI"
+        )
     from tools.ac_harness.rig_lock import RigSessionLock, RigSessionOwner, read_rig_session_owner
     from tools.ai_sidecar.pressure_bench import _process_creation_time
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import importlib.util
 import json
 import subprocess
 import sys
@@ -20,6 +21,13 @@ from tools.ai_sidecar.traffic_eligibility import (
     traffic_eligibility,
 )
 from tools.lap_qualification import qualify_archive
+
+
+def _skip_without_luajit_on_macos():
+    # Upstream lupa deliberately excludes bundled LuaJIT on macOS. Linux and
+    # Windows must provide it, so there the caller goes on to a real failure.
+    if sys.platform == "darwin" and importlib.util.find_spec("lupa.luajit21") is None:
+        pytest.skip("Lupa does not bundle LuaJIT on macOS; exercised by Linux CI")
 
 
 def context(*, at=1.0, gap=20.0, distance=20.0, height=0.0, count=2):
@@ -358,6 +366,7 @@ def test_sampler_keeps_nominal_rate_across_render_jitter_without_catchup(hz):
 @pytest.mark.parametrize("lua_runtime", ["default", "luajit21"])
 def test_real_lua_module_schema_and_rate_limit_without_wheel_reads(lua_runtime):
     if lua_runtime == "luajit21":
+        _skip_without_luajit_on_macos()
         # LuaJIT's caught Windows SEH exceptions confuse pytest's in-process
         # faulthandler. Run the identical assertions in an isolated interpreter;
         # an actual crash still fails this test through its return code.
@@ -522,7 +531,25 @@ def test_entry_script_and_module_compile_with_declared_harness_runtimes():
     ).read_text(encoding="utf-8")
     result = harness.lua.eval("function(s) local f,e=load(s); return e or 'ok' end")(source)
     assert result == "ok"
+    # The Lua 5.5 entry compile above has already been asserted on every host.
+    _skip_without_luajit_on_macos()
     assert TraceReplayHarness(lua_runtime="luajit21").require("traffic_context") is not None
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_missing_luajit_is_never_skipped_on_ci_platforms(monkeypatch, platform):
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, "platform", platform)
+        patch.setattr(importlib.util, "find_spec", lambda name: None)
+        _skip_without_luajit_on_macos()  # must return so the LuaJIT import fails loudly
+
+
+def test_missing_luajit_skips_with_a_reason_on_macos(monkeypatch):
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, "platform", "darwin")
+        patch.setattr(importlib.util, "find_spec", lambda name: None)
+        with pytest.raises(pytest.skip.Exception, match="does not bundle LuaJIT on macOS"):
+            _skip_without_luajit_on_macos()
 
 
 def test_fresh_native_replay_split_keeps_occupied_and_clear_bars():
