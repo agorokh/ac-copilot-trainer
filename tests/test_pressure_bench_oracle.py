@@ -439,3 +439,42 @@ def test_loaded_fingerprint_includes_positional_defaults():
     finally:
         oracle.main.__defaults__ = original_defaults
     assert oracle.code_sha256() == original_fingerprint
+
+
+def test_fingerprint_material_serializes_every_code_constant_type():
+    # Python 3.14 stores constant slices in co_consts; older Pythons never do, so
+    # exercise the constant types directly rather than through compiled code.
+    constants = (
+        None,
+        True,
+        7,
+        1.5,
+        float("inf"),
+        float("nan"),
+        2j,
+        "text",
+        b"raw",
+        ...,
+        slice(1, None, 2),
+        (slice(None, -1), frozenset({"b", "a"})),
+        compile("x[1:]", "<fingerprint>", "eval"),
+    )
+    # Canonical JSON accepts all of them, and a second pass yields the same digest.
+    digest = oracle.canonical_sha256(oracle._code_material(constants))
+    assert digest == oracle.canonical_sha256(oracle._code_material(constants))
+    assert oracle._code_material(slice(1, None, 2)) == {
+        "slice": [{"int": 1}, {"NoneType": None}, {"int": 2}]
+    }
+    # Equal-comparing constants of different types or shapes stay distinct.
+    distinct = [1, True, 1.0, 1 + 0j, "1", b"1", (1,), slice(1), slice(1, None), slice(1, None, 1)]
+    digests = {oracle.canonical_sha256(oracle._code_material(value)) for value in distinct}
+    assert len(digests) == len(distinct)
+    assert oracle._code_material(0.0) != oracle._code_material(-0.0)
+
+
+@pytest.mark.parametrize(
+    "value", [object(), bytearray(b"x"), range(3), type("Text", (str,), {})("x")]
+)
+def test_fingerprint_material_rejects_unknown_types_instead_of_coercing(value):
+    with pytest.raises(TypeError, match="Oracle fingerprint cannot serialize"):
+        oracle._code_material(value)
