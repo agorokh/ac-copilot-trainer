@@ -365,9 +365,11 @@ def test_record_saved_before_the_finish_can_never_vouch_for_the_lap():
     )
     result = attest(**_reads((LAP_END, early), (LAP_END + 2000, late)))
     assert not result.verified and "vendor_join_ambiguous" in result.reasons
-    early["savedAtMs"] = EXPORTED_MS - 1
-    assert not attest(**_reads((LAP_END, early))).verified
-    early["savedAtMs"] = EXPORTED_MS
+    # exported_at is truncated to the second, so the finish may be up to 999 ms later.
+    for saved in (EXPORTED_MS - 1, EXPORTED_MS, LAP_END - 1):
+        early["savedAtMs"] = saved
+        assert not attest(**_reads((LAP_END, early))).verified
+    early["savedAtMs"] = LAP_END
     assert attest(**_reads((LAP_END, early))).verified
 
 
@@ -386,6 +388,67 @@ def test_a_later_contradicting_or_malformed_vendor_read_is_never_skipped():
     # An earlier read that simply had not caught up yet does not block the lap.
     pending = vendor_payload(lapTimeSeconds=None, finalized=False)
     assert attest(**_reads((LAP_END + 500, pending), (LAP_END + 2000, clean))).verified
+
+
+def _with_snapshot_event(inputs, event):
+    events = parse_journal(inputs["capture_journal"]) + [event]
+    return {**inputs, "capture_journal": journal(events)}
+
+
+def test_a_failed_last_look_at_the_vendor_file_abstains():
+    """The label may have changed in the very write the monitor could not read."""
+    inputs = _reads((LAP_END + 500, vendor_payload()))
+    for status in ("unreadable", "missing"):
+        failed = {"kind": "vendor_snapshot", "t_ms": LAP_END + 2000, "status": status}
+        result = attest(**_with_snapshot_event(inputs, failed))
+        assert not result.verified and "vendor_record_unreadable" in result.reasons
+    # A failed read followed by a successful one is decided by the successful one.
+    recovered = _reads((LAP_END + 500, vendor_payload()), (LAP_END + 4000, vendor_payload()))
+    failed = {"kind": "vendor_snapshot", "t_ms": LAP_END + 2000, "status": "unreadable"}
+    assert attest(**_with_snapshot_event(recovered, failed)).verified
+
+
+def test_any_read_of_the_session_that_flags_this_lap_number_blocks_it():
+    clean = vendor_payload()
+    twin = vendor_payload()
+    twin["summary"]["laps"].append(
+        dict(clean["summary"]["laps"][0], id="twin", recordUid="twin", aiIntervened=True)
+    )
+    # An earlier covering read listed an AI twin that the latest read no longer shows.
+    result = attest(**_reads((LAP_END + 500, twin), (LAP_END + 2000, clean)))
+    assert not result.verified and "vendor_join_ambiguous" in result.reasons
+    # Same lap number, AI label, different duration, in an earlier covering read.
+    revised = vendor_payload(aiIntervened=True, lapTimeSeconds=LAP_MS / 1000 + 0.002)
+    result = attest(**_reads((LAP_END + 500, revised), (LAP_END + 2000, clean)))
+    assert not result.verified and "vendor_join_ambiguous" in result.reasons
+    # Saved before the finish (so never a candidate), but it flagged the lap as AI.
+    in_progress = vendor_payload(aiIntervened=True, lapTimeSeconds=None, finalized=False)
+    in_progress["savedAtMs"] = LAP_START + 30_000
+    for read_ms in (LAP_START + 31_000, LAP_END + 500):
+        result = attest(**_reads((read_ms, in_progress), (LAP_END + 2000, clean)))
+        assert not result.verified and "vendor_join_ambiguous" in result.reasons
+    # The same label in a different vendor session, or for another lap number, is not
+    # evidence about this lap.
+    other_session = vendor_payload(aiIntervened=True)
+    other_session["sessionId"] = "another-vendor-session"
+    other_session["sessionStartedAtMs"] = LAP_END + 60_000
+    other_session["savedAtMs"] = LAP_END + 90_000
+    assert attest(**_reads((LAP_END + 2000, clean), (LAP_END + 95_000, other_session))).verified
+    other_lap = vendor_payload()
+    other_lap["summary"]["laps"].append(
+        dict(
+            clean["summary"]["laps"][0],
+            id="lap3",
+            recordUid="lap3",
+            lapNumber=3,
+            lapTimeSeconds=71.5,
+            aiIntervened=True,
+        )
+    )
+    assert attest(**_reads((LAP_END + 2000, other_lap))).verified
+    nameless = vendor_payload()
+    nameless["sessionId"] = ""
+    assert "vendor_record_unreadable" in attest(**_reads((LAP_END + 2000, nameless))).reasons
 
 
 def test_unreadable_vendor_bytes_abstain_instead_of_meaning_no_ai():
@@ -612,6 +675,36 @@ def test_restrictive_fact_revokes_one_certified_lap(tmp_path, ledger):
     # The revocation is final: the lap can never be certified again.
     again = certify_archive(path, write_capture(tmp_path / "again"), register=True)
     assert again["reasons"] == ["existing_attribution:shared"]
+
+
+def test_revocation_needs_the_exact_lap_and_strict_archive_bytes(tmp_path, ledger):
+    record = native_record()
+    path = write_archive(tmp_path, record)
+    certify_archive(path, write_capture(tmp_path), register=True)
+    before = ledger.read_bytes()
+    # Another archive that only shares the session and lap number cannot revoke it.
+    lookalike = native_record()
+    lookalike["lap_uuid"] = "lookalike-lap"
+    with pytest.raises(AttributionError, match="conflicting_attribution_identity"):
+        register_attribution(
+            write_archive(tmp_path, lookalike, name="lookalike.json"), shared_assessment(lookalike)
+        )
+    assert ledger.read_bytes() == before
+    assert qualify_archive(record, use="human_progression").allowed
+
+    fresh = native_record()
+    fresh.update(lap_uuid="fresh-lap", session_uuid="fresh-session")
+    envelope = attest(fresh).qualification
+    text = json.dumps(fresh)
+    shadowed = tmp_path / "shadowed.json"
+    shadowed.write_text(
+        text.replace('"session_uuid"', '"session_uuid": "ignored", "session_uuid"', 1),
+        encoding="utf-8",
+    )
+    assert json.loads(shadowed.read_text(encoding="utf-8")) == fresh
+    with pytest.raises(AttributionError, match="archive_unreadable"):
+        register_human_attestation(shadowed, envelope)
+    assert ledger.read_bytes() == before
 
 
 def test_named_ledger_is_used_for_the_guard_and_the_append(tmp_path, ledger):

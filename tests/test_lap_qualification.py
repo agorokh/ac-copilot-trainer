@@ -827,6 +827,10 @@ def test_human_attestation_never_replaces_or_promotes_an_existing_entry(
         (lambda w: w["native_ai"].update(wall_elapsed_s=100), "native_lap_wall_clock_mismatch"),
         (lambda w: w["control_map"].update(sample_count=2, max_gap_ms=0), "control_map_probe_gap"),
         (lambda w: w["vendor_practice"].update(saved_ms=1), "vendor_record_not_covering_lap"),
+        (
+            lambda w: w["vendor_practice"].update(saved_ms=w["window"]["end_ms"] - 5001),
+            "vendor_record_not_covering_lap",
+        ),
         (lambda w: w["vendor_practice"].update(disagreeing_reads=1), "vendor_join_ambiguous"),
         (lambda w: w["vendor_practice"].update(covering_reads=0), "vendor_join_ambiguous"),
         (lambda w: w["vendor_practice"]["lap"].update(lap_number=9), "vendor_lap_unmatched"),

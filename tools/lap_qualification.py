@@ -7,7 +7,8 @@ native archive; registration cannot certify human control or promote it live.
 The explicit #529 native-control witness may permit plant fitting only.
 The default-off #988 capture-time attestation is the sole human-authority writer:
 it needs every process-level signal positively read and bound to the payload hash,
-and it never relabels a lap that already has a ledger entry.
+and it never relabels a lap that already has a ledger entry. The one replacement
+the ledger allows is revocation: a restrictive fact supersedes a human attestation.
 """
 
 from __future__ import annotations
@@ -444,6 +445,15 @@ def native_harness_report_clean(report: Mapping[str, Any], *, driver: str) -> bo
     return clean and (driver != "handshake" or _map(drive.get("payload")).get("ok") is True)
 
 
+def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate_key")
+        result[key] = value
+    return result
+
+
 def human_attestation_enabled() -> bool:
     """Default off; only the exact value ``1`` opts in (#988)."""
     return os.environ.get(HUMAN_ATTESTATION_ENV) == "1"
@@ -632,7 +642,8 @@ def human_witness_reasons(
     else:
         if vendor["read_ms"] < lap_end:
             reasons.append("vendor_record_stale")
-        if vendor["session_started_ms"] > lap_start + 1000 or vendor["saved_ms"] < exported_ms:
+        # Saved no earlier than the latest possible finish, so it can hold this lap.
+        if vendor["session_started_ms"] > lap_start + 1000 or vendor["saved_ms"] < lap_end:
             reasons.append("vendor_record_not_covering_lap")
         if (
             not _count(vendor.get("covering_reads"))
@@ -1259,15 +1270,20 @@ def register_human_attestation(
     Default off. The envelope must be the producer's own, carry a witness that
     still certifies against the archive bytes read here, and target a native lap
     with no existing ledger entry: a registered AI, shared or unknown fact is
-    never replaced or promoted. ``register_attribution`` is unchanged for every
-    other caller and still refuses human authority.
+    never replaced or promoted. ``register_attribution`` still refuses human
+    authority; its only new effect is that a restrictive fact for the exact same
+    lap supersedes (revokes) an attestation written here.
     """
     if not human_attestation_enabled():
         raise AttributionError("human_control_attestation_disabled")
     if not isinstance(qualification, Mapping):
         raise AttributionError("qualification_root_invalid")
     raw = _stable_bytes(Path(archive_path))
-    record = json.loads(raw)
+    try:
+        # Stricter than other readers: a duplicate key could shadow a capture fact.
+        record = json.loads(raw, object_pairs_hook=_unique_keys)
+    except (ValueError, RecursionError) as exc:
+        raise AttributionError("archive_unreadable") from exc
     if not isinstance(record, dict):
         raise AttributionError("archive_root_invalid")
     reason = _binding_reason(record, qualification)
@@ -1294,7 +1310,11 @@ def _append_entry(
     *,
     ledger_path: str | Path | None,
 ) -> dict[str, Any]:
-    """Shared atomic append; an existing identity is never replaced or broadened."""
+    """Shared atomic append; a restrictive entry is never replaced or broadened.
+
+    The single replacement is revocation of a #988 human attestation by a
+    restrictive fact for the exact same identity.
+    """
     identity = archive_identity(record)
     if _identity_reasons(identity):
         raise AttributionError("attribution_identity_incomplete")
@@ -1329,6 +1349,7 @@ def _append_entry(
             # of the same lap. Nothing ever replaces a restrictive fact.
             if (
                 len(selected) != 1
+                or selected[0]["identity"] != identity
                 or _map(selected[0]["qualification"]).get("authority") != "human"
                 or _map(entry["qualification"]).get("authority") not in {"ai", "shared", "unknown"}
             ):

@@ -278,8 +278,13 @@ def _control_map_facts(
     }
 
 
-def _vendor_candidate(read_ms: int, digest: str, raw: bytes, lap_ms: int) -> dict[str, Any] | None:
-    """Facts from one vendor practice record, or ``None`` when it cannot be read as one."""
+def _vendor_candidate(
+    read_ms: int, digest: str, raw: bytes, lap_ms: int, lap_n: int
+) -> tuple[dict[str, Any], str, bool] | None:
+    """Facts from one vendor practice record, its session, and whether it flags this lap.
+
+    ``None`` means the bytes cannot be read as a practice record.
+    """
     if hashlib.sha256(raw).hexdigest() != digest:
         return None
     try:
@@ -292,6 +297,8 @@ def _vendor_candidate(read_ms: int, digest: str, raw: bytes, lap_ms: int) -> dic
         or payload["schemaVersion"] != 1
         or type(payload.get("sessionStartedAtMs")) is not int
         or type(payload.get("savedAtMs")) is not int
+        or not isinstance(payload.get("sessionId"), str)
+        or not payload["sessionId"]
     ):
         return None
     summary = payload.get("summary")
@@ -301,7 +308,16 @@ def _vendor_candidate(read_ms: int, digest: str, raw: bytes, lap_ms: int) -> dic
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         return None
     matches = []
+    flagged = False
     for row in rows:
+        # Any row carrying this lap's number with an AI label counts against the lap,
+        # whatever duration that row currently shows.
+        if (
+            type(row.get("lapNumber")) is int
+            and row["lapNumber"] == lap_n
+            and (row.get("aiIntervened") is True or row.get("eligibility") == "ai-debug-only")
+        ):
+            flagged = True
         seconds = row.get("lapTimeSeconds")
         if seconds is None:
             continue  # a lap the vendor has not timed yet
@@ -325,7 +341,7 @@ def _vendor_candidate(read_ms: int, digest: str, raw: bytes, lap_ms: int) -> dic
             "finalized": row.get("finalized"),
             "eligibility": row.get("eligibility"),
         }
-    return {
+    facts = {
         "record_sha256": digest,
         "read_ms": read_ms,
         "session_started_ms": payload["sessionStartedAtMs"],
@@ -335,52 +351,73 @@ def _vendor_candidate(read_ms: int, digest: str, raw: bytes, lap_ms: int) -> dic
         "session_lap_count": len(rows),
         "lap": lap,
     }
+    return facts, payload["sessionId"], flagged
 
 
 def _vendor_facts(
     events: Sequence[Mapping[str, Any]],
     vendor: Mapping[str, bytes],
     lap_ms: int,
+    lap_n: int,
     exported_ms: int,
     reasons: list[str],
 ) -> dict[str, Any] | None:
     """The latest read of a record that can contain this lap, or why none is usable.
 
-    Every record read after the finish must be readable: an unreadable or malformed
-    later read is never skipped in favour of an earlier, cleaner one. A record saved
-    before the finish cannot contain the lap and is not a candidate.
+    The last look at the vendor file must have succeeded, and every record read after
+    the finish must be readable: a failed or malformed later read is never skipped in
+    favour of an earlier, cleaner one. A record saved before the latest possible
+    finish cannot be relied on to contain the lap and is not a candidate. Any read
+    of the same vendor session, from the lap start on, that marks this lap number as
+    AI-intervened counts as a disagreement even if a later read no longer does.
     """
     lap_start, lap_end = exported_ms - lap_ms, exported_ms + 1000
-    reads = [
-        event
-        for event in events
-        if event["kind"] == "vendor_snapshot" and _is_hash(event.get("sha256"))
-    ]
+    snapshots = [event for event in events if event["kind"] == "vendor_snapshot"]
+    reads = [event for event in snapshots if _is_hash(event.get("sha256"))]
     if not reads:
         return None
-    considered = [event for event in reads if event["t_ms"] >= lap_end] or [reads[-1]]
-    candidates: dict[str, dict[str, Any]] = {}
+    after = [event for event in snapshots if event["t_ms"] >= lap_end]
+    if after and not _is_hash(after[-1].get("sha256")):
+        reasons.append("vendor_record_unreadable")
+        return None
+    parsed: dict[str, tuple[dict[str, Any], str, bool] | None] = {}
+
+    def candidate(event: Mapping[str, Any]) -> tuple[dict[str, Any], str, bool] | None:
+        digest = event["sha256"]
+        raw = vendor.get(digest)
+        result = _vendor_candidate(event["t_ms"], digest, raw, lap_ms, lap_n) if raw else None
+        if result is not None or digest not in parsed:
+            parsed[digest] = result  # keeps the latest read time per content
+        return result
+
+    considered = [event for event in after if _is_hash(event.get("sha256"))] or [reads[-1]]
     for event in considered:
-        raw = vendor.get(event["sha256"])
-        candidate = _vendor_candidate(event["t_ms"], event["sha256"], raw, lap_ms) if raw else None
-        if candidate is None:
+        if candidate(event) is None:
             reasons.append("vendor_record_unreadable")
             return None
-        candidates[event["sha256"]] = candidate  # keeps the latest read time per content
-    ordered = sorted(candidates.values(), key=lambda candidate: candidate["read_ms"])
+    ordered = sorted(
+        (parsed[digest] for digest in dict.fromkeys(event["sha256"] for event in considered)),
+        key=lambda item: item[0]["read_ms"],
+    )
     covering = [
-        candidate
-        for candidate in ordered
-        if candidate["saved_ms"] >= exported_ms
-        and candidate["session_started_ms"] <= lap_start + 1000
+        item
+        for item in ordered
+        if item[0]["saved_ms"] >= lap_end and item[0]["session_started_ms"] <= lap_start + 1000
     ]
     if not covering:
-        return {**ordered[-1], "covering_reads": 0, "disagreeing_reads": 0}
-    decision = covering[-1]
+        return {**ordered[-1][0], "covering_reads": 0, "disagreeing_reads": 0}
+    decision, session, _ = covering[-1]
     disagreeing = sum(
         1
-        for candidate in covering[:-1]
-        if candidate["matched_laps"] and candidate["lap"] != decision["lap"]
+        for facts, _, _ in covering[:-1]
+        if facts["matched_laps"] > 1 or (facts["matched_laps"] and facts["lap"] != decision["lap"])
+    )
+    # Reads taken while the lap was still running are evidence too, when readable.
+    for event in reads:
+        if lap_start <= event["t_ms"] < lap_end and event["sha256"] not in parsed:
+            candidate(event)
+    disagreeing += sum(
+        1 for item in parsed.values() if item is not None and item[1] == session and item[2]
     )
     return {**decision, "covering_reads": len(covering), "disagreeing_reads": disagreeing}
 
@@ -438,7 +475,9 @@ def signal_reasons(
         else:
             coverage_start = min(start_ms, declaration["declared_ms"]) if declaration else start_ms
             control = _control_map_facts(capture_journal, events, coverage_start, end_ms)
-            vendor_facts = _vendor_facts(events, vendor or {}, lap_ms, exported_ms, reasons)
+            vendor_facts = _vendor_facts(
+                events, vendor or {}, lap_ms, identity["lap_n"], exported_ms, reasons
+            )
     observation = _map(record.get("trace")).get("control_observation")
     witness = {
         "schema_version": 1,

@@ -14,13 +14,23 @@ input statistics, and never infers a human from a missing signal.
 | Non-human path | Signal | Where it is read | Certifies only when |
 |---|---|---|---|
 | Project autonomous driver | CSP Custom-AI sections `Car0` / `CarControls0` (bare and `Local\`) | Read-only `OpenFileMapping` probe every 100 ms by the capture monitor | Every sample from the declaration to the lap end reads *absent*, no gap over 500 ms, and AC's own `acpmf_physics` opens through the same opener (positive control) |
-| Native game AI | CSP `car.isAIControlled` and `car.isUserControlled` | Counted every frame by the trainer app, stored in the archive as `trace.control_observation` | Complete lap, zero unknown frames, zero AI frames, every frame user-controlled |
-| Vendor AI driving | The vendor practice record's `aiIntervened` label | Rolling snapshot file, preserved by the capture monitor | A record read after the lap covers it by session window, matches track and car, matches exactly one lap by duration (1 ms), and labels it not intervened, complete and finalized |
+| Native game AI, pause, replay | CSP `car.isAIControlled`, `car.isUserControlled`, `sim.isLive`, plus wall-clock elapsed time | Counted on every frame of an open lap by the trainer app, stored in the archive as `trace.control_observation` | Complete lap, zero unknown frames, zero AI frames, every frame user-controlled and live, at least 10 frames per second, and wall-clock elapsed within 2.5 s of the lap time |
+| Vendor AI driving | The vendor practice record's `aiIntervened` label | Rolling snapshot file, preserved by the capture monitor | The latest read of a record saved after the finish covers the lap by session window, matches track and car, matches exactly one lap by duration (1 ms) with the same lap number, and labels it not intervened, `eligible`, complete and finalized. No read of that vendor session disagrees or marks the lap number as AI, and the last look at the file succeeded |
 | (operator intent) | Declaration from a rig button via `tools/rig_controls` | Appended to `declarations.jsonl` | Declared before the lap started, at most 20 minutes before it ended, not cleared since. Necessary, never sufficient |
 
 A probe that fails for any reason other than "file not found" is `error`, not `absent`. A torn
-journal line, a clock that runs backwards, a duplicate JSON key or an unreadable vendor file all
-abstain. A lap that already has a ledger entry or an embedded assessment is never attested.
+journal line, a clock that runs backwards, a duplicate JSON key in a journal, vendor file or
+archive, or an unreadable vendor file all abstain. A vendor record saved before the latest
+possible finish is never a candidate, and a failed or malformed later read is never skipped in
+favour of an earlier clean one. A lap that already has a ledger entry or a `qualification` key of
+any value is never attested.
+
+AC lap time excludes paused time, and the capture window is derived from it. A paused lap would
+start before the probed window, so a lap whose wall-clock elapsed time disagrees with its lap
+time abstains (`native_lap_wall_clock_mismatch`), as does one with a paused or replay frame
+(`native_lap_not_live`).
+
+Run `attest` after the session has ended, so the latest vendor read is the final one.
 
 The decision is `tools.lap_qualification.human_witness_reasons`. The producer and every later
 reader call the same function, so a stored verdict is never trusted.
@@ -31,6 +41,9 @@ reader call the same function, so a stored verdict is never trusted.
   a native archive, a witness that still certifies against the bytes it reads, and no existing
   entry for that lap. `register_attribution` is unchanged and still refuses human authority.
 - A certified lap is granted `analysis` and `human_progression` only.
+- **Revoking one lap.** Registering a restrictive fact (`ai`, `shared` or `unknown`) for the exact
+  same lap with `register_attribution` replaces its human attestation. It is the only
+  replacement the ledger allows, it is final, and nothing can replace a restrictive fact.
 - `qualify_archive` rechecks the witness, the payload hash and the in-archive control counts on
   every call. With the opt-in unset, an attested lap is denied every use except `analysis`
   (`human_control_attestation_disabled`): unsetting the variable is the revocation switch.
@@ -75,6 +88,13 @@ if any already-attributed lap would be certified.
 - **Declaration hardware.** The `attest` binding needs the managed keypad firmware, which is not
   flashed (workstation-ops#3863).
 - **Other input injectors.** A virtual controller or any path not listed above is not observed.
+- **Track layout in the vendor join.** The vendor key's layout field is not understood, so only
+  track and car are compared.
+- **Vendor lap numbering.** The join assumes the vendor's lap number equals the archive's, as in
+  the one observed session and as `tools/moza_ingest` already requires. If they differ on the
+  rig, every lap abstains.
+- **Frames the app never sees.** Frames where the app returns before sampling (no car, main
+  menu) are not counted; only the frame-rate floor and the wall-clock rule bound them.
 - **Tamper resistance.** Evidence is structural and hash-bound, not signed. The ledger file is
   the trust anchor.
 

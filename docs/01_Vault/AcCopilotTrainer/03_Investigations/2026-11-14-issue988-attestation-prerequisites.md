@@ -36,6 +36,10 @@ signal is reachable only from CSP Lua. The trainer now counts both fields every 
 Not observed: what the fields read while AC's own AI drives the player car, and what they read
 under the project's Custom-AI hijack. Treat the field as existing, not as proven.
 
+The same definitions file declares, on `ac.StateSim`, `isLive` ("simulation is currently running
+(not paused and not in replay mode)", line 5350), `isPaused` (5346) and `isReplayActive` (5352).
+The trainer counts non-live frames with `isLive`. Its live behaviour is equally unobserved.
+
 ## Vendor practice record: one rolling file, not written for every session
 
 `%LOCALAPPDATA%\MOZA Racing Lab\training-evaluation\training-evaluation-snapshot-v1.json` is
@@ -51,7 +55,9 @@ the only file under that folder that carries `aiIntervened`. It holds a single s
 Consequences for any consumer: the file must be copied during capture because the next session
 overwrites it, and a lap can be joined to it only by session window, combo and lap duration.
 Whether it is always written when Racing Lab observes a session, and whether switching AI on
-mid-lap sets the label, are unobserved.
+mid-lap sets the label, are unobserved. So is whether its `lapNumber` always equals the
+trainer's lap number: they agreed in the one 2026-10-13 session, and `tools/moza_ingest`
+already requires it, but a constant offset would make every lap abstain.
 
 ## Declaration surface: the keypad is not flashed
 
