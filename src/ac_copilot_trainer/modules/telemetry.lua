@@ -214,9 +214,11 @@ function Telemetry:beginLapClock(simTime, fullLapBoundary)
   self._lastWheelsOutside = nil
   -- Issue #988: per-frame CSP control-authority facts, summarized before any
   -- downsampling. Raw counts only; readers decide. Unknown is never "not AI".
+  -- Wall-clock start: AC lap time excludes pauses, so readers compare both.
   self._controlObservation = { schema_version=1, source="car.isAIControlled", sample_count=0,
-    unknown_count=0, ai_controlled_count=0, user_controlled_count=0,
+    unknown_count=0, ai_controlled_count=0, user_controlled_count=0, not_live_count=0,
     complete=fullLapBoundary == true }
+  self._controlWallStart = (os and os.time and os.time()) or nil
 end
 
 --- Drop samples older than (now - bufferSeconds).
@@ -290,12 +292,27 @@ function Telemetry:update(dt, car, sim, recordLap)
     self.n = self.n - 1
   end
 
+  -- Issue #988: count control authority on EVERY frame of an open lap, including the
+  -- frames an ambiguous finish wrap withholds from the trace, so none is uncounted.
+  local control = self._controlObservation
+  if control and self.lapT0 ~= nil then
+    local aiControlled = ch.safeCarField(car, "isAIControlled", nil)
+    local userControlled = ch.safeCarField(car, "isUserControlled", nil)
+    local live = ch.safeCarField(sim, "isLive", nil)
+    control.sample_count = control.sample_count+1
+    if type(aiControlled) ~= "boolean" or type(userControlled) ~= "boolean"
+        or type(live) ~= "boolean" then
+      control.unknown_count = control.unknown_count+1
+    else
+      if aiControlled then control.ai_controlled_count = control.ai_controlled_count+1 end
+      if userControlled then control.user_controlled_count = control.user_controlled_count+1 end
+      if not live then control.not_live_count = control.not_live_count+1 end
+    end
+  end
+
   -- Lap trace (separate from rolling window)
   if recordLap == false and self._offTrackObservation then
     self._offTrackObservation.complete = false
-  end
-  if recordLap == false and self._controlObservation then
-    self._controlObservation.complete = false
   end
   if self.lapT0 ~= nil and recordLap ~= false then
     -- Accumulate BEFORE either raw-buffer or final-trace downsampling. A short
@@ -312,18 +329,6 @@ function Telemetry:update(dt, car, sim, recordLap)
         end
       end
       self._lastWheelsOutside = wheelsOutside
-    end
-    local control = self._controlObservation
-    if control then
-      local aiControlled = ch.safeCarField(car, "isAIControlled", nil)
-      local userControlled = ch.safeCarField(car, "isUserControlled", nil)
-      control.sample_count = control.sample_count+1
-      if type(aiControlled) ~= "boolean" or type(userControlled) ~= "boolean" then
-        control.unknown_count = control.unknown_count+1
-      else
-        if aiControlled then control.ai_controlled_count = control.ai_controlled_count+1 end
-        if userControlled then control.user_controlled_count = control.user_controlled_count+1 end
-      end
     end
     local eMs = (t - self.lapT0) * 1000
     self.lapN = self.lapN + 1
@@ -494,7 +499,12 @@ function Telemetry:finalizeLapTrace(includeOffTrackObservation)
   if self._controlObservation then
     control = {}
     for key,value in pairs(self._controlObservation) do control[key] = value end
+    local wallEnd = (os and os.time and os.time()) or nil
+    if type(wallEnd) == "number" and type(self._controlWallStart) == "number" then
+      control.wall_elapsed_s = wallEnd - self._controlWallStart
+    end
   end
+  self._controlWallStart = nil
   self._offTrackObservation = nil
   self._controlObservation = nil
   self._lastWheelsOutside = nil

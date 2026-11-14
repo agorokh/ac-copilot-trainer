@@ -259,7 +259,7 @@ local function controlObservation(raw)
       or type(raw.complete) ~= "boolean" then return nil end
   local out = { schema_version=1, source=raw.source, complete=raw.complete }
   for _, key in ipairs({"sample_count", "unknown_count", "ai_controlled_count",
-      "user_controlled_count"}) do
+      "user_controlled_count", "not_live_count", "wall_elapsed_s"}) do
     local v = raw[key]
     if type(v) ~= "number" or v ~= v or v == math.huge or v ~= math.floor(v) or v < 0 then
       return nil
@@ -268,7 +268,8 @@ local function controlObservation(raw)
   end
   if out.unknown_count > out.sample_count
       or out.ai_controlled_count + out.unknown_count > out.sample_count
-      or out.user_controlled_count + out.unknown_count > out.sample_count then return nil end
+      or out.user_controlled_count + out.unknown_count > out.sample_count
+      or out.not_live_count + out.unknown_count > out.sample_count then return nil end
   return out
 end
 

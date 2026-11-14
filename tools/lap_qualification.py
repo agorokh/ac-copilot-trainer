@@ -17,6 +17,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -60,6 +61,12 @@ HUMAN_ATTESTATION_DECLARATION_TTL_MS = 20 * 60 * 1000
 HUMAN_ATTESTATION_VENDOR_LAP_TOLERANCE_MS = 1
 HUMAN_ATTESTATION_NATIVE_SOURCE = "car.isAIControlled"
 HUMAN_ATTESTATION_DECLARE_ACTION = "human_control.declare"
+# AC lap time excludes paused time; wall-clock elapsed (1 s resolution at both ends)
+# must agree with it or the capture window no longer brackets the lap.
+HUMAN_ATTESTATION_WALL_CLOCK_TOLERANCE_MS = 2500
+HUMAN_ATTESTATION_MIN_FRAME_HZ = 10
+HUMAN_ATTESTATION_VENDOR_ELIGIBILITY = "eligible"
+_EXPORTED_AT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 _IMPORT_FORMATS = frozenset({"motec_csv", "track_titan_reference_v1", "moza_tracecore_view_v1"})
 _CONTEXT_USES = frozenset({"map", "live_reference", "reference_comparison"})
 _UNITS = {
@@ -448,7 +455,7 @@ def _count(value: Any) -> bool:
 
 def _utc_ms(value: Any) -> int | None:
     """Parse the archive writer's second-resolution ``exported_at`` only."""
-    if not isinstance(value, str) or len(value) != 20:
+    if not isinstance(value, str) or not _EXPORTED_AT.fullmatch(value):
         return None
     try:
         parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
@@ -563,11 +570,14 @@ def human_witness_reasons(
             or control["first_ms"] > coverage_start
             or control["last_ms"] < end_ms
             or control["max_gap_ms"] > HUMAN_ATTESTATION_MAX_PROBE_GAP_MS
+            # The recorded span cannot exceed what that many samples can bridge.
+            or control["max_gap_ms"] * (control["sample_count"] - 1)
+            < control["last_ms"] - control["first_ms"]
         ):
             reasons.append("control_map_probe_gap")
 
-    # Native game AI: CSP's per-frame state, summarized before trace downsampling
-    # inside the hash-bound archive itself.
+    # Native game AI, pause and replay: CSP's per-frame state, summarized before trace
+    # downsampling inside the hash-bound archive itself, plus wall-clock elapsed time.
     native = _map(witness.get("native_ai"))
     native_counts = [
         native.get(key)
@@ -576,6 +586,8 @@ def human_witness_reasons(
             "unknown_count",
             "ai_controlled_count",
             "user_controlled_count",
+            "not_live_count",
+            "wall_elapsed_s",
         )
     ]
     if (
@@ -584,7 +596,6 @@ def human_witness_reasons(
         or native.get("source") != HUMAN_ATTESTATION_NATIVE_SOURCE
         or type(native.get("complete")) is not bool
         or any(not _count(value) for value in native_counts)
-        or native["sample_count"] < 2
     ):
         reasons.append("native_ai_observation_missing")
     else:
@@ -594,15 +605,26 @@ def human_witness_reasons(
             reasons.append("native_ai_observation_mismatch")
         if native["complete"] is not True:
             reasons.append("native_ai_observation_incomplete")
+        if native["sample_count"] * 1000 < lap_ms * HUMAN_ATTESTATION_MIN_FRAME_HZ:
+            reasons.append("native_ai_observation_sparse")
         if native["unknown_count"]:
             reasons.append("native_ai_state_unknown")
         if native["ai_controlled_count"]:
             reasons.append("native_ai_controlled")
         if native["user_controlled_count"] != native["sample_count"]:
             reasons.append("native_user_control_absent")
+        if native["not_live_count"]:
+            reasons.append("native_lap_not_live")
+        if (
+            abs(native["wall_elapsed_s"] * 1000 - lap_ms)
+            > HUMAN_ATTESTATION_WALL_CLOCK_TOLERANCE_MS
+        ):
+            reasons.append("native_lap_wall_clock_mismatch")
 
     # Vendor AI driving: only the vendor's own practice record labels it, and it
-    # shares no session identifier, so the join is session window + combo + duration.
+    # shares no session identifier, so the join is session window + combo + lap
+    # number + duration, decided from the latest read of a record saved after the
+    # finish. A record saved earlier cannot contain this lap.
     vendor = _map(witness.get("vendor_practice"))
     vendor_times = [vendor.get(key) for key in ("read_ms", "session_started_ms", "saved_ms")]
     if not _is_hash(vendor.get("record_sha256")) or any(type(v) is not int for v in vendor_times):
@@ -610,11 +632,15 @@ def human_witness_reasons(
     else:
         if vendor["read_ms"] < lap_end:
             reasons.append("vendor_record_stale")
-        if (
-            vendor["session_started_ms"] > lap_start + HUMAN_ATTESTATION_WINDOW_MARGIN_MS
-            or vendor["saved_ms"] < exported_ms - HUMAN_ATTESTATION_WINDOW_MARGIN_MS
-        ):
+        if vendor["session_started_ms"] > lap_start + 1000 or vendor["saved_ms"] < exported_ms:
             reasons.append("vendor_record_not_covering_lap")
+        if (
+            not _count(vendor.get("covering_reads"))
+            or vendor["covering_reads"] < 1
+            or not _count(vendor.get("disagreeing_reads"))
+            or vendor["disagreeing_reads"]
+        ):
+            reasons.append("vendor_join_ambiguous")
         key = vendor.get("reference_key")
         parts = key.split("|") if isinstance(key, str) else []
         track = identity.get("track_id")
@@ -632,6 +658,8 @@ def human_witness_reasons(
         elif (
             type(lap.get("lap_time_ms")) is not int
             or abs(lap["lap_time_ms"] - lap_ms) > HUMAN_ATTESTATION_VENDOR_LAP_TOLERANCE_MS
+            or type(lap.get("lap_number")) is not int
+            or lap["lap_number"] != identity.get("lap_n")
         ):
             reasons.append("vendor_lap_unmatched")
         else:
@@ -639,6 +667,8 @@ def human_witness_reasons(
                 reasons.append("vendor_ai_intervened")
             elif lap.get("ai_intervened") is not False:
                 reasons.append("vendor_ai_label_unreadable")
+            elif lap.get("eligibility") != HUMAN_ATTESTATION_VENDOR_ELIGIBILITY:
+                reasons.append("vendor_lap_not_eligible")
             if lap.get("complete") is not True or lap.get("finalized") is not True:
                 reasons.append("vendor_lap_incomplete")
     return list(dict.fromkeys(reasons))
@@ -1287,6 +1317,7 @@ def _append_entry(
         os.close(fd)
         entries = _read_ledger(path, required=False)
         selected = [item for item in entries if _same_selected_identity(item["identity"], identity)]
+        superseded = False
         if selected:
             if len(selected) == 1 and selected[0] == entry:
                 return {
@@ -1294,7 +1325,16 @@ def _append_entry(
                     "reason": "already_registered",
                     "source_sha256": entry["source_sha256"],
                 }
-            raise AttributionError("conflicting_attribution_identity")
+            # Revocation only: a restrictive fact replaces a #988 human attestation
+            # of the same lap. Nothing ever replaces a restrictive fact.
+            if (
+                len(selected) != 1
+                or _map(selected[0]["qualification"]).get("authority") != "human"
+                or _map(entry["qualification"]).get("authority") not in {"ai", "shared", "unknown"}
+            ):
+                raise AttributionError("conflicting_attribution_identity")
+            entries = [item for item in entries if item is not selected[0]]
+            superseded = True
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", dir=path.parent, delete=False
         ) as output:
@@ -1312,7 +1352,11 @@ def _append_entry(
             raise AttributionError("input_changed_during_registration")
         os.replace(temp_name, path)
         temp_name = None
-        return {"registered": True, "reason": "registered", "source_sha256": entry["source_sha256"]}
+        return {
+            "registered": True,
+            "reason": "superseded_human_attestation" if superseded else "registered",
+            "source_sha256": entry["source_sha256"],
+        }
     finally:
         if temp_name is not None:
             Path(temp_name).unlink(missing_ok=True)

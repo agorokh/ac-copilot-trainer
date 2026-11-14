@@ -58,6 +58,8 @@ def native_record() -> dict[str, Any]:
                 "unknown_count": 0,
                 "ai_controlled_count": 0,
                 "user_controlled_count": 6000,
+                "not_live_count": 0,
+                "wall_elapsed_s": LAP_MS // 1000,
             },
         },
     }

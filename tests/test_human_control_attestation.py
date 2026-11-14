@@ -17,6 +17,7 @@ from tests.human_attestation_helpers import (
     CAPTURE_END,
     CAPTURE_START,
     DECLARED_MS,
+    EXPORTED_MS,
     LAP_END,
     LAP_MS,
     LAP_START,
@@ -255,6 +256,34 @@ ABSTENTIONS = {
         capture_inputs(**_vendor(referenceKey=7)),
         {"vendor_combo_unreadable"},
     ),
+    "vendor_other_lap_number": (
+        capture_inputs(**_vendor(lapNumber=1)),
+        {"vendor_lap_unmatched"},
+    ),
+    "vendor_lap_number_missing": (
+        capture_inputs(**_vendor(lapNumber=None)),
+        {"vendor_lap_unmatched"},
+    ),
+    "vendor_eligibility_missing": (
+        capture_inputs(**_vendor(eligibility=None)),
+        {"vendor_lap_not_eligible"},
+    ),
+    "vendor_eligibility_unrecognized": (
+        capture_inputs(**_vendor(eligibility="pending-review")),
+        {"vendor_lap_not_eligible"},
+    ),
+    "vendor_lap_time_mistyped": (
+        capture_inputs(**_vendor(lapTimeSeconds=True)),
+        {"vendor_record_unreadable"},
+    ),
+    "vendor_lap_time_absurd": (
+        capture_inputs(**_vendor(lapTimeSeconds=1e306)),
+        {"vendor_lap_unmatched"},
+    ),
+    "vendor_lap_not_timed_yet": (
+        capture_inputs(**_vendor(lapTimeSeconds=None)),
+        {"vendor_lap_unmatched"},
+    ),
 }
 
 
@@ -292,9 +321,71 @@ def test_vendor_record_from_another_session_window_does_not_cover_the_lap():
     payload["sessionStartedAtMs"] = LAP_END + 60_000
     payload["savedAtMs"] = LAP_END + 120_000
     assert "vendor_record_not_covering_lap" in attest(**capture_inputs(vendor=payload)).reasons
+    for key, value in (("savedAtMs", None), ("sessionStartedAtMs", 1.5), ("savedAtMs", True)):
+        payload = vendor_payload()
+        payload[key] = value
+        assert "vendor_record_unreadable" in attest(**capture_inputs(vendor=payload)).reasons
+    # A session that began a few seconds into the lap cannot have recorded all of it.
     payload = vendor_payload()
-    del payload["savedAtMs"]
-    assert "vendor_record_missing" in attest(**capture_inputs(vendor=payload)).reasons
+    payload["sessionStartedAtMs"] = LAP_START + 4000
+    assert "vendor_record_not_covering_lap" in attest(**capture_inputs(vendor=payload)).reasons
+
+
+def _reads(*records):
+    """Capture inputs where each (read_ms, payload) is one preserved vendor read."""
+    raws = [(read_ms, encode(payload)) for read_ms, payload in records]
+    digests = [hashlib.sha256(raw).hexdigest() for _, raw in raws]
+    events = probes() + [
+        {"kind": "vendor_snapshot", "t_ms": read_ms, "sha256": digest}
+        for (read_ms, _), digest in zip(raws, digests, strict=True)
+    ]
+    return {
+        "capture_journal": journal(events),
+        "vendor": {digest: raw for digest, (_, raw) in zip(digests, raws, strict=True)},
+    }
+
+
+def test_record_saved_before_the_finish_can_never_vouch_for_the_lap():
+    """A row of equal duration in an earlier save is a different lap, not this one."""
+    early = vendor_payload()
+    early["savedAtMs"] = EXPORTED_MS - 5000
+    result = attest(**_reads((LAP_END, early)))
+    assert not result.verified and "vendor_record_not_covering_lap" in result.reasons
+    # The later save shows this lap as AI-intervened beside an earlier clean lap of
+    # the same duration: still no certification.
+    late = vendor_payload(lapNumber=1)
+    late["summary"]["laps"].append(
+        dict(
+            vendor_payload()["summary"]["laps"][0],
+            id="ai-lap",
+            recordUid="ai-lap",
+            aiIntervened=True,
+            eligibility="ai-debug-only",
+        )
+    )
+    result = attest(**_reads((LAP_END, early), (LAP_END + 2000, late)))
+    assert not result.verified and "vendor_join_ambiguous" in result.reasons
+    early["savedAtMs"] = EXPORTED_MS - 1
+    assert not attest(**_reads((LAP_END, early))).verified
+    early["savedAtMs"] = EXPORTED_MS
+    assert attest(**_reads((LAP_END, early))).verified
+
+
+def test_a_later_contradicting_or_malformed_vendor_read_is_never_skipped():
+    clean = vendor_payload()
+    malformed = vendor_payload(aiIntervened=True)
+    malformed["sessionStartedAtMs"] = float(LAP_START - 60_000)
+    result = attest(**_reads((LAP_END + 500, clean), (LAP_END + 2000, malformed)))
+    assert not result.verified and "vendor_record_unreadable" in result.reasons
+    revised = vendor_payload(aiIntervened=True, lapTimeSeconds=LAP_MS / 1000 + 0.002)
+    result = attest(**_reads((LAP_END + 500, clean), (LAP_END + 2000, revised)))
+    assert not result.verified and "vendor_lap_unmatched" in result.reasons
+    flipped = vendor_payload(aiIntervened=True)
+    result = attest(**_reads((LAP_END + 500, clean), (LAP_END + 2000, flipped)))
+    assert {"vendor_ai_intervened", "vendor_join_ambiguous"} <= set(result.reasons)
+    # An earlier read that simply had not caught up yet does not block the lap.
+    pending = vendor_payload(lapTimeSeconds=None, finalized=False)
+    assert attest(**_reads((LAP_END + 500, pending), (LAP_END + 2000, clean))).verified
 
 
 def test_unreadable_vendor_bytes_abstain_instead_of_meaning_no_ai():
@@ -325,6 +416,11 @@ def test_stale_declaration_abstains_even_with_continuous_probing():
         ({"complete": False}, "native_ai_observation_incomplete"),
         ({"user_controlled_count": 5990}, "native_user_control_absent"),
         ({"source": "car.other"}, "native_ai_observation_missing"),
+        ({"not_live_count": 3}, "native_lap_not_live"),
+        ({"wall_elapsed_s": 95}, "native_lap_wall_clock_mismatch"),
+        ({"wall_elapsed_s": 57}, "native_lap_wall_clock_mismatch"),
+        ({"sample_count": 2, "user_controlled_count": 2}, "native_ai_observation_sparse"),
+        ({"wall_elapsed_s": None}, "native_ai_observation_missing"),
         ({"sample_count": 6000.0}, "native_ai_observation_missing"),
         ({"sample_count": True}, "native_ai_observation_missing"),
     ],
@@ -482,6 +578,60 @@ def test_existing_attribution_is_never_attested_or_promoted(tmp_path, ledger):
     embedded.update(lap_uuid="embedded-lap", session_uuid="embedded-session")
     embedded["qualification"] = shared_assessment(embedded)
     assert attest(embedded).reasons == ("existing_attribution:shared",)
+    for placeholder in (None, {}, [], 0, ""):
+        embedded["qualification"] = placeholder
+        result = attest(embedded)
+        assert not result.verified and result.reason == "existing_attribution:unknown"
+
+
+def test_paused_lap_cannot_hide_an_earlier_autonomous_stint():
+    """Lap time excludes a pause, so the wall-clock start lies before the window."""
+    record = native_record()
+    record["trace"]["control_observation"]["wall_elapsed_s"] = 60 + 40
+    autonomous_until = LAP_START - 20_000
+    events = [
+        probe(event["t_ms"], state="present") if event["t_ms"] <= autonomous_until else event
+        for event in probes(start=LAP_START - 60_000)
+    ]
+    inputs = capture_inputs(probe_events=events, declarations=[declaration(LAP_START - 8000)])
+    result = attest(record, **inputs)
+    assert not result.verified and "native_lap_wall_clock_mismatch" in result.reasons
+
+
+def test_restrictive_fact_revokes_one_certified_lap(tmp_path, ledger):
+    record = native_record()
+    path = write_archive(tmp_path, record)
+    certify_archive(path, write_capture(tmp_path), register=True)
+    assert qualify_archive(record, use="human_progression").authority == "human"
+    receipt = register_attribution(path, shared_assessment(record))
+    assert receipt["reason"] == "superseded_human_attestation"
+    [entry] = json.loads(ledger.read_text(encoding="utf-8"))["entries"]
+    assert entry["qualification"]["authority"] == "shared"
+    decision = qualify_archive(record, use="human_progression")
+    assert not decision.allowed and decision.authority == "shared"
+    # The revocation is final: the lap can never be certified again.
+    again = certify_archive(path, write_capture(tmp_path / "again"), register=True)
+    assert again["reasons"] == ["existing_attribution:shared"]
+
+
+def test_named_ledger_is_used_for_the_guard_and_the_append(tmp_path, ledger):
+    record = native_record()
+    path = write_archive(tmp_path, record)
+    scratch = tmp_path / "scratch-ledger.json"
+    scratch.write_text(json.dumps({"schema_version": 1, "entries": []}), encoding="utf-8")
+    register_attribution(path, shared_assessment(record), ledger_path=scratch)
+    receipt = certify_archive(path, write_capture(tmp_path), register=True, ledger_path=scratch)
+    assert receipt["reasons"] == ["existing_attribution:shared"]
+    assert json.loads(ledger.read_text(encoding="utf-8"))["entries"] == []
+
+
+def test_archive_with_a_duplicate_key_is_unreadable(tmp_path):
+    clean = json.dumps(native_record())
+    dirty = clean.replace('"lap_uuid"', '"session_uuid": "shadowed", "lap_uuid"', 1)
+    path = tmp_path / "duplicate.json"
+    path.write_text(dirty, encoding="utf-8")
+    assert json.loads(dirty)["session_uuid"] == "synthetic-session"
+    assert attest_archive(path, write_capture(tmp_path)).reasons == ("archive_unreadable",)
 
 
 def test_unreadable_ledger_blocks_attestation(ledger):
@@ -683,6 +833,9 @@ def test_bench_verdict_applies_the_fixed_acceptance_rule():
     ):
         result = bench_verdict(*_bench(**change))
         assert result["verdict"] == "INCONCLUSIVE" and reason in result["reasons"]
+    manifest, results = _bench()
+    results[-1]["verified"] = 1
+    assert bench_verdict(manifest, results)["reasons"] == ["results_invalid"]
     manifest, results = _bench()
     results[0]["witness_sha256"] = None
     assert bench_verdict(manifest, results)["reasons"] == ["certification_without_hash_binding"]

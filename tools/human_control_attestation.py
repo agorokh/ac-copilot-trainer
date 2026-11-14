@@ -28,7 +28,8 @@ import os
 import sys
 import time
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -96,6 +97,23 @@ class Attestation:
 
 class _InputError(ValueError):
     """A capture input exists but cannot be trusted as read."""
+
+
+@contextmanager
+def _ledger_scope(ledger_path: str | Path | None) -> Iterator[None]:
+    """Make a named ledger the one store read and written, then restore the caller's."""
+    if ledger_path is None:
+        yield
+        return
+    previous = os.environ.get(ATTRIBUTIONS_ENV)
+    os.environ[ATTRIBUTIONS_ENV] = str(ledger_path)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(ATTRIBUTIONS_ENV, None)
+        else:
+            os.environ[ATTRIBUTIONS_ENV] = previous
 
 
 def unverified(*reasons: str) -> Attestation:
@@ -272,6 +290,8 @@ def _vendor_candidate(read_ms: int, digest: str, raw: bytes, lap_ms: int) -> dic
         not isinstance(payload, dict)
         or type(payload.get("schemaVersion")) is not int
         or payload["schemaVersion"] != 1
+        or type(payload.get("sessionStartedAtMs")) is not int
+        or type(payload.get("savedAtMs")) is not int
     ):
         return None
     summary = payload.get("summary")
@@ -283,7 +303,11 @@ def _vendor_candidate(read_ms: int, digest: str, raw: bytes, lap_ms: int) -> dic
     matches = []
     for row in rows:
         seconds = row.get("lapTimeSeconds")
-        if type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds <= 0:
+        if seconds is None:
+            continue  # a lap the vendor has not timed yet
+        if type(seconds) not in (int, float) or not math.isfinite(seconds):
+            return None
+        if not 0 < seconds < 86_400:
             continue
         duration = round(seconds * 1000)
         if abs(duration - lap_ms) <= HUMAN_ATTESTATION_VENDOR_LAP_TOLERANCE_MS:
@@ -295,6 +319,7 @@ def _vendor_candidate(read_ms: int, digest: str, raw: bytes, lap_ms: int) -> dic
         key = row.get("referenceKey", key)
         lap = {
             "lap_time_ms": duration,
+            "lap_number": row.get("lapNumber"),
             "ai_intervened": row.get("aiIntervened"),
             "complete": row.get("complete"),
             "finalized": row.get("finalized"),
@@ -303,8 +328,8 @@ def _vendor_candidate(read_ms: int, digest: str, raw: bytes, lap_ms: int) -> dic
     return {
         "record_sha256": digest,
         "read_ms": read_ms,
-        "session_started_ms": payload.get("sessionStartedAtMs"),
-        "saved_ms": payload.get("savedAtMs"),
+        "session_started_ms": payload["sessionStartedAtMs"],
+        "saved_ms": payload["savedAtMs"],
         "reference_key": key if isinstance(key, str) else None,
         "matched_laps": len(matches),
         "session_lap_count": len(rows),
@@ -316,10 +341,16 @@ def _vendor_facts(
     events: Sequence[Mapping[str, Any]],
     vendor: Mapping[str, bytes],
     lap_ms: int,
-    lap_start: int,
-    lap_end: int,
+    exported_ms: int,
     reasons: list[str],
 ) -> dict[str, Any] | None:
+    """The latest read of a record that can contain this lap, or why none is usable.
+
+    Every record read after the finish must be readable: an unreadable or malformed
+    later read is never skipped in favour of an earlier, cleaner one. A record saved
+    before the finish cannot contain the lap and is not a candidate.
+    """
+    lap_start, lap_end = exported_ms - lap_ms, exported_ms + 1000
     reads = [
         event
         for event in events
@@ -327,32 +358,31 @@ def _vendor_facts(
     ]
     if not reads:
         return None
-    after = [event for event in reads if event["t_ms"] >= lap_end]
-    ordered = after or [reads[-1]]
+    considered = [event for event in reads if event["t_ms"] >= lap_end] or [reads[-1]]
     candidates: dict[str, dict[str, Any]] = {}
-    for event in ordered:
-        digest = event["sha256"]
-        if digest in candidates:
-            continue
-        raw = vendor.get(digest)
-        candidate = _vendor_candidate(event["t_ms"], digest, raw, lap_ms) if raw else None
+    for event in considered:
+        raw = vendor.get(event["sha256"])
+        candidate = _vendor_candidate(event["t_ms"], event["sha256"], raw, lap_ms) if raw else None
         if candidate is None:
             reasons.append("vendor_record_unreadable")
             return None
-        candidates[digest] = candidate
+        candidates[event["sha256"]] = candidate  # keeps the latest read time per content
+    ordered = sorted(candidates.values(), key=lambda candidate: candidate["read_ms"])
     covering = [
-        c
-        for c in candidates.values()
-        if c["matched_laps"]
-        and type(c["session_started_ms"]) is int
-        and type(c["saved_ms"]) is int
-        and c["session_started_ms"] <= lap_start + HUMAN_ATTESTATION_WINDOW_MARGIN_MS
-        and c["saved_ms"] >= lap_end - 1000 - HUMAN_ATTESTATION_WINDOW_MARGIN_MS
+        candidate
+        for candidate in ordered
+        if candidate["saved_ms"] >= exported_ms
+        and candidate["session_started_ms"] <= lap_start + 1000
     ]
-    # Several distinct records that each claim this lap but disagree are not a join.
-    if len({json.dumps(c["lap"], sort_keys=True) for c in covering}) > 1:
-        reasons.append("vendor_join_ambiguous")
-    return (covering or list(candidates.values()))[0]
+    if not covering:
+        return {**ordered[-1], "covering_reads": 0, "disagreeing_reads": 0}
+    decision = covering[-1]
+    disagreeing = sum(
+        1
+        for candidate in covering[:-1]
+        if candidate["matched_laps"] and candidate["lap"] != decision["lap"]
+    )
+    return {**decision, "covering_reads": len(covering), "disagreeing_reads": disagreeing}
 
 
 # --------------------------------------------------------------------------------------
@@ -408,7 +438,7 @@ def signal_reasons(
         else:
             coverage_start = min(start_ms, declaration["declared_ms"]) if declaration else start_ms
             control = _control_map_facts(capture_journal, events, coverage_start, end_ms)
-            vendor_facts = _vendor_facts(events, vendor or {}, lap_ms, lap_start, lap_end, reasons)
+            vendor_facts = _vendor_facts(events, vendor or {}, lap_ms, exported_ms, reasons)
     observation = _map(record.get("trace")).get("control_observation")
     witness = {
         "schema_version": 1,
@@ -455,8 +485,8 @@ def attest_lap(
     # Never relabel: an embedded assessment or any ledger fact (including an
     # unreadable ledger) ends attestation before a signal is even considered.
     resolved = resolve_archive_provenance(record, source_sha256=source_sha256)
-    existing = resolved.get("qualification")
-    if existing is not None:
+    if "qualification" in resolved:
+        existing = resolved["qualification"]
         error = _map(existing).get("resolution_error")
         if error:
             return unverified(f"attribution_unavailable:{error}")
@@ -535,8 +565,8 @@ def attest_archive(archive_path: str | Path, capture_dir: str | Path | None) -> 
         return unverified(DISABLED)
     try:
         raw = _stable_bytes(Path(archive_path))
-        record = json.loads(raw)
-    except (AttributionError, OSError, ValueError, RecursionError):
+        record = _loads(raw)
+    except (AttributionError, OSError, ValueError):
         return unverified("archive_unreadable")
     reasons: list[str] = []
     capture, declarations, vendor = _capture_inputs(
@@ -560,24 +590,29 @@ def certify_archive(
     register: bool = False,
     ledger_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Attest one archive and, only on request, append the certification."""
-    result = attest_archive(archive_path, capture_dir)
-    receipt: dict[str, Any] = {
-        "archive": str(archive_path),
-        "verified": result.verified,
-        "reason": result.reason,
-        "reasons": list(result.reasons),
-        "witness_sha256": result.witness_sha256,
-        "registered": None,
-    }
-    if result.verified and register and result.qualification is not None:
-        try:
-            receipt["registered"] = register_human_attestation(
-                archive_path, result.qualification, ledger_path=ledger_path
-            )
-        except (AttributionError, OSError, ValueError) as exc:
-            receipt["registered"] = {"registered": False, "reason": str(exc)}
-    return receipt
+    """Attest one archive and, only on request, append the certification.
+
+    A named ledger is used for both the never-relabel guard and the append, so the
+    guard can never read one store while the certification lands in another.
+    """
+    with _ledger_scope(ledger_path):
+        result = attest_archive(archive_path, capture_dir)
+        receipt: dict[str, Any] = {
+            "archive": str(archive_path),
+            "verified": result.verified,
+            "reason": result.reason,
+            "reasons": list(result.reasons),
+            "witness_sha256": result.witness_sha256,
+            "registered": None,
+        }
+        if result.verified and register and result.qualification is not None:
+            try:
+                receipt["registered"] = register_human_attestation(
+                    archive_path, result.qualification, ledger_path=ledger_path
+                )
+            except (AttributionError, OSError, ValueError) as exc:
+                receipt["registered"] = {"registered": False, "reason": str(exc)}
+        return receipt
 
 
 # --------------------------------------------------------------------------------------
@@ -592,12 +627,17 @@ def scorecard(
     identity. ``signal_reasons`` are reported separately from the ledger guard so
     a zero is not merely "the ledger already said so".
     """
-    entries = _read_ledger(Path(ledger_path), required=True)
+    with _ledger_scope(ledger_path):
+        return _scorecard(Path(ledger_path), Path(laps_dir), first)
+
+
+def _scorecard(ledger_path: Path, laps_dir: Path, first: int | None) -> dict[str, Any]:
+    entries = _read_ledger(ledger_path, required=True)
     selected = entries if first is None else entries[:first]
     wanted = {entry["identity"]["lap_uuid"]: entry for entry in selected}
     found: dict[str, tuple[Path, bytes, dict[str, Any]]] = {}
     unreadable = 0
-    for path in sorted(Path(laps_dir).glob("*.json")):
+    for path in sorted(laps_dir.glob("*.json")):
         try:
             raw = _stable_bytes(path)
             record = json.loads(raw)
@@ -673,6 +713,11 @@ def bench_verdict(
     keys = [(row["session_uuid"], row["lap_n"]) for row in laps]
     if len(set(keys)) != len(keys):
         return {"verdict": "INCONCLUSIVE", "reasons": ["manifest_duplicate_lap"]}
+    if any(
+        not isinstance(result, Mapping) or type(result.get("verified")) is not bool
+        for result in results
+    ):
+        return {"verdict": "INCONCLUSIVE", "reasons": ["results_invalid"]}
     by_key = {}
     for result in results:
         identity = _map(result.get("identity"))
@@ -867,23 +912,12 @@ def main(argv: list[str] | None = None) -> int:
     verdict.add_argument("--manifest", required=True, type=Path)
     verdict.add_argument("--results", required=True, type=Path)
     args = parser.parse_args(argv)
-    # A named ledger is the one store for this invocation, including the
-    # never-relabel guard; the caller's environment is restored afterwards.
-    ledger = getattr(args, "ledger", None)
-    previous = os.environ.get(ATTRIBUTIONS_ENV)
-    if ledger is not None:
-        os.environ[ATTRIBUTIONS_ENV] = str(ledger)
     try:
-        return _run(args)
+        with _ledger_scope(getattr(args, "ledger", None)):
+            return _run(args)
     except (AttributionError, _InputError, OSError) as exc:
         print(json.dumps({"ok": False, "reason": str(exc)}))
         return 2
-    finally:
-        if ledger is not None:
-            if previous is None:
-                os.environ.pop(ATTRIBUTIONS_ENV, None)
-            else:
-                os.environ[ATTRIBUTIONS_ENV] = previous
 
 
 def _run(args: argparse.Namespace) -> int:

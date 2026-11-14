@@ -607,10 +607,12 @@ def test_native_control_authority_counts_survive_downsampling_and_the_real_write
         car.isAIControlled=(i==2 or i==3)
         car.isUserControlled=not car.isAIControlled
         car.splinePosition=(i-1)/3000
-        t:update(.01,car,{gameTime=i*.01})
+        -- Frame 5 is paused; frames 7-8 are withheld from the trace by an ambiguous
+        -- finish wrap. All of them must still be counted.
+        t:update(.01,car,{gameTime=i*.01,isLive=i~=5},not (i==7 or i==8))
       end
       local trace,offTrack,control=t:finalizeLapTrace(true)
-      assert(#trace==2000 and offTrack.sample_count==3001)
+      assert(#trace==2000 and offTrack.sample_count==2999 and offTrack.complete==false)
       local job=assert(require('lap_archive').createWriteJob({session_uuid='control',
         lap_n=1,lap_ms=30010,car={},sim={},trace=trace,offTrackObservation=offTrack,
         controlObservation=control},50))
@@ -629,8 +631,11 @@ def test_native_control_authority_counts_survive_downsampling_and_the_real_write
         "unknown_count": 0,
         "ai_controlled_count": 2,
         "user_controlled_count": 2999,
+        "not_live_count": 1,
+        "wall_elapsed_s": record["trace"]["control_observation"]["wall_elapsed_s"],
     }
-    assert record["trace"]["off_track_observation"]["sample_count"] == 3001
+    assert record["trace"]["control_observation"]["wall_elapsed_s"] in (0, 1)
+    assert record["trace"]["off_track_observation"]["sample_count"] == 2999
 
 
 def test_unread_control_authority_is_unknown_and_never_zero_filled(tmp_path):
@@ -640,10 +645,11 @@ def test_unread_control_authority_is_unknown_and_never_zero_filled(tmp_path):
       local t=require('telemetry').new()
       t:beginLapClock(0,false)
       local car={speedKmh=100,position={x=1,y=0,z=1},isAIControlled=false}
-      for i=1,3 do
-        if i==3 then car.isUserControlled=true end
-        car.splinePosition=i/3
-        t:update(.05,car,{gameTime=i*.05})
+      for i=1,4 do
+        if i>=3 then car.isUserControlled=true end
+        car.splinePosition=i/4
+        -- Frame 4 has every car field but no readable sim state: still unknown.
+        t:update(.05,car,{gameTime=i*.05,isLive=(i~=4) or nil})
       end
       local trace,_,control=t:finalizeLapTrace(true)
       local one=t:finalizeLapTrace()
@@ -653,7 +659,10 @@ def test_unread_control_authority_is_unknown_and_never_zero_filled(tmp_path):
         trace=trace})
       assert(legacy.trace.control_observation==nil)
       for _,bad in ipairs({{},{schema_version=1,source='car.isAIControlled',complete=true,
-          sample_count=1,unknown_count=0,ai_controlled_count=2,user_controlled_count=0}}) do
+          sample_count=1,unknown_count=0,ai_controlled_count=2,user_controlled_count=0,
+          not_live_count=0,wall_elapsed_s=1},{schema_version=1,source='car.isAIControlled',
+          complete=true,sample_count=1,unknown_count=0,ai_controlled_count=0,
+          user_controlled_count=1,not_live_count=0}}) do
         local rejected=archive.buildRecord({session_uuid='bad',lap_n=1,lap_ms=1000,car={},sim={},
           trace=trace,controlObservation=bad})
         assert(rejected.trace.control_observation==nil)
@@ -664,5 +673,6 @@ def test_unread_control_authority_is_unknown_and_never_zero_filled(tmp_path):
     )
     observation = record["trace"]["control_observation"]
     assert observation["complete"] is False
-    assert observation["sample_count"] == 3 and observation["unknown_count"] == 2
+    assert observation["sample_count"] == 4 and observation["unknown_count"] == 3
     assert observation["ai_controlled_count"] == 0 and observation["user_controlled_count"] == 1
+    assert observation["not_live_count"] == 0
