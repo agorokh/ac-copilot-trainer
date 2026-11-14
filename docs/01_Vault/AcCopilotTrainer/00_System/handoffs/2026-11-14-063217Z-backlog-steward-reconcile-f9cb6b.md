@@ -12,20 +12,24 @@ relates_to:
   - AcCopilotTrainer/pitfalls/epic-body-delivery-drift.md
 ---
 
-# Backlog reconciliation 2026-11-14 — `/backlog-steward` `f9cb6b` (read-only)
+# Backlog reconciliation 2026-11-14 — `/backlog-steward` `f9cb6b`
 
-Read-only run at `main` `3448597c` against ledger `c4a91e`. Nothing on GitHub was changed.
-Five issues are open: #956, #957, #529, #401, #117. Evidence per issue is in the linked
-snapshot.
+Read-only run at `main` `3448597c` against ledger `c4a91e`. Afterwards, on operator
+instruction, the #401 body and `Roadmap.md` were refreshed as a pair and the #956 body
+was refreshed; no other tracker state was changed. Five issues are open: #956, #957, #529, #401, #117. Evidence per issue
+is in the linked snapshot.
 
 ## What the run found
 
 - **#956 `partially-delivered`.** Prototype, AI bench and driver repairs are merged
   (PRs #964 through #981). Native acceptance is INCONCLUSIVE at 0/12 and the rig cap is
   spent: 2050.96 s remain, one genuine unit needs 2610.23 s. The post-#981 driver has not
-  run natively. The body still says 11260 s remain.
-- **#401 `live`, pair stale.** The body and `Roadmap.md` both count three open issues and
-  never mention #955, #956, #957 or the `REX-20261111` slate.
+  run natively. The body said 11260 s remained; it was refreshed the same day with a
+  current-state section, acceptance criteria and checkboxes unchanged.
+- **#401 `live`, pair was stale, now refreshed.** The body and `Roadmap.md` both counted
+  three open issues and never mentioned #955, #956, #957 or the `REX-20261111` slate. Both
+  now record them: the issue body was edited the same day, and the `Roadmap.md` half is
+  in a follow-up vault PR because PR #983 auto-merged this node before that commit landed.
 - **#529 `partially-delivered`, unchanged.** No commits on the `REX-20261024-01/-03`
   surfaces since `145c07a`; the three operator decisions are still pending. #956 changed
   the shared driver in `tools/ac_harness` (default-off).
@@ -34,18 +38,21 @@ snapshot.
 - **#117 `live`, parked.** Unchanged.
 - **Closed since `c4a91e`:** #86 and #955 are clean done.
 
-## Proposals awaiting the operator (none executed)
+## Proposals awaiting the operator
 
 1. #956: choose between publishing INCONCLUSIVE and closing or parking, granting a new
-   bounded rig cap, or driving the 12 stints by hand. Refresh the body whichever is chosen.
-2. #401: one paired refresh of the issue body and `Roadmap.md`.
-3. #957: read-only count of human-qualified traffic-clean sessions per combo on the rig.
+   bounded rig cap, or driving the 12 stints by hand.
+2. #957: read-only count of human-qualified traffic-clean sessions per combo on the rig.
+3. #955 follow-on: live traffic-gated coaching has no owning issue; file one only if wanted.
+
+Executed on operator instruction: the #401 body and `Roadmap.md` paired refresh, and the
+#956 body refresh.
 
 ## Resume pointer
 
-Do not start another #956 native attempt under the spent registration, and do not treat the
-#401 body's "3 open issues" as current. If the operator picks an option for #956, hand code
-work to `/orchestrate` and body rewrites to `github-issue-creator`.
+Do not start another #956 native attempt under the spent registration. If the operator
+picks an option for #956, hand code work to `/orchestrate` and body rewrites to
+`github-issue-creator`.
 
 ## Not done
 

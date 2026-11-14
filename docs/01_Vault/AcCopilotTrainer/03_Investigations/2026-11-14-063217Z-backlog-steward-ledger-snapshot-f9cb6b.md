@@ -12,18 +12,19 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/roadmap-expansion-2026-11-11.md
 ---
 
-# Backlog ledger snapshot — 2026-11-14 (run `f9cb6b`, read-only)
+# Backlog ledger snapshot — 2026-11-14 (run `f9cb6b`, settled after the #401 and #956 refreshes)
 
 `/backlog-steward` run `f9cb6b` over `agorokh/ac-copilot-trainer` at merged `main` `3448597c`,
-diffed against snapshot `c4a91e` (`145c07a`). Read-only: no label, comment, close or body edit
-was made. No Council was convened; verdicts rest on the artifacts cited per entry. No GitHub
+diffed against snapshot `c4a91e` (`145c07a`). The run itself was read-only. Afterwards, on
+operator instruction, the #401 body and `Roadmap.md` were refreshed as a pair and the #956
+body was refreshed; no label, comment or close was made on any issue. No Council was convened; verdicts rest on the artifacts cited per entry. No GitHub
 Project board is declared for workspace `ac_copilot` (fleet `board_manifest.yml` lists it as
 intentionally undeclared), so board reconciliation was skipped.
 
 | Issue | State | Verdict | Change vs `c4a91e` | Proposed move |
 |---|---|---|---|---|
-| #956 | open | `partially-delivered` | new | escalate: operator decision on spent rig cap; refresh body |
-| #401 | open | `live` (pair stale) | flag added | paired refresh of body + `Roadmap.md` |
+| #956 | open | `partially-delivered` | new | escalate: operator decision on spent rig cap (body refreshed 2026-11-14) |
+| #401 | open | `live` (pair was stale) | flag added, then settled | pair refreshed 2026-11-14 on operator instruction |
 | #529 | open | `partially-delivered` | unchanged, not re-flagged | keep |
 | #957 | open | `live` (Hold) | new | keep on Hold |
 | #117 | open | `live` (parked) | unchanged, not re-flagged | keep parked |
@@ -139,12 +140,13 @@ left behind by eight later comments that track the real remainder (`2050.9643220
       ],
       "scope_evolution": "Human 30% timing criterion replaced by autonomous 90 s-per-case protocol (operator adopted PR #970, body section 'Adopted autonomous acceptance'); owner authorized the driving repair in comment 6869681438.",
       "drift_flags": [
-        "body-stale: body says approved 240 min 'leaves 11260.227089s'; actual remainder is 2050.9643220 s and the cap stop has fired.",
-        "body-stale: 'Delivery checkpoint - 2026-11-12' and 'Files to touch' predate pressure_bench*, pit_return and the racing_driver/auto_drive changes.",
         "budget-creep: explore card budget went 1.5 engineering days + 60 rig minutes -> 2 more days + 240 rig minutes; both exhausted without a scored case.",
         "seam-migration: last five PRs changed the shared autonomous driver (tools/ac_harness), the surface #529 G1 runs on."
       ],
-      "recommended_action": "escalate: operator decides between (a) publishing INCONCLUSIVE as the explore verdict and closing or parking, (b) a new bounded rig cap, (c) human-driven stints for the 12 cases. Refresh the body either way. Do not re-attempt under the spent registration.",
+      "resolved_flags": [
+        "body-stale (found by this run): the body said 240 min 'leaves 11260.227089s' and its checkpoint and file list predated the bench and harness work. Body refreshed 2026-11-14 on operator instruction with a current-state section; acceptance criteria and checkboxes unchanged (1 checked, 5 unchecked)."
+      ],
+      "recommended_action": "escalate: operator decides between (a) publishing INCONCLUSIVE as the explore verdict and closing or parking, (b) a new bounded rig cap, (c) human-driven stints for the 12 cases. Do not re-attempt under the spent registration.",
       "main_sha": "3448597c"
     }
   },
@@ -291,8 +293,9 @@ left behind by eight later comments that track the real remainder (`2050.9643220
       ],
       "counterevidence": [],
       "remaining_acceptance": ["Standing umbrella; keep body and Roadmap.md synchronized on every owner or capability change."],
-      "drift_flags": ["pair-stale: #401 body and Roadmap.md both omit #955, #956, #957 and count 3 open issues instead of 5."],
-      "recommended_action": "rewrite: one paired refresh of the #401 body and Roadmap.md (route to github-issue-creator plus a vault-only PR).",
+      "drift_flags": [],
+      "resolved_flags": ["pair-stale (found by this run): #401 body and Roadmap.md both omitted #955, #956, #957 and counted 3 open issues instead of 5. Refreshed as a pair on 2026-11-14 on operator instruction (issue body edited the same day; Roadmap.md in the follow-up vault PR after #983)."],
+      "recommended_action": "keep; pair refreshed 2026-11-14. Next refresh is owed when #956 or #957 changes state.",
       "main_sha": "3448597c"
     }
   },
