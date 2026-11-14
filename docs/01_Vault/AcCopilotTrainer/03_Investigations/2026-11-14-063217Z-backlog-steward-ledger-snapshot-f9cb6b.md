@@ -12,18 +12,19 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/roadmap-expansion-2026-11-11.md
 ---
 
-# Backlog ledger snapshot — 2026-11-14 (run `f9cb6b`, read-only)
+# Backlog ledger snapshot — 2026-11-14 (run `f9cb6b`, settled after the #401 refresh)
 
 `/backlog-steward` run `f9cb6b` over `agorokh/ac-copilot-trainer` at merged `main` `3448597c`,
-diffed against snapshot `c4a91e` (`145c07a`). Read-only: no label, comment, close or body edit
-was made. No Council was convened; verdicts rest on the artifacts cited per entry. No GitHub
+diffed against snapshot `c4a91e` (`145c07a`). The run itself was read-only. Afterwards, on
+operator instruction, the #401 body and `Roadmap.md` were refreshed as a pair; no label,
+comment or close was made on any other issue. No Council was convened; verdicts rest on the artifacts cited per entry. No GitHub
 Project board is declared for workspace `ac_copilot` (fleet `board_manifest.yml` lists it as
 intentionally undeclared), so board reconciliation was skipped.
 
 | Issue | State | Verdict | Change vs `c4a91e` | Proposed move |
 |---|---|---|---|---|
 | #956 | open | `partially-delivered` | new | escalate: operator decision on spent rig cap; refresh body |
-| #401 | open | `live` (pair stale) | flag added | paired refresh of body + `Roadmap.md` |
+| #401 | open | `live` (pair was stale) | flag added, then settled | pair refreshed 2026-11-14 on operator instruction |
 | #529 | open | `partially-delivered` | unchanged, not re-flagged | keep |
 | #957 | open | `live` (Hold) | new | keep on Hold |
 | #117 | open | `live` (parked) | unchanged, not re-flagged | keep parked |
@@ -291,8 +292,9 @@ left behind by eight later comments that track the real remainder (`2050.9643220
       ],
       "counterevidence": [],
       "remaining_acceptance": ["Standing umbrella; keep body and Roadmap.md synchronized on every owner or capability change."],
-      "drift_flags": ["pair-stale: #401 body and Roadmap.md both omit #955, #956, #957 and count 3 open issues instead of 5."],
-      "recommended_action": "rewrite: one paired refresh of the #401 body and Roadmap.md (route to github-issue-creator plus a vault-only PR).",
+      "drift_flags": [],
+      "resolved_flags": ["pair-stale (found by this run): #401 body and Roadmap.md both omitted #955, #956, #957 and counted 3 open issues instead of 5. Refreshed as a pair on 2026-11-14 on operator instruction (issue body edited the same day; Roadmap.md in the follow-up vault PR after #983)."],
+      "recommended_action": "keep; pair refreshed 2026-11-14. Next refresh is owed when #956 or #957 changes state.",
       "main_sha": "3448597c"
     }
   },
