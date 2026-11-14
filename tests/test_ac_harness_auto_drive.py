@@ -5225,3 +5225,123 @@ def test_delegated_drive_reverifies_its_owner_before_every_launch(tmp_path):
     assert reason.startswith("delegated rig owner lost before launch")
     assert launches == ["first"]  # the relaunch never reached Content Manager
     assert checks == [(7, tmp_path / "rig.lock")] * 2
+
+
+def test_ggv_slip_feedback_resolves_strict_axle_radii(tmp_path):
+    car = tmp_path / "content/cars/test_car/data"
+    car.mkdir(parents=True)
+    (car / "tyres.ini").write_text("[FRONT_1]\nRADIUS=0.34\n[REAR_1]\nRADIUS=0.355\n")
+    config = _cfg(driver="ggv", car_id="test_car", ac_root=tmp_path, slip_compound_index=1)
+    driver = _build_driver(config, _LINE)
+    assert driver.slip_feedback.radii == (0.34, 0.34, 0.355, 0.355)
+    with pytest.raises(ValueError, match="both compound axles"):
+        _build_driver(replace(config, slip_compound_index=2), _LINE)
+    with pytest.raises(ValueError, match="requires GGV"):
+        _build_driver(replace(config, driver="racing"), _LINE, _PROFILE)
+
+
+def test_slip_feedback_does_not_borrow_missing_rear_radius(tmp_path):
+    car = tmp_path / "content/cars/test_car/data"
+    car.mkdir(parents=True)
+    (car / "tyres.ini").write_text("[FRONT]\nRADIUS=0.34\n[REAR]\nNAME=missing-radius\n")
+    with pytest.raises(ValueError, match="both compound axles"):
+        _build_driver(
+            _cfg(driver="ggv", car_id="test_car", ac_root=tmp_path, slip_compound_index=0), _LINE
+        )
+
+
+@pytest.mark.parametrize("invalid_feedback", [False, True])
+def test_real_rig_loop_binds_native_slip_reader_and_stops_invalid_feedback(
+    monkeypatch, invalid_feedback
+):
+    import struct
+    from types import SimpleNamespace
+
+    import tools.ac_harness.ai_line as ai
+    import tools.ac_harness.auto_drive as ad
+    import tools.ac_harness.entry_launcher as launcher
+    import tools.ac_harness.shared_memory as shared
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    class NoopThread:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def join(self, **kwargs):
+            pass
+
+    class Reader:
+        packet = 0
+        closed = False
+
+        def read_physics(self):
+            self.packet += 1
+            return SimpleNamespace(packet_id=self.packet)
+
+        def read_physics_bytes(self, size):
+            if invalid_feedback:
+                return b""
+            buf = bytearray(size)
+            struct.pack_into("<i", buf, 0, self.packet)
+            struct.pack_into("<f", buf, 28, 90)
+            struct.pack_into("<4f", buf, 104, 25 / 0.34, 25 / 0.34, 25 / 0.355, 25 / 0.355 * 1.4)
+            return bytes(buf)
+
+        def read_graphics(self):
+            return SimpleNamespace(completed_laps=0)
+
+        def close(self):
+            self.closed = True
+
+    stop = threading.Event()
+
+    class NativeController:
+        reads = 0
+
+        def __init__(self):
+            self.writes = []
+
+        def read_car_data(self):
+            self.reads += 1
+            if self.reads >= 4:
+                stop.set()
+            return dict(
+                position=(float(self.reads * 10), 0.0, 0.0),
+                look=(1.0, 0.0, 0.0),
+                speed_kmh=90.0,
+                rpm=5000.0,
+                gear=4,
+            )
+
+        def write_controls(self, gas, brake, steer, **kwargs):
+            self.writes.append((gas, brake, kwargs))
+
+    driver = RacingDriver.from_ggv_profile(
+        _LINE, [50.0] * len(_LINE), slip_radii_m=(0.34, 0.34, 0.355, 0.355)
+    )
+    driver._longitudinal = lambda *_: (1.0, 0.0)
+    reader, controller = Reader(), NativeController()
+    monkeypatch.setattr(ad, "resolve_fast_lane", lambda *_: pathlib.Path("fast_lane.ai"))
+    monkeypatch.setattr(ai, "load_ai_line", lambda *_: _LINE)
+    monkeypatch.setattr(ad, "_build_driver", lambda *_: driver)
+    monkeypatch.setattr(shared, "SharedMemoryReader", lambda: reader)
+    monkeypatch.setattr(launcher, "running_process_ids", lambda _: frozenset({101}))
+    monkeypatch.setattr(ad.threading, "Thread", NoopThread)
+    monkeypatch.setattr(ad.time, "sleep", lambda _: None)
+    config = _cfg(driver="ggv", spawn_to_line=False, drive_seconds=0.2)
+    if invalid_feedback:
+        with pytest.raises(ValueError, match="Slip feedback native physics unavailable"):
+            ad.rig_drive(controller, config, stop)
+    else:
+        stats = ad.rig_drive(controller, config, stop)
+    runtime_writes = [row for row in controller.writes if row[2]]
+    assert reader.closed
+    if invalid_feedback:
+        assert not runtime_writes
+    else:
+        assert runtime_writes and all(row[0] == 0 for row in runtime_writes)
+        assert stats.payload["slip_feedback"]["native_packets"] >= 1
+        assert stats.payload["slip_feedback"]["gas_cuts"] >= 1

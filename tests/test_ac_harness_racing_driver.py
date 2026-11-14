@@ -315,3 +315,173 @@ def test_constructor_validates():
         RacingDriver(line, [40.0] * 10, max_speed_kmh=30.0, min_speed_kmh=40.0)
     with pytest.raises(ValueError, match="steering_mode"):
         RacingDriver(line, [40.0] * 10, steering_mode="lookahead")
+
+
+# Native issue956 failures are braking lock and driven-wheel spin, not a
+# qualification exception. Exercise the actual step() path with measured radii.
+def _slip_physics(packet, ratios=(0.0, 0.0, 0.0, 0.0), *, speed=90.0):
+    from tools.ac_harness.racing_telemetry import PhysFrame
+
+    radii = (0.34, 0.34, 0.355, 0.355)
+    omega = tuple(speed / 3.6 / r * (1 + s) for r, s in zip(radii, ratios, strict=True))
+    return PhysFrame(packet, 0.0, 0.0, 4, 4000, 0.0, speed, 0.0, 0.0, (0.0,) * 4, omega)
+
+
+def _feedback_driver():
+    driver = RacingDriver.from_ggv_profile(
+        _straight_line(100), [50.0] * 100, slip_radii_m=(0.34, 0.34, 0.355, 0.355)
+    )
+    driver.phase = PHASE_LAP
+    return driver
+
+
+def test_native_step_cuts_single_rear_spin_and_front_lock_and_vetoes_downshift():
+    driver = _feedback_driver()
+    native = _slip_physics(1, (0, 0, 0, 0.3881))
+    driver.set_phys_read(lambda: native)
+    driver._longitudinal = lambda *_: (0.98, 0.0)
+    spun = driver.step((50, 0, 0), (1, 0, 0), 90, 5000, 4, 0)
+    assert spun.gas == 0.0
+    driver._longitudinal = lambda *_: (0.0, 0.936)
+    native = _slip_physics(2, (0, -0.9863, -0.2842, -0.0204))
+    locked = driver.step((50, 0, 0), (1, 0, 0), 90, 3000, 4, 0.012)
+    assert locked.brake == 0.0 and not locked.gear_dn
+    assert driver.slip_feedback.summary()["downshift_vetoes"] == 1
+
+
+def test_slip_feedback_projects_developing_lock_before_admission_threshold():
+    from tools.ac_harness.racing_driver import WheelSlipGovernor
+
+    governor = WheelSlipGovernor((0.34, 0.34, 0.355, 0.355))
+    native = _slip_physics(1)
+    governor.read = lambda: native
+    assert governor.apply(1, 1, False, 0)[:2] == (0, 0)
+    native = _slip_physics(2, (0, -0.05, 0, 0))
+    assert governor.apply(0, 1, False, 0.01)[1] == 0
+    # Re-reading a packet, even with changed bytes, cannot restore the brake.
+    native = _slip_physics(2)
+    assert governor.apply(0, 1, False, 0.05)[1] == 0
+    native = _slip_physics(3)
+    assert 0 < governor.apply(0, 1, False, 0.06)[1] < 0.1
+    with pytest.raises(ValueError, match="stale"):
+        governor.apply(0, 1, False, 0.17)
+
+
+@pytest.mark.parametrize("ratios", [(0, 0, 0, 0.4), (0, -0.99, 0, 0), (0, 0, -0.48, -0.48)])
+def test_slip_feedback_never_increases_requested_pedals(ratios):
+    from tools.ac_harness.racing_driver import WheelSlipGovernor
+
+    governor = WheelSlipGovernor((0.34, 0.34, 0.355, 0.355))
+    governor.read = lambda: _slip_physics(1, ratios)
+    gas, brake, _ = governor.apply(0.25, 0.4, False, 0)
+    assert 0 <= gas <= 0.25 and 0 <= brake <= 0.4
+
+
+def test_slip_feedback_rejects_missing_invalid_and_restarted_streams():
+    from dataclasses import replace
+
+    from tools.ac_harness.racing_driver import WheelSlipGovernor
+
+    governor = WheelSlipGovernor((0.34, 0.34, 0.355, 0.355))
+    with pytest.raises(ValueError, match="unavailable"):
+        governor.apply(1, 0, False, 0)
+    governor.read = lambda: replace(_slip_physics(1), wheel_omega=(float("nan"), 1, 1, 1))
+    with pytest.raises(ValueError, match="invalid"):
+        governor.apply(1, 0, False, 0)
+    governor.read = lambda: _slip_physics(1)
+    governor.apply(1, 0, False, 0)
+    governor.read = lambda: _slip_physics(2)
+    with pytest.raises(ValueError, match="stale"):
+        governor.apply(1, 0, False, 0.11)
+
+
+def test_feedback_disabled_preserves_uninstrumented_driver():
+    driver = RacingDriver.from_ggv_profile(_straight_line(100), [50.0] * 100)
+    driver.set_phys_read(lambda: pytest.fail("ordinary driver must not read feedback"))
+    assert driver.slip_feedback is None
+    assert driver.lookahead_m == 4 and driver.lookahead_time_s == 0.15
+    assert driver.step((50, 0, 0), (1, 0, 0), 90, 5000, 4, 0).gas > 0
+
+
+def test_feedback_ramps_pedal_application_and_adds_braking_headroom():
+    driver = _feedback_driver()
+    governor = driver.slip_feedback
+    native = _slip_physics(1)
+    driver.set_phys_read(lambda: native)
+    assert driver.lookahead_m == 12 and driver.lookahead_time_s == 0.5
+    assert governor.apply(1, 1, False, 0)[:2] == (0, 0)
+    native = _slip_physics(2)
+    assert governor.apply(1, 1, False, 0.012)[:2] == pytest.approx((0.018, 0.036))
+    # A faster caller cannot accelerate the ramp by repeatedly reading one packet.
+    assert governor.apply(1, 1, False, 0.024)[:2] == pytest.approx((0.018, 0.036))
+    assert governor.apply(0, 0, False, 0.025)[:2] == (0, 0)
+    # The same baked profile requests braking earlier for a real upcoming speed
+    # drop, compensating for application ramps and possible feedback release.
+    target = [50.0] * 100
+    target[34:40] = [20.0] * 6
+    ordinary = RacingDriver.from_ggv_profile(_straight_line(100), target)
+    feedback = RacingDriver.from_ggv_profile(
+        _straight_line(100), target, slip_radii_m=(0.34, 0.34, 0.355, 0.355)
+    )
+    assert ordinary.profile == feedback.profile == target
+    assert feedback.target_speed_kmh(30, 180) < ordinary.target_speed_kmh(30, 180)
+
+
+def test_slip_feedback_denies_packet_rollback_and_clock_rollback():
+    from tools.ac_harness.racing_driver import WheelSlipGovernor
+
+    governor = WheelSlipGovernor((0.34, 0.34, 0.355, 0.355))
+    governor.read = lambda: _slip_physics(10)
+    governor.apply(1, 0, False, 1.0)
+    governor.read = lambda: _slip_physics(9)
+    with pytest.raises(ValueError, match="backwards"):
+        governor.apply(1, 0, False, 1.01)
+    with pytest.raises(ValueError, match="clock"):
+        governor.apply(1, 0, False, 0.99)
+
+
+@pytest.mark.parametrize("braking", [False, True])
+def test_feedback_couples_to_bounded_wheel_response_without_parking(braking):
+    # Illustrative first-order wheel response, not AC physics or live acceptance.
+    # Open-loop full pedal settles at |slip|=.4; feedback must still propel/brake.
+    from tools.ac_harness.racing_driver import WheelSlipGovernor
+
+    governor = WheelSlipGovernor((0.34, 0.34, 0.355, 0.355))
+    slip, peak, delivered = 0.0, 0.0, []
+    native = _slip_physics(1)
+    governor.read = lambda: native
+    for i in range(200):
+        ratios = (0, slip, 0, 0) if braking else (0, 0, 0, slip)
+        native = _slip_physics(i + 1, ratios)
+        gas, brake, _ = governor.apply(0 if braking else 1, 1 if braking else 0, False, i * 0.012)
+        pedal = brake if braking else gas
+        slip += 0.3 * ((-0.4 if braking else 0.4) * pedal - slip)
+        peak = max(peak, abs(slip))
+        delivered.append(pedal)
+    assert peak < 0.2
+    assert sum(delivered[-50:]) / 50 > 0.05
+
+
+def test_authorized_recovery_resets_feedback_without_replacing_reader_or_audit():
+    driver = _feedback_driver()
+    governor = driver.slip_feedback
+    native = _slip_physics(10, (0, -0.99, 0, 0.4))
+
+    def reader():
+        return native
+
+    driver.set_phys_read(reader)
+    governor.apply(1, 1, True, 0.0)
+    before = governor.summary().copy()
+    # The real harness calls on_recovery after its >.1s teleport sleeps.
+    driver.on_recovery()
+    assert driver.slip_feedback is governor and governor.read is reader
+    assert governor.summary() == before
+    native = _slip_physics(11)
+    assert governor.apply(1, 1, False, 1.5)[:2] == (0, 0)
+    native = _slip_physics(12)
+    gas, brake, _ = governor.apply(1, 1, False, 1.512)
+    assert gas == pytest.approx(0.018) and brake == pytest.approx(0.036)
+    # Freshness is still mandatory after the new stream begins.
+    with pytest.raises(ValueError, match="stale"):
+        governor.apply(1, 1, False, 1.7)
