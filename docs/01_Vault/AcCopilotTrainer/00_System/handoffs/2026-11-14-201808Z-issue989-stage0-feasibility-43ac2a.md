@@ -79,8 +79,9 @@ per session leaves 1 session. None is evidence about a human driver.
   archives were kept in the session scratchpad only, never committed or uploaded.
 - Rig time used: 0 s. Nothing was started, written or deleted on the rig.
 - Decision-rule changes made after seeing the data are disclosed in the issue comment.
-- Local `make ci-fast` on the macOS host: every non-test step passes; `ci-test` has 10 failures
-  in `test_pressure_bench*.py` and `test_traffic_eligibility.py` that also fail on untouched
-  `origin/main` there (Python 3.14 code-constant serialization, `/proc`, LuaJIT). GitHub `build`
-  is the authority for this PR.
+- Local `make ci-fast` on the macOS host: every non-test step passes; `ci-test` has 10 failures.
+  Nine (`test_pressure_bench_oracle.py`, `test_traffic_eligibility.py`) fail identically on
+  untouched `origin/main` there (Python 3.14 code-constant serialization, LuaJIT). The tenth
+  (`test_pressure_bench.py`) reads `/proc`, absent on macOS; it was not rerun on `origin/main`.
+  GitHub `build` is the authority for this PR.
 - Tier-3 `ac_copilot` was queried at LOAD and before edits; vault Tier-2 supplied the card.
