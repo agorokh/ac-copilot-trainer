@@ -112,6 +112,12 @@ def test_uncommitted_and_unmeasured_approaches_are_armed_but_not_usable():
     session = effect.load_session(events)
     assert all(a["committed"] and not a["emitted"] for a in session["approaches"])
     assert not any(effect.is_usable(a) for a in session["approaches"])
+    # Unheard passes still measure pass-to-pass variation; they just cannot be randomized.
+    assert all(effect.is_measured(a) for a in session["approaches"])
+    variance = effect.variance_by_root([session])["slow_apex"]
+    assert (variance["n"], variance["n_cue_emitted"]) == (4, 0)
+    assert effect.armed_rates([session])["sessions"][0]["measured"] == 4
+    assert effect.armed_rates([session])["sessions"][0]["usable_approaches"] == 0
 
 
 def test_variance_is_reported_per_root_within_corner():

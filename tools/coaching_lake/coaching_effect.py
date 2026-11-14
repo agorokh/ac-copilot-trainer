@@ -84,20 +84,27 @@ def load_session(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def is_measured(approach: Mapping[str, Any]) -> bool:
+    """The pass after an ARMED approach has a measured, finite targeted-error magnitude."""
+    outcome = approach.get("outcome")
+    return (
+        isinstance(outcome, Mapping)
+        and outcome.get("pass_measured") is True
+        and _finite(outcome.get("targeted_error")) is not None
+    )
+
+
 def is_usable(approach: Mapping[str, Any]) -> bool:
     """An approach stage 1 could randomize and score: the runtime emitted a cue for it and the
-    pass that followed has a measured, finite targeted-error magnitude.
+    pass that followed is measured.
 
     A commit the runtime then dropped (reference off pace) is not usable: no cue was delivered,
     so there is nothing to withhold.
     """
-    outcome = approach.get("outcome")
     return (
         approach.get("committed") is True
         and approach.get("emitted") is True
-        and isinstance(outcome, Mapping)
-        and outcome.get("pass_measured") is True
-        and _finite(outcome.get("targeted_error")) is not None
+        and is_measured(approach)
     )
 
 
@@ -118,6 +125,7 @@ def armed_rates(sessions: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                 "armed_approaches": armed,
                 "committed": sum(1 for a in s["approaches"] if a["committed"]),
                 "emitted": sum(1 for a in s["approaches"] if a["emitted"]),
+                "measured": sum(1 for a in s["approaches"] if is_measured(a)),
                 "usable_approaches": usable,
                 "no_outcome": sum(1 for a in s["approaches"] if a["outcome"] is None),
                 "armed_per_lap": armed / s["laps_replayed"] if s["laps_replayed"] else None,
@@ -164,10 +172,13 @@ def project_session(
 
 
 def _strata(sessions: Sequence[Mapping[str, Any]]) -> dict[tuple[str, int, str], list[dict]]:
+    """Measured ARMED approaches by (session, corner, root), whether or not a cue was emitted:
+    pass-to-pass variation is a property of the driving, and stage 0 has no withheld arm.
+    """
     strata: dict[tuple[str, int, str], list[dict]] = {}
     for s in sessions:
         for a in s["approaches"]:
-            if is_usable(a):
+            if is_measured(a):
                 strata.setdefault((s["session"], a["corner"], a["root"]), []).append(a)
     return strata
 
@@ -184,8 +195,18 @@ def variance_by_root(sessions: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         times = [t for a in rows if (t := _finite(a["outcome"].get("corner_time_s"))) is not None]
         entry = by_root.setdefault(
             root,
-            {"values": [], "ss": 0.0, "df": 0, "t_ss": 0.0, "t_df": 0, "strata": 0, "unit": None},
+            {
+                "values": [],
+                "ss": 0.0,
+                "df": 0,
+                "t_ss": 0.0,
+                "t_df": 0,
+                "strata": 0,
+                "unit": None,
+                "emitted": 0,
+            },
         )
+        entry["emitted"] += sum(1 for a in rows if a["emitted"])
         entry["values"].extend(values)
         entry["strata"] += 1
         entry["unit"] = rows[0]["outcome"].get("targeted_error_unit")
@@ -205,6 +226,7 @@ def variance_by_root(sessions: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         out[root] = {
             "unit": entry["unit"],
             "n": len(values),
+            "n_cue_emitted": entry["emitted"],
             "strata": entry["strata"],
             "mean": mean,
             "sd": statistics.stdev(values) if len(values) >= 2 else None,
@@ -431,8 +453,9 @@ ASSUMPTIONS = [
     "Unit of randomization is one usable ARMED approach: the runtime emitted a cue and the "
     "following pass has a measured targeted-error magnitude. Assignment is independent "
     "speak/withhold at p = 0.5.",
-    "The observed pass-to-pass distribution of targeted error, which comes from cued passes, "
-    "stands in for the withheld distribution.",
+    "The noise pool is every ARMED approach with a measured pass, whether or not its cue was "
+    "emitted. That observed pass-to-pass distribution stands in for the withheld distribution. "
+    "The projected count uses only approaches whose cue was emitted.",
     "Magnitudes are rescaled to mean 1 within each (session, corner, root); single-pass and "
     "zero-mean strata are excluded. A simulated session resamples the pooled relative "
     "magnitudes with replacement, so passes are treated as exchangeable: no trend, learning, "
