@@ -73,11 +73,15 @@ class HumanDrillTarget:
     corner_time_tolerance_s: float
     reference_identity: str
     baseline_identity: str
+    practice_only: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result["combo"] = list(self.combo)
-        result["source"] = "qualified_human_reference"
+        practice_only = result.pop("practice_only")
+        result["source"] = (
+            "operator_attested_session_practice" if practice_only else "qualified_human_reference"
+        )
         return result
 
     def assess(self, signature: CornerSignature, *, corner_time_s: float) -> dict[str, Any]:
@@ -131,6 +135,7 @@ def build_human_drill_target(
     baseline_identity: str,
     exit_speed_tolerance_kmh: float = 2.0,
     corner_time_tolerance_s: float = 0.1,
+    practice_permit: Any = None,
 ) -> HumanDrillTarget:
     """Freeze one curriculum target from already-qualified human observations.
 
@@ -147,10 +152,23 @@ def build_human_drill_target(
     )
     from tools.ai_sidecar.driver_progression import drill_definition, drill_primary_metric
 
-    if any(
-        getattr(decision, "allowed", False) is not True
-        or getattr(decision, "authority", None) != "human"
-        for decision in (reference_qualification, baseline_qualification)
+    def accepted(decision: Qualification) -> bool:
+        if practice_permit is not None:
+            from tools.human_session import HumanSessionPermit
+            from tools.lap_qualification import is_practice_human
+
+            return (
+                isinstance(practice_permit, HumanSessionPermit)
+                and getattr(decision, "allowed", False) is True
+                and is_practice_human(decision)
+            )
+        return (
+            getattr(decision, "allowed", False) is True
+            and getattr(decision, "authority", None) == "human"
+        )
+
+    if not all(
+        accepted(decision) for decision in (reference_qualification, baseline_qualification)
     ):
         raise FrontierError("drill_requires_qualified_human_archives")
     if (
@@ -258,6 +276,10 @@ def build_human_drill_target(
         corner_time_tolerance_s=float(corner_time_tolerance_s),
         reference_identity=reference_identity,
         baseline_identity=baseline_identity,
+        practice_only=any(
+            decision.authority == "attested_human"
+            for decision in (reference_qualification, baseline_qualification)
+        ),
     )
 
 

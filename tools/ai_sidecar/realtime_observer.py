@@ -977,6 +977,7 @@ def build_observer_from_reference(
     brake_prepare_lead_s: float | None = None,
     expected_combo: tuple[str, str, str | None] | None = None,
     diagnostics: dict[str, Any] | None = None,
+    practice_permit: Any = None,
 ) -> RealtimeObserver | None:
     """Build an observer whose target envelope is the corpus best of a (faster) reference lap.
 
@@ -984,13 +985,32 @@ def build_observer_from_reference(
     GGV theoretical ceiling (we never fabricate one from a driven lap). Returns None when the
     archive has no usable trace or no segmentable corners.
     """
-    qualification = qualify_archive(
-        reference_archive, use="live_reference", expected_combo=expected_combo
-    )
+    if practice_permit is not None:
+        from tools.lap_qualification import qualify_practice_archive
+
+        qualification = qualify_practice_archive(
+            reference_archive,
+            use="practice_reference",
+            permit=practice_permit,
+            expected_combo=expected_combo,
+        )
+    else:
+        qualification = qualify_archive(
+            reference_archive, use="live_reference", expected_combo=expected_combo
+        )
     if diagnostics is not None:
         diagnostics.update(allowed=qualification.allowed, reason=qualification.reason)
     if not qualification.allowed:
         return None
+    if practice_permit is not None:
+        from tools.ai_sidecar.coaching_runtime import practice_reference_usable
+
+        if not practice_reference_usable(
+            reference_archive, practice_permit=practice_permit, expected_combo=expected_combo
+        ):
+            if diagnostics is not None:
+                diagnostics.update(allowed=False, reason="practice_reference_evidence_unavailable")
+            return None
     if diagnostics is not None:
         diagnostics.update(allowed=False, reason="reference_trace_unavailable")
     generator = reference_archive.get("generator")

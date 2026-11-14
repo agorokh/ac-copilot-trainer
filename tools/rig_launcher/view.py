@@ -37,6 +37,7 @@ _ROWS: tuple[tuple[str, str], ...] = (
     ("Screen", "screen"),
     ("Voice", "voice"),
     ("Practice drill", "practice_drill"),
+    ("Human session", "human_session"),
     ("SimHub", "simhub"),
     ("Tablet", "tablet"),
     ("Keypad", "keypad"),
@@ -287,6 +288,24 @@ class LauncherView:
                 highlightthickness=1,
                 highlightbackground=theme.LINE_2,
             ).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(9, 0))
+        if "human_session" in actions:
+            tk.Button(
+                row,
+                text="HUMAN SESSION",
+                command=actions["human_session"],
+                cursor="hand2",
+                relief="flat",
+                bd=0,
+                padx=10,
+                pady=11,
+                font=(self._f_disp, 10, "bold"),
+                bg=theme.RAISE,
+                fg=theme.CHALK,
+                activebackground=theme.SLAB,
+                activeforeground=theme.CHALK,
+                highlightthickness=1,
+                highlightbackground=theme.LINE_2,
+            ).grid(row=1, column=3, columnspan=2, sticky="ew", padx=(9, 0), pady=(9, 0))
 
     def _build_simhub_toggle(
         self,
@@ -416,6 +435,214 @@ class LauncherView:
             assert isinstance(detail, tk.Label)
             detail.configure(text=probe.detail or "")
         self.fit_window()
+
+
+_HUMAN_SESSION_FIELDS = (
+    ("mode", "Driving mode", (("Live driving", "live"), ("Replay / unknown", "unknown"))),
+    ("human_steering", "Steering", (("Human", True), ("Other / unknown", False))),
+    ("human_throttle", "Throttle", (("Human", True), ("Other / unknown", False))),
+    ("human_brake", "Brake", (("Human", True), ("Other / unknown", False))),
+    ("ai", "AI control", (("Off", False), ("On / unknown", True))),
+    ("shared", "Shared control", (("Off", False), ("On / unknown", True))),
+    ("harness", "Harness control", (("Off", False), ("On / unknown", True))),
+    ("abs", "ABS", (("Off", "off"), ("Factory", "factory"), ("On", "on"))),
+    ("tc", "Traction control", (("Off", "off"), ("Factory", "factory"), ("On", "on"))),
+    ("gears", "Gears", (("Manual", "manual"), ("Automatic", "automatic"))),
+    ("clutch", "Auto clutch", (("Off", "off"), ("On", "on"))),
+    ("blip", "Auto blip", (("Off", "off"), ("On", "on"))),
+    ("stability", "Stability assistance", (("Off", "off"), ("On", "on"))),
+    ("abs_level", "ABS exact level", ()),
+    ("tc_level", "TC exact level", ()),
+    ("stability_level", "Stability exact level", ()),
+)
+
+
+class HumanSessionView:
+    """Explicit local start/end declarations; this view never starts a process."""
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        *,
+        on_prepare: Callable[[dict[str, Any]], None],
+        on_end: Callable[[dict[str, Any]], None],
+        on_revoke: Callable[[], None],
+        voice_bank: str | None = None,
+    ) -> None:
+        from tkinter import ttk
+
+        self.window = tk.Toplevel(parent)
+        self.window.title("Game Point · Human session")
+        self.window.configure(bg=theme.GRAPHITE)
+        apply_dark_title_bar(self.window)
+        frame = tk.Frame(self.window, bg=theme.GRAPHITE, padx=18, pady=16)
+        frame.pack(fill="both", expand=True)
+        for column in (1, 3):
+            frame.columnconfigure(column, weight=1)
+
+        def label(text: str, row: int, column: int, **kwargs: Any) -> tk.Label:
+            widget = tk.Label(
+                frame,
+                text=text,
+                bg=theme.GRAPHITE,
+                fg=theme.CHALK,
+                font=("Segoe UI", 10),
+                anchor="w",
+                justify="left",
+                **kwargs,
+            )
+            widget.grid(row=row, column=column, sticky="ew", padx=(0, 10), pady=5)
+            return widget
+
+        title = label("PORSCHE 911 GT3 R 2016 · SPA", 0, 0)
+        title.grid(columnspan=4)
+        title.configure(fg=theme.BRASS, font=("Segoe UI", 14, "bold"))
+        explanation = label(
+            "One prospective session, at most ten lap attempts. Declare who drives and all "
+            "assistance at the start and again at the end. Arming starts no AC or audio.\n"
+            "START requires a configured phrase bank. "
+            "Use Disclose / stop immediately if control or assistance changes. "
+            "This is operator attestation for the bounded study, not verified human control.",
+            1,
+            0,
+            wraplength=760,
+        )
+        explanation.grid(columnspan=4)
+        label("Private driver identifier", 2, 0)
+        self._driver = tk.StringVar(self.window, value="")
+        tk.Entry(frame, textvariable=self._driver, font=("Segoe UI", 11)).grid(
+            row=2, column=1, columnspan=3, sticky="ew", pady=5
+        )
+        label("Study phrase bank", 3, 0)
+        self._bank = tk.StringVar(self.window, value=voice_bank or "")
+        self._bank_entry = tk.Entry(frame, textvariable=self._bank, font=("Segoe UI", 10))
+        self._bank_entry.grid(row=3, column=1, columnspan=2, sticky="ew", padx=(0, 10), pady=5)
+
+        def browse_bank() -> None:
+            from tkinter import filedialog
+
+            selected = filedialog.askdirectory(parent=self.window, title="Choose study phrase bank")
+            if selected:
+                self._bank.set(selected)
+
+        self._bank_browse = tk.Button(frame, text="Browse…", command=browse_bank)
+        self._bank_browse.grid(row=3, column=3, sticky="ew", pady=5)
+        self._vars: dict[str, tk.StringVar] = {}
+        self._choices: dict[str, dict[str, Any]] = {}
+        self._selectors: list[Any] = []
+        for index, (key, caption, choices) in enumerate(_HUMAN_SESSION_FIELDS):
+            row, column = 4 + index // 2, 2 * (index % 2)
+            label(caption, row, column)
+            variable = tk.StringVar(self.window, value="")
+            self._vars[key] = variable
+            self._choices[key] = dict(choices)
+            if choices:
+                selector = ttk.Combobox(
+                    frame,
+                    textvariable=variable,
+                    values=[caption for caption, _value in choices],
+                    state="readonly",
+                    width=19,
+                    font=("Segoe UI", 10),
+                )
+            else:
+                selector = tk.Entry(frame, textvariable=variable, width=19, font=("Segoe UI", 10))
+            selector.grid(row=row, column=column + 1, sticky="ew", padx=(0, 10), pady=5)
+            self._selectors.append(selector)
+        next_row = 4 + (len(_HUMAN_SESSION_FIELDS) + 1) // 2
+        self._status = label("Reading saved session status…", next_row, 0, wraplength=760)
+        self._status.grid(columnspan=4)
+
+        def declare(callback: Callable[[dict[str, Any]], None], *, prepare: bool = False) -> None:
+            try:
+                declaration = self.declaration()
+            except ValueError:
+                self.show_error("Enter a driver and choose every control and assistance field.")
+                return
+            if prepare:
+                declaration["voice_bank"] = self._bank.get().strip()
+            callback(declaration)
+
+        self._prepare = tk.Button(
+            frame, text="Arm one session", command=lambda: declare(on_prepare, prepare=True)
+        )
+        self._end = tk.Button(frame, text="End and attest", command=lambda: declare(on_end))
+        self._revoke = tk.Button(frame, text="Disclose / stop", command=on_revoke)
+        for column, button in enumerate((self._prepare, self._end, self._revoke)):
+            button.grid(row=next_row + 1, column=column, sticky="ew", padx=(0, 10), pady=10)
+        tk.Button(frame, text="Close window", command=self.window.destroy).grid(
+            row=next_row + 1, column=3, sticky="ew", pady=10
+        )
+        note = label("Closing this window does not supply an end declaration.", next_row + 2, 0)
+        note.grid(columnspan=4)
+        self.window.update_idletasks()
+        self.window.minsize(self.window.winfo_reqwidth(), self.window.winfo_reqheight())
+
+    def declaration(self) -> dict[str, Any]:
+        driver = self._driver.get().strip()
+        if not driver or any(not variable.get() for variable in self._vars.values()):
+            raise ValueError("human_session_declaration_incomplete")
+        return {
+            "driver_id": driver,
+            "assistance": {
+                key: self._choices[key][variable.get()]
+                if self._choices[key]
+                else variable.get().strip()
+                for key, variable in self._vars.items()
+            },
+        }
+
+    def clear_declaration(self) -> None:
+        self._driver.set("")
+        for variable in self._vars.values():
+            variable.set("")
+
+    def show_error(self, message: str) -> None:
+        self._status.configure(text=message, fg=theme.BRAKE)
+
+    def show_status(self, status: Mapping[str, Any]) -> None:
+        configured = status.get("configured") is True
+        phase = status.get("phase", "unavailable")
+        awaiting_end = phase == "closed" and status.get("reason") == "awaiting_end_declaration"
+        aborted_end = phase == "aborted" and status.get("end_recorded") is not True
+        messages = {
+            "unavailable": "Not armed. Complete the start declaration to prepare one session.",
+            "prepared": "Armed. Use normal START, then the exact Porsche / Spa session. "
+            "Complete a fresh end declaration afterwards.",
+            "active": "Session active. Complete the end declaration when driving finishes.",
+            "closed": "Session closed. The one-session allowance remains consumed.",
+            "aborted": "Session stopped. The one-session allowance cannot be re-armed.",
+        }
+        text = messages.get(str(phase), "Session status unavailable; arming is disabled.")
+        if configured and phase == "unavailable":
+            text = "The saved session record is unavailable; arming is disabled."
+        if awaiting_end:
+            text = "Capture finished. Complete a fresh end declaration; the outcome is unverified."
+        if phase == "aborted":
+            text = (
+                "Record the end declaration. This stopped session remains permanently unverified."
+                if aborted_end
+                else "End declaration recorded. The stopped session remains permanently unverified."
+            )
+        if phase == "closed" and status.get("reason") == "end_declaration_mismatch":
+            text = "Start and end declarations differ. No study result can be accepted."
+        if phase == "active" and type(status.get("remaining_laps")) is int:
+            text += f" {status['remaining_laps']} lap attempts remain."
+        self._status.configure(text=text, fg=theme.MUTE)
+        if status.get("voice_bank"):
+            self._bank.set(str(status["voice_bank"]))
+        self._bank_entry.configure(state="disabled" if configured else "normal")
+        self._bank_browse.configure(state="disabled" if configured else "normal")
+        self._prepare.configure(
+            state="disabled" if configured or phase != "unavailable" else "normal"
+        )
+        state = (
+            "normal"
+            if configured and (phase in {"prepared", "active"} or awaiting_end)
+            else "disabled"
+        )
+        self._end.configure(state="normal" if configured and aborted_end else state)
+        self._revoke.configure(state=state)
 
 
 class MozaReviewView:

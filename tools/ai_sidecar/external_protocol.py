@@ -674,6 +674,9 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
     payload = frame.get("payload")
     if not isinstance(payload, dict):
         return "telemetry_tick requires object 'payload'"
+    for key in ("is_live", "is_replay", "is_ai"):
+        if key in payload and type(payload[key]) is not bool:
+            return f"{key} requires a boolean"
     traffic_error = _validate_traffic_wire(payload)
     if traffic_error:
         return traffic_error

@@ -342,9 +342,16 @@ _practice_native_identity: tuple[str, str, str | None, int, str] | None = None
 _practice_native_seen = 0.0
 _practice_native_expiry: asyncio.TimerHandle | None = None
 _PRACTICE_NATIVE_MAX_AGE_S = 5.0
+_human_session_permit: Any | None = None
+_human_practice_session: Any | None = None
+_human_practice_reference: dict[str, Any] | None = None
+_human_practice_intake_lock: asyncio.Lock | None = None
 
 
 def _pending_practice_status() -> dict[str, object]:
+    if _human_practice_session is not None:
+        private = _human_practice_session.status()
+        return {key: private.get(key) for key in ("configured", "active", "phase", "reason")}
     return {
         "configured": _practice_voice_settings is not None,
         "active": False,
@@ -363,6 +370,22 @@ def _stop_practice_voice(reason: str) -> None:
     if practice is not None:
         practice.abort(reason)
         _refresh_practice_voice_guard()
+    if _human_practice_session is not None:
+        _human_practice_session.abort(reason)
+    completed_capture = (
+        _human_practice_session is not None
+        and _human_practice_session.status().get("observed_laps") == 10
+        and _human_practice_session.status().get("phase") in {"passed", "failed"}
+    )
+    if _human_session_permit is not None and not (
+        completed_capture
+        and reason
+        in {"native_session_disconnected", "native_session_stale", "native_session_changed"}
+    ):
+        try:
+            _human_session_permit.revoke(reason)
+        except (OSError, ValueError):
+            logger.exception("human practice permit could not retain stop state")
     voice = _voice_coach
     if voice is not None:
         stop = getattr(voice, "stop", None)
@@ -424,8 +447,11 @@ def _note_practice_native(websocket: Any, data: dict[str, Any]) -> None:
     """Use only the live loopback Lua producer, never relayed/cached identities."""
     global _practice_native_peer, _practice_native_identity, _practice_native_seen
     global _practice_native_expiry, _observer_feed_peer, _observer_feed_warned, _practice_admitted
+    global _human_practice_session
     if _practice_voice_settings is None:
         return
+    if os.environ.get("AC_COPILOT_PRACTICE_PERMIT", "").strip() and _human_session_permit is None:
+        return  # A spent/malformed study cannot fall back to legacy practice admission.
     if (
         websocket not in _lua_authorized_peers
         or websocket not in _external_peers
@@ -438,6 +464,26 @@ def _note_practice_native(websocket: Any, data: dict[str, Any]) -> None:
         return
     if data.get(TYPE_KEY) == TYPE_TELEMETRY_TICK:
         if websocket is _practice_native_peer:
+            if _human_session_permit is not None:
+                try:
+                    payload = data.get("payload") or {}
+                    state = _human_session_permit.observe_native(payload)
+                    if state.get("phase") == "aborted":
+                        _stop_practice_voice(str(state.get("reason") or "human_session_aborted"))
+                        return
+                    if _coach_runtime is None and _human_practice_session is not None:
+                        from tools.ai_sidecar.coaching_runtime import practice_frame_conditions
+
+                        eligible, reason = practice_frame_conditions(data)
+                        _human_practice_session.observe_native(
+                            dict(payload), condition_eligible=eligible, ineligible_reason=reason
+                        )
+                        if _human_practice_session.status().get("phase") == "aborted":
+                            _stop_practice_voice(_human_practice_session.reason)
+                            return
+                except (OSError, ValueError):
+                    _stop_practice_voice("human_session_native_evidence_invalid")
+                    return
             _practice_native_seen = time.monotonic()
         return
     if data.get(TYPE_KEY) != TYPE_STATE_SNAPSHOT or data.get("topic") not in {
@@ -446,6 +492,14 @@ def _note_practice_native(websocket: Any, data: dict[str, Any]) -> None:
     }:
         return
     payload = data.get("payload")
+    if _human_session_permit is not None and websocket is _practice_native_peer:
+        if not isinstance(payload, dict) or (
+            payload.get("is_live") is not True
+            or payload.get("is_ai") is not False
+            or payload.get("is_replay") is not False
+        ):
+            _stop_practice_voice("human_session_live_control_lost")
+            return
     combo = _native_practice_combo(payload)
     session_index = payload.get("session_index") if isinstance(payload, dict) else None
     if combo is None or type(session_index) is not int or session_index < 0:
@@ -477,9 +531,26 @@ def _note_practice_native(websocket: Any, data: dict[str, Any]) -> None:
         _stop_practice_voice("practice_restart_required")
         return
     _release_practice_native(reason="native_session_changed")
+    if _human_session_permit is not None:
+        from tools.ai_sidecar.coaching.practice import PracticeSession
+
+        try:
+            _human_session_permit.admit(payload)
+        except (OSError, ValueError):
+            # A paused/unknown first snapshot may precede live Drive. A later
+            # native change-only snapshot may admit it; never trust the file itself.
+            return
+        _human_practice_session = PracticeSession.pending_reference(
+            (combo[0], combo[1], combo[2] or ""),
+            "trail-brake-entry",
+            practice_permit=_human_session_permit,
+        )
     _practice_native_peer, _practice_native_identity = websocket, identity
     _practice_native_seen = time.monotonic()
-    _wire_voice(_practice_voice_settings, expected_combo=combo)
+    if _human_session_permit is None:
+        _wire_voice(_practice_voice_settings, expected_combo=combo)
+    else:
+        _practice_admitted = True
     if getattr(_coach_runtime, "practice", None) is not None:
         _practice_admitted = True
     # Reserve the observer stream for the same independently identified native peer.
@@ -572,6 +643,30 @@ def public_voice_runtime_status() -> dict[str, object]:
         status["practice_drill"] = public
     else:
         status["practice_drill"] = _pending_practice_status()
+    if _human_session_permit is not None:
+        try:
+            attestation = _human_session_permit.status(private=True)
+        except (OSError, ValueError):
+            attestation = {"phase": "unavailable", "end_confirmed": False}
+        drill = status["practice_drill"]
+        confirmed_capture = (
+            attestation.get("end_confirmed") is True
+            and attestation.get("phase") == "closed"
+            and attestation.get("attempted_laps") == 10
+            and len(attestation.get("accepted_laps", [])) == 10
+        )
+        if drill.get("phase") == "passed" and not confirmed_capture:
+            ended = (
+                attestation.get("phase") == "closed"
+                and attestation.get("reason") != "awaiting_end_declaration"
+            )
+            drill.update(
+                active=False,
+                phase="unverified" if ended else "awaiting_end_declaration",
+                reason="end_evidence_incomplete" if ended else "end_declaration_required",
+            )
+        if attestation.get("phase") == "aborted":
+            drill.update(active=False, phase="aborted", reason="human_attestation_revoked")
     reason = str(status.get("disabled_reason") or "")
     if reason:
         status["disabled_reason"] = _ABSOLUTE_PATH_RE.sub("<path>", reason)
@@ -800,6 +895,12 @@ def _with_snapshot_age(
 
 def _reset_external_state() -> None:
     _release_practice_native(reason="native_session_disconnected")
+    global _human_session_permit, _human_practice_session, _human_practice_reference
+    global _human_practice_intake_lock
+    _human_session_permit = None
+    _human_practice_session = None
+    _human_practice_reference = None
+    _human_practice_intake_lock = None
     global _prescription_transaction_lock
     _prescription_transaction_lock = None
     global _pressure_bench_guard
@@ -1150,6 +1251,113 @@ async def _send_brain_followup(websocket: Any, inbound: dict[str, Any]) -> None:
     if followup is None:
         return
     await _safe_send(websocket, followup)
+
+
+async def _accept_human_practice_archive(websocket: Any, inbound: dict[str, Any]) -> None:
+    """Consume only prospective archives from this admitted native producer.
+
+    This intake deliberately precedes and replaces legacy follow-ups for the
+    scoped study. Safe analysis paths and inline traces cannot grant attribution.
+    """
+    global _human_practice_reference
+    if (
+        _human_session_permit is None
+        or _human_practice_session is None
+        or _practice_native_identity is None
+        or websocket is not _practice_native_peer
+        or websocket not in _lua_authorized_peers
+        or websocket not in _external_peers
+        or _peer_class(websocket) != CLIENT_CLASS_LUA
+    ):
+        return
+    raw_path = inbound.get("archivePath")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return  # The ordinary completion precedes the immutable archive-path notification.
+    from tools.ai_sidecar.coaching_runtime import (
+        practice_archive_conditions,
+        practice_reference_usable,
+    )
+    from tools.lap_qualification import qualify_practice_archive, register_practice_attribution
+
+    permit = _human_session_permit
+    session = _human_practice_session
+    native_identity = _practice_native_identity
+    combo = native_identity[:3]
+    lock = _human_practice_intake_lock
+    if lock is None:
+        return
+    async with lock:
+        if websocket is not _practice_native_peer or native_identity != _practice_native_identity:
+            return
+        try:
+            archive = await asyncio.to_thread(resolve_lap_archive, {"archivePath": raw_path})
+            if not isinstance(archive, dict):
+                raise ValueError("native_archive_unavailable")
+            lap = archive.get("lap") or {}
+            if (
+                type(inbound.get("lap")) is not int
+                or inbound["lap"] != lap.get("lap_n")
+                or inbound.get("lapTimeMs") != lap.get("lap_ms")
+            ):
+                raise ValueError("native_completion_identity_mismatch")
+            await asyncio.to_thread(
+                register_practice_attribution, Path(raw_path), permit=permit, expected_combo=combo
+            )
+            archive = await asyncio.to_thread(resolve_lap_archive, {"archivePath": raw_path})
+            if not isinstance(archive, dict):
+                raise ValueError("registered_native_archive_unavailable")
+            qualification = qualify_practice_archive(
+                archive, use="practice_trial", permit=permit, expected_combo=combo
+            )
+            if not qualification.allowed and not (
+                _coach_runtime is None and lap.get("lap_n") in {1, 2}
+            ):
+                raise ValueError("prospective_archive_qualification_failed")
+            if (
+                websocket is not _practice_native_peer
+                or native_identity != _practice_native_identity
+            ):
+                return
+            if _coach_runtime is None:
+                session.record_warmup(
+                    archive,
+                    qualification,
+                    condition_eligible=practice_archive_conditions(
+                        archive, practice_session=session
+                    ),
+                    reference_eligible=practice_reference_usable(
+                        archive, practice_permit=permit, expected_combo=combo
+                    ),
+                )
+                candidate = session.reference_candidate()
+                if candidate is not None and session.status().get("phase") != "aborted":
+                    _human_practice_reference = candidate
+                    _wire_voice(
+                        _practice_voice_settings,
+                        expected_combo=combo,
+                        practice_reference=candidate,
+                    )
+                    if _coach_runtime is None or _coach_runtime.practice is not session:
+                        raise ValueError("warmup_reference_runtime_unavailable")
+            else:
+                _coach_runtime.record_practice_archive(
+                    archive,
+                    qualification,
+                    voice_ready=(
+                        _voice_runtime_status.get("enabled") is True
+                        and getattr(_voice_coach, "practice_evidence_ready", False) is True
+                    ),
+                )
+                _refresh_practice_voice_guard()
+            status = session.status()
+            if status.get("observed_laps") == 10 and status.get("phase") in {"passed", "failed"}:
+                permit.seal_capture()
+            if status.get("phase") in {"aborted", "failed", "unavailable"}:
+                _stop_practice_voice(str(status.get("reason") or "human_practice_unavailable"))
+        except (OSError, ValueError, TypeError):
+            # A missing, conflicting or stale native archive cannot be rescued by
+            # legacy fallbacks, another producer, or a later reference-seeding lap.
+            _stop_practice_voice("human_practice_archive_rejected")
 
 
 async def _coach_v2_between_lap(
@@ -1819,7 +2027,32 @@ def _route_voice_dispatches(connection: Any, request: Any, tail: str) -> Any:
 
 def _route_practice_status(connection: Any, request: Any, tail: str) -> Any:
     status = getattr(_coach_runtime, "practice_status", None)
-    payload = status() if callable(status) else _pending_practice_status()
+    payload = (
+        status()
+        if callable(status)
+        else (
+            _human_practice_session.status()
+            if _human_practice_session is not None
+            else _pending_practice_status()
+        )
+    )
+    if _human_session_permit is not None:
+        try:
+            payload["human_session"] = _human_session_permit.status(private=True)
+        except (OSError, ValueError):
+            payload["human_session"] = {"phase": "unavailable", "reason": "permit_unreadable"}
+        attestation = payload["human_session"]
+        payload["outcome_basis"] = "operator_attested_session_practice"
+        payload["experimental_outcome"] = (
+            payload.get("phase")
+            if attestation.get("end_confirmed") is True
+            and attestation.get("phase") == "closed"
+            and attestation.get("attempted_laps") == 10
+            and len(attestation.get("accepted_laps", [])) == 10
+            and payload.get("phase") in {"passed", "failed"}
+            else "unverified"
+        )
+        payload["g3_human_improvement"] = "unverified"
     return _http_response(connection, HTTPStatus.OK, json.dumps(payload), "application/json")
 
 
@@ -1911,7 +2144,17 @@ def make_process_request(token: str | None):
         path = (getattr(request, "path", "") or "").split("?", 1)[0]
         route = _match_route(path)
         if route is not None:
-            if route.token_gated and token and not _is_loopback_peer(connection):
+            private_practice = route.path == "/coach/practice"
+            if private_practice and not token:
+                return _http_response(
+                    connection,
+                    HTTPStatus.FORBIDDEN,
+                    "private practice inspection requires a configured token\n",
+                    "text/plain",
+                )
+            if private_practice or (
+                route.token_gated and token and not _is_loopback_peer(connection)
+            ):
                 supplied = request.headers.get(AUTH_HEADER)
                 if supplied is None or not secrets.compare_digest(supplied, token):
                     return _http_response(
@@ -2901,6 +3144,9 @@ async def _publish_completed_lap_map(inbound: dict[str, Any], producer: Any) -> 
 async def _refresh_map_corner_catalog(payload: dict[str, Any], producer: Any) -> None:
     global _map_corner_catalog, _map_comparison_generation, _track_map_frame
     from tools.ai_sidecar.track_map import bind_reference_corners, build_track_map
+
+    if _human_session_permit is not None and producer is not _practice_native_peer:
+        return  # Other relay clients cannot choose the study's canonical corner identity.
 
     catalog = {
         "available": payload.get("corner_catalog_available") is True,
@@ -4617,6 +4863,9 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                 observability.METRICS.record_message("event", str(event_name))
 
             if data.get("event") == "lap_complete":
+                if _human_session_permit is not None:
+                    await _accept_human_practice_archive(websocket, data)
+                    continue
                 identity = (data.get("lap"), data.get("lapTimeMs"))
                 if identity != latest_lap_identity:
                     latest_lap_identity = identity
@@ -4849,7 +5098,18 @@ async def _run(
         raise SystemExit('websockets is required. Install: pip install -e ".[coaching]"') from e
 
     process_request = make_process_request(token)
+    prospective_settings = (
+        _practice_voice_settings
+        if os.environ.get("AC_COPILOT_PRACTICE_PERMIT", "").strip()
+        else None
+    )
+    if prospective_settings is not None and not token:
+        raise SystemExit("prospective human practice requires a configured sidecar token")
     _reset_external_state()
+    if prospective_settings is not None:
+        # Main wires configuration before entering this loop. Peer-state reset
+        # must not discard the not-yet-consumed prospective declaration.
+        _wire_voice(prospective_settings)
     # Issue #511 Part D: the voice scheduler's worker thread hands dispatch broadcasts to this
     # loop via call_soon_threadsafe; captured here (the one place the serve loop is known).
     _event_loop = asyncio.get_running_loop()
@@ -4917,6 +5177,7 @@ def _wire_voice(
     voice_settings: VoiceRuntimeConfig,
     *,
     expected_combo: tuple[str, str, str | None] | None = None,
+    practice_reference: dict[str, Any] | None = None,
 ) -> None:
     """Build the optional live observer + in-process voice coach from CLI paths (issue #341).
 
@@ -4930,6 +5191,8 @@ def _wire_voice(
     # voice-disabled (or different-bank) configuration can never keep serving stale clips;
     # the enabled path below re-arms via _set_voice_web_bank (PR #519 review).
     global _practice_voice_settings, _practice_voice_reason, _practice_admitted
+    global _human_session_permit, _human_practice_session, _human_practice_reference
+    global _human_practice_intake_lock
     practice_requested = os.environ.get("AC_COPILOT_COACH_DRILLS") == "1"
     if expected_combo is None:
         _release_practice_native(reason="native_session_changed")
@@ -4937,6 +5200,31 @@ def _wire_voice(
             _stop_practice_voice("native_session_changed")
         _practice_admitted = False
         _practice_voice_settings = voice_settings if practice_requested else None
+        _human_session_permit = None
+        _human_practice_session = None
+        _human_practice_reference = None
+        _human_practice_intake_lock = asyncio.Lock()
+        permit_path = os.environ.get("AC_COPILOT_PRACTICE_PERMIT", "").strip()
+        if permit_path and practice_requested:
+            from tools.human_session import HumanSessionPermit
+
+            try:
+                _human_session_permit = HumanSessionPermit.load(permit_path)
+                if _human_session_permit.status().get("phase") != "prepared":
+                    raise ValueError("human_session_already_consumed")
+            except (OSError, ValueError):
+                _human_session_permit = None
+                _practice_voice_reason = "human_session_permit_unavailable"
+                set_voice_coach(None)
+                set_realtime_observer(None)
+                set_coach_runtime(None)
+                set_voice_runtime_status(
+                    configured=True,
+                    enabled=False,
+                    state="disabled",
+                    disabled_reason="human_session_permit_unavailable",
+                )
+                return
     _disarm_voice_web_bank()
     set_coach_runtime(None)
     # Same authority for the reference-derived track map (#531 Part F): a re-wire whose
@@ -4947,7 +5235,8 @@ def _wire_voice(
     _track_map_frame = None
     _map_reference_archive = None
     _map_comparison_generation += 1
-    _map_corner_catalog = None
+    if practice_reference is None:
+        _map_corner_catalog = None
     _map_latest_archive = None
     _map_latest_lap_n = None
     _sidecar_state_cache.pop(TOPIC_SESSION_REVIEW, None)
@@ -4957,14 +5246,26 @@ def _wire_voice(
         label="track.map reference invalidated",
     )
     reference_path = voice_settings.reference_path
+    if _human_session_permit is not None:
+        # An explicitly armed prospective study never inherits Magione, an alien
+        # technique artifact or a historical archive as its bootstrap source.
+        reference_path = None
     bank_dir = voice_settings.bank_dir
     alien_line_path = voice_settings.alien_line_path or os.environ.get("AC_COPILOT_ALIEN_LINE")
+    if _human_session_permit is not None:
+        alien_line_path = None
     bank_backend = (
         voice_settings.backend or os.environ.get("AC_COPILOT_VOICE_BACKEND") or "rtmixer"
         if bank_dir
         else None
     )
-    configured = bool(reference_path or bank_dir or voice_settings.tts_enabled or alien_line_path)
+    configured = bool(
+        reference_path
+        or bank_dir
+        or voice_settings.tts_enabled
+        or alien_line_path
+        or _human_session_permit is not None
+    )
     set_voice_runtime_status(
         configured=configured,
         enabled=False,
@@ -4980,7 +5281,24 @@ def _wire_voice(
         if practice_requested:
             _practice_voice_reason = "qualified_human_reference_required"
         return
-    if (bank_dir or voice_settings.tts_enabled or alien_line_path) and not reference_path:
+    if _human_session_permit is not None and practice_reference is None:
+        set_realtime_observer(None)
+        _practice_voice_reason = "expected_combo_unavailable"
+        set_voice_runtime_status(
+            configured=True,
+            enabled=False,
+            state="disabled",
+            disabled_reason="warmup_reference_required",
+            bank_configured=bool(bank_dir),
+            reference_configured=False,
+            tts_enabled=False,
+        )
+        return
+    if (
+        (bank_dir or voice_settings.tts_enabled or alien_line_path)
+        and not reference_path
+        and practice_reference is None
+    ):
         if practice_requested:
             _practice_voice_reason = "qualified_human_reference_required"
         reason = "voice or alien frontier configured without AC_COPILOT_REFERENCE_ARCHIVE"
@@ -5011,20 +5329,38 @@ def _wire_voice(
         return
 
     observer_ready = False
-    if reference_path:
+    if reference_path or practice_reference is not None:
         try:
             from tools.ai_sidecar.realtime_observer import build_observer_from_reference
             from tools.lap_archive_export import load_lap_archive
             from tools.lap_qualification import qualify_archive
 
-            archive = load_lap_archive(reference_path, allow_legacy_schema=True)
+            archive = (
+                practice_reference
+                if practice_reference is not None
+                else load_lap_archive(reference_path, allow_legacy_schema=True)
+            )
             # Startup has no independent live combo yet. Managed references remain parked
             # until a caller can supply that context; do not certify the file against itself.
-            qualification = qualify_archive(
-                archive, use="live_reference", expected_combo=expected_combo
-            )
+            if _human_session_permit is not None:
+                from tools.lap_qualification import is_practice_human, qualify_practice_archive
+
+                qualification = qualify_practice_archive(
+                    archive,
+                    use="practice_reference",
+                    permit=_human_session_permit,
+                    expected_combo=expected_combo,
+                )
+            else:
+                qualification = qualify_archive(
+                    archive, use="live_reference", expected_combo=expected_combo
+                )
             native_human = (
-                qualification.authority == "human"
+                (
+                    is_practice_human(qualification)
+                    if _human_session_permit is not None
+                    else qualification.authority == "human"
+                )
                 and archive.get("source") == "in_game"
                 and archive.get("import_format") is None
             )
@@ -5054,7 +5390,11 @@ def _wire_voice(
             try:
                 from tools.ai_sidecar.track_map import build_track_map
 
-                map_payload = build_track_map(archive, expected_combo=expected_combo)
+                map_payload = (
+                    None
+                    if _human_session_permit is not None
+                    else build_track_map(archive, expected_combo=expected_combo)
+                )
                 if map_payload is not None:
                     _track_map_frame = make_track_map(map_payload)
                     _schedule_external_broadcast(_track_map_frame, label="track.map re-wire")
@@ -5074,6 +5414,11 @@ def _wire_voice(
                 expected_combo=expected_combo,
                 brake_prepare_lead_s=_env_float(
                     "AC_COPILOT_BRAKE_LEAD_S", 3.2, min_value=1.0, max_value=6.0
+                ),
+                **(
+                    {"practice_permit": _human_session_permit}
+                    if _human_session_permit is not None
+                    else {}
                 ),
             )
             if observer is None:
@@ -5117,6 +5462,15 @@ def _wire_voice(
                     expected_combo=expected_combo,
                     driver_profile_path=os.environ.get("AC_COPILOT_DRIVER_PROFILE"),
                     alien_line_path=alien_line_path,
+                    **(
+                        {
+                            "practice_session": _human_practice_session,
+                            "practice_permit": _human_session_permit,
+                            "canonical_corner_catalog": _map_corner_catalog,
+                        }
+                        if _human_session_permit is not None
+                        else {}
+                    ),
                 )
                 if coach_rt is not None:
                     set_coach_runtime(coach_rt)

@@ -383,6 +383,26 @@ function M.publishTelemetryTickIfDue(opts)
     lap = math.max(0, math.floor(tonumber(_field(car, "lapCount")) or 0)),
   }
   local archiveSession = opts.archiveSessionUuid
+  -- Native control/replay observations constrain an explicit operator-attested
+  -- practice session. They never certify exclusive physical human control.
+  for key, source in pairs({ is_live = "isLive", is_replay = "isReplayActive" }) do
+    local value = _field(opts.sim, source)
+    if type(value) == "boolean" then payload[key] = value end
+  end
+  local isAI = _field(car, "isAIControlled")
+  if type(isAI) == "boolean" then payload.is_ai = isAI end
+  local conditions = {}
+  for key, source in pairs({
+    ambientTempC = "ambientTemperature", trackTempC = "roadTemperature",
+    weatherType = "weatherType", trackGripLevel = "roadGrip",
+  }) do
+    local value = _finite(_field(opts.sim, source))
+    if value ~= nil then conditions[key] = value end
+  end
+  if next(conditions) ~= nil then payload.conditions = conditions end
+  local wheel0 = _field(_field(car, "wheels"), 0)
+  local optimal = _finite(_field(wheel0, "tyreOptimumTemperature"))
+  if optimal ~= nil and optimal > 0 then payload.tyre_optimal_temp_c = optimal end
   if type(archiveSession) == "string" and #archiveSession > 0 and #archiveSession <= 128
       and archiveSession:match("^[%w_%.%-]+$") then
     payload.archive_session_uuid = archiveSession
