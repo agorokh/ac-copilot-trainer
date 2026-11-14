@@ -494,6 +494,12 @@ implementation, simulator output or a partial set of cases.
 It applies at the next normal sidecar start. Changing it while a sidecar is running
 shows a restart hint; it never interrupts a driving session. The checkbox enables
 Coach V2 but does not arm audio, select a voice bank, start AC or enable an AI bench.
+The reference stays parked until the existing authorized Lua connection publishes a
+fresh native session identity matching its car, track and layout. The file cannot
+certify its own combo. Stale/disconnected or changed identity silences and parks the
+study. Duplicate live identity does not reload the reference or restart audio. One
+practice identity is admitted per explicit sidecar configuration; reconnecting or
+changing the native session cannot silently start another block or reset its cap.
 
 Practice uses the existing driver's next curriculum stage and one canonical corner.
 It requires a qualified human reference for the exact combo, condition-indexed

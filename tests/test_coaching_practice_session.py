@@ -408,3 +408,33 @@ def test_unready_voice_cannot_be_replaced_by_a_favorable_corner_metric():
     rig.dispatch()
     status = rig.complete(voice_ready=False)
     assert status["cued_attempts"] == 0 and status["reason"] == "condition_ineligible"
+
+
+@pytest.mark.parametrize("late_event", ["dispatch", "cancel", "abort"])
+def test_terminal_thermal_reason_and_evidence_survive_late_voice_events(late_event):
+    rig = NativePractice().prime()
+    rig.session.abort("tyre_temp_critical")
+    before = copy.deepcopy(rig.session.status())
+    if late_event == "dispatch":
+        for _ in range(300):
+            rig.dispatch()
+    elif late_event == "cancel":
+        rig.session.note_voice_cancel({"seq": 999, "clip_id": "late", "dispatch_t_mono_ms": 1})
+    else:
+        rig.session.abort("voice_evidence_capacity_exceeded")
+    assert rig.session.status() == before
+
+
+def test_successful_block_is_frozen_against_later_native_and_voice_evidence():
+    rig = NativePractice().to_retention()
+    rig.complete()
+    assert rig.complete()["phase"] == "passed"
+    before = copy.deepcopy(rig.session.status())
+    windows = len(rig.session._windows)
+    for _ in range(300):
+        rig.dispatch()
+    rig.session.note_voice_cancel({"seq": 999, "clip_id": "late", "dispatch_t_mono_ms": 1})
+    rig.tick(12, rig.start + 20)
+    rig.session.abort("lap_budget_exhausted")
+    assert rig.session.status() == before
+    assert len(rig.session._windows) == windows

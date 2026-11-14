@@ -332,6 +332,163 @@ class VoiceRuntimeConfig:
     verbosity: str | None = None
 
 
+# Practice references need an independent live native identity. Keep the requested
+# configuration while parked; never derive that authority from the reference file.
+_practice_voice_settings: VoiceRuntimeConfig | None = None
+_practice_voice_reason = "expected_combo_unavailable"
+_practice_admitted = False
+_practice_native_peer: Any | None = None
+_practice_native_identity: tuple[str, str, str | None, int, str] | None = None
+_practice_native_seen = 0.0
+_practice_native_expiry: asyncio.TimerHandle | None = None
+_PRACTICE_NATIVE_MAX_AGE_S = 5.0
+
+
+def _pending_practice_status() -> dict[str, object]:
+    return {
+        "configured": _practice_voice_settings is not None,
+        "active": False,
+        "phase": "unavailable" if _practice_voice_settings is not None else "disabled",
+        "reason": (
+            _practice_voice_reason if _practice_voice_settings is not None else "not_configured"
+        ),
+    }
+
+
+def _stop_practice_voice(reason: str) -> None:
+    """Silence the old generation before clearing its instructional guard."""
+    global _practice_voice_reason
+    _practice_voice_reason = reason
+    practice = getattr(_coach_runtime, "practice", None)
+    if practice is not None:
+        practice.abort(reason)
+        _refresh_practice_voice_guard()
+    voice = _voice_coach
+    if voice is not None:
+        stop = getattr(voice, "stop", None)
+        if callable(stop):
+            stop()
+    set_voice_coach(None)
+    set_coach_runtime(None)
+    set_realtime_observer(None)
+    _disarm_voice_web_bank()
+    status = voice_runtime_status()
+    status.update(enabled=False, state="disabled", disabled_reason=reason)
+    set_voice_runtime_status(**status)
+
+
+def _release_practice_native(peer: Any | None = None, *, reason: str) -> None:
+    global _practice_native_peer, _practice_native_identity, _practice_native_expiry
+    if peer is not None and peer is not _practice_native_peer:
+        return
+    if _practice_native_expiry is not None:
+        _practice_native_expiry.cancel()
+        _practice_native_expiry = None
+    if _practice_native_peer is not None:
+        _stop_practice_voice(reason)
+        _release_observer_feed(_practice_native_peer)
+    _practice_native_peer = None
+    _practice_native_identity = None
+
+
+def _expire_practice_native(peer: Any, identity: tuple[str, str, str | None, int, str]) -> None:
+    global _practice_native_expiry
+    if peer is not _practice_native_peer or identity != _practice_native_identity:
+        return
+    remaining = _PRACTICE_NATIVE_MAX_AGE_S - (time.monotonic() - _practice_native_seen)
+    if remaining > 0:
+        _practice_native_expiry = asyncio.get_running_loop().call_later(
+            remaining, _expire_practice_native, peer, identity
+        )
+    else:
+        _release_practice_native(peer, reason="native_session_stale")
+
+
+def _native_practice_combo(payload: Any) -> tuple[str, str, str | None] | None:
+    if not isinstance(payload, dict):
+        return None
+    car, full_track = payload.get("car_id"), payload.get("track_id")
+    if not all(
+        isinstance(value, str) and value and value == value.strip() for value in (car, full_track)
+    ):
+        return None
+    # lifecycle_publisher uses ac.getTrackFullID('/'): a bare track is the
+    # canonical no-layout identity, while track/layout identifies a named layout.
+    parts = full_track.split("/")
+    if len(parts) > 2 or not all(parts) or any("\\" in part for part in parts):
+        return None
+    return car, parts[0], parts[1] if len(parts) == 2 else None
+
+
+def _note_practice_native(websocket: Any, data: dict[str, Any]) -> None:
+    """Use only the live loopback Lua producer, never relayed/cached identities."""
+    global _practice_native_peer, _practice_native_identity, _practice_native_seen
+    global _practice_native_expiry, _observer_feed_peer, _observer_feed_warned, _practice_admitted
+    if _practice_voice_settings is None:
+        return
+    if (
+        websocket not in _lua_authorized_peers
+        or websocket not in _external_peers
+        or _peer_class(websocket) != CLIENT_CLASS_LUA
+    ):
+        return
+    if "snapshot_age_ms" in data:
+        if websocket is _practice_native_peer:
+            _release_practice_native(websocket, reason="native_session_stale")
+        return
+    if data.get(TYPE_KEY) == TYPE_TELEMETRY_TICK:
+        if websocket is _practice_native_peer:
+            _practice_native_seen = time.monotonic()
+        return
+    if data.get(TYPE_KEY) != TYPE_STATE_SNAPSHOT or data.get("topic") not in {
+        "session",
+        "connection",
+    }:
+        return
+    payload = data.get("payload")
+    combo = _native_practice_combo(payload)
+    session_index = payload.get("session_index") if isinstance(payload, dict) else None
+    if combo is None or type(session_index) is not int or session_index < 0:
+        if websocket is _practice_native_peer:
+            _release_practice_native(websocket, reason="native_session_identity_unavailable")
+        return
+    if data["topic"] == "connection":
+        if websocket is _practice_native_peer and _practice_native_identity is not None:
+            if (*combo, session_index) == _practice_native_identity[:4]:
+                _practice_native_seen = time.monotonic()
+            else:
+                _release_practice_native(websocket, reason="native_session_changed")
+        return
+    session_uuid = payload.get("session_uuid")
+    if not isinstance(session_uuid, str) or not session_uuid.strip():
+        if websocket is _practice_native_peer:
+            _release_practice_native(websocket, reason="native_session_identity_unavailable")
+        return
+    identity = (*combo, session_index, session_uuid)
+    if _practice_native_peer is not None and websocket is not _practice_native_peer:
+        return  # A second native connection cannot replace a live study's producer.
+    if identity == _practice_native_identity:
+        _practice_native_seen = time.monotonic()
+        return  # Change-only publisher replay must not reload archives/restart audio.
+    if _practice_admitted:
+        # A disconnect, stale lease or a new session cannot silently buy another
+        # study/lap budget. Only an explicit launch/reconfiguration can re-arm it.
+        _release_practice_native(reason="native_session_changed")
+        _stop_practice_voice("practice_restart_required")
+        return
+    _release_practice_native(reason="native_session_changed")
+    _practice_native_peer, _practice_native_identity = websocket, identity
+    _practice_native_seen = time.monotonic()
+    _wire_voice(_practice_voice_settings, expected_combo=combo)
+    if getattr(_coach_runtime, "practice", None) is not None:
+        _practice_admitted = True
+    # Reserve the observer stream for the same independently identified native peer.
+    _observer_feed_peer, _observer_feed_warned = websocket, False
+    _practice_native_expiry = asyncio.get_running_loop().call_later(
+        _PRACTICE_NATIVE_MAX_AGE_S, _expire_practice_native, websocket, identity
+    )
+
+
 def set_realtime_observer(observer: Any | None) -> None:
     """Install (or clear) the live ``RealtimeObserver`` fed by ``telemetry_tick`` (issue #341)."""
     global _observer
@@ -413,6 +570,8 @@ def public_voice_runtime_status() -> dict[str, object]:
             if not isinstance(public[key], str) or not re.fullmatch(r"[a-z0-9_]+", public[key]):
                 public[key] = "practice_unavailable"
         status["practice_drill"] = public
+    else:
+        status["practice_drill"] = _pending_practice_status()
     reason = str(status.get("disabled_reason") or "")
     if reason:
         status["disabled_reason"] = _ABSOLUTE_PATH_RE.sub("<path>", reason)
@@ -640,6 +799,7 @@ def _with_snapshot_age(
 
 
 def _reset_external_state() -> None:
+    _release_practice_native(reason="native_session_disconnected")
     global _prescription_transaction_lock
     _prescription_transaction_lock = None
     global _pressure_bench_guard
@@ -1659,11 +1819,7 @@ def _route_voice_dispatches(connection: Any, request: Any, tail: str) -> Any:
 
 def _route_practice_status(connection: Any, request: Any, tail: str) -> Any:
     status = getattr(_coach_runtime, "practice_status", None)
-    payload = (
-        status()
-        if callable(status)
-        else {"configured": False, "active": False, "phase": "disabled", "reason": "not_configured"}
-    )
+    payload = status() if callable(status) else _pending_practice_status()
     return _http_response(connection, HTTPStatus.OK, json.dumps(payload), "application/json")
 
 
@@ -1976,6 +2132,7 @@ def _drop_external_peer(peer: Any) -> None:
     ``_handler`` teardown). The serial transport (issue #463) has no such loop, so it
     calls this when the USB link drops.
     """
+    _release_practice_native(peer, reason="native_session_disconnected")
     _drop_setup_exchange_peer(peer)
     _external_peers.discard(peer)
     _session_start_authorized_peers.discard(peer)
@@ -3904,6 +4061,8 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             )
             client_class = CLIENT_CLASS_EXTERNAL
         _external_peer_classes[websocket] = client_class
+        if websocket is _practice_native_peer and client_class != CLIENT_CLASS_LUA:
+            _release_practice_native(websocket, reason="native_session_authority_unavailable")
         logger.info(
             "external hello accepted peer=%s client=%s class=%s peers=%d",
             peer,
@@ -3945,6 +4104,7 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             make_error("peer must send hello before other frame types", ref_type=t),
         )
         return
+    _note_practice_native(websocket, data)
     if t in (MIC_SUBSCRIBE, MIC_CHUNK, MIC_END):
         # PCM is sensitive: never use the ordinary broadcast-to-every-peer path,
         # never cache it, and require an explicit local voice consumer subscription.
@@ -4605,6 +4765,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     pending_followups.add(brain_task)
                     brain_task.add_done_callback(_followup_done)
     finally:
+        _release_practice_native(websocket, reason="native_session_disconnected")
         _drop_setup_exchange_peer(websocket)
         _external_peers.discard(websocket)
         was_mic_subscriber = websocket in _voice_mic_subscribers
@@ -4752,7 +4913,11 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
-def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
+def _wire_voice(
+    voice_settings: VoiceRuntimeConfig,
+    *,
+    expected_combo: tuple[str, str, str | None] | None = None,
+) -> None:
     """Build the optional live observer + in-process voice coach from CLI paths (issue #341).
 
     Best-effort by design: a missing/invalid reference or bank disables the feature with a loud log
@@ -4764,6 +4929,14 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
     # Re-wiring is authoritative for the tablet-endpoint serving state: disarm first so a
     # voice-disabled (or different-bank) configuration can never keep serving stale clips;
     # the enabled path below re-arms via _set_voice_web_bank (PR #519 review).
+    global _practice_voice_settings, _practice_voice_reason, _practice_admitted
+    practice_requested = os.environ.get("AC_COPILOT_COACH_DRILLS") == "1"
+    if expected_combo is None:
+        _release_practice_native(reason="native_session_changed")
+        if practice_requested or _practice_voice_settings is not None:
+            _stop_practice_voice("native_session_changed")
+        _practice_admitted = False
+        _practice_voice_settings = voice_settings if practice_requested else None
     _disarm_voice_web_bank()
     set_coach_runtime(None)
     # Same authority for the reference-derived track map (#531 Part F): a re-wire whose
@@ -4804,8 +4977,12 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
         tts_enabled=bool(voice_settings.tts_enabled),
     )
     if not configured:
+        if practice_requested:
+            _practice_voice_reason = "qualified_human_reference_required"
         return
     if (bank_dir or voice_settings.tts_enabled or alien_line_path) and not reference_path:
+        if practice_requested:
+            _practice_voice_reason = "qualified_human_reference_required"
         reason = "voice or alien frontier configured without AC_COPILOT_REFERENCE_ARCHIVE"
         logger.error("voice: %s", reason)
         set_voice_runtime_status(
@@ -4820,6 +4997,18 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
             tts_enabled=bool(voice_settings.tts_enabled),
         )
         return
+    if practice_requested and expected_combo is None:
+        # The native publisher will activate this exact requested configuration only
+        # after its independent car/track/layout arrives over an authorized connection.
+        set_realtime_observer(None)
+        _practice_voice_reason = "expected_combo_unavailable"
+        status = voice_runtime_status()
+        status.update(
+            state="disabled",
+            disabled_reason="reference qualification: expected_combo_unavailable",
+        )
+        set_voice_runtime_status(**status)
+        return
 
     observer_ready = False
     if reference_path:
@@ -4831,14 +5020,27 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
             archive = load_lap_archive(reference_path, allow_legacy_schema=True)
             # Startup has no independent live combo yet. Managed references remain parked
             # until a caller can supply that context; do not certify the file against itself.
-            qualification = qualify_archive(archive, use="live_reference")
-            if not qualification.allowed:
+            qualification = qualify_archive(
+                archive, use="live_reference", expected_combo=expected_combo
+            )
+            native_human = (
+                qualification.authority == "human"
+                and archive.get("source") == "in_game"
+                and archive.get("import_format") is None
+            )
+            if not qualification.allowed or (practice_requested and not native_human):
+                _practice_voice_reason = (
+                    qualification.reasons[0].split(":", 1)[0]
+                    if not qualification.allowed
+                    else "qualified_native_human_reference_required"
+                )
+                reason = _practice_voice_reason if practice_requested else qualification.reason
                 set_realtime_observer(None)
                 set_voice_runtime_status(
                     configured=True,
                     enabled=False,
                     state="disabled",
-                    disabled_reason=f"reference qualification: {qualification.reason}",
+                    disabled_reason=f"reference qualification: {reason}",
                     backend=bank_backend or "",
                     bank_configured=bool(bank_dir),
                     reference_configured=True,
@@ -4852,7 +5054,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
             try:
                 from tools.ai_sidecar.track_map import build_track_map
 
-                map_payload = build_track_map(archive)
+                map_payload = build_track_map(archive, expected_combo=expected_combo)
                 if map_payload is not None:
                     _track_map_frame = make_track_map(map_payload)
                     _schedule_external_broadcast(_track_map_frame, label="track.map re-wire")
@@ -4869,6 +5071,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
             # latency + human reaction). Tunable per rig; clamped to a sane coaching range.
             observer = build_observer_from_reference(
                 archive,
+                expected_combo=expected_combo,
                 brake_prepare_lead_s=_env_float(
                     "AC_COPILOT_BRAKE_LEAD_S", 3.2, min_value=1.0, max_value=6.0
                 ),
@@ -4911,6 +5114,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
 
                 coach_rt = build_coach_runtime(
                     archive,
+                    expected_combo=expected_combo,
                     driver_profile_path=os.environ.get("AC_COPILOT_DRIVER_PROFILE"),
                     alien_line_path=alien_line_path,
                 )
@@ -4945,6 +5149,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                 else _exception_detail(exc)
             )
             reason = f"failed to load reference: {detail}"
+            _practice_voice_reason = "reference_archive_unavailable"
             logger.exception("voice: failed to load reference %s", reference_path)
             set_voice_runtime_status(
                 configured=True,

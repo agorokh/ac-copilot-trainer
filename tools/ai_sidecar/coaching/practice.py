@@ -84,6 +84,8 @@ class PracticeSession:
         return bool(self.ledger.drill_active and not self.ledger.drill_retention and not self._hold)
 
     def abort(self, reason: str) -> None:
+        if self._terminal:
+            return
         self._terminal, self._phase, self.reason = True, "aborted", reason
         if self.ledger.drill is not None:
             self.ledger.drill.abort(reason)
@@ -161,12 +163,16 @@ class PracticeSession:
             window.last_tick = now
 
     def note_voice_dispatch(self, payload: dict[str, Any]) -> None:
+        if self._terminal:
+            return
         if len(self._voice) == self._voice.maxlen:
             self.abort("voice_evidence_capacity_exceeded")
             return
         self._voice.append(dict(payload))
 
     def note_voice_cancel(self, payload: dict[str, Any]) -> None:
+        if self._terminal:
+            return
         for event in reversed(self._voice):
             if (
                 event.get("seq") == payload.get("seq")
@@ -383,6 +389,8 @@ class PracticeSession:
         self.reason = (
             state["reason"] if delivery is not None else "voice_delivery_evidence_unavailable"
         )
+        if state["phase"] in {"passed", "failed", "aborted"}:
+            self._terminal, self._phase = True, state["phase"]
         receipt.update(
             phase_after=state["phase"],
             reason=self.reason,
