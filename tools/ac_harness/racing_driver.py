@@ -363,7 +363,11 @@ class WheelSlipGovernor:
                 old_drive, old_minimum = self.previous_slips
                 projected_drive += min(0.12, max(0.0, (drive - old_drive) / dt) * 0.03)
                 projected_minimum += max(-0.12, min(0.0, (minimum - old_minimum) / dt) * 0.03)
-            self.previous_slips, self.slips = (drive, minimum), (drive, minimum)
+            # Startup zeros are masked values, not measurements. Differentiating
+            # across that boundary invents slip growth and can park both pedals
+            # near 5 m/s. The first moving sample still gets the direct clamp.
+            self.previous_slips = (drive, minimum) if speed >= 5 else None
+            self.slips = (drive, minimum)
             gas_cap, brake_cap = slip_limited_controls(
                 1.0,
                 1.0,

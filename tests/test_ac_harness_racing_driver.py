@@ -485,3 +485,36 @@ def test_authorized_recovery_resets_feedback_without_replacing_reader_or_audit()
     # Freshness is still mandatory after the new stream begins.
     with pytest.raises(ValueError, match="stale"):
         governor.apply(1, 1, False, 1.7)
+
+
+@pytest.mark.parametrize("braking", [False, True])
+def test_feedback_does_not_project_masked_startup_zeros_into_pedal_cuts(braking):
+    from tools.ac_harness.racing_driver import WheelSlipGovernor
+
+    governor = WheelSlipGovernor((0.34, 0.34, 0.355, 0.355))
+    native = _slip_physics(1)
+    governor.read = lambda: native
+    delivered = []
+    # Healthy, constant actual slip crossing the walking-speed boundary at a
+    # native control cadence. A masked zero is not a previous slip measurement.
+    ratios = (0, -0.02, 0, 0) if braking else (0, 0, 0.02, 0.02)
+    for i in range(600):
+        speed_mps = 4.99 if i % 2 == 0 else 5.01
+        native = _slip_physics(i + 1, ratios, speed=speed_mps * 3.6)
+        gas, brake, _ = governor.apply(0 if braking else 1, 1 if braking else 0, False, i * 0.005)
+        delivered.append(brake if braking else gas)
+    assert delivered[-100:] == pytest.approx([1.0] * 100)
+
+
+@pytest.mark.parametrize("braking", [False, True])
+def test_feedback_clamps_real_slip_on_first_moving_sample_after_mask(braking):
+    from tools.ac_harness.racing_driver import WheelSlipGovernor
+
+    governor = WheelSlipGovernor((0.34, 0.34, 0.355, 0.355))
+    native = _slip_physics(1, speed=4.99 * 3.6)
+    governor.read = lambda: native
+    governor.apply(1, 1, False, 0)
+    ratios = (0, -0.99, 0, 0) if braking else (0, 0, 0.4, 0.4)
+    native = _slip_physics(2, ratios, speed=5.01 * 3.6)
+    gas, brake, _ = governor.apply(1, 1, False, 0.005)
+    assert (brake if braking else gas) == 0
