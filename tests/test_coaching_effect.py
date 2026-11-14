@@ -92,6 +92,7 @@ def test_rates_and_projection_arithmetic():
         "laps": 60,
         "randomized_laps": 50,
         "usable_approaches": pytest.approx(75.0),
+        "committed_approaches": pytest.approx(75.0),
         "track_time_fraction": 1.0,
     }
     assert effect.project_session(rates, track_time_fraction=0.75)["laps"] == 45
@@ -191,6 +192,50 @@ def test_detectable_effect_tracks_noise_and_sample_size():
 def test_fixed_thresholds(sessions, approaches, detectable, verdict):
     decision = effect.decide(sessions=sessions, projected_approaches=approaches, effect=detectable)
     assert decision["verdict"] == verdict and decision["reason"]
+    # The thresholds are unchanged when the coach emitted at least one of its cues.
+    assert (
+        effect.decide(
+            sessions=sessions,
+            projected_approaches=approaches,
+            effect=detectable,
+            committed=10,
+            emitted=1,
+        )
+        == decision
+    )
+
+
+def test_a_replay_that_emitted_no_cue_is_inconclusive_not_a_stop():
+    """Cues committed but none emitted (reference slower than the driver): the replay does not
+    represent a coached session, so neither a proceed nor a stop can be read from it.
+    """
+    for approaches, detectable in ((0.0, None), (80.0, 0.10), (80.0, 0.90)):
+        decision = effect.decide(
+            sessions=3,
+            projected_approaches=approaches,
+            effect=detectable,
+            committed=404,
+            emitted=0,
+        )
+        assert decision["verdict"] == "inconclusive"
+        assert "emitted none" in decision["reason"]
+    # Too few sessions is still reported first.
+    assert (
+        effect.decide(sessions=1, projected_approaches=0.0, effect=None, committed=404, emitted=0)[
+            "verdict"
+        ]
+        == "blocked"
+    )
+
+    journals = [_journal(f"s{i}") for i in range(3)]
+    journals = [[e for e in events if e["event"] != "emitted"] for events in journals]
+    report = effect.feasibility_report(journals, sims=20, perms=19)
+    assert report["decision"]["verdict"] == "inconclusive"
+    assert report["projection_90_min"]["usable_approaches"] == 0
+    side = report["if_committed_cues_were_emitted"]
+    assert side["projected_approaches"] == pytest.approx(20.0)  # 50 laps x 4 / 10 coached laps
+    assert side["minimum_detectable_effect"]["n"] == 20
+    assert "Not used by the decision" in effect.render_markdown(report)
 
 
 def test_thresholds_are_the_ones_fixed_in_the_issue():

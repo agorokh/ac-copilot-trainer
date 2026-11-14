@@ -114,6 +114,7 @@ def armed_rates(sessions: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         coached = max(0, s["laps_replayed"] - s["assess_laps"])
         armed = len(s["approaches"])
         usable = sum(1 for a in s["approaches"] if is_usable(a))
+        committed_measured = sum(1 for a in s["approaches"] if a["committed"] and is_measured(a))
         rows.append(
             {
                 "session": s["session"],
@@ -126,6 +127,7 @@ def armed_rates(sessions: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                 "committed": sum(1 for a in s["approaches"] if a["committed"]),
                 "emitted": sum(1 for a in s["approaches"] if a["emitted"]),
                 "measured": sum(1 for a in s["approaches"] if is_measured(a)),
+                "committed_measured": committed_measured,
                 "usable_approaches": usable,
                 "no_outcome": sum(1 for a in s["approaches"] if a["outcome"] is None),
                 "armed_per_lap": armed / s["laps_replayed"] if s["laps_replayed"] else None,
@@ -137,6 +139,7 @@ def armed_rates(sessions: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     coached = sum(r["coached_laps"] for r in rows)
     armed = sum(r["armed_approaches"] for r in rows)
     usable = sum(r["usable_approaches"] for r in rows)
+    committed_measured = sum(r["committed_measured"] for r in rows)
     lap_ms = [ms for s in sessions for ms in s["lap_ms"]]
     return {
         "sessions": rows,
@@ -144,6 +147,12 @@ def armed_rates(sessions: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "laps_replayed": laps,
             "coached_laps": coached,
             "armed_approaches": armed,
+            "committed": sum(r["committed"] for r in rows),
+            "emitted": sum(r["emitted"] for r in rows),
+            "committed_measured": committed_measured,
+            "committed_measured_per_coached_lap": (
+                committed_measured / coached if coached else None
+            ),
             "usable_approaches": usable,
             "armed_per_lap": armed / laps if laps else None,
             "armed_per_coached_lap": armed / coached if coached else None,
@@ -156,17 +165,28 @@ def armed_rates(sessions: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 def project_session(
     rates: Mapping[str, Any], *, minutes: float = SESSION_MINUTES, track_time_fraction: float = 1.0
 ) -> dict[str, Any]:
-    """Usable randomized approaches expected in one session of ``minutes``."""
+    """Usable randomized approaches expected in one session of ``minutes``.
+
+    ``committed_approaches`` is the same projection counting every approach the ledger
+    committed, whether or not the runtime emitted its cue.
+    """
     pooled = rates["pooled"]
     lap_s, rate = pooled["mean_lap_s"], pooled["usable_per_coached_lap"]
     if not lap_s or rate is None:
-        return {"laps": 0, "randomized_laps": 0, "usable_approaches": 0.0}
+        return {
+            "laps": 0,
+            "randomized_laps": 0,
+            "usable_approaches": 0.0,
+            "committed_approaches": 0.0,
+            "track_time_fraction": track_time_fraction,
+        }
     laps = math.floor(minutes * 60.0 * track_time_fraction / lap_s)
     randomized = max(0, laps - UNCUED_LAPS)
     return {
         "laps": laps,
         "randomized_laps": randomized,
         "usable_approaches": randomized * rate,
+        "committed_approaches": randomized * pooled["committed_measured_per_coached_lap"],
         "track_time_fraction": track_time_fraction,
     }
 
@@ -338,12 +358,31 @@ def minimum_detectable_effect(
     }
 
 
-def decide(*, sessions: int, projected_approaches: float, effect: float | None) -> dict[str, str]:
-    """Apply the fixed thresholds of issue #989."""
+def decide(
+    *,
+    sessions: int,
+    projected_approaches: float,
+    effect: float | None,
+    committed: int = 0,
+    emitted: int = 0,
+) -> dict[str, str]:
+    """Apply the fixed thresholds of issue #989.
+
+    Two guards come first, because the thresholds only mean something on a replay that
+    represents a coached session: enough sessions, and at least one cue actually emitted.
+    """
     if sessions < MIN_SESSIONS:
         return {
             "verdict": "blocked",
             "reason": f"{sessions} replayed session(s); stage 0 requires at least {MIN_SESSIONS}",
+        }
+    if committed > 0 and emitted == 0:
+        return {
+            "verdict": "inconclusive",
+            "reason": (
+                f"the ledger committed {committed} cue(s) and the runtime emitted none, so the "
+                "replay does not represent a coached session and the thresholds do not apply"
+            ),
         }
     if effect is None:
         return {
@@ -392,6 +431,13 @@ def feasibility_report(
     at_minimum = minimum_detectable_effect(
         pool["values"], PROCEED_MIN_APPROACHES, sims=sims, perms=perms, seed=seed
     )
+    if_emitted = minimum_detectable_effect(
+        pool["values"],
+        math.floor(projection["committed_approaches"]),
+        sims=sims,
+        perms=perms,
+        seed=seed,
+    )
     variance = variance_by_root(sessions)
     time_sds = [
         (v["corner_time_sd_within_s"], v["n"])
@@ -423,6 +469,12 @@ def feasibility_report(
         },
         "minimum_detectable_effect": detectable,
         "minimum_detectable_effect_at_40": at_minimum,
+        # Not used by the decision. What the numbers would be if every cue the ledger
+        # committed had been emitted.
+        "if_committed_cues_were_emitted": {
+            "projected_approaches": projection["committed_approaches"],
+            "minimum_detectable_effect": if_emitted,
+        },
         "corner_time_guardrail": {
             "sd_within_s": time_sd,
             "difference_standard_error_s": (
@@ -434,6 +486,8 @@ def feasibility_report(
             sessions=len(sessions),
             projected_approaches=projection["usable_approaches"],
             effect=detectable["effect"],
+            committed=rates["pooled"]["committed"],
+            emitted=rates["pooled"]["emitted"],
         ),
         "thresholds": {
             "min_sessions": MIN_SESSIONS,
@@ -448,8 +502,8 @@ def feasibility_report(
 
 
 ASSUMPTIONS = [
-    "No effect is estimated. Journals are 'as delivered': every committed approach was cued, "
-    "so the effect is simulated on top of observed variation.",
+    "No effect is estimated. Journals are 'as delivered': every ARMED approach was handled as "
+    "the stock coach handles it, so the effect is simulated on top of observed variation.",
     "Unit of randomization is one usable ARMED approach: the runtime emitted a cue and the "
     "following pass has a measured targeted-error magnitude. Assignment is independent "
     "speak/withhold at p = 0.5.",
@@ -493,6 +547,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         f"- ARMED approaches: {pooled['armed_approaches']} "
         f"({num(pooled['armed_per_lap'])} per lap, "
         f"{num(pooled['armed_per_coached_lap'])} per coached lap); "
+        f"committed by the ledger: {pooled['committed']}; cues emitted: {pooled['emitted']}; "
         f"usable: {pooled['usable_approaches']} "
         f"({num(pooled['usable_per_coached_lap'])} per coached lap)",
         f"- 90-minute projection: {projection['laps']} laps, "
@@ -510,6 +565,18 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             "not reached at 100%"
             if report["minimum_detectable_effect_at_40"]["effect"] is None
             else format(report["minimum_detectable_effect_at_40"]["effect"], ".0%")
+        ),
+        "- Not used by the decision, if every committed cue had been emitted: "
+        f"{num(report['if_committed_cues_were_emitted']['projected_approaches'], '.1f')} "
+        "projected approaches, detectable effect "
+        + (
+            "not reached at 100%"
+            if report["if_committed_cues_were_emitted"]["minimum_detectable_effect"]["effect"]
+            is None
+            else format(
+                report["if_committed_cues_were_emitted"]["minimum_detectable_effect"]["effect"],
+                ".0%",
+            )
         ),
         "",
         "| Root | Unit | n | Mean | SD | SD within corner | CV within | Share zero |",
