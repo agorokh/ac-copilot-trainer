@@ -153,6 +153,25 @@ core/surface temperature changes lateral behaviour and pressure tracks temperatu
 [SAE tyre core/surface temperature study](https://saemobilus.sae.org/articles/influence-tire-core-surface-temperature-lateral-tire-characteristics-2014-01-0074), and
 [SAE tyre temperature/pressure study](https://saemobilus.sae.org/papers/estimating-tire-pressure-based-different-tire-temperature-measurement-points-2024-01-5002).
 
+### Explicit native AI plant fitting (#529)
+
+`auto_drive` and `auto_alien` accept the default-off `--native-ai-plant-fit` option. It records
+AI control in the existing append-only attribution ledger and permits **plant fitting only**
+when a clean native handshake/alien/GGV run proves the exact session, timed-lap window, raw
+archive and payload hashes, and matching installed/harness app digests. The immutable
+`native-control-witness.json` in the evidence directory records those facts before refinement.
+Missing, changed or conflicting attribution fails the run and prevents plant persistence.
+
+This opt-in never qualifies human PB/progression, reference, comparison or map use, and cannot
+admit MOZA/imported, shared or unknown-control records. An older restrictive entry cannot be
+broadened by rerunning the option; retain its original archive and ledger bytes. Fitting still
+requires the normal validity, combo, thermal, uncertainty and repeatability checks. A failed
+or incomplete native drive receives restrictive AI attribution rather than a plant-fit grant.
+
+Self-play can retain a new measured brake/drive bin only when it raises the existing lower
+confidence bound. A prior-only or weaker batch cannot replace it; point-model caps remain in
+force. No passive pedal sample is relabelled as an active probe or peak-friction measurement.
+
 ## One-button alien pipeline (#529 P2 / #572 — plant-ID → optimized line → QSS → drive)
 
 `auto_alien` composes the handshake and the drive into one command: it ensures the combo's

@@ -4443,6 +4443,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "artifact under Documents/Assetto Corsa/alien_line/)",
     )
     p.add_argument(
+        "--native-ai-plant-fit",
+        action="store_true",
+        help="explicitly attribute this native AI run and opt clean, evidenced archives into plant "
+        "fitting only; human progression and reference uses remain prohibited",
+    )
+    p.add_argument(
         "--alien-rebuild-line",
         action="store_true",
         help="alien: ignore the cached line artifact and rebuild it from the current plant",
@@ -4878,6 +4884,9 @@ def _main_impl(
     argv: list[str] | None, cleanup: ExitStack
 ) -> int:  # pragma: no cover - rig-only CLI wiring
     args = _build_arg_parser().parse_args(argv)
+    if args.native_ai_plant_fit and args.driver not in {"handshake", "alien", "ggv"}:
+        print("auto-drive: --native-ai-plant-fit requires handshake, alien or ggv driver")
+        return 2
     if args.cm_preset is None and not args.car:
         print("auto-drive: pass --car (preset is generated) or --cm-preset (hand-authored)")
         return 2
@@ -5410,6 +5419,25 @@ def _main_impl(
         "lap_archives_all": lap_archives_all,
         "journal_dir": str(journal_dir) if journal_dir else None,
     }
+    native_attribution_ok = True
+    if args.native_ai_plant_fit:
+        from tools.ac_harness.native_attribution import attribute_native_control
+        from tools.lap_qualification import AttributionError
+
+        try:
+            extras["native_attribution"] = attribute_native_control(
+                lap_archives,
+                report=report.to_dict(),
+                driver=config.driver,
+                app_install=app_provenance.to_dict(),
+                evidence_dir=evidence_dir,
+            )
+        except (AttributionError, OSError, ValueError) as exc:
+            native_attribution_ok = False
+            extras["native_attribution"] = {"ok": False, "reason": str(exc)}
+            report.ok = False
+            report.error = f"native attribution failed: {exc}"
+            report.notes.append(report.error)
     if config.driver == "handshake":
         # #532: fold the handshake outcome into the report and persist a PASSED result as the
         # combo's plant artifact. Diagnostics ALWAYS go to extras. But only OVERWRITE the report
@@ -5443,7 +5471,7 @@ def _main_impl(
                     f"matching valid < {handshake_laps_used}"
                 ),
             }
-        elif sink.get("ok") and isinstance(sink.get("result"), dict):
+        elif native_attribution_ok and sink.get("ok") and isinstance(sink.get("result"), dict):
             # #543: live physics rows alone have no tyre state. Refine only from the immutable
             # #488 lap archives collected by the same run; no archive/thermal cohort means the ggv
             # block remains visibly unavailable and --use-plant safely keeps the generic plant.

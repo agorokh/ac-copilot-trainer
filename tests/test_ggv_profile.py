@@ -1620,6 +1620,34 @@ def test_merge_selfplay_lateral_monotonic_and_longitudinal_preserved():
     assert merged.provenance["selfplay_merges"][-1] == stats
 
 
+def test_selfplay_adopts_proven_longitudinal_bins_without_raising_point_caps():
+    from tools.ac_harness.ggv_profile import merge_selfplay_model
+
+    prior = _prior()
+    current = with_binned_uncertainty(prior, [], prior)
+    batch = with_binned_uncertainty(prior, _uncertainty_rows(), prior)
+    merged, stats = merge_selfplay_model(current, batch)
+
+    for kind in ("brake", "drive"):
+        assert stats[f"{kind}_bins_adopted"] > 0
+        assert merged.uncertainty_bins[6][kind] == batch.uncertainty_bins[6][kind]
+        assert merged.uncertainty_bins[25][kind] == current.uncertainty_bins[25][kind]
+    assert merged.brake_b0_g == current.brake_b0_g
+    assert merged.brake_b1 == current.brake_b1
+    assert merged.drive_b0_g == current.drive_b0_g
+    assert merged.drive_b1 == current.drive_b1
+    assert merged.ax_brake_cap_g == current.ax_brake_cap_g
+    assert merged.supported_longitudinal == current.supported_longitudinal
+
+    # A later soft stint, including abundant ordinary pedal use, cannot erase the evidence.
+    soft_rows = [{**row, "accg_lon": row["accg_lon"] * 0.1} for row in _uncertainty_rows()]
+    softer = with_binned_uncertainty(prior, soft_rows, prior)
+    retained, retained_stats = merge_selfplay_model(merged, softer)
+    for kind in ("brake", "drive"):
+        assert retained_stats[f"{kind}_bins_raised"] == 0
+        assert retained.uncertainty_bins[6][kind] == merged.uncertainty_bins[6][kind]
+
+
 def test_merge_selfplay_point_model_never_drops_and_history_accumulates():
     from dataclasses import replace as dc_replace
 
