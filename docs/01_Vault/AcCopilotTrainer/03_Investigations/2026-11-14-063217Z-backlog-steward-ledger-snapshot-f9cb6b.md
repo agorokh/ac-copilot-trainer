@@ -12,18 +12,18 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/roadmap-expansion-2026-11-11.md
 ---
 
-# Backlog ledger snapshot — 2026-11-14 (run `f9cb6b`, settled after the #401 refresh)
+# Backlog ledger snapshot — 2026-11-14 (run `f9cb6b`, settled after the #401 and #956 refreshes)
 
 `/backlog-steward` run `f9cb6b` over `agorokh/ac-copilot-trainer` at merged `main` `3448597c`,
 diffed against snapshot `c4a91e` (`145c07a`). The run itself was read-only. Afterwards, on
-operator instruction, the #401 body and `Roadmap.md` were refreshed as a pair; no label,
-comment or close was made on any other issue. No Council was convened; verdicts rest on the artifacts cited per entry. No GitHub
+operator instruction, the #401 body and `Roadmap.md` were refreshed as a pair and the #956
+body was refreshed; no label, comment or close was made on any issue. No Council was convened; verdicts rest on the artifacts cited per entry. No GitHub
 Project board is declared for workspace `ac_copilot` (fleet `board_manifest.yml` lists it as
 intentionally undeclared), so board reconciliation was skipped.
 
 | Issue | State | Verdict | Change vs `c4a91e` | Proposed move |
 |---|---|---|---|---|
-| #956 | open | `partially-delivered` | new | escalate: operator decision on spent rig cap; refresh body |
+| #956 | open | `partially-delivered` | new | escalate: operator decision on spent rig cap (body refreshed 2026-11-14) |
 | #401 | open | `live` (pair was stale) | flag added, then settled | pair refreshed 2026-11-14 on operator instruction |
 | #529 | open | `partially-delivered` | unchanged, not re-flagged | keep |
 | #957 | open | `live` (Hold) | new | keep on Hold |
@@ -140,12 +140,13 @@ left behind by eight later comments that track the real remainder (`2050.9643220
       ],
       "scope_evolution": "Human 30% timing criterion replaced by autonomous 90 s-per-case protocol (operator adopted PR #970, body section 'Adopted autonomous acceptance'); owner authorized the driving repair in comment 6869681438.",
       "drift_flags": [
-        "body-stale: body says approved 240 min 'leaves 11260.227089s'; actual remainder is 2050.9643220 s and the cap stop has fired.",
-        "body-stale: 'Delivery checkpoint - 2026-11-12' and 'Files to touch' predate pressure_bench*, pit_return and the racing_driver/auto_drive changes.",
         "budget-creep: explore card budget went 1.5 engineering days + 60 rig minutes -> 2 more days + 240 rig minutes; both exhausted without a scored case.",
         "seam-migration: last five PRs changed the shared autonomous driver (tools/ac_harness), the surface #529 G1 runs on."
       ],
-      "recommended_action": "escalate: operator decides between (a) publishing INCONCLUSIVE as the explore verdict and closing or parking, (b) a new bounded rig cap, (c) human-driven stints for the 12 cases. Refresh the body either way. Do not re-attempt under the spent registration.",
+      "resolved_flags": [
+        "body-stale (found by this run): the body said 240 min 'leaves 11260.227089s' and its checkpoint and file list predated the bench and harness work. Body refreshed 2026-11-14 on operator instruction with a current-state section; acceptance criteria and checkboxes unchanged (1 checked, 5 unchecked)."
+      ],
+      "recommended_action": "escalate: operator decides between (a) publishing INCONCLUSIVE as the explore verdict and closing or parking, (b) a new bounded rig cap, (c) human-driven stints for the 12 cases. Do not re-attempt under the spent registration.",
       "main_sha": "3448597c"
     }
   },

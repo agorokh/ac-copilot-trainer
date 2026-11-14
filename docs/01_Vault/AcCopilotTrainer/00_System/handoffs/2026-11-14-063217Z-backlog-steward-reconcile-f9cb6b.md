@@ -15,8 +15,8 @@ relates_to:
 # Backlog reconciliation 2026-11-14 — `/backlog-steward` `f9cb6b`
 
 Read-only run at `main` `3448597c` against ledger `c4a91e`. Afterwards, on operator
-instruction, the #401 body and `Roadmap.md` were refreshed as a pair; no other tracker
-state was changed. Five issues are open: #956, #957, #529, #401, #117. Evidence per issue
+instruction, the #401 body and `Roadmap.md` were refreshed as a pair and the #956 body
+was refreshed; no other tracker state was changed. Five issues are open: #956, #957, #529, #401, #117. Evidence per issue
 is in the linked snapshot.
 
 ## What the run found
@@ -24,7 +24,8 @@ is in the linked snapshot.
 - **#956 `partially-delivered`.** Prototype, AI bench and driver repairs are merged
   (PRs #964 through #981). Native acceptance is INCONCLUSIVE at 0/12 and the rig cap is
   spent: 2050.96 s remain, one genuine unit needs 2610.23 s. The post-#981 driver has not
-  run natively. The body still says 11260 s remain.
+  run natively. The body said 11260 s remained; it was refreshed the same day with a
+  current-state section, acceptance criteria and checkboxes unchanged.
 - **#401 `live`, pair was stale, now refreshed.** The body and `Roadmap.md` both counted
   three open issues and never mentioned #955, #956, #957 or the `REX-20261111` slate. Both
   now record them: the issue body was edited the same day, and the `Roadmap.md` half is
@@ -40,11 +41,12 @@ is in the linked snapshot.
 ## Proposals awaiting the operator
 
 1. #956: choose between publishing INCONCLUSIVE and closing or parking, granting a new
-   bounded rig cap, or driving the 12 stints by hand. Refresh the body whichever is chosen.
+   bounded rig cap, or driving the 12 stints by hand.
 2. #957: read-only count of human-qualified traffic-clean sessions per combo on the rig.
 3. #955 follow-on: live traffic-gated coaching has no owning issue; file one only if wanted.
 
-Executed on operator instruction: the #401 body and `Roadmap.md` paired refresh.
+Executed on operator instruction: the #401 body and `Roadmap.md` paired refresh, and the
+#956 body refresh.
 
 ## Resume pointer
 
