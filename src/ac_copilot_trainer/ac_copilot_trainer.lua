@@ -2697,6 +2697,9 @@ function script.update(dt)
       car = car,
       sim = sim,
       sessionUuid = SESSION_UUID,
+      archiveLapN = telemetryPublisher.archiveLapOrdinal(state.lapsCompleted,
+        state.lastLapCount, car.lapCount, state.lastSplinePos, car.splinePosition, teleported),
+      lapTimeMs = car.lapTimeMs,
       wsBridge = wsBridge,
     }) then
       -- A re-emitted `session` means the car/track/session identity changed: follow with a
@@ -2787,6 +2790,7 @@ function script.update(dt)
     telemetryPublisher.publishTelemetryTickIfDue({
       dt = dt,
       car = car,
+      sim = sim,
       wsBridge = wsBridge,
       lat_g = liveChassis.accG_lat,
       long_g = liveChassis.accG_long,

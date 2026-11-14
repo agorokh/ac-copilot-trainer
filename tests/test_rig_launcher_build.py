@@ -66,19 +66,20 @@ def test_missing_frozen_modules_requires_sapi_backend_only_on_windows() -> None:
     windows = missing_frozen_modules(platform="win32", find=nothing)
     linux = missing_frozen_modules(platform="linux", find=nothing)
 
-    assert {"numpy", "sounddevice", "pyttsx3", "serial", "websockets"} <= set(linux)
+    assert {"numpy", "psutil", "sounddevice", "pyttsx3", "serial", "websockets"} <= set(linux)
     assert "comtypes" not in linux
     assert set(windows) - set(linux) == {"comtypes", "pythoncom"}
     assert missing_frozen_modules(platform="win32", find=lambda _m: object()) == []
 
 
-def test_prepare_fails_loudly_on_missing_module_before_speechlib() -> None:
+@pytest.mark.parametrize("missing", ["pyttsx3", "psutil"])
+def test_prepare_fails_loudly_on_missing_module_before_speechlib(missing) -> None:
     calls: list[str] = []
 
-    with pytest.raises(FrozenBuildError, match=r"missing pyttsx3.*\[launcher\]"):
+    with pytest.raises(FrozenBuildError, match=rf"missing {missing}.*\[launcher\]"):
         prepare_frozen_build(
             platform="win32",
-            find=lambda m: None if m == "pyttsx3" else object(),
+            find=lambda m: None if m == missing else object(),
             speechlib=lambda: calls.append("speechlib") or Path("x"),
         )
     assert calls == []

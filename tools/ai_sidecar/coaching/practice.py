@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import time
 from collections import deque
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -44,9 +45,10 @@ class PracticeSession:
     ledger: CoachingLedger
     combo: tuple[str, str, str]
     reference_signatures: dict[int, CornerSignature]
-    reference_qualification: Qualification
+    reference_qualification: Qualification | None
     reference_identity: str
     drill_id: str
+    practice_permit: Any = None
     reason: str = "qualified_human_lap_required"
     _phase: str = "warmup"
     _session: str | None = None
@@ -61,24 +63,109 @@ class PracticeSession:
     _hold: str = "native_lap_context_required"
     _terminal: bool = False
     _evidence: list[dict[str, Any]] = field(default_factory=list)
+    _reference_pending: bool = False
+    _warmup_candidates: dict[int, dict[str, Any] | None] = field(default_factory=dict)
+    _reference_candidate: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         self.reference_signatures = {
             key: replace(value) for key, value in self.reference_signatures.items()
         }
         self.ledger.drills_enabled = True
-        if (
-            not self.reference_qualification.allowed
-            or self.reference_qualification.authority != "human"
-        ):
+        if self._reference_pending and self.reference_qualification is None:
+            self.reason = "warmup_reference_required"
+            return
+        if not self._human(self.reference_qualification):
             self._terminal, self._phase, self.reason = (
                 True,
                 "unavailable",
                 "qualified_human_reference_required",
             )
 
+    def _human(self, qualification: Qualification | None) -> bool:
+        if self.practice_permit is not None:
+            from tools.human_session import HumanSessionPermit
+            from tools.lap_qualification import is_practice_human
+
+            return (
+                isinstance(self.practice_permit, HumanSessionPermit)
+                and qualification is not None
+                and is_practice_human(qualification)
+            )
+        return bool(
+            qualification is not None
+            and qualification.allowed
+            and qualification.authority == "human"
+        )
+
+    @classmethod
+    def pending_reference(
+        cls,
+        combo: tuple[str, str, str],
+        drill_id: str,
+        *,
+        ledger: CoachingLedger | None = None,
+        practice_permit: Any = None,
+    ) -> PracticeSession:
+        """Collect this block's first two laps without inventing a human reference."""
+        return cls(
+            ledger if ledger is not None else CoachingLedger(),
+            combo,
+            {},
+            None,
+            "",
+            drill_id,
+            practice_permit=practice_permit,
+            _reference_pending=True,
+        )
+
+    def reference_candidate(self) -> dict[str, Any] | None:
+        return deepcopy(self._reference_candidate)
+
+    def record_warmup(
+        self,
+        record: dict[str, Any],
+        qualification: Qualification,
+        *,
+        condition_eligible: bool,
+        reference_eligible: bool,
+    ) -> dict[str, Any]:
+        return self.complete_archive(
+            record,
+            qualification,
+            {},
+            labels={},
+            condition_eligible=condition_eligible,
+            voice_ready=False,
+            reference_eligible=reference_eligible,
+        )
+
+    def install_reference(
+        self,
+        signatures: dict[int, CornerSignature],
+        qualification: Qualification,
+        identity: str,
+    ) -> None:
+        candidate = self._reference_candidate
+        if (
+            self._terminal
+            or not self._reference_pending
+            or candidate is None
+            or identity != candidate.get("lap_uuid")
+            or not signatures
+            or not self._human(qualification)
+        ):
+            raise ValueError("warmup_reference_install_rejected")
+        self.reference_signatures = {key: replace(value) for key, value in signatures.items()}
+        self.reference_qualification = qualification
+        self.reference_identity = identity
+        self._reference_pending = False
+        self._phase, self.reason = "baseline", "baseline_laps"
+
     @property
     def instruction_allowed(self) -> bool:
+        if self._reference_pending:
+            return False
         if self.ledger.drill is None:
             return not self._terminal  # The comparator remains the ordinary unlocked coach.
         return bool(self.ledger.drill_active and not self.ledger.drill_retention and not self._hold)
@@ -260,6 +347,7 @@ class PracticeSession:
         labels: dict[int, str],
         condition_eligible: bool,
         voice_ready: bool,
+        reference_eligible: bool = False,
     ) -> dict[str, Any]:
         if self._terminal:
             return self.status()
@@ -283,10 +371,7 @@ class PracticeSession:
         actual = archive_combo(record)
         combo = (actual[0], actual[1], actual[2] or "") if actual is not None else None
         valid_human = (
-            qualification.allowed
-            and qualification.authority == "human"
-            and lap.get("is_valid") is True
-            and combo == self.combo
+            self._human(qualification) and lap.get("is_valid") is True and combo == self.combo
         )
         off_track = self._off_track(record)
         lap_id = str(record.get("lap_uuid") or "")
@@ -312,6 +397,39 @@ class PracticeSession:
         if off_track is True and self.ledger.drill is None:
             self._terminal, self._phase, self.reason = True, "failed", "off_track"
             receipt.update(phase_after="failed", reason="off_track", advanced=False)
+            return self.status()
+        if self._reference_pending:
+            slot = ordinal - self._first_ordinal if self._first_ordinal is not None else -1
+            if slot not in (0, 1):
+                self.abort("warmup_reference_required_before_baseline")
+                return self.status()
+            eligible = (
+                valid_human
+                and record.get("source") == "in_game"
+                and record.get("import_format") is None
+                and off_track is False
+                and condition_eligible is True
+                and reference_eligible is True
+                and bool(lap_id)
+                and window.full_start
+                and window.continuous
+            )
+            self._warmup_candidates[slot] = deepcopy(record) if eligible else None
+            if len(self._warmup_candidates) == 2:
+                self._reference_candidate = next(
+                    (
+                        self._warmup_candidates[index]
+                        for index in (0, 1)
+                        if self._warmup_candidates[index] is not None
+                    ),
+                    None,
+                )
+                if self._reference_candidate is None:
+                    self.abort("eligible_warmup_reference_unavailable")
+                else:
+                    self.reason = "warmup_reference_install_required"
+            else:
+                self.reason = "warmup_laps"
             return self.status()
         if self.ledger.drill is None:
             if len(self._seen) <= 2:
@@ -350,8 +468,11 @@ class PracticeSession:
                         baseline_corner_time_s=elapsed,
                         reference_identity=self.reference_identity,
                         baseline_identity=baseline_id,
+                        practice_permit=self.practice_permit,
                     )
-                    self.ledger.start_drill(target, max_laps=10 - len(self._seen))
+                    self.ledger.start_drill(
+                        target, max_laps=10 - len(self._seen), practice_permit=self.practice_permit
+                    )
                 except (FrontierError, ValueError) as exc:
                     self.reason = str(exc)
                     continue
