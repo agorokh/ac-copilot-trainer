@@ -2197,6 +2197,7 @@ SAPI_SPEECHLIB_MODULE = "comtypes.gen.SpeechLib"
 #: before Analysis and fails the build instead of shipping an EXE that breaks on the rig (#893).
 FROZEN_REQUIRED_MODULES: tuple[str, ...] = (
     "numpy",
+    "psutil",
     "sounddevice",
     "pyttsx3",
     "serial",

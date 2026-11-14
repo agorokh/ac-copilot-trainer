@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import os
+import string
 import tempfile
 import time
 import uuid
@@ -23,6 +24,7 @@ PRACTICE_COMBO = ("ks_porsche_911_gt3_r_2016", "spa", None)
 MAX_LAPS = 10
 MAX_NATIVE_GAP_S = 0.30
 MAX_NATIVE_AGE_S = 5.0
+_REASON_CHARACTERS = frozenset(string.ascii_lowercase + string.digits + "_")
 _ASSISTANCE_VALUES = {
     "mode": {"live"},
     "abs": {"off", "factory", "on"},
@@ -163,7 +165,7 @@ def _validate_state(state: Any) -> None:
             or len(state["archives"]) > MAX_LAPS
             or not isinstance(state.get("reason"), str)
             or not state["reason"]
-            or any(char not in "abcdefghijklmnopqrstuvwxyz_0123456789" for char in state["reason"])
+            or any(char not in _REASON_CHARACTERS for char in state["reason"])
             or _declaration(**state["declaration"]) != state["declaration"]
             or _digest(state["declaration"]) != state.get("declaration_sha256")
             or type(state.get("revision")) is not int
@@ -939,7 +941,7 @@ def _validate_reason(reason: Any) -> None:
     if (
         not isinstance(reason, str)
         or not reason
-        or any(char not in "abcdefghijklmnopqrstuvwxyz_0123456789" for char in reason)
+        or any(char not in _REASON_CHARACTERS for char in reason)
     ):
         raise HumanSessionError("campaign_reason_invalid")
 

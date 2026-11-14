@@ -28,6 +28,7 @@ dev = [
   "websockets>=16.0",
   "lupa>=2.7",  # Lua runtime for HUD smoke tests (issue #66)
   "pyserial>=3.5",  # USB-serial rig-screen transport (issue #463); lazy-imported by the sidecar
+  "psutil>=7.2.2",  # prospective human-session process identity and loss detection (#529)
 ]
 mining = [
   # Security floor: requests 2.33.0+ fixes CVE-2026-25645 (surfaced in pip-audit with dev+mining+knowledge).
@@ -55,6 +56,7 @@ coaching = [
     "scikit-learn>=1.8.0",
     "shap>=0.51.0",
     "pyserial>=3.5",  # USB-serial rig-screen transport (issue #463)
+    "psutil>=7.2.2",  # prospective human-session process identity and loss detection (#529)
 ]
 # Issue #340: in-the-ear phrase-bank playback (lazy-imported in voice/playback.py).
 # Install on the rig to render/play clips: pip install -e ".[voice]".
@@ -82,8 +84,9 @@ voice-client = [
     "pyttsx3>=2.90",
     "websockets>=16.0",
 ]
-# Game Point launcher packaging (#363). Runtime code stays stdlib-only; this
-# extra is needed to build the Windows .exe artifact and bundle sidecar runtime deps.
+# Game Point launcher packaging (#363). The supervisor core stays stdlib-only;
+# the prospective human study uses psutil for process identity. This extra also
+# builds the Windows .exe artifact and bundles sidecar runtime dependencies.
 # Keep this extra ALWAYS-INSTALLABLE on a clean Windows rig: the sidecar voice floor here is
 # numpy + sounddevice (bundled-PortAudio wheels). rtmixer is deliberately NOT bundled (#383) —
 # it has no prebuilt Windows wheels and would hard-fail `pip install -e ".[launcher]"`; add the
@@ -95,6 +98,7 @@ launcher = [
   "sounddevice>=0.5.1",
   "pyttsx3>=2.90",
   "pyserial>=3.5",  # sidecar USB-serial rig-screen transport (issue #463)
+  "psutil>=7.2.2",  # prospective human-session process identity and loss detection (#529)
 ]
 # Issue #368: OFFLINE neural-voice bake (recommended Kokoro-82M backend, Apache-2.0). Used only by
 # the rig/dev bake step (tools/ai_sidecar/voice/bake.py KokoroBackend, lazy-imported); never on the
