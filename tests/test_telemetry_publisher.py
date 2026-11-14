@@ -10,6 +10,7 @@ closed one (returns false) so the no-op-when-WS-down contract is asserted.
 
 from __future__ import annotations
 
+import json
 import pathlib
 
 import pytest
@@ -508,6 +509,82 @@ def test_archive_ordinal_uses_all_boundary_counter_only_on_unambiguous_frames(
         helper(9, previous_count, current_count, previous_spline, current_spline, teleported)
         == expected
     )
+
+
+def test_due_unbound_native_tick_defers_without_burning_sequence_or_catching_up_in_a_burst():
+    rt = _runtime()
+    result = rt.execute("""
+      local m=require('telemetry_publisher'); m.reset()
+      local ws=make_ws()
+      local opts={dt=.05,wsBridge=ws,car={speedKmh=80},archiveSessionUuid='native-session'}
+      for i=1,10 do assert(m.publishTelemetryTickIfDue(opts)==false) end
+      assert(#ws._calls==0)
+      opts.archiveLapN=2; opts.dt=0
+      local bound=m.publishTelemetryTickIfDue(opts)
+      local immediateRepeat=m.publishTelemetryTickIfDue(opts)
+      return {bound=bound,repeatSent=immediateRepeat,n=#ws._calls,frame=ws._calls[1].send}
+    """)
+    assert result["bound"] is True and result["repeatSent"] is False
+    assert result["n"] == 1 and result["frame"]["seq"] == 1
+    assert result["frame"]["payload"]["archive_lap_n"] == 2
+
+
+def test_actual_lua_finish_transition_still_binds_the_native_permit_window(tmp_path):
+    from tests.test_human_session import session_fixture
+    from tools.human_session import PRACTICE_COMBO
+
+    permit, archive_root = session_fixture(tmp_path)
+    rt = _runtime()
+    publish = rt.execute("""
+      local m=require('telemetry_publisher'); m.reset()
+      local ws=make_ws()
+      local car={speedKmh=100,lapCount=0,splinePosition=0,lapTimeMs=0,isAIControlled=false}
+      local sim={isLive=true,isReplayActive=false}
+      return function(dt,completed,previousCount,currentCount,previousSpline,spline,elapsed)
+        car.lapCount=currentCount; car.splinePosition=spline; car.lapTimeMs=elapsed
+        local ordinal=m.archiveLapOrdinal(completed,previousCount,currentCount,
+          previousSpline,spline,false)
+        local sent=m.publishTelemetryTickIfDue({dt=dt,wsBridge=ws,car=car,sim=sim,
+          archiveSessionUuid='synthetic-native-session',archiveLapN=ordinal})
+        return sent and ws._calls[#ws._calls].send or nil
+      end
+    """)
+
+    def observe(frame, now):
+        assert frame is not None
+        permit.observe_native(dict(frame["payload"].items()), now=now)
+
+    observe(publish(0.05, 0, 0, 0, 0, 0, 0), 0)
+    for index in range(1, 40):
+        observe(
+            publish(0.05, 0, 0, 0, (index - 1) / 40, index / 40, index * 50),
+            index * 0.05,
+        )
+    # The due finish frame is emitted before main updates its archive counter.
+    assert publish(0.05, 0, 0, 1, 0.975, 0, 0) is None
+    # One normal 60Hz frame later, the owed tick sends even though .016 < .05.
+    bound = publish(0.016, 1, 1, 1, 0, 0.008, 16)
+    observe(bound, 2.016)
+    assert bound["payload"]["archive_lap_n"] == 2
+    assert bound["seq"] == 41
+    window = permit._state["windows"]["1"]
+    assert window["closed"] is True
+    assert 0 < window["end_tick"] - window["last_tick"] <= 0.30
+    assert permit.status()["phase"] == "active"
+    record = {
+        "schema_version": 1,
+        "source": "in_game",
+        "session_uuid": "synthetic-native-session",
+        "lap_uuid": "synthetic-transition-lap",
+        "car": {"id": PRACTICE_COMBO[0]},
+        "track": {"id": PRACTICE_COMBO[1], "layout": None},
+        "lap": {"lap_n": 1, "lap_ms": 2000, "is_valid": True},
+    }
+    path = archive_root / "lap_transition.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    raw = path.read_bytes()
+    assert permit.accept_archive(path, expected_combo=PRACTICE_COMBO)["identity"]["lap_n"] == 1
+    assert path.read_bytes() == raw
 
 
 def test_telemetry_tick_suppressed_until_external_hello_acked():

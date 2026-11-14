@@ -100,6 +100,14 @@ local function _sessionIndex(sim)
   return nil
 end
 
+-- These SDK booleans are observations, not evidence that the physical driver is
+-- human. Unknown stays omitted so prospective practice cannot infer an all-clear.
+local function _boolField(value, key)
+  local ok, result = pcall(function() return value[key] end)
+  if ok and type(result) == "boolean" then return result end
+  return nil
+end
+
 
 --- ~1 Hz connection heartbeat.
 ---@param opts table  {dt:number, car?, sim?, wsBridge, appVersion?}
@@ -130,6 +138,9 @@ function M.publishConnectionIfDue(opts)
     track_id = _trackId(),
     session_index = _sessionIndex(opts.sim),
     app_version = (opts.appVersion ~= nil) and tostring(opts.appVersion) or nil,
+    is_live = _boolField(opts.sim, "isLive"),
+    is_replay = _boolField(opts.sim, "isReplayActive"),
+    is_ai = _boolField(opts.car, "isAIControlled"),
   }) == true
 end
 
@@ -149,8 +160,13 @@ function M.publishSessionIfChanged(opts)
   local carId = _carId(opts.car)
   local sessIdx = _sessionIndex(opts.sim)
   local sessionUuid = opts.sessionUuid
+  local isLive = _boolField(opts.sim, "isLive")
+  local isReplay = _boolField(opts.sim, "isReplayActive")
+  local isAI = _boolField(opts.car, "isAIControlled")
   local key = tostring(trackId) .. "|" .. tostring(carId) .. "|" .. tostring(sessIdx)
       .. "|" .. tostring(sessionUuid)
+      .. "|" .. tostring(isLive) .. "|" .. tostring(isReplay) .. "|" .. tostring(isAI)
+      .. "|" .. tostring(type(opts.archiveLapN) == "number")
   if key == _lastSessionKey then
     return false
   end
@@ -163,6 +179,11 @@ function M.publishSessionIfChanged(opts)
     car_id = carId,
     session_index = sessIdx,
     session_uuid = sessionUuid,
+    archive_lap_n = opts.archiveLapN,
+    lap_time_ms = opts.lapTimeMs,
+    is_live = isLive,
+    is_replay = isReplay,
+    is_ai = isAI,
   }) == true
   if ok then
     _lastSessionKey = key

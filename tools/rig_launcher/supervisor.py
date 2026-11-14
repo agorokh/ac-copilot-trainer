@@ -464,6 +464,9 @@ class GamePointStatus:
     practice_drill: ProbeResult = field(
         default_factory=lambda: ProbeResult("practice_drill", True, "disabled")
     )
+    human_session: ProbeResult = field(
+        default_factory=lambda: ProbeResult("human_session", True, "disabled")
+    )
 
     @property
     def stable_ac_in_use(self) -> bool:
@@ -497,6 +500,7 @@ class GamePointStatus:
             "keypad": self.keypad.to_dict(),
             "moza_review": self.moza_review.to_dict(),
             "practice_drill": self.practice_drill.to_dict(),
+            "human_session": self.human_session.to_dict(),
             "log_path": self.log_path,
             "status_path": self.status_path,
             "checks": [check.to_dict() for check in self.checks],
@@ -534,6 +538,7 @@ class GamePointSupervisor:
         self._python = python_executable or sys.executable
         self._frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
         self._sidecar_process: Any | None = None
+        self._sidecar_human_session = False
         self._sidecar_family: dict[int, Any] = {}
         self._sidecar_family_identities: dict[int, Any] = {}
         self._sidecar_stop_error = ""
@@ -811,7 +816,157 @@ class GamePointSupervisor:
         if self.config.voice_tts:
             env["AC_COPILOT_VOICE_TTS"] = "1"
         _put_or_clear(env, "AC_COPILOT_VOICE_CHANNEL_MAP", self.config.voice_channel_map)
+        # The campaign is armed only by the local declaration UI, never by an ambient
+        # environment value. Active lost-owner permits reach startup for refusal;
+        # terminal receipts remain preserved without changing ordinary non-study START.
+        _put_or_clear(env, "AC_COPILOT_PRACTICE_PERMIT", None)
+        permit = self._human_session_path()
+        if permit.exists():
+            status = self.human_session_status(private=True)
+            if status.get("phase") == "unavailable":
+                raise ValueError("human_session_record_unavailable")
+        else:
+            status = {}
+        if status.get("phase") in {"prepared", "active"}:
+            env["AC_COPILOT_PRACTICE_PERMIT"] = str(permit)
+            _put_or_clear(env, "AC_COPILOT_REFERENCE_ARCHIVE", None)
+            _put_or_clear(env, "AC_COPILOT_ALIEN_LINE", None)
+            env["AC_COPILOT_COACH_DRILLS"] = "1"
+            env["AC_COPILOT_COACH_V2"] = "1"
+            selected = status.get("voice_bank")
+            _put_or_clear(env, "AC_COPILOT_VOICE_BANK", self.human_session_voice_bank(selected))
+            _put_or_clear(env, "AC_COPILOT_VOICE_TTS", "0")
         return env
+
+    def human_session_voice_bank(self, selected: str | None = None) -> str:
+        """Validate the private selection, or discover exactly one staged valid bank."""
+        from tools.ai_sidecar.voice.manifest import MANIFEST_FILENAME, Manifest, ManifestError
+
+        def validate(value: str) -> str:
+            resolved = _resolve_launcher_path(value, base=self._launcher_path_base())
+            if resolved is None:
+                raise ValueError("human_session_voice_bank_invalid")
+            base = Path(resolved)
+            try:
+                manifest = Manifest.load(base / MANIFEST_FILENAME)
+                if not manifest.clips or not manifest.validate(base).ok:
+                    raise ValueError("human_session_voice_bank_invalid")
+            except (OSError, ManifestError) as exc:
+                raise ValueError("human_session_voice_bank_invalid") from exc
+            return str(base)
+
+        if selected:
+            return validate(selected)
+        if self.config.voice_bank:
+            return validate(self.config.voice_bank)
+        staging = self.paths.root / "voice-banks"
+        choices = []
+        if staging.is_dir():
+            for candidate in staging.iterdir():
+                if candidate.is_dir():
+                    try:
+                        choices.append(validate(str(candidate)))
+                    except ValueError:
+                        continue
+        if len(choices) != 1:
+            raise ValueError("human_session_voice_bank_selection_required")
+        return choices[0]
+
+    def _human_session_path(self) -> Path:
+        from tools.human_session import campaign_path
+
+        return campaign_path(self.paths.root)
+
+    def human_session_status(self, *, private: bool = False) -> dict[str, Any]:
+        """Inspect without consuming the permit; private declarations stay in the local modal."""
+        from tools.human_session import HumanSessionPermit
+
+        return HumanSessionPermit.read_status(self._human_session_path(), private=private)
+
+    def _human_session_overlay_requested(self) -> bool:
+        try:
+            status = self.human_session_status()
+        except (OSError, ValueError):
+            return False  # preflight separately exposes and blocks an unreadable receipt.
+        return status.get("phase") in {"prepared", "active"}
+
+    def _human_session_voice_requested(self) -> bool:
+        with self._proc_lock:
+            if (
+                self._sidecar_human_session
+                and self._sidecar_process is not None
+                and self._sidecar_process.poll() is None
+            ):
+                return True
+        return self._human_session_overlay_requested()
+
+    def prepare_human_session(
+        self,
+        *,
+        driver_id: str,
+        assistance: Mapping[str, Any],
+        voice_bank: str | None = None,
+    ) -> dict:
+        """Save one prospective declaration without starting AC, voice or the sidecar."""
+        from tools.human_session import HumanSessionPermit
+
+        if not self.config.token:
+            raise ValueError("human_session_token_required")
+        with self._proc_lock:
+            if self._sidecar_process is not None and self._sidecar_process.poll() is None:
+                raise ValueError("running_sidecar_requires_restart")
+            if self._sidecar_stop_error:
+                raise ValueError("sidecar_stop_failed")
+        if self._read_health().ok:
+            raise ValueError("running_sidecar_requires_restart")
+        if self._human_session_path().exists():
+            raise ValueError("campaign_already_exists")
+        permit = HumanSessionPermit.prepare(
+            self._human_session_path(),
+            driver_id=driver_id,
+            assistance=assistance,
+            voice_bank=self.human_session_voice_bank(voice_bank),
+        )
+        return permit.status(private=True)
+
+    def close_human_session(self, end_declaration: Mapping[str, Any]) -> dict:
+        from tools.human_session import close_campaign
+
+        return close_campaign(self._human_session_path(), end_declaration)
+
+    def revoke_human_session(self) -> dict:
+        from tools.human_session import revoke_campaign
+
+        return revoke_campaign(self._human_session_path(), reason="operator_disclosed_change")
+
+    def probe_human_session(self) -> ProbeResult:
+        """Public launcher status contains no declarations, identities, hashes or paths."""
+        try:
+            status = self.human_session_status()
+        except (OSError, ValueError):
+            return ProbeResult("human_session", False, "unavailable", "Session record unavailable.")
+        phase = status.get("phase")
+        details = {
+            "unavailable": "Prospective human session is off.",
+            "prepared": "Declaration saved. START waits for the exact Porsche / Spa session.",
+            "active": "One bounded session is in progress; stop within ten completed laps.",
+            "closed": "Session closed. A new session cannot be armed.",
+            "aborted": "Session stopped. A new session cannot be armed.",
+        }
+        if phase not in details:
+            return ProbeResult("human_session", False, "unavailable", "Session record unavailable.")
+        if phase == "unavailable" and status.get("configured"):
+            return ProbeResult("human_session", False, "unavailable", "Session record unavailable.")
+        if not status.get("configured"):
+            return ProbeResult("human_session", True, "disabled", details["unavailable"])
+        if phase == "closed" and status.get("reason") == "awaiting_end_declaration":
+            return ProbeResult(
+                "human_session",
+                True,
+                "awaiting_end_declaration",
+                "Capture finished. Complete the end declaration in Human session.",
+            )
+        return ProbeResult("human_session", phase != "aborted", str(phase), details[phase])
 
     def simhub_environment(self) -> dict[str, str]:
         """Expose the launcher's resolved sidecar endpoint to the SimHub plugin."""
@@ -837,6 +992,32 @@ class GamePointSupervisor:
         which needs the sidecar's live device name.
         """
         checks: list[ProbeResult] = []
+        if self._human_session_path().exists():
+            try:
+                campaign = self.human_session_status()
+            except (OSError, ValueError):
+                campaign = {"phase": "unavailable"}
+            if campaign.get("phase") == "unavailable":
+                checks.append(
+                    ProbeResult(
+                        "human_session", False, "unavailable", "Session record unavailable."
+                    )
+                )
+            if campaign.get("phase") in {"prepared", "active"}:
+                private = self.human_session_status(private=True)
+                bank = _resolve_launcher_path(
+                    private.get("voice_bank") or self.config.voice_bank,
+                    base=self._launcher_path_base(),
+                )
+                if not bank or not (Path(bank) / "manifest.json").is_file():
+                    checks.append(
+                        ProbeResult(
+                            "human_session_voice",
+                            False,
+                            "bank_missing",
+                            "Select a phrase bank before starting the prospective session.",
+                        )
+                    )
         if (
             self._environ.get("AC_COPILOT_PRESSURE_BENCH_PERMIT")
             and self._environ.get("AC_COPILOT_PRESSURE_EXPERIMENT") == "1"
@@ -865,7 +1046,11 @@ class GamePointSupervisor:
             checks.append(ProbeResult("sidecar_token", True, "loopback"))
 
         voice_requested = self.config.voice_bank or self.config.voice_tts
-        if voice_requested and not self.config.reference_archive:
+        if (
+            voice_requested
+            and not self.config.reference_archive
+            and not self._human_session_overlay_requested()
+        ):
             checks.append(
                 ProbeResult(
                     "voice_reference",
@@ -919,6 +1104,13 @@ class GamePointSupervisor:
         # the lock — start_sidecar is main-thread-serial, so no concurrent start races this gap.
         existing = self._read_health()
         if existing.ok:
+            if self._human_session_overlay_requested():
+                return ProbeResult(
+                    "sidecar",
+                    False,
+                    "restart_required",
+                    "The existing sidecar is preserved. Close it after driving before START.",
+                )
             return ProbeResult(
                 "sidecar",
                 True,
@@ -930,17 +1122,19 @@ class GamePointSupervisor:
                 self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
                 log = self.paths.sidecar_log_path.open("a", encoding="utf-8")
                 self._log_handles.append(log)
+                child_env = self.sidecar_environment()
                 self._sidecar_process = self._popen(
                     self.sidecar_command(),
                     **_subprocess_kwargs(
                         cwd=self._sidecar_working_directory(),
-                        env=self.sidecar_environment(),
+                        env=child_env,
                         stdout=log,
                         stderr=subprocess.STDOUT,
                         text=True,
                     ),
                 )
-            except (OSError, FileNotFoundError) as exc:
+                self._sidecar_human_session = "AC_COPILOT_PRACTICE_PERMIT" in child_env
+            except (OSError, ValueError) as exc:
                 self._sidecar_process = None
                 self._close_log_handles()
                 return ProbeResult("sidecar", False, "start_failed", str(exc))
@@ -1421,6 +1615,7 @@ class GamePointSupervisor:
             screen=screen,
             voice=self.probe_voice(health_payload),
             practice_drill=self.probe_practice_drill(health_payload),
+            human_session=self.probe_human_session(),
             simhub=self.probe_simhub(start=start_sim),
             tablet=self.probe_tablet(health_payload),
             resilient=self._resilient_process_status(),
@@ -1619,6 +1814,10 @@ class GamePointSupervisor:
                     "DISABLED",
                     "voice requested but sidecar health has no voice runtime status",
                 )
+        if self._human_session_voice_requested():
+            return ProbeResult(
+                "voice", True, "configured", "Study bank selected; awaiting native session"
+            )
         if self.config.reference_archive and self.config.voice_bank:
             return ProbeResult("voice", True, "configured", "reference archive + bank configured")
         if self.config.reference_archive and self.config.voice_tts:
@@ -1637,6 +1836,9 @@ class GamePointSupervisor:
         set-but-blank ``AC_COPILOT_VOICE_BANK`` that cleared a settings value, could not be
         diagnosed from the Voice row or ``status.json``. ``unset`` adds no noise.
         """
+        if self._human_session_voice_requested():
+            note = "study bank selected locally"
+            return replace(result, detail=f"{result.detail}; {note}" if result.detail else note)
         source = self.config.voice_bank_source
         if source == VOICE_BANK_SOURCE_UNSET:
             return result
@@ -1733,11 +1935,16 @@ class GamePointSupervisor:
 
     def _voice_requested(self) -> bool:
         return bool(
-            self.config.reference_archive or self.config.voice_bank or self.config.voice_tts
+            self.config.reference_archive
+            or self.config.voice_bank
+            or self.config.voice_tts
+            or self._human_session_voice_requested()
         )
 
     def _voice_playback_requested(self) -> bool:
-        return bool(self.config.voice_bank or self.config.voice_tts)
+        return bool(
+            self.config.voice_bank or self.config.voice_tts or self._human_session_voice_requested()
+        )
 
     def probe_simhub(self, *, start: bool = False) -> ProbeResult:
         exe = self._simhub_exe()
@@ -1990,6 +2197,7 @@ SAPI_SPEECHLIB_MODULE = "comtypes.gen.SpeechLib"
 #: before Analysis and fails the build instead of shipping an EXE that breaks on the rig (#893).
 FROZEN_REQUIRED_MODULES: tuple[str, ...] = (
     "numpy",
+    "psutil",
     "sounddevice",
     "pyttsx3",
     "serial",
@@ -2061,6 +2269,8 @@ def build_pyinstaller_args(
         "sounddevice",
         "--hidden-import",
         "tools.ai_sidecar.voice.engine",
+        "--hidden-import",
+        "tools.human_session",
         "--hidden-import",
         "tools.ai_sidecar.voice.playback",
         "--hidden-import",
@@ -2494,6 +2704,7 @@ def render_status_lines(status: GamePointStatus) -> list[str]:
         status.screen,
         status.voice,
         status.practice_drill,
+        status.human_session,
         status.simhub,
         status.tablet,
         status.resilient,

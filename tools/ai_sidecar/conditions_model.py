@@ -23,8 +23,48 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-# weatherType is NOT standardized across base AC / CSP / Sol — match defensively (lowercase substr).
-_WET_TOKENS = ("damp", "rain", "wet", "snow", "storm", "shower")
+# Legacy weather names vary across base AC / Sol; numeric native observations use
+# ac.WeatherType from the installed CSP SDK's ac_apps/lib.lua enum declaration.
+_CSP_WEATHER_NAMES = dict(
+    enumerate(
+        (
+            "light_thunderstorm",
+            "thunderstorm",
+            "heavy_thunderstorm",
+            "light_drizzle",
+            "drizzle",
+            "heavy_drizzle",
+            "light_rain",
+            "rain",
+            "heavy_rain",
+            "light_snow",
+            "snow",
+            "heavy_snow",
+            "light_sleet",
+            "sleet",
+            "heavy_sleet",
+            "clear",
+            "few_clouds",
+            "scattered_clouds",
+            "broken_clouds",
+            "overcast_clouds",
+            "fog",
+            "mist",
+            "smoke",
+            "haze",
+            "sand",
+            "dust",
+            "squalls",
+            "tornado",
+            "hurricane",
+            "cold",
+            "hot",
+            "windy",
+            "hail",
+        )
+    )
+)
+_WET_TOKENS = ("damp", "rain", "wet", "snow", "storm", "shower", "drizzle", "sleet", "hail")
 _DRY_TOKENS = ("dry", "clear", "sun", "cloud", "overcast", "fair", "mist")
 
 # trackGripLevel bands (AC native scalar; fresh stock session ~0.95-0.96, rubbers UP toward ~1.0).
@@ -84,10 +124,25 @@ class ConditionsReport:
         return f"Conditions: {self.regime}, {g}."
 
 
+def normalize_weather_type(weather: Any) -> str | None:
+    """Read a CSP enum or legacy name without rewriting the immutable native observation.
+
+    Only exact known enum values are mapped; bools, fractional and unknown numeric
+    values never become a clear/dry default. Known labels whose regime is uncertain
+    remain uncertain under the existing conservative name classifier.
+    """
+    if isinstance(weather, str):
+        return weather.strip() or None
+    if type(weather) in (int, float):
+        return _CSP_WEATHER_NAMES.get(weather)
+    return None
+
+
 def _regime(weather: Any) -> str:
-    if not isinstance(weather, str) or not weather.strip():
+    label = normalize_weather_type(weather)
+    if label is None:
         return "unknown"
-    w = weather.strip().lower()
+    w = label.lower()
     if any(t in w for t in _WET_TOKENS):
         return "wet"
     if any(t in w for t in _DRY_TOKENS):
@@ -132,7 +187,7 @@ def analyze_conditions(
     grip = _num(conditions.get("trackGripLevel"))
     track_t = _num(conditions.get("trackTempC"))
     ambient_t = _num(conditions.get("ambientTempC"))
-    weather = conditions.get("weatherType")
+    weather = normalize_weather_type(conditions.get("weatherType"))
     regime = _regime(weather)
     band = _grip_band(grip)
 

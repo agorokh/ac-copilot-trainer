@@ -544,3 +544,59 @@ session and ten laps; compare with the existing unlocked coach. The software's s
 pass is not #529 G3 acceptance: that gate still requires measured human improvement across
 sessions. Historical archives lacking native full-lap/off-track evidence remain unavailable
 for this live protocol. Do not relabel them or infer missing observations as zero.
+
+### Fresh operator-attested Porsche/Spa session
+
+The **Human session** action prepares the prospective `ks_porsche_911_gt3_r_2016` /
+`spa` / default-layout experiment. Enter a private driver identifier, every control
+and assistance choice, and exact ABS/TC/stability levels. Unknown choices cannot arm.
+Human steering/throttle/braking, live driving, and AI/shared/harness control off must
+be explicitly declared. This records **operator attestation**, not verified physical
+human control. Preparing it starts no AC, sidecar or audio.
+Arming requires a configured sidecar token. `/coach/practice` requires that token
+even on loopback; public health never exposes the private declarations or receipts.
+
+Select a phrase-bank directory in the dialog, or use the sole validated bank staged
+under Game Point's `voice-banks/` directory. Vocabulary, voice signature and clip
+hashes are checked again before normal START. The owned child receives a scoped
+configuration that clears the inherited reference and alien-line paths, enables
+the study, and uses the selected bank. Normal settings and user environment remain
+unchanged. A running/adopted sidecar is preserved; finish it before arming.
+
+Start the sidecar through normal **START**, then select solo Porsche/Spa Practice
+in Content Manager. The study binds only to a fresh authorized native session at
+its first lap, with explicit live/non-replay/non-AI observations. The driver,
+assists, setup, tyres and conditions must remain fixed. The private campaign receipt
+is the durable one-session/ten-attempt authority: reconnect, process loss, identity
+change or missing evidence cannot create another allowance. There is no reset button.
+
+The first two warm-up attempts also provide the reference; no seed session or
+eleventh lap is added. Coaching remains parked while the reference is pending.
+The earliest eligible first-two native archive is frozen after both warm-up receipts
+arrive, before baseline evidence is evaluated. It needs complete native windows,
+zero off-track evidence, strict trace/thermal/condition eligibility and usable corner
+geometry. A later lap cannot replace it. Missing eligible warm-up evidence stops
+the block. This reference is only an experimental same-session technique observation;
+it does not establish a personal frontier or a historical best.
+
+Laps 3–5 use the ordinary unlocked coach; laps 6–8 use one frozen
+`trail-brake-entry` target at one canonical corner; laps 9–10 require uncued retention.
+No admissible target after baseline means unavailable, not an invented target or more
+laps. Hide visual coaching/ghost/racing-line guidance throughout retention. Actual
+audibility and any unexpected instruction must be recorded; software dispatch does
+not prove what the driver heard. Safety SAVE warnings remain available.
+
+After the tenth accepted archive the capture is sealed. Return to pits, open
+**Human session**, enter the driver and all assistance choices afresh, and select
+**End and attest**. The parked driver can complete this after telemetry stops.
+Missing or conflicting end evidence leaves the experimental outcome unverified.
+Retain authenticated `/coach/practice` receipts, native archives, setup/condition
+snapshots and the campaign record before teardown.
+
+The canonical attribution overlay labels these records `attested_human` with
+`operator_attested_human_control` evidence. Only `practice_reference` and
+`practice_trial` may use it with the active session context. Generic PB/progression,
+live-reference, map/comparison and plant-fit consumers remain ineligible; existing
+AI/shared/unknown restrictions win. Raw archives and historical A/F/G are unchanged.
+Synthetic/software checks do not establish human control, audibility, or G3's
+required improvement across sessions.

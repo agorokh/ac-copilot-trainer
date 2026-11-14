@@ -5,6 +5,8 @@ ledger preserves legacy behavior without certifying a human driver. An explicitl
 configured unavailable ledger fails closed. Evidence can restrict an immutable
 native archive; registration cannot certify human control or promote it live.
 The explicit #529 native-control witness may permit plant fitting only.
+Prospective operator attestations authorize only explicit live practice context;
+they never become verified-human, PB or general reference evidence.
 """
 
 from __future__ import annotations
@@ -27,9 +29,20 @@ from tools.lap_trace_validity import completed_trace_reason, finish_wrap_cut
 SCHEMA_VERSION = 1
 ATTRIBUTIONS_ENV = "AC_COPILOT_LAP_ATTRIBUTIONS"
 USES = frozenset(
-    {"analysis", "map", "live_reference", "reference_comparison", "human_progression", "plant_fit"}
+    {
+        "analysis",
+        "map",
+        "live_reference",
+        "reference_comparison",
+        "human_progression",
+        "plant_fit",
+        "practice_reference",
+        "practice_trial",
+    }
 )
-AUTHORITIES = frozenset({"human", "ai", "shared", "unknown"})
+SCOPED_USES = frozenset({"practice_reference", "practice_trial"})
+AUTHORITIES = frozenset({"human", "attested_human", "ai", "shared", "unknown"})
+PRACTICE_ORIGIN = "operator_attested_human_control_v1"
 # Native archive acceleration channels use G; importing a channel still requires
 # bound measured-unit evidence and does not inherit eligibility from this constant.
 NATIVE_ACCELERATION_UNIT = "G"
@@ -240,6 +253,15 @@ def _validate_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if type(envelope.get("schema_version")) is not int or envelope.get("schema_version") != 1:
             raise AttributionError("attribution_store_invalid")
         authority = envelope.get("authority")
+        if authority == "attested_human":
+            if not _practice_attribution_evidence(
+                envelope,
+                identity=identity,
+                payload_digest=entry["payload_sha256"],
+                source_digest=entry["source_sha256"],
+            ):
+                raise AttributionError("attribution_store_invalid")
+            continue
         if not isinstance(authority, str) or authority not in {"ai", "shared", "unknown"}:
             raise AttributionError("attribution_store_invalid")
         uses = envelope.get("supported_uses")
@@ -278,6 +300,54 @@ def _validate_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _is_hash(value: Any) -> bool:
     return (
         isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+    )
+
+
+def _practice_attribution_evidence(
+    envelope: Mapping[str, Any],
+    *,
+    identity: Mapping[str, Any],
+    payload_digest: str,
+    source_digest: str,
+) -> bool:
+    uses = envelope.get("supported_uses")
+    evidence = envelope.get("evidence")
+    if (
+        envelope.get("authority") != "attested_human"
+        or envelope.get("origin") != PRACTICE_ORIGIN
+        or not isinstance(uses, dict)
+        or set(uses) - USES
+        or any(type(value) is not bool for value in uses.values())
+        or any(value for use, value in uses.items() if use not in SCOPED_USES | {"analysis"})
+        or not all(uses.get(use) is True for use in SCOPED_USES)
+        or not isinstance(evidence, list)
+        or len(evidence) != 1
+    ):
+        return False
+    item = evidence[0]
+    if not isinstance(item, Mapping) or item.get("kind") != "operator_attested_human_control":
+        return False
+    witness = item.get("witness")
+    if not isinstance(witness, Mapping):
+        return False
+    try:
+        digest = hashlib.sha256(
+            json.dumps(witness, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+    except (ValueError, TypeError):
+        return False
+    return (
+        item.get("sha256") == digest
+        and witness.get("identity") == dict(identity)
+        and witness.get("payload_sha256") == payload_digest
+        and witness.get("source_sha256") == source_digest
+        and isinstance(witness.get("permit_id"), str)
+        and bool(witness["permit_id"])
+        and _is_hash(witness.get("declaration_sha256"))
+        and _is_hash(witness.get("native_window_sha256"))
+        and type(witness.get("reference_eligible")) is bool
     )
 
 
@@ -698,6 +768,10 @@ class ArchiveQualificationSnapshot:
                 authority=str(_map(envelope).get("authority") or "legacy_unknown"),
             )
         if not managed:
+            if use in SCOPED_USES:
+                return _decision(
+                    False, ["practice_context_required"], managed=True, authority="legacy_unknown"
+                )
             return _decision(True, ["legacy_unknown"], managed=False, authority="legacy_unknown")
         if not isinstance(envelope, Mapping):
             return _decision(False, ["qualification_missing"], managed=True, authority="unknown")
@@ -774,6 +848,8 @@ class ArchiveQualificationSnapshot:
             elif expected is None:
                 reasons.append("expected_combo_unavailable")
         reasons.extend(self._trace_errors)
+        if use in SCOPED_USES:
+            reasons.append("practice_context_required")
         return _decision(not reasons, reasons, managed=True, authority=authority)
 
 
@@ -785,6 +861,149 @@ def qualify_archive(
 ) -> Qualification:
     """One policy, with fresh provenance checks on every ordinary boundary call."""
     return ArchiveQualificationSnapshot(record).qualify(use=use, expected_combo=expected_combo)
+
+
+def is_practice_human(qualification: Qualification) -> bool:
+    """An explicit scoped consumer may accept attestation without calling it verified."""
+    return qualification.allowed and qualification.authority in {"human", "attested_human"}
+
+
+def qualify_practice_archive(
+    record: Mapping[str, Any],
+    *,
+    use: str,
+    permit: Any,
+    expected_combo: tuple[str, str, str | None],
+) -> Qualification:
+    from tools.human_session import HumanSessionError, HumanSessionPermit
+
+    if use not in SCOPED_USES:
+        return _decision(False, ["unsupported_practice_use"], managed=True, authority="unknown")
+    if not isinstance(permit, HumanSessionPermit):
+        return _decision(False, ["practice_context_required"], managed=True, authority="unknown")
+    if not isinstance(record, Mapping):
+        return _decision(False, ["archive_root_invalid"], managed=True, authority="unknown")
+    snapshot = ArchiveQualificationSnapshot(record)
+    resolved = snapshot.record
+    envelope = _map(resolved.get("qualification"))
+    authority = str(envelope.get("authority") or "unknown")
+    reasons = []
+    if envelope.get("resolution_error"):
+        reasons.append(str(envelope["resolution_error"]))
+    if authority != "attested_human":
+        reasons.append(f"practice_attribution_required:{authority}")
+    try:
+        selected = [
+            item
+            for item in _read_ledger(default_attribution_path(), required=True)
+            if _same_selected_identity(item["identity"], archive_identity(resolved))
+        ]
+        if len(selected) != 1 or selected[0]["qualification"] != envelope:
+            reasons.append("canonical_practice_attribution_required")
+    except AttributionError as exc:
+        reasons.append(str(exc))
+    if resolved.get("source") != "in_game" or resolved.get("import_format") is not None:
+        reasons.append("native_archive_required")
+    if type(resolved.get("schema_version")) is not int or resolved.get("schema_version") != 1:
+        reasons.append("archive_schema_unsupported")
+    try:
+        context = permit.qualification_context(resolved, expected_combo=expected_combo)
+        witness = (
+            _map((_map(envelope.get("evidence", [{}])[0])).get("witness"))
+            if isinstance(envelope.get("evidence"), list) and envelope["evidence"]
+            else {}
+        )
+        if context != witness or not _practice_attribution_evidence(
+            envelope,
+            identity=archive_identity(resolved),
+            payload_digest=payload_sha256(resolved),
+            source_digest=context["source_sha256"],
+        ):
+            reasons.append("practice_witness_mismatch")
+        if use == "practice_reference" and context.get("reference_eligible") is not True:
+            reasons.append("practice_reference_window_closed")
+    except (HumanSessionError, AttributionError, OSError, KeyError, TypeError, ValueError) as exc:
+        reasons.append(
+            str(exc)
+            if isinstance(exc, (HumanSessionError, AttributionError))
+            else "practice_context_unavailable"
+        )
+    binding_error = snapshot._binding_error
+    if binding_error:
+        reasons.append(binding_error)
+    reasons.extend(_identity_reasons(archive_identity(resolved)))
+    reasons.extend(snapshot._trace_errors)
+    if _map(resolved.get("lap")).get("is_valid") is not True:
+        reasons.append("lap_validity_unproved")
+    if (
+        _map(resolved.get("lap")).get("complete") is False
+        or _map(resolved.get("lap")).get("partial") is True
+    ):
+        reasons.append("lap_incomplete")
+    traffic = archive_traffic_eligibility(resolved)
+    if traffic is not None and not traffic.eligible:
+        reasons.append(traffic.reason)
+    try:
+        snapshot.assert_current()
+    except AttributionError as exc:
+        reasons.append(str(exc))
+    return _decision(not reasons, reasons, managed=True, authority=authority)
+
+
+def register_practice_attribution(
+    archive_path: str | Path,
+    *,
+    permit: Any,
+    expected_combo: tuple[str, str, str | None],
+) -> dict[str, Any]:
+    """Only a consumed live permit may append this fallible, experiment-only claim."""
+    from tools.human_session import HumanSessionPermit
+
+    if not isinstance(permit, HumanSessionPermit):
+        raise AttributionError("practice_context_required")
+    receipt = permit.accept_archive(archive_path, expected_combo=expected_combo)
+    raw = _stable_bytes(Path(archive_path))
+    record = json.loads(raw)
+    if not isinstance(record, dict):
+        raise AttributionError("archive_root_invalid")
+    resolved = resolve_archive_provenance(record, source_path=archive_path)
+    old = _map(resolved.get("qualification"))
+    if old.get("resolution_error"):
+        raise AttributionError(str(old["resolution_error"]))
+    if old and old.get("authority") != "attested_human":
+        permit.revoke("restrictive_attribution_conflict")
+        raise AttributionError("conflicting_attribution_identity")
+    witness = permit.qualification_context(record, expected_combo=expected_combo)
+    if receipt["source_sha256"] != hashlib.sha256(raw).hexdigest():
+        raise AttributionError("input_changed_during_registration")
+    evidence_digest = hashlib.sha256(
+        json.dumps(witness, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    ).hexdigest()
+    envelope = build_qualification(
+        record,
+        authority="attested_human",
+        origin=PRACTICE_ORIGIN,
+        supported_uses={use: use in SCOPED_USES | {"analysis"} for use in USES},
+        channels={name: {"unit": unit, "basis": "measured"} for name, unit in _UNITS.items()},
+        reasons=["operator_attestation_only", "no_generic_human_or_reference_promotion"],
+        evidence=[
+            {
+                "kind": "operator_attested_human_control",
+                "sha256": evidence_digest,
+                "witness": witness,
+            }
+        ],
+    )
+    entry = {
+        "identity": archive_identity(record),
+        "payload_sha256": payload_sha256(record),
+        "source_sha256": hashlib.sha256(raw).hexdigest(),
+        "qualification": envelope,
+    }
+    _validate_entries([entry])
+    with permit._registration_guard(record, expected_combo=expected_combo):
+        result = _append_attribution(archive_path, raw, entry, ledger_path=None)
+    return {**result, "identity": entry["identity"], "qualification": envelope}
 
 
 def duplicate_identity_reasons(records: Sequence[Mapping[str, Any]]) -> dict[int, str]:
@@ -906,6 +1125,17 @@ def register_attribution(
         "qualification": dict(qualification),
     }
     _validate_entries([entry])
+    return _append_attribution(archive_path, raw, entry, ledger_path=ledger_path)
+
+
+def _append_attribution(
+    archive_path: str | Path,
+    raw: bytes,
+    entry: dict[str, Any],
+    *,
+    ledger_path: str | Path | None,
+) -> dict[str, Any]:
+    identity = entry["identity"]
     path = Path(ledger_path) if ledger_path is not None else default_attribution_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = path.with_name(path.name + ".lock")

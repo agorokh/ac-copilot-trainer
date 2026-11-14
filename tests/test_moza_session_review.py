@@ -46,7 +46,16 @@ def test_cache_inspection_is_useful_but_not_promoted_or_rewritten(tmp_path):
     review = report["moza_review"]
     assert review["status"] == "inspection_only"
     assert review["authority"] == "unknown"
-    assert len(review["qualification"]) == 6
+    assert set(review["qualification"]) == {
+        "analysis",
+        "map",
+        "live_reference",
+        "reference_comparison",
+        "human_progression",
+        "plant_fit",
+        "practice_reference",
+        "practice_trial",
+    }
     assert not any(item["allowed"] for item in review["qualification"].values())
     assert not any(item["available"] for item in review["channels"])
     assert review["inspection"]["detail_point_count"] == 3
