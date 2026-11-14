@@ -2013,6 +2013,8 @@ def _passthrough_args(args: argparse.Namespace) -> list[str]:
         # #575: both stages must agree on the app version — an identification session run against
         # a stale app produces the plant artifact the drive stage then trusts.
         out.append("--strict-app-version")
+    if getattr(args, "native_ai_plant_fit", False):
+        out.append("--native-ai-plant-fit")
     return out
 
 
@@ -2089,6 +2091,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--track", required=True, help="AC track id (e.g. magione)")
     p.add_argument("--track-layout", default=None, help="layout subdir for multi-layout tracks")
     p.add_argument("--setup", default=None, help="car setup name (plant identity includes it)")
+    p.add_argument(
+        "--native-ai-plant-fit",
+        action="store_true",
+        help="opt clean native harness archives into evidenced AI plant fitting only; "
+        "human progression and reference uses remain prohibited",
+    )
     p.add_argument(
         "--strict-app-version",
         action="store_true",

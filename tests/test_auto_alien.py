@@ -267,6 +267,13 @@ def test_resolve_drive_seconds_scales_with_lap_window(tmp_path):
     assert resolve_drive_seconds(_args(tmp_path, "--laps", "3", "--drive-seconds", "200")) == 200.0
 
 
+def test_native_ai_fit_opt_in_reaches_both_native_stages_and_defaults_off(tmp_path):
+    for extra, expected in (((), False), (("--native-ai-plant-fit",), True)):
+        args = _args(tmp_path, *extra)
+        for build in (identify_argv, drive_argv):
+            assert ("--native-ai-plant-fit" in build(args, tmp_path / "stage")) is expected
+
+
 def test_drive_argv_carries_lap_window_scale_and_overspeed(tmp_path):
     args = _args(tmp_path, "--laps", "3")
     drive = drive_argv(args, tmp_path / "d")

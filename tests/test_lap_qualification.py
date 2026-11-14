@@ -29,6 +29,7 @@ from tools.lap_qualification import (
     main,
     qualify_archive,
     register_attribution,
+    restricted_lap_identities,
 )
 
 UNITS = {
@@ -93,6 +94,169 @@ def write_native(tmp_path, record=None):
     path = tmp_path / "lap_synthetic.json"
     path.write_text(json.dumps(record or archive()), encoding="utf-8")
     return path
+
+
+def native_control_report(record):
+    identity = {
+        "lap_n": record["lap"]["lap_n"],
+        "lap_ms": record["lap"]["lap_ms"],
+    }
+    return {
+        "ok": True,
+        "session_uuid": record["session_uuid"],
+        "car_id": record["car"]["id"],
+        "track_id": record["track"]["id"],
+        "timed_laps": [identity],
+        "drive": {
+            "drove": True,
+            "sim_dead": False,
+            "session_replaced": False,
+            "recoveries": 0,
+            "recovery_capped": False,
+            "unexpected_sim_pids": [],
+        },
+    }
+
+
+def register_native_test(tmp_path, record=None, *, report_change=None, app_change=None):
+    from tools.ac_harness.native_attribution import attribute_native_control
+
+    record = archive() if record is None else record
+    path = write_native(tmp_path, record)
+    report = native_control_report(record)
+    if report_change:
+        report_change(report)
+    app = {"status": "match", "harness_digest": EVIDENCE_HASH, "installed_digest": EVIDENCE_HASH}
+    if app_change:
+        app_change(app)
+    receipt = attribute_native_control(
+        [path], report=report, driver="alien", app_install=app, evidence_dir=tmp_path / "evidence"
+    )
+    return path, receipt
+
+
+def test_native_ai_opt_in_is_plant_only_and_preserves_raw_bytes(tmp_path, ledger):
+    record = archive()
+    expected = json.dumps(record).encode()
+    path, receipt = register_native_test(tmp_path, record)
+    assert path.read_bytes() == expected
+    assert receipt["sha256"] == hashlib.sha256(Path(receipt["witness"]).read_bytes()).hexdigest()
+    assert len(json.loads(ledger.read_bytes())["entries"]) == 1
+    assert restricted_lap_identities(use="plant_fit") == []
+    assert len(restricted_lap_identities(use="human_progression")) == 1
+    for use in USES:
+        decision = qualify_archive(record, use=use, expected_combo=archive_combo(record))
+        assert decision.authority == "ai"
+        assert decision.allowed is (use in {"analysis", "plant_fit"}), (use, decision)
+
+
+def test_old_restrictive_native_entry_cannot_be_broadened(tmp_path, ledger):
+    record = archive()
+    path = write_native(tmp_path, record)
+    register_attribution(path, assessment(record, authority="ai"))
+    before = ledger.read_bytes()
+    with pytest.raises(AttributionError, match="conflicting_attribution_identity"):
+        register_native_test(tmp_path, record)
+    assert ledger.read_bytes() == before
+    assert not qualify_archive(record, use="plant_fit").allowed
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda w: w.update(session_uuid="other-session"),
+        lambda w: w.update(driver="moza"),
+        lambda w: w.update(clean_run=False),
+        lambda w: w["report"].update(ok=False),
+        lambda w: w["report"].update(session_uuid="other-session"),
+        lambda w: w["report"]["drive"].update(recoveries=1),
+        lambda w: w["report"]["drive"].update(sim_dead=True),
+        lambda w: w["report"]["drive"].update(session_replaced=True),
+        lambda w: w.update(timed_laps=[]),
+        lambda w: w["app_install"].update(installed_digest="0" * 64),
+        lambda w: w["archives"][0].update(source="imported"),
+        lambda w: w["archives"][0].update(import_format="moza_tracecore_view_v1"),
+        lambda w: w["archives"][0].update(payload_sha256="0" * 64),
+        lambda w: w["archives"][0].update(source_sha256="0" * 64),
+        lambda w: w["archives"][0]["identity"].update(lap_uuid="other-lap"),
+    ],
+)
+def test_native_witness_fields_are_enforced_even_with_a_recomputed_hash(tmp_path, ledger, change):
+    path, _ = register_native_test(tmp_path)
+    data = json.loads(ledger.read_bytes())
+    item = data["entries"][0]["qualification"]["evidence"][0]
+    change(item["witness"])
+    encoded = json.dumps(item["witness"], sort_keys=True, separators=(",", ":"), allow_nan=False)
+    item["sha256"] = hashlib.sha256(encoded.encode()).hexdigest()
+    ledger.write_text(json.dumps(data), encoding="utf-8")
+    decision = qualify_archive(json.loads(path.read_bytes()), use="plant_fit")
+    assert not decision.allowed and decision.reason == "attribution_store_invalid"
+
+
+def test_changed_native_witness_without_rehash_fails_closed(tmp_path, ledger):
+    path, _ = register_native_test(tmp_path)
+    data = json.loads(ledger.read_bytes())
+    data["entries"][0]["qualification"]["evidence"][0]["witness"]["driver"] = "handshake"
+    ledger.write_text(json.dumps(data), encoding="utf-8")
+    assert (
+        qualify_archive(json.loads(path.read_bytes()), use="plant_fit").reason
+        == "attribution_store_invalid"
+    )
+
+
+@pytest.mark.parametrize(
+    "report_change,app_change",
+    [
+        (lambda r: r.update(ok=False), None),
+        (lambda r: r["drive"].update(recoveries=1), None),
+        (lambda r: r["drive"].update(session_replaced=True), None),
+        (None, lambda a: a.update(status="mismatch")),
+    ],
+)
+def test_rejected_native_run_still_gets_restrictive_ai_attribution(
+    tmp_path, report_change, app_change
+):
+    path, _ = register_native_test(tmp_path, report_change=report_change, app_change=app_change)
+    record = json.loads(path.read_bytes())
+    for use in USES - {"analysis"}:
+        decision = qualify_archive(record, use=use, expected_combo=archive_combo(record))
+        assert not decision.allowed and decision.authority == "ai"
+
+
+@pytest.mark.parametrize("field,value", [("source", "imported"), ("import_format", "motec_csv")])
+def test_native_producer_cannot_opt_imported_data_in(tmp_path, ledger, field, value):
+    record = archive()
+    record[field] = value
+    before = ledger.read_bytes()
+    with pytest.raises(AttributionError, match="native_harness_(source|schema)_required"):
+        register_native_test(tmp_path, record)
+    assert ledger.read_bytes() == before
+
+
+def test_native_producer_requires_exact_observed_session_and_lap(tmp_path, ledger):
+    before = ledger.read_bytes()
+    with pytest.raises(AttributionError, match="native_harness_report_identity_mismatch"):
+        register_native_test(
+            tmp_path, report_change=lambda r: r.update(session_uuid="other-session")
+        )
+    assert ledger.read_bytes() == before
+
+
+def test_native_plant_opt_in_defaults_off():
+    from tools.ac_harness.auto_drive import _build_arg_parser
+
+    parser = _build_arg_parser()
+    assert not parser.parse_args(["--track", "synthetic"]).native_ai_plant_fit
+    assert parser.parse_args(["--track", "synthetic", "--native-ai-plant-fit"]).native_ai_plant_fit
+
+
+def test_incomplete_native_archive_window_is_attributed_but_not_fit(tmp_path):
+    path, _ = register_native_test(
+        tmp_path,
+        report_change=lambda report: report["timed_laps"].append({"lap_n": 3, "lap_ms": 61000}),
+    )
+    decision = qualify_archive(json.loads(path.read_bytes()), use="plant_fit")
+    assert not decision.allowed and decision.authority == "ai"
 
 
 def test_original_native_and_direct_dict_follow_same_restriction(tmp_path):

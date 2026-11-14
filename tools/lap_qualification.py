@@ -4,6 +4,7 @@ This is a boundary policy, never a telemetry-tick operation. A missing default
 ledger preserves legacy behavior without certifying a human driver. An explicitly
 configured unavailable ledger fails closed. Evidence can restrict an immutable
 native archive; registration cannot certify human control or promote it live.
+The explicit #529 native-control witness may permit plant fitting only.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ AUTHORITIES = frozenset({"human", "ai", "shared", "unknown"})
 # Native archive acceleration channels use G; importing a channel still requires
 # bound measured-unit evidence and does not inherit eligibility from this constant.
 NATIVE_ACCELERATION_UNIT = "G"
+NATIVE_HARNESS_ORIGIN = "ac_harness_native_control_v1"
 _IMPORT_FORMATS = frozenset({"motec_csv", "track_titan_reference_v1", "moza_tracecore_view_v1"})
 _CONTEXT_USES = frozenset({"map", "live_reference", "reference_comparison"})
 _UNITS = {
@@ -245,7 +247,16 @@ def _validate_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
             not isinstance(uses, dict)
             or set(uses) - USES
             or any(type(v) is not bool for v in uses.values())
-            or any(v for key, v in uses.items() if key != "analysis")
+            or any(v for key, v in uses.items() if key not in {"analysis", "plant_fit"})
+            or (
+                uses.get("plant_fit") is True
+                and not native_harness_fit_evidence(
+                    envelope,
+                    identity=identity,
+                    payload_digest=entry["payload_sha256"],
+                    source_digest=entry["source_sha256"],
+                )
+            )
         ):
             raise AttributionError("attribution_store_invalid")
         evidence = envelope.get("evidence")
@@ -268,6 +279,120 @@ def _is_hash(value: Any) -> bool:
     return (
         isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
     )
+
+
+def native_harness_fit_evidence(
+    envelope: Mapping[str, Any],
+    *,
+    identity: Mapping[str, Any],
+    payload_digest: str,
+    source_digest: str | None = None,
+) -> bool:
+    """The sole AI plant-fit exception: an exact, clean native-control witness.
+
+    This never grants a human/reference use or broadens an older ledger entry.
+    The producer's witness is embedded so downstream readers verify its hash and
+    identity without depending on a mutable report or another state store.
+    """
+    uses = _map(envelope.get("supported_uses"))
+    if (
+        envelope.get("authority") != "ai"
+        or envelope.get("origin") != NATIVE_HARNESS_ORIGIN
+        or set(uses) - USES
+        or any(type(value) is not bool for value in uses.values())
+        or uses.get("plant_fit") is not True
+        or any(value is True for key, value in uses.items() if key not in {"analysis", "plant_fit"})
+    ):
+        return False
+    evidence = envelope.get("evidence")
+    if not isinstance(evidence, list):
+        return False
+    for item in evidence:
+        if not isinstance(item, Mapping) or item.get("kind") != "native_harness_plant_fit":
+            continue
+        witness = _map(item.get("witness"))
+        try:
+            encoded = json.dumps(
+                witness, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode("utf-8")
+        except (ValueError, TypeError):
+            continue
+        if item.get("sha256") != hashlib.sha256(encoded).hexdigest():
+            continue
+        app = _map(witness.get("app_install"))
+        report = _map(witness.get("report"))
+        if (
+            type(witness.get("schema_version")) is not int
+            or witness.get("schema_version") != 1
+            or witness.get("driver") not in {"handshake", "alien", "ggv"}
+            or witness.get("clean_run") is not True
+            or not native_harness_report_clean(report, driver=witness.get("driver"))
+            or witness.get("session_uuid") != identity.get("session_uuid")
+            or report.get("session_uuid") != identity.get("session_uuid")
+            or report.get("car_id") != identity.get("car_id")
+            or report.get("track_id") != identity.get("track_id")
+            or app.get("status") != "match"
+            or not _is_hash(app.get("harness_digest"))
+            or app.get("installed_digest") != app.get("harness_digest")
+        ):
+            continue
+        archives = witness.get("archives")
+        timed = witness.get("timed_laps")
+        if not isinstance(archives, list) or not archives or not isinstance(timed, list):
+            continue
+        if any(
+            not isinstance(row, dict)
+            or type(row.get("lap_n")) is not int
+            or type(row.get("lap_ms")) is not int
+            or row["lap_n"] <= 0
+            or row["lap_ms"] <= 0
+            for row in timed
+        ):
+            continue
+        observed = [_map(_map(row).get("identity")) for row in archives]
+        if any(
+            _identity_reasons(row) or row.get("session_uuid") != witness["session_uuid"]
+            for row in observed
+        ):
+            continue
+        if len({row["lap_n"] for row in observed}) != len(observed) or len(
+            {row["lap_uuid"] for row in observed}
+        ) != len(observed):
+            continue
+        if sorted((row["lap_n"], row["lap_ms"]) for row in observed) != sorted(
+            (row["lap_n"], row["lap_ms"]) for row in timed
+        ):
+            continue
+        selected = [row for row in archives if _map(row).get("identity") == dict(identity)]
+        if len(selected) != 1:
+            continue
+        selected = selected[0]
+        if (
+            selected.get("source") == "in_game"
+            and selected.get("import_format") is None
+            and selected.get("payload_sha256") == payload_digest
+            and _is_hash(selected.get("source_sha256"))
+            and (source_digest is None or selected["source_sha256"] == source_digest)
+        ):
+            return True
+    return False
+
+
+def native_harness_report_clean(report: Mapping[str, Any], *, driver: str) -> bool:
+    """Recheck explicit run facts rather than trusting a stored clean-run flag."""
+    drive = _map(report.get("drive"))
+    clean = (
+        report.get("ok") is True
+        and drive.get("drove") is True
+        and drive.get("sim_dead") is False
+        and drive.get("session_replaced") is False
+        and type(drive.get("recoveries")) is int
+        and drive["recoveries"] == 0
+        and drive.get("recovery_capped") is False
+        and isinstance(drive.get("unexpected_sim_pids"), list)
+        and not drive["unexpected_sim_pids"]
+    )
+    return clean and (driver != "handshake" or _map(drive.get("payload")).get("ok") is True)
 
 
 def _same_selected_identity(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
@@ -587,7 +712,20 @@ class ArchiveQualificationSnapshot:
             reasons.append(binding_error)
         if authority not in AUTHORITIES:
             reasons.append("unknown_control_authority")
-        if authority != "human" and use != "analysis":
+        native_fit = (
+            use == "plant_fit"
+            and authority == "ai"
+            and envelope.get("origin") == NATIVE_HARNESS_ORIGIN
+            and binding_error is None
+            and source == "in_game"
+            and record.get("import_format") is None
+            and native_harness_fit_evidence(
+                envelope,
+                identity=archive_identity(record),
+                payload_digest=self._provenance[1] or payload_sha256(record),
+            )
+        )
+        if authority != "human" and use != "analysis" and not native_fit:
             reasons.append(f"control_authority_not_human:{authority}")
         evidence = envelope.get("evidence")
         if authority == "human" and not any(
@@ -696,7 +834,18 @@ def restricted_lap_identities(*, use: str) -> list[dict[str, Any]]:
         dict(entry["identity"])
         for entry in entries
         if (
-            _map(entry["qualification"]).get("authority") != "human"
+            (
+                _map(entry["qualification"]).get("authority") != "human"
+                and not (
+                    use == "plant_fit"
+                    and native_harness_fit_evidence(
+                        entry["qualification"],
+                        identity=entry["identity"],
+                        payload_digest=entry["payload_sha256"],
+                        source_digest=entry["source_sha256"],
+                    )
+                )
+            )
             or _map(_map(entry["qualification"]).get("supported_uses")).get(use) is not True
         )
     ]
@@ -708,7 +857,7 @@ def register_attribution(
     *,
     ledger_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Append one restrictive fact atomically, rejecting conflicts/concurrent writers."""
+    """Append AI facts atomically; only evidenced native control may grant plant use."""
     if not isinstance(qualification, Mapping):
         raise AttributionError("qualification_root_invalid")
     raw = _stable_bytes(Path(archive_path))
@@ -721,7 +870,21 @@ def register_attribution(
     if qualification.get("authority") not in {"ai", "shared", "unknown"}:
         raise AttributionError("registration_cannot_certify_human_control")
     uses = _map(qualification.get("supported_uses"))
-    if any(value is True for key, value in uses.items() if key != "analysis"):
+    native_fit = (
+        record.get("source") == "in_game"
+        and record.get("import_format") is None
+        and native_harness_fit_evidence(
+            qualification,
+            identity=archive_identity(record),
+            payload_digest=payload_sha256(record),
+            source_digest=hashlib.sha256(raw).hexdigest(),
+        )
+    )
+    if any(
+        value is True
+        for key, value in uses.items()
+        if key != "analysis" and not (key == "plant_fit" and native_fit)
+    ):
         raise AttributionError("registration_cannot_promote_production_use")
     evidence = qualification.get("evidence")
     if (
