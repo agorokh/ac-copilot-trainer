@@ -31,7 +31,8 @@ operator-attended bench session has not run and 0 of 1 rig sessions is used. Do 
 
 ## Evidence, and what it does not show
 
-- Offline scorecard, run read-only on the rig at commits `987659cc` and `def723ab`: 0 certified
+- Offline scorecard, run read-only on the rig at commits `987659cc`, `def723ab` and `f85bfcd0`
+  (the final code): 0 certified
   of the 156 archives still present from the 174 named laps; 18 have rotated out and were not
   evaluated; 0 of 175 across the 193-entry ledger. The ledger hash and archive listing were
   identical before and after. This is a rejection-only result by construction.
