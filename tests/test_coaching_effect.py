@@ -107,6 +107,11 @@ def test_uncommitted_and_unmeasured_approaches_are_armed_but_not_usable():
         if event["event"] == "outcome":
             event["targeted_error"] = None
     assert not any(effect.is_usable(a) for a in effect.load_session(events)["approaches"])
+    # Committed by the ledger but dropped by the runtime (off-pace reference): no cue was heard.
+    events = [e for e in _journal("s2") if e["event"] != "emitted"]
+    session = effect.load_session(events)
+    assert all(a["committed"] and not a["emitted"] for a in session["approaches"])
+    assert not any(effect.is_usable(a) for a in session["approaches"])
 
 
 def test_variance_is_reported_per_root_within_corner():

@@ -85,12 +85,16 @@ def load_session(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def is_usable(approach: Mapping[str, Any]) -> bool:
-    """An approach stage 1 could randomize and score: the ledger committed a cue for it and the
+    """An approach stage 1 could randomize and score: the runtime emitted a cue for it and the
     pass that followed has a measured, finite targeted-error magnitude.
+
+    A commit the runtime then dropped (reference off pace) is not usable: no cue was delivered,
+    so there is nothing to withhold.
     """
     outcome = approach.get("outcome")
     return (
         approach.get("committed") is True
+        and approach.get("emitted") is True
         and isinstance(outcome, Mapping)
         and outcome.get("pass_measured") is True
         and _finite(outcome.get("targeted_error")) is not None
@@ -424,7 +428,7 @@ def feasibility_report(
 ASSUMPTIONS = [
     "No effect is estimated. Journals are 'as delivered': every committed approach was cued, "
     "so the effect is simulated on top of observed variation.",
-    "Unit of randomization is one usable ARMED approach: the ledger committed a cue and the "
+    "Unit of randomization is one usable ARMED approach: the runtime emitted a cue and the "
     "following pass has a measured targeted-error magnitude. Assignment is independent "
     "speak/withhold at p = 0.5.",
     "The observed pass-to-pass distribution of targeted error, which comes from cued passes, "
