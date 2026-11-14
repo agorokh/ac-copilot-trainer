@@ -699,6 +699,11 @@ def bench_verdict(
     }
     if false_certifications:
         return {"verdict": "FAIL", "reasons": ["non_human_lap_certified"], **summary}
+    if any(
+        result.get("verified") is True and not _is_hash(result.get("witness_sha256"))
+        for result in results
+    ):
+        return {"verdict": "FAIL", "reasons": ["certification_without_hash_binding"], **summary}
     reasons = []
     if unlabelled:
         reasons.append("unlabelled_results")

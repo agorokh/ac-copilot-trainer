@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.human_attestation_helpers import certified_envelope, native_record
 from tools.ac_harness.ggv_profile import observe_lap_tyre_state
 from tools.ai_sidecar.driver_profile import (
     ProfileLoadError,
@@ -19,16 +20,21 @@ from tools.ai_sidecar.driver_profile import (
 from tools.lap_archive_export import LapArchiveExportError, load_lap_archive
 from tools.lap_qualification import (
     ATTRIBUTIONS_ENV,
+    HUMAN_ATTESTATION_ENV,
     USES,
     AttributionError,
     _stable_bytes,
     archive_combo,
+    archive_identity,
     build_qualification,
     default_attribution_path,
     duplicate_identity_reasons,
+    human_witness_reasons,
     main,
+    payload_sha256,
     qualify_archive,
     register_attribution,
+    register_human_attestation,
     restricted_lap_identities,
 )
 
@@ -729,3 +735,143 @@ def test_registration_refuses_malformed_envelope_before_publishing(tmp_path, led
     with pytest.raises(AttributionError, match="attribution_store_invalid"):
         register_attribution(write_native(tmp_path, record), envelope)
     assert ledger.read_bytes() == before
+
+
+# -- #988 capture-time human-control attestation: the narrow human-authority path ------
+@pytest.fixture
+def attestation_on(monkeypatch):
+    monkeypatch.setenv(HUMAN_ATTESTATION_ENV, "1")
+
+
+def _rehash(envelope):
+    witness = envelope["evidence"][0]["witness"]
+    encoded = json.dumps(witness, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    envelope["evidence"][0]["sha256"] = hashlib.sha256(encoded).hexdigest()
+    return envelope
+
+
+def test_attested_lap_is_human_for_progression_with_payload_bound_evidence(
+    tmp_path, ledger, attestation_on
+):
+    record = native_record()
+    path = write_native(tmp_path, record)
+    raw = path.read_bytes()
+    assert qualify_archive(record, use="human_progression").authority == "legacy_unknown"
+    envelope = certified_envelope(record)
+    assert register_human_attestation(path, envelope)["registered"] is True
+    assert path.read_bytes() == raw
+    decision = qualify_archive(json.loads(raw), use="human_progression")
+    assert decision.allowed and decision.managed and decision.authority == "human"
+    [entry] = json.loads(ledger.read_text(encoding="utf-8"))["entries"]
+    witness = entry["qualification"]["evidence"][0]["witness"]
+    assert entry["payload_sha256"] == payload_sha256(record) == witness["archive"]["payload_sha256"]
+    assert entry["source_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert witness["archive"]["source_sha256"] == entry["source_sha256"]
+    combo = ("synthetic-car", "synthetic-track", None)
+    for use in USES - {"analysis", "human_progression"}:
+        assert not qualify_archive(record, use=use, expected_combo=combo).allowed
+    # Any payload change, including the PB flag, drops the lap off the human path.
+    edited = copy.deepcopy(record)
+    edited["lap"]["is_pb"] = False
+    denied = qualify_archive(edited, use="human_progression")
+    assert not denied.allowed and denied.reason == "attribution_payload_mismatch"
+
+
+def test_human_attestation_registration_defaults_off_and_is_revocable(
+    tmp_path, ledger, monkeypatch
+):
+    record = native_record()
+    path = write_native(tmp_path, record)
+    monkeypatch.setenv(HUMAN_ATTESTATION_ENV, "1")
+    envelope = certified_envelope(record)
+    monkeypatch.delenv(HUMAN_ATTESTATION_ENV)
+    before = ledger.read_bytes()
+    with pytest.raises(AttributionError, match="human_control_attestation_disabled"):
+        register_human_attestation(path, envelope)
+    assert ledger.read_bytes() == before
+    monkeypatch.setenv(HUMAN_ATTESTATION_ENV, "1")
+    register_human_attestation(path, envelope)
+    monkeypatch.delenv(HUMAN_ATTESTATION_ENV)
+    denied = qualify_archive(record, use="human_progression")
+    assert not denied.allowed and denied.reason == "human_control_attestation_disabled"
+    assert qualify_archive(record, use="analysis").allowed
+    assert restricted_lap_identities(use="human_progression") == [archive_identity(record)]
+    assert restricted_lap_identities(use="analysis") == []
+
+
+def test_human_attestation_never_replaces_or_promotes_an_existing_entry(
+    tmp_path, ledger, attestation_on
+):
+    record = native_record()
+    path = write_native(tmp_path, record)
+    envelope = certified_envelope(record)
+    register_attribution(path, assessment(record, authority="ai"))
+    before = ledger.read_bytes()
+    with pytest.raises(AttributionError, match="conflicting_attribution_identity"):
+        register_human_attestation(path, envelope)
+    assert ledger.read_bytes() == before
+    assert qualify_archive(record, use="human_progression").authority == "ai"
+    with pytest.raises(AttributionError, match="registration_cannot_certify_human_control"):
+        register_attribution(write_native(tmp_path, record), envelope)
+
+
+@pytest.mark.parametrize(
+    "mutate,reason",
+    [
+        (lambda w: w["control_map"].update(present_count=40), "control_map_present"),
+        (lambda w: w["control_map"].update(error_count=1), "control_map_probe_error"),
+        (lambda w: w["control_map"].update(max_gap_ms=900), "control_map_probe_gap"),
+        (lambda w: w["control_map"].update(sections=[]), "control_map_probe_missing"),
+        (lambda w: w["native_ai"].update(ai_controlled_count=1), "native_ai_controlled"),
+        (lambda w: w["vendor_practice"].update(matched_laps=2), "vendor_join_ambiguous"),
+        (lambda w: w["vendor_practice"]["lap"].update(ai_intervened=True), "vendor_ai_intervened"),
+        (lambda w: w.update(vendor_practice=None), "vendor_record_missing"),
+        (lambda w: w.update(declaration=None), "declaration_missing"),
+        (lambda w: w["declaration"].update(surface="keyboard"), "declaration_missing"),
+        (lambda w: w["window"].update(start_ms=w["window"]["start_ms"] + 9000), "attestation_lap"),
+        (lambda w: w["archive"].update(payload_sha256="0" * 64), "attestation_payload_mismatch"),
+        (lambda w: w.update(producer="another_producer"), "attestation_producer_mismatch"),
+        (lambda w: w.update(schema_version=2), "attestation_schema_unsupported"),
+    ],
+)
+def test_mid_lap_ai_ambiguous_join_or_missing_signal_cannot_reach_the_human_path(
+    tmp_path, ledger, attestation_on, mutate, reason
+):
+    record = native_record()
+    path = write_native(tmp_path, record)
+    envelope = certified_envelope(record)
+    mutate(envelope["evidence"][0]["witness"])
+    reasons = human_witness_reasons(
+        envelope["evidence"][0]["witness"],
+        identity=archive_identity(record),
+        payload_digest=payload_sha256(record),
+    )
+    assert any(item.startswith(reason) for item in reasons), reasons
+    before = ledger.read_bytes()
+    for candidate in (envelope, _rehash(copy.deepcopy(envelope))):
+        with pytest.raises(AttributionError, match="human_control_evidence_invalid"):
+            register_human_attestation(path, candidate)
+        embedded = copy.deepcopy(record)
+        embedded["qualification"] = candidate
+        decision = qualify_archive(embedded, use="human_progression")
+        assert not decision.allowed and "human_control_evidence_invalid" in decision.reasons
+    assert ledger.read_bytes() == before
+
+
+def test_hand_written_human_ledger_entry_without_a_witness_is_an_invalid_store(
+    tmp_path, ledger, attestation_on
+):
+    record = native_record()
+    path = write_native(tmp_path, record)
+    forged = assessment(record, authority="human", promoted=True)
+    entry = {
+        "identity": archive_identity(record),
+        "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "payload_sha256": payload_sha256(record),
+        "qualification": forged,
+    }
+    ledger.write_text(json.dumps({"schema_version": 1, "entries": [entry]}), encoding="utf-8")
+    decision = qualify_archive(record, use="human_progression")
+    assert not decision.allowed and decision.reason == "attribution_store_invalid"
+    with pytest.raises(AttributionError, match="human_control_evidence_invalid"):
+        register_human_attestation(path, forged)

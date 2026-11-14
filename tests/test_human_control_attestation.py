@@ -655,7 +655,11 @@ def _bench(human_certified=6, false_arm=None, **arm_counts):
             laps.append({"session_uuid": "bench", "lap_n": lap_n, "arm": arm})
             verified = (arm == "human" and index < human_certified) or arm == false_arm
             results.append(
-                {"identity": {"session_uuid": "bench", "lap_n": lap_n}, "verified": verified}
+                {
+                    "identity": {"session_uuid": "bench", "lap_n": lap_n},
+                    "verified": verified,
+                    "witness_sha256": EVIDENCE_HASH if verified else None,
+                }
             )
     return {"vendor_record_available": True, "laps": laps}, results
 
@@ -680,11 +684,20 @@ def test_bench_verdict_applies_the_fixed_acceptance_rule():
         result = bench_verdict(*_bench(**change))
         assert result["verdict"] == "INCONCLUSIVE" and reason in result["reasons"]
     manifest, results = _bench()
+    results[0]["witness_sha256"] = None
+    assert bench_verdict(manifest, results)["reasons"] == ["certification_without_hash_binding"]
+    manifest, results = _bench()
     manifest["vendor_record_available"] = False
     assert bench_verdict(manifest, results)["reasons"] == ["vendor_record_unavailable_for_session"]
     manifest, results = _bench()
     assert bench_verdict(manifest, results[:-1])["verdict"] == "INCONCLUSIVE"
-    results.append({"identity": {"session_uuid": "bench", "lap_n": 99}, "verified": True})
+    results.append(
+        {
+            "identity": {"session_uuid": "bench", "lap_n": 99},
+            "verified": True,
+            "witness_sha256": EVIDENCE_HASH,
+        }
+    )
     assert "unlabelled_results" in bench_verdict(manifest, results)["reasons"]
     manifest["laps"].append(dict(manifest["laps"][0]))
     assert bench_verdict(manifest, results)["reasons"] == ["manifest_duplicate_lap"]

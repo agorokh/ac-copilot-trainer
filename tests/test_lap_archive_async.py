@@ -594,3 +594,75 @@ def test_flush_drains_whole_queue_to_full_archives(tmp_path: pathlib.Path) -> No
     assert rt.eval("_queue_len()") == 0, "flush must drain ALL queued jobs, not just the first"
     assert not list(tmp_path.rglob("*.tmp"))
     assert len(list(tmp_path.rglob("lap_*.json"))) == 3  # lap 7 + lap 8 + lap 9
+
+
+def test_native_control_authority_counts_survive_downsampling_and_the_real_writer(tmp_path):
+    """#988: a short mid-lap AI interval must not vanish with a dropped trace row."""
+    rt = _runtime(tmp_path)
+    path = rt.execute("""
+      local t=require('telemetry').new()
+      t:beginLapClock(0,true)
+      local car={speedKmh=100,position={x=1,y=0,z=1},wheelsOutside=0,isUserControlled=true}
+      for i=1,3001 do
+        car.isAIControlled=(i==2 or i==3)
+        car.isUserControlled=not car.isAIControlled
+        car.splinePosition=(i-1)/3000
+        t:update(.01,car,{gameTime=i*.01})
+      end
+      local trace,offTrack,control=t:finalizeLapTrace(true)
+      assert(#trace==2000 and offTrack.sample_count==3001)
+      local job=assert(require('lap_archive').createWriteJob({session_uuid='control',
+        lap_n=1,lap_ms=30010,car={},sim={},trace=trace,offTrackObservation=offTrack,
+        controlObservation=control},50))
+      for i=1,100 do
+        local done,ok,path=job:step(128)
+        if done then assert(ok,path); return path end
+      end
+      error('bounded writer did not finish')
+    """)
+    record = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    assert record["trace"]["control_observation"] == {
+        "schema_version": 1,
+        "source": "car.isAIControlled",
+        "complete": True,
+        "sample_count": 3001,
+        "unknown_count": 0,
+        "ai_controlled_count": 2,
+        "user_controlled_count": 2999,
+    }
+    assert record["trace"]["off_track_observation"]["sample_count"] == 3001
+
+
+def test_unread_control_authority_is_unknown_and_never_zero_filled(tmp_path):
+    rt = _runtime(tmp_path)
+    record = _lua_to_py(
+        rt.execute("""
+      local t=require('telemetry').new()
+      t:beginLapClock(0,false)
+      local car={speedKmh=100,position={x=1,y=0,z=1},isAIControlled=false}
+      for i=1,3 do
+        if i==3 then car.isUserControlled=true end
+        car.splinePosition=i/3
+        t:update(.05,car,{gameTime=i*.05})
+      end
+      local trace,_,control=t:finalizeLapTrace(true)
+      local one=t:finalizeLapTrace()
+      assert(type(one)=='table')
+      local archive=require('lap_archive')
+      local legacy=archive.buildRecord({session_uuid='legacy',lap_n=1,lap_ms=1000,car={},sim={},
+        trace=trace})
+      assert(legacy.trace.control_observation==nil)
+      for _,bad in ipairs({{},{schema_version=1,source='car.isAIControlled',complete=true,
+          sample_count=1,unknown_count=0,ai_controlled_count=2,user_controlled_count=0}}) do
+        local rejected=archive.buildRecord({session_uuid='bad',lap_n=1,lap_ms=1000,car={},sim={},
+          trace=trace,controlObservation=bad})
+        assert(rejected.trace.control_observation==nil)
+      end
+      return archive.buildRecord({session_uuid='partial',lap_n=1,lap_ms=1000,car={},sim={},
+        trace=trace,controlObservation=control})
+    """)
+    )
+    observation = record["trace"]["control_observation"]
+    assert observation["complete"] is False
+    assert observation["sample_count"] == 3 and observation["unknown_count"] == 2
+    assert observation["ai_controlled_count"] == 0 and observation["user_controlled_count"] == 1
