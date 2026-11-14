@@ -500,6 +500,9 @@ certify its own combo. Stale/disconnected or changed identity silences and parks
 study. Duplicate live identity does not reload the reference or restart audio. One
 practice identity is admitted per explicit sidecar configuration; reconnecting or
 changing the native session cannot silently start another block or reset its cap.
+When stopping an owned packaged sidecar, Game Point verifies exit of the bootloader
+and its captured descendants. A failed stop stays visible and blocks replacement;
+an adopted sidecar remains outside that teardown authority.
 
 Practice uses the existing driver's next curriculum stage and one canonical corner.
 It requires a qualified human reference for the exact combo, condition-indexed

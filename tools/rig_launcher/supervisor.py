@@ -127,6 +127,62 @@ def _subprocess_kwargs(**kwargs: Any) -> dict[str, Any]:
     return kwargs
 
 
+def _windows_process_parents() -> dict[int, int]:
+    """Strict native snapshot of PID -> parent PID, as in the harness Toolhelp probes."""
+    import ctypes
+    from ctypes import wintypes
+
+    class ProcessEntry(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+    kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    for name in ("Process32FirstW", "Process32NextW"):
+        function = getattr(kernel, name)
+        function.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry))
+        function.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel.CloseHandle.restype = wintypes.BOOL
+    snapshot = kernel.CreateToolhelp32Snapshot(0x00000002, 0)
+    if snapshot == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        entry = ProcessEntry()
+        entry.dwSize = ctypes.sizeof(entry)
+        if not kernel.Process32FirstW(snapshot, ctypes.byref(entry)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        parents = {}
+        while True:
+            parents[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+            ctypes.set_last_error(0)
+            if not kernel.Process32NextW(snapshot, ctypes.byref(entry)):
+                error = ctypes.get_last_error()
+                if error not in (0, 18):  # ERROR_NO_MORE_FILES
+                    raise ctypes.WinError(error)
+                return parents
+    finally:
+        kernel.CloseHandle(snapshot)
+
+
+def _bind_windows_process(pid: int) -> Any:
+    # Reuse the harness's retained kernel handle rather than inventing PID-only kill logic.
+    from tools.ac_harness.rig_watchdog import WindowsProcess
+
+    return WindowsProcess(pid, can_terminate=True)
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -478,6 +534,9 @@ class GamePointSupervisor:
         self._python = python_executable or sys.executable
         self._frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
         self._sidecar_process: Any | None = None
+        self._sidecar_family: dict[int, Any] = {}
+        self._sidecar_family_identities: dict[int, Any] = {}
+        self._sidecar_stop_error = ""
         self._coach_drills_restart_pending = False
         self._resilient_process: Any | None = None
         self._resilient_log_handle: Any | None = None
@@ -844,6 +903,8 @@ class GamePointSupervisor:
             detail = "; ".join(check.detail or check.name for check in blocking)
             return ProbeResult("sidecar", False, "blocked", detail)
         with self._proc_lock:
+            if self._sidecar_stop_error:
+                return ProbeResult("sidecar", False, "stop_failed", self._sidecar_stop_error)
             if self._sidecar_process is not None and self._sidecar_process.poll() is None:
                 return ProbeResult("sidecar", True, "running", f"pid={self._sidecar_process.pid}")
             if self._sidecar_process is not None and self._sidecar_process.poll() is not None:
@@ -1234,6 +1295,8 @@ class GamePointSupervisor:
             if proc is None:
                 self._close_log_handles()
                 return ProbeResult("sidecar", True, "stopped")
+            if self._frozen and sys.platform == "win32":
+                return self._stop_frozen_sidecar(proc, timeout=timeout)
             if proc.poll() is not None:
                 self._sidecar_process = None
                 self._close_log_handles()
@@ -1250,6 +1313,91 @@ class GamePointSupervisor:
             self._close_log_handles()
             return ProbeResult("sidecar", True, "stopped")
 
+    def _capture_frozen_sidecar_family(self, proc: Any) -> None:
+        """Bind the owned bootloader and descendants BEFORE the parent can be terminated."""
+        if proc.pid not in self._sidecar_family:
+            root = _bind_windows_process(proc.pid)
+            try:
+                identity = root.identity()
+                expected = os.path.normcase(os.path.abspath(self._python))
+                if os.path.normcase(os.path.abspath(identity.exe)) != expected:
+                    raise OSError(
+                        "owned frozen sidecar image does not match the spawned executable"
+                    )
+            except Exception:
+                root.close()
+                raise
+            self._sidecar_family[proc.pid] = root
+            self._sidecar_family_identities[proc.pid] = identity
+        parents = _windows_process_parents()
+        pending = list(self._sidecar_family)
+        while pending:
+            parent_pid = pending.pop(0)
+            parent_identity = self._sidecar_family_identities[parent_pid]
+            for pid, parent in parents.items():
+                if parent != parent_pid or pid in self._sidecar_family:
+                    continue
+                child = _bind_windows_process(pid)
+                try:
+                    identity = child.identity()
+                    if identity.created_filetime < parent_identity.created_filetime:
+                        # A stale parent PID from another process generation is not ownership.
+                        raise OSError(
+                            f"cannot prove frozen sidecar descendant ownership: pid={pid}"
+                        )
+                except Exception:
+                    child.close()
+                    raise
+                self._sidecar_family[pid] = child
+                self._sidecar_family_identities[pid] = identity
+                pending.append(pid)
+
+    def _stop_frozen_sidecar(self, proc: Any, *, timeout: float) -> ProbeResult:
+        try:
+            self._capture_frozen_sidecar_family(proc)
+        except Exception as exc:  # noqa: BLE001 - unknown ownership must not kill foreign audio/UI
+            self._sidecar_stop_error = f"could not capture owned frozen process family: {exc}"
+            return ProbeResult("sidecar", False, "stop_failed", self._sidecar_stop_error)
+        errors = []
+        if proc.poll() is None:
+            try:
+                self._run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    **_subprocess_kwargs(capture_output=True, text=True, timeout=timeout),
+                )
+            except Exception as exc:  # noqa: BLE001 - retained handles provide a narrow fallback
+                errors.append(str(exc))
+        # taskkill success is not exit proof. A failed invocation, parent-only exit, or an
+        # already-exited bootloader still leaves the exact captured child handles available.
+        for process in reversed(list(self._sidecar_family.values())):
+            try:
+                if not process.exited():
+                    process.terminate()
+            except Exception as exc:  # noqa: BLE001 - try every owned member before reporting
+                errors.append(str(exc))
+        deadline = time.monotonic() + max(0.0, timeout)
+        try:
+            while True:
+                remaining = [
+                    pid for pid, member in self._sidecar_family.items() if not member.exited()
+                ]
+                if not remaining and proc.poll() is not None:
+                    break
+                if time.monotonic() >= deadline:
+                    raise OSError(f"owned frozen sidecar processes still alive: {remaining}")
+                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+        except Exception as exc:  # noqa: BLE001 - retain handles and ownership for a retry
+            self._sidecar_stop_error = "; ".join([*errors, str(exc)])
+            return ProbeResult("sidecar", False, "stop_failed", self._sidecar_stop_error)
+        for process in self._sidecar_family.values():
+            process.close()
+        self._sidecar_family.clear()
+        self._sidecar_family_identities.clear()
+        self._sidecar_stop_error = ""
+        self._sidecar_process = None
+        self._close_log_handles()
+        return ProbeResult("sidecar", True, "stopped")
+
     def poll_status(self, *, start_simhub: bool | None = None) -> GamePointStatus:
         """Snapshot every probe and persist status.json.
 
@@ -1264,7 +1412,7 @@ class GamePointSupervisor:
         # Health first: the `voice_endpoint` check (#672 Part A) needs the sidecar's live
         # device name, which only the health payload carries.
         checks = self.preflight(health_payload)
-        if health.ok:
+        if health.ok and sidecar.state != "stop_failed":
             sidecar = health
         screen = _screen_from_health(health)
         status = GamePointStatus(
@@ -1786,6 +1934,8 @@ class GamePointSupervisor:
         # swap it out between the None-check and the .poll()/.pid reads (#568 review).
         with self._proc_lock:
             proc = self._sidecar_process
+            if self._sidecar_stop_error:
+                return ProbeResult("sidecar", False, "stop_failed", self._sidecar_stop_error)
             if proc is None:
                 return ProbeResult("sidecar", False, "stopped")
             code = proc.poll()
