@@ -36,6 +36,11 @@ RIG_ACTIONS = {
     "shakers.level.decrease",
     "shakers.mute.toggle",
 }
+# Operator declaration for capture-time human-control attestation (#988). Buttons only:
+# a knob detent must never declare. Inert unless the attestation opt-in and its journal
+# are configured on the PC; tests pin these names to the producer's.
+ATTEST_ACTIONS = {"human_control.declare", "human_control.clear"}
+ATTEST_CONTROLS = ("button_1", "button_2", "button_3", "knob_press")
 
 
 @dataclass(frozen=True)
@@ -121,6 +126,13 @@ def _binding(value: object) -> Binding:
         and data["name"] in RIG_ACTIONS
     ):
         return Binding("rig", name=data["name"])
+    if (
+        action == "attest"
+        and set(data) == {"action", "name"}
+        and isinstance(data["name"], str)
+        and data["name"] in ATTEST_ACTIONS
+    ):
+        return Binding("attest", name=data["name"])
     if action == "key" and set(data) == {"action", "keys"}:
         keys = data["keys"]
         if isinstance(keys, list) and 1 <= len(keys) <= 4 and all(isinstance(k, str) for k in keys):
@@ -131,7 +143,9 @@ def _binding(value: object) -> Binding:
                     tuple(k for k in chord if k in MODIFIERS)
                     + tuple(k for k in chord if k not in MODIFIERS),
                 )
-    raise ValueError("binding must be noop, an allowed rig action, or a bounded key chord")
+    raise ValueError(
+        "binding must be noop, an allowed rig or attest action, or a bounded key chord"
+    )
 
 
 def parse_config(value: object) -> Config:
@@ -174,11 +188,17 @@ def parse_config(value: object) -> Config:
             raise ValueError("non-default profiles need a condition")
         if name == default and when:
             raise ValueError("default profile must be unconditional")
+        parsed = tuple(_binding(bindings[c]) for c in CONTROLS)
+        if any(
+            binding.action == "attest" and control not in ATTEST_CONTROLS
+            for control, binding in zip(CONTROLS, parsed, strict=True)
+        ):
+            raise ValueError("attest actions can only be bound to a button press")
         profiles.append(
             Profile(
                 name,
                 tuple(rgb),
-                tuple(_binding(bindings[c]) for c in CONTROLS),
+                parsed,
                 priority,
                 _processes(when["foreground_process"]) if "foreground_process" in when else (),
                 _processes(when["running_process"]) if "running_process" in when else (),

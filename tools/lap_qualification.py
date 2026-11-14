@@ -7,6 +7,11 @@ native archive; registration cannot certify human control or promote it live.
 The explicit #529 native-control witness may permit plant fitting only.
 Prospective operator attestations authorize only explicit live practice context;
 they never become verified-human, PB or general reference evidence.
+The default-off #988 capture-time attestation is the sole verified-human writer:
+it needs every process-level signal positively read and bound to the payload hash,
+and it never relabels a lap that already has a ledger entry, including an
+operator-attested practice lap. The one replacement the ledger allows is
+revocation: a restrictive fact supersedes a #988 human attestation.
 """
 
 from __future__ import annotations
@@ -16,9 +21,11 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import cached_property
 from pathlib import Path
 from typing import Any
@@ -47,6 +54,34 @@ PRACTICE_ORIGIN = "operator_attested_human_control_v1"
 # bound measured-unit evidence and does not inherit eligibility from this constant.
 NATIVE_ACCELERATION_UNIT = "G"
 NATIVE_HARNESS_ORIGIN = "ac_harness_native_control_v1"
+# Capture-time human-control attestation (#988). Default off: unset means no producer
+# output is written and no attested envelope is honoured for a human-only use.
+HUMAN_ATTESTATION_ORIGIN = "human_control_attestation_v1"
+HUMAN_ATTESTATION_ENV = "AC_COPILOT_HUMAN_CONTROL_ATTESTATION"
+HUMAN_ATTESTATION_USES = frozenset({"analysis", "human_progression"})
+# The project autonomous driver's CSP Custom-AI sections for the player car. Both the
+# bare and the explicit session-local name are probed; tests pin them to custom_ai.py.
+HUMAN_ATTESTATION_SECTIONS = (
+    "AcTools.CSP.NewBehaviour.CustomAI.Car0.v0",
+    "AcTools.CSP.NewBehaviour.CustomAI.CarControls0.v0",
+    "Local\\AcTools.CSP.NewBehaviour.CustomAI.Car0.v0",
+    "Local\\AcTools.CSP.NewBehaviour.CustomAI.CarControls0.v0",
+)
+# Positive control: AC's own section must open through the same opener, otherwise an
+# "absent" answer may only mean the probe ran in another Windows session namespace.
+HUMAN_ATTESTATION_REFERENCE_SECTION = "acpmf_physics"
+HUMAN_ATTESTATION_MAX_PROBE_GAP_MS = 500
+HUMAN_ATTESTATION_WINDOW_MARGIN_MS = 5000
+HUMAN_ATTESTATION_DECLARATION_TTL_MS = 20 * 60 * 1000
+HUMAN_ATTESTATION_VENDOR_LAP_TOLERANCE_MS = 1
+HUMAN_ATTESTATION_NATIVE_SOURCE = "car.isAIControlled"
+HUMAN_ATTESTATION_DECLARE_ACTION = "human_control.declare"
+# AC lap time excludes paused time; wall-clock elapsed (1 s resolution at both ends)
+# must agree with it or the capture window no longer brackets the lap.
+HUMAN_ATTESTATION_WALL_CLOCK_TOLERANCE_MS = 2500
+HUMAN_ATTESTATION_MIN_FRAME_HZ = 10
+HUMAN_ATTESTATION_VENDOR_ELIGIBILITY = "eligible"
+_EXPORTED_AT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 _IMPORT_FORMATS = frozenset({"motec_csv", "track_titan_reference_v1", "moza_tracecore_view_v1"})
 _CONTEXT_USES = frozenset({"map", "live_reference", "reference_comparison"})
 _UNITS = {
@@ -262,14 +297,30 @@ def _validate_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
             ):
                 raise AttributionError("attribution_store_invalid")
             continue
-        if not isinstance(authority, str) or authority not in {"ai", "shared", "unknown"}:
+        # Human authority exists in the ledger only as a full #988 attestation; its
+        # structure is checked regardless of the opt-in so disabling never corrupts
+        # the store. Eligibility is still decided at the qualification boundary.
+        attested = authority == "human" and human_control_attestation_evidence(
+            envelope,
+            identity=identity,
+            payload_digest=entry["payload_sha256"],
+            source_digest=entry["source_sha256"],
+        )
+        if not isinstance(authority, str) or (
+            authority not in {"ai", "shared", "unknown"} and not attested
+        ):
             raise AttributionError("attribution_store_invalid")
         uses = envelope.get("supported_uses")
         if (
             not isinstance(uses, dict)
             or set(uses) - USES
             or any(type(v) is not bool for v in uses.values())
-            or any(v for key, v in uses.items() if key not in {"analysis", "plant_fit"})
+            or any(
+                v
+                for key, v in uses.items()
+                if key not in {"analysis", "plant_fit"}
+                and not (attested and key in HUMAN_ATTESTATION_USES)
+            )
             or (
                 uses.get("plant_fit") is True
                 and not native_harness_fit_evidence(
@@ -463,6 +514,296 @@ def native_harness_report_clean(report: Mapping[str, Any], *, driver: str) -> bo
         and not drive["unexpected_sim_pids"]
     )
     return clean and (driver != "handshake" or _map(drive.get("payload")).get("ok") is True)
+
+
+def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate_key")
+        result[key] = value
+    return result
+
+
+def human_attestation_enabled() -> bool:
+    """Default off; only the exact value ``1`` opts in (#988)."""
+    return os.environ.get(HUMAN_ATTESTATION_ENV) == "1"
+
+
+def _count(value: Any) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _utc_ms(value: Any) -> int | None:
+    """Parse the archive writer's second-resolution ``exported_at`` only."""
+    if not isinstance(value, str) or not _EXPORTED_AT.fullmatch(value):
+        return None
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+    return int(parsed.timestamp()) * 1000
+
+
+def human_witness_reasons(
+    witness: Mapping[str, Any],
+    *,
+    identity: Mapping[str, Any],
+    payload_digest: str,
+    source_digest: str | None = None,
+    record: Mapping[str, Any] | None = None,
+) -> list[str]:
+    """Every reason a capture-time witness cannot certify human control (#988).
+
+    Empty means certified. This is the single decision used by both the producer
+    and every later reader, and it rechecks recorded facts instead of a stored
+    verdict. A signal that is missing, unread, stale or ambiguous is a reason; an
+    unreadable probe is never treated as "controller not present".
+    """
+    if not isinstance(witness, Mapping):
+        return ["attestation_witness_missing"]
+    if type(witness.get("schema_version")) is not int or witness.get("schema_version") != 1:
+        return ["attestation_schema_unsupported"]
+    reasons: list[str] = []
+    if witness.get("producer") != HUMAN_ATTESTATION_ORIGIN:
+        reasons.append("attestation_producer_mismatch")
+    archive = _map(witness.get("archive"))
+    if _identity_reasons(identity) or archive.get("identity") != dict(identity):
+        reasons.append("attestation_identity_mismatch")
+    if archive.get("source") != "in_game" or archive.get("import_format") is not None:
+        reasons.append("attestation_source_unsupported")
+    if not _is_hash(payload_digest) or archive.get("payload_sha256") != payload_digest:
+        reasons.append("attestation_payload_mismatch")
+    if not _is_hash(archive.get("source_sha256")) or (
+        source_digest is not None and archive.get("source_sha256") != source_digest
+    ):
+        reasons.append("attestation_source_hash_mismatch")
+    exported_ms = _utc_ms(archive.get("exported_at"))
+    lap_ms = identity.get("lap_ms")
+    window = _map(witness.get("window"))
+    start_ms, end_ms = window.get("start_ms"), window.get("end_ms")
+    if exported_ms is None or type(lap_ms) is not int or lap_ms <= 0:
+        return [*reasons, "attestation_lap_window_unavailable"]
+    # exported_at is truncated to the second and written at the finish boundary.
+    lap_start, lap_end = exported_ms - lap_ms, exported_ms + 1000
+    if (
+        (record is not None and record.get("exported_at") != archive.get("exported_at"))
+        or type(start_ms) is not int
+        or type(end_ms) is not int
+        or start_ms > lap_start - HUMAN_ATTESTATION_WINDOW_MARGIN_MS
+        or end_ms < lap_end + HUMAN_ATTESTATION_WINDOW_MARGIN_MS
+    ):
+        return [*reasons, "attestation_lap_window_mismatch"]
+
+    # Operator declaration: necessary, never sufficient. It must precede the lap,
+    # still be fresh at its end and not have been cleared in between.
+    declaration = _map(witness.get("declaration"))
+    declared_ms = declaration.get("declared_ms")
+    coverage_start = start_ms
+    if (
+        declaration.get("surface") != "rig_controls"
+        or declaration.get("action") != HUMAN_ATTESTATION_DECLARE_ACTION
+        or not _is_hash(declaration.get("journal_sha256"))
+        or type(declared_ms) is not int
+        or not _count(declaration.get("cleared_count"))
+    ):
+        reasons.append("declaration_missing")
+    else:
+        coverage_start = min(start_ms, declared_ms)
+        if declared_ms > lap_start:
+            reasons.append("declaration_after_lap_start")
+        if lap_end - declared_ms > HUMAN_ATTESTATION_DECLARATION_TTL_MS:
+            reasons.append("declaration_stale")
+        if declaration["cleared_count"]:
+            reasons.append("declaration_cleared")
+
+    # Project autonomous driver: the control map must be read absent continuously
+    # from the declaration through the lap, with the positive control readable.
+    control = _map(witness.get("control_map"))
+    counts = [
+        control.get(key)
+        for key in (
+            "sample_count",
+            "present_count",
+            "error_count",
+            "reference_unavailable_count",
+            "max_gap_ms",
+        )
+    ]
+    if (
+        control.get("sections") != list(HUMAN_ATTESTATION_SECTIONS)
+        or control.get("reference_section") != HUMAN_ATTESTATION_REFERENCE_SECTION
+        or not _is_hash(control.get("journal_sha256"))
+        or any(not _count(value) for value in counts)
+        or type(control.get("first_ms")) is not int
+        or type(control.get("last_ms")) is not int
+    ):
+        reasons.append("control_map_probe_missing")
+    else:
+        if control["present_count"]:
+            reasons.append("control_map_present")
+        if control["error_count"]:
+            reasons.append("control_map_probe_error")
+        if control["reference_unavailable_count"]:
+            reasons.append("control_map_reference_unavailable")
+        if (
+            control["sample_count"] < 2
+            or control["first_ms"] > coverage_start
+            or control["last_ms"] < end_ms
+            or control["max_gap_ms"] > HUMAN_ATTESTATION_MAX_PROBE_GAP_MS
+            # The recorded span cannot exceed what that many samples can bridge.
+            or control["max_gap_ms"] * (control["sample_count"] - 1)
+            < control["last_ms"] - control["first_ms"]
+        ):
+            reasons.append("control_map_probe_gap")
+
+    # Native game AI, pause and replay: CSP's per-frame state, summarized before trace
+    # downsampling inside the hash-bound archive itself, plus wall-clock elapsed time.
+    native = _map(witness.get("native_ai"))
+    native_counts = [
+        native.get(key)
+        for key in (
+            "sample_count",
+            "unknown_count",
+            "ai_controlled_count",
+            "user_controlled_count",
+            "not_live_count",
+            "wall_elapsed_s",
+        )
+    ]
+    if (
+        type(native.get("schema_version")) is not int
+        or native.get("schema_version") != 1
+        or native.get("source") != HUMAN_ATTESTATION_NATIVE_SOURCE
+        or type(native.get("complete")) is not bool
+        or any(not _count(value) for value in native_counts)
+    ):
+        reasons.append("native_ai_observation_missing")
+    else:
+        if record is not None and _map(record.get("trace")).get("control_observation") != dict(
+            native
+        ):
+            reasons.append("native_ai_observation_mismatch")
+        if native["complete"] is not True:
+            reasons.append("native_ai_observation_incomplete")
+        if native["sample_count"] * 1000 < lap_ms * HUMAN_ATTESTATION_MIN_FRAME_HZ:
+            reasons.append("native_ai_observation_sparse")
+        if native["unknown_count"]:
+            reasons.append("native_ai_state_unknown")
+        if native["ai_controlled_count"]:
+            reasons.append("native_ai_controlled")
+        if native["user_controlled_count"] != native["sample_count"]:
+            reasons.append("native_user_control_absent")
+        if native["not_live_count"]:
+            reasons.append("native_lap_not_live")
+        if (
+            abs(native["wall_elapsed_s"] * 1000 - lap_ms)
+            > HUMAN_ATTESTATION_WALL_CLOCK_TOLERANCE_MS
+        ):
+            reasons.append("native_lap_wall_clock_mismatch")
+
+    # Vendor AI driving: only the vendor's own practice record labels it, and it
+    # shares no session identifier, so the join is session window + combo + lap
+    # number + duration, decided from the latest read of a record saved after the
+    # finish. A record saved earlier cannot contain this lap.
+    vendor = _map(witness.get("vendor_practice"))
+    vendor_times = [vendor.get(key) for key in ("read_ms", "session_started_ms", "saved_ms")]
+    if not _is_hash(vendor.get("record_sha256")) or any(type(v) is not int for v in vendor_times):
+        reasons.append("vendor_record_missing")
+    else:
+        if vendor["read_ms"] < lap_end:
+            reasons.append("vendor_record_stale")
+        # Saved no earlier than the latest possible finish, so it can hold this lap.
+        if vendor["session_started_ms"] > lap_start + 1000 or vendor["saved_ms"] < lap_end:
+            reasons.append("vendor_record_not_covering_lap")
+        if (
+            not _count(vendor.get("covering_reads"))
+            or vendor["covering_reads"] < 1
+            or not _count(vendor.get("disagreeing_reads"))
+            or vendor["disagreeing_reads"]
+        ):
+            reasons.append("vendor_join_ambiguous")
+        key = vendor.get("reference_key")
+        parts = key.split("|") if isinstance(key, str) else []
+        track = identity.get("track_id")
+        track = track.split("/", 1)[0] if isinstance(track, str) else None
+        if len(parts) < 3 or parts[0] != "AC" or not parts[1] or not parts[2]:
+            reasons.append("vendor_combo_unreadable")
+        elif parts[1] != track or parts[2] != identity.get("car_id"):
+            reasons.append("vendor_combo_mismatch")
+        matched = vendor.get("matched_laps")
+        lap = _map(vendor.get("lap"))
+        if not _count(matched) or matched == 0:
+            reasons.append("vendor_lap_unmatched")
+        elif matched > 1:
+            reasons.append("vendor_join_ambiguous")
+        elif (
+            type(lap.get("lap_time_ms")) is not int
+            or abs(lap["lap_time_ms"] - lap_ms) > HUMAN_ATTESTATION_VENDOR_LAP_TOLERANCE_MS
+            or type(lap.get("lap_number")) is not int
+            or lap["lap_number"] != identity.get("lap_n")
+        ):
+            reasons.append("vendor_lap_unmatched")
+        else:
+            if lap.get("ai_intervened") is True or lap.get("eligibility") == "ai-debug-only":
+                reasons.append("vendor_ai_intervened")
+            elif lap.get("ai_intervened") is not False:
+                reasons.append("vendor_ai_label_unreadable")
+            elif lap.get("eligibility") != HUMAN_ATTESTATION_VENDOR_ELIGIBILITY:
+                reasons.append("vendor_lap_not_eligible")
+            if lap.get("complete") is not True or lap.get("finalized") is not True:
+                reasons.append("vendor_lap_incomplete")
+    return list(dict.fromkeys(reasons))
+
+
+def human_control_attestation_evidence(
+    envelope: Mapping[str, Any],
+    *,
+    identity: Mapping[str, Any],
+    payload_digest: str,
+    source_digest: str | None = None,
+    record: Mapping[str, Any] | None = None,
+) -> bool:
+    """The sole persisted human-authority path: one exact capture-time witness (#988).
+
+    Grants human progression and analysis only. The embedded witness is hashed and
+    rechecked here, so a reader never depends on a mutable capture directory.
+    """
+    uses = _map(envelope.get("supported_uses"))
+    if (
+        envelope.get("authority") != "human"
+        or envelope.get("origin") != HUMAN_ATTESTATION_ORIGIN
+        or set(uses) - USES
+        or any(type(value) is not bool for value in uses.values())
+        or any(value for key, value in uses.items() if key not in HUMAN_ATTESTATION_USES)
+    ):
+        return False
+    evidence = envelope.get("evidence")
+    if not isinstance(evidence, list):
+        return False
+    items = [
+        item
+        for item in evidence
+        if isinstance(item, Mapping) and item.get("kind") == "verified_human_control"
+    ]
+    if len(items) != 1:
+        return False
+    witness = _map(items[0].get("witness"))
+    try:
+        encoded = json.dumps(
+            witness, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+    except (ValueError, TypeError):
+        return False
+    return items[0].get("sha256") == hashlib.sha256(encoded).hexdigest() and not (
+        human_witness_reasons(
+            witness,
+            identity=identity,
+            payload_digest=payload_digest,
+            source_digest=source_digest,
+            record=record,
+        )
+    )
 
 
 def _same_selected_identity(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
@@ -809,6 +1150,21 @@ class ArchiveQualificationSnapshot:
             for item in (evidence if isinstance(evidence, list) else [])
         ):
             reasons.append("human_control_evidence_missing")
+        if envelope.get("origin") == HUMAN_ATTESTATION_ORIGIN:
+            # The #988 producer's envelope is honoured only as a complete, exact
+            # witness, and only while the operator keeps the producer enabled.
+            if authority != "human" or (
+                binding_error is None
+                and not human_control_attestation_evidence(
+                    envelope,
+                    identity=archive_identity(record),
+                    payload_digest=self._provenance[1] or payload_sha256(record),
+                    record=record,
+                )
+            ):
+                reasons.append("human_control_evidence_invalid")
+            if use != "analysis" and not human_attestation_enabled():
+                reasons.append("human_control_attestation_disabled")
         if type(record.get("schema_version")) is not int or record.get("schema_version") != 1:
             reasons.append("archive_schema_unsupported")
         if not isinstance(source, str) or source not in {"in_game", "imported"}:
@@ -1066,6 +1422,11 @@ def restricted_lap_identities(*, use: str) -> list[dict[str, Any]]:
                 )
             )
             or _map(_map(entry["qualification"]).get("supported_uses")).get(use) is not True
+            or (
+                _map(entry["qualification"]).get("authority") == "human"
+                and use != "analysis"
+                and not human_attestation_enabled()
+            )
         )
     ]
 
@@ -1115,6 +1476,65 @@ def register_attribution(
         )
     ):
         raise AttributionError("attribution_evidence_missing")
+    return _append_entry(archive_path, raw, record, qualification, ledger_path=ledger_path)
+
+
+def register_human_attestation(
+    archive_path: str | Path,
+    qualification: Mapping[str, Any],
+    *,
+    ledger_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Append one #988 capture-time attestation; the only human-authority writer.
+
+    Default off. The envelope must be the producer's own, carry a witness that
+    still certifies against the archive bytes read here, and target a native lap
+    with no existing ledger entry: a registered AI, shared or unknown fact is
+    never replaced or promoted. ``register_attribution`` still refuses human
+    authority; its only new effect is that a restrictive fact for the exact same
+    lap supersedes (revokes) an attestation written here.
+    """
+    if not human_attestation_enabled():
+        raise AttributionError("human_control_attestation_disabled")
+    if not isinstance(qualification, Mapping):
+        raise AttributionError("qualification_root_invalid")
+    raw = _stable_bytes(Path(archive_path))
+    try:
+        # Stricter than other readers: a duplicate key could shadow a capture fact.
+        record = json.loads(raw, object_pairs_hook=_unique_keys)
+    except (ValueError, RecursionError) as exc:
+        raise AttributionError("archive_unreadable") from exc
+    if not isinstance(record, dict):
+        raise AttributionError("archive_root_invalid")
+    reason = _binding_reason(record, qualification)
+    if reason:
+        raise AttributionError(reason)
+    if record.get("source") != "in_game" or record.get("import_format") is not None:
+        raise AttributionError("human_attestation_source_unsupported")
+    if not human_control_attestation_evidence(
+        qualification,
+        identity=archive_identity(record),
+        payload_digest=payload_sha256(record),
+        source_digest=hashlib.sha256(raw).hexdigest(),
+        record=record,
+    ):
+        raise AttributionError("human_control_evidence_invalid")
+    return _append_entry(archive_path, raw, record, qualification, ledger_path=ledger_path)
+
+
+def _append_entry(
+    archive_path: str | Path,
+    raw: bytes,
+    record: Mapping[str, Any],
+    qualification: Mapping[str, Any],
+    *,
+    ledger_path: str | Path | None,
+) -> dict[str, Any]:
+    """Shared atomic append; a restrictive entry is never replaced or broadened.
+
+    The single replacement is revocation of a #988 human attestation by a
+    restrictive fact for the exact same identity.
+    """
     identity = archive_identity(record)
     if _identity_reasons(identity):
         raise AttributionError("attribution_identity_incomplete")
@@ -1148,6 +1568,7 @@ def _append_attribution(
         os.close(fd)
         entries = _read_ledger(path, required=False)
         selected = [item for item in entries if _same_selected_identity(item["identity"], identity)]
+        superseded = False
         if selected:
             if len(selected) == 1 and selected[0] == entry:
                 return {
@@ -1155,7 +1576,17 @@ def _append_attribution(
                     "reason": "already_registered",
                     "source_sha256": entry["source_sha256"],
                 }
-            raise AttributionError("conflicting_attribution_identity")
+            # Revocation only: a restrictive fact replaces a #988 human attestation
+            # of the same lap. Nothing ever replaces a restrictive fact.
+            if (
+                len(selected) != 1
+                or selected[0]["identity"] != identity
+                or _map(selected[0]["qualification"]).get("authority") != "human"
+                or _map(entry["qualification"]).get("authority") not in {"ai", "shared", "unknown"}
+            ):
+                raise AttributionError("conflicting_attribution_identity")
+            entries = [item for item in entries if item is not selected[0]]
+            superseded = True
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", dir=path.parent, delete=False
         ) as output:
@@ -1173,7 +1604,11 @@ def _append_attribution(
             raise AttributionError("input_changed_during_registration")
         os.replace(temp_name, path)
         temp_name = None
-        return {"registered": True, "reason": "registered", "source_sha256": entry["source_sha256"]}
+        return {
+            "registered": True,
+            "reason": "superseded_human_attestation" if superseded else "registered",
+            "source_sha256": entry["source_sha256"],
+        }
     finally:
         if temp_name is not None:
             Path(temp_name).unlink(missing_ok=True)

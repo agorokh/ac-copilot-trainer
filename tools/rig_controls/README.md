@@ -45,6 +45,21 @@ release, profile switch, input loss or disconnect releases the injected keys. Kn
 mappings send one down/up chord per detent. Only bounded, recognized key names and
 reserved rig actions are accepted; JSON cannot execute shell commands.
 
+An operator declaration for capture-time human-control attestation
+([#988](https://github.com/agorokh/ac-copilot-trainer/issues/988)) is a separate,
+buttons-only action:
+
+```json
+{"action":"attest","name":"human_control.declare"}
+```
+
+`human_control.clear` withdraws it. A press appends one event to the file named by
+`AC_COPILOT_HUMAN_DECLARATION_JOURNAL`, and only while
+`AC_COPILOT_HUMAN_CONTROL_ATTESTATION=1`; otherwise the status shows
+"attestation not enabled" and nothing is written. It injects no key. A knob detent
+cannot carry it. See
+[the attestation contract](../../docs/10_Development/41_Human_Control_Attestation.md).
+
 Conditions in `when`:
 
 - `foreground_process`: any exact executable basename in the list owns focus.
