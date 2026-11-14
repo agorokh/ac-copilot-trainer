@@ -512,6 +512,9 @@ without degrading exit speed or whole-corner time. Distinct invalid or undeliver
 attempts consume the cap. Any observed off-track event fails the block. Tyre core
 overheat/critical aborts immediately; uncertain identity, missing evidence or transport
 gaps cannot certify a trial. The block never silently resets or starts a second drill.
+Completed-corner evidence must bracket the same entry-to-exit window used by the
+human signature. Malformed/nonfinite rows, reversed clocks/positions and sample gaps
+over 300 ms are refused; the full-window time is interpolated at its boundaries.
 
 Retention suppresses current, queued and deferred instructional clips at the actual
 voice dispatch boundary. Safety SAVE remains available. A cancellation attempt invalidates

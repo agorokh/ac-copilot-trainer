@@ -228,13 +228,13 @@ end
 ---  opts.session_uuid (string), opts.car (StateCar|nil), opts.sim (StateSim|nil),
 ---  opts.lap_n (int), opts.lap_ms (int), opts.is_pb (bool), opts.is_valid (bool),
 ---  opts.trace (per-sample objects), opts.corners (corner_features list),
+---  opts.offTrackObservation (pre-downsampling native observation summary|nil),
 ---  opts.setup_snap (setupReader snap), opts.setup_hash (string),
 ---  opts.setup_ini_path (string|nil) absolute active INI path (preferred over snap.path),
 ---  opts.rules_hints (string list), opts.sidecar_debrief (string|nil),
 ---  opts.corner_advice (table label->text|nil)
 ---@return table|nil
-local function offTrackObservation(trace)
-  local raw = type(trace) == "table" and trace.off_track_observation or nil
+local function offTrackObservation(raw)
   if type(raw) ~= "table" or raw.schema_version ~= 1 or raw.source ~= "car.wheelsOutside"
       or raw.event_count_basis ~= "positive_runs_unknown_breaks_run"
       or type(raw.complete) ~= "boolean" then return nil end
@@ -453,7 +453,7 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
       samples_count = samplesCount,
       fields = traceFieldNames,
       samples = samplesColumnar,
-      off_track_observation = offTrackObservation(opts.trace),
+      off_track_observation = offTrackObservation(opts.offTrackObservation),
     },
     corners = cornersOut,
     coaching = {

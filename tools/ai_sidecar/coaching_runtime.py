@@ -260,43 +260,90 @@ class CoachRuntime:
         if self.practice is not None:
             self.practice.note_voice_cancel(payload)
 
+    @staticmethod
+    def _practice_frames(record: dict[str, Any], required: tuple[str, ...]) -> list[dict]:
+        trace = record.get("trace")
+        if not isinstance(trace, dict):
+            return []
+        fields, samples = trace.get("fields"), trace.get("samples")
+        if (
+            not isinstance(fields, list)
+            or any(not isinstance(name, str) for name in fields)
+            or len(set(fields)) != len(fields)
+            or not isinstance(samples, list)
+            or len(samples) < 2
+        ):
+            return []
+        names = tuple(dict.fromkeys(("spline", "eMs", *required)))
+        index = {name: i for i, name in enumerate(fields)}
+        if any(name not in index for name in names):
+            return []
+        frames = []
+        previous = None
+        for row in samples:
+            if not isinstance(row, (list, tuple)) or len(row) != len(fields):
+                return []
+            frame = {}
+            for name in names:
+                value = row[index[name]]
+                if type(value) not in (int, float) or _finite_float(value) is None:
+                    return []
+                frame[name] = float(value)
+            if not 0 <= frame["spline"] <= 1 or frame["eMs"] < 0:
+                return []
+            if previous is not None and (
+                not 0 < frame["eMs"] - previous["eMs"] <= 300
+                or frame["spline"] < previous["spline"]
+            ):
+                return []
+            frames.append(frame)
+            previous = frame
+        return frames
+
     def _practice_observations(
         self, record: dict[str, Any]
     ) -> dict[int, tuple[CornerSignature, float]]:
-        trace = record.get("trace") or {}
-        fields, samples = trace.get("fields", []), trace.get("samples", [])
-        index = {name: i for i, name in enumerate(fields)}
-        if not {"spline", "eMs", "speed", "brake", "throttle", "steer"}.issubset(index):
+        frames = self._practice_frames(record, ("speed", "brake", "throttle", "steer"))
+        if not frames or any(
+            frame["speed"] < 0 or not 0 <= frame["brake"] <= 1 or not 0 <= frame["throttle"] <= 1
+            for frame in frames
+        ):
             return {}
-        frames = [{name: row[index[name]] for name in index} for row in samples]
         signatures = _reference_signatures(self.refs, self._practice_anchors, frames)
+
+        def crossing_time(position: float) -> float | None:
+            for left, right in zip(frames, frames[1:], strict=False):
+                if left["spline"] <= position <= right["spline"]:
+                    span = right["spline"] - left["spline"]
+                    if span > 0:
+                        fraction = (position - left["spline"]) / span
+                        return left["eMs"] + fraction * (right["eMs"] - left["eMs"])
+            return None
+
         result = {}
         for ref in self.refs:
             # A wrapped physical corner needs adjacent-lap evidence; never join two different
             # passes at the ends of one archive and call that a completed trial.
-            if not 0 <= ref.spline_lo < ref.spline_hi <= 1 or ref.index not in signatures:
+            start = self._practice_anchors[ref.index].brake - 0.04
+            if not 0 <= start < ref.spline_hi <= 1 or ref.index not in signatures:
                 continue
-            times = [fr["eMs"] for fr in frames if ref.spline_lo <= fr["spline"] <= ref.spline_hi]
-            if len(times) >= 2 and times[-1] > times[0]:
-                result[ref.index] = (signatures[ref.index], (times[-1] - times[0]) / 1000.0)
+            start_ms, end_ms = crossing_time(start), crossing_time(ref.spline_hi)
+            if start_ms is not None and end_ms is not None and end_ms > start_ms:
+                result[ref.index] = (signatures[ref.index], (end_ms - start_ms) / 1000.0)
         return result
 
     def _practice_archive_conditions(self, record: dict[str, Any]) -> bool:
-        trace = record.get("trace") or {}
-        fields, samples = trace.get("fields", []), trace.get("samples", [])
-        index = {name: i for i, name in enumerate(fields)}
         names = [f"tyreCoreTemp_{wheel}" for wheel in _WHEELS]
         brake_names = [f"brakeTemp_{wheel}" for wheel in _WHEELS]
-        if not samples or any(name not in index for name in names + brake_names):
+        frames = self._practice_frames(record, tuple(names + brake_names))
+        if not frames:
             return False
         tyres = record.get("tyres") or {}
         optimal = _finite_float(tyres.get("optimalTempC")) or self._practice_optimal_temp_c
         if optimal is None or optimal <= 0:
             return False
-        for row in samples:
-            if not isinstance(row, (list, tuple)) or len(row) != len(fields):
-                return False
-            values = [_finite_float(row[index[name]]) for name in names + brake_names]
+        for sample in frames:
+            values = [sample[name] for name in names + brake_names]
             if any(value is None or value <= 0 for value in values[:4]) or any(
                 value is None or value < 0 for value in values[4:]
             ):
@@ -968,7 +1015,7 @@ def _finite_float(value: Any) -> float | None:
         return None
     try:
         f = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return f if math.isfinite(f) else None
 

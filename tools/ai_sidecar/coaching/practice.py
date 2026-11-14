@@ -255,6 +255,8 @@ class PracticeSession:
         condition_eligible: bool,
         voice_ready: bool,
     ) -> dict[str, Any]:
+        if self._terminal:
+            return self.status()
         lap = record.get("lap")
         lap = lap if isinstance(lap, dict) else {}
         session, ordinal = record.get("session_uuid"), lap.get("lap_n")

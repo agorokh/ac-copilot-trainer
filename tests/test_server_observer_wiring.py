@@ -355,7 +355,9 @@ def test_wire_voice_bank_uses_env_audio_routing(tmp_path, monkeypatch):
         def start(self) -> None:
             seen["started"] = True
 
-    def fake_from_bank(bank_dir, config, *, backend, dispatch_listener=None):  # noqa: ANN001
+    def fake_from_bank(  # noqa: ANN001
+        bank_dir, config, *, backend, dispatch_listener=None, cancellation_listener=None
+    ):
         seen["bank_dir"] = bank_dir
         seen["backend"] = backend
         seen["device_name"] = config.device_name
@@ -364,6 +366,7 @@ def test_wire_voice_bank_uses_env_audio_routing(tmp_path, monkeypatch):
         # Issue #511 Part D: the server wires its dispatch listener so remote voice
         # endpoints receive coaching.voice broadcasts.
         seen["dispatch_listener"] = dispatch_listener is server._on_voice_dispatch
+        seen["cancellation_listener"] = cancellation_listener is server._on_voice_cancel
         return _Coach()
 
     server.set_voice_coach(None)
@@ -395,6 +398,7 @@ def test_wire_voice_bank_uses_env_audio_routing(tmp_path, monkeypatch):
         "host_api": "Windows DirectSound",
         "verbosity": "high",
         "dispatch_listener": True,
+        "cancellation_listener": True,
         "started": True,
     }
 

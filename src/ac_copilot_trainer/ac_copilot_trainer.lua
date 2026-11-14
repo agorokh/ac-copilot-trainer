@@ -2868,7 +2868,7 @@ function script.update(dt)
     if carLapInvalidatedFlag(car) then
       state.lapInvalidatedThisLap = true
     end
-    local completedTrace = tel:finalizeLapTrace()
+    local completedTrace, completedOffTrack = tel:finalizeLapTrace(true)
     -- The first partial lap after arming/reset is explicitly incomplete. Store raw
     -- scalar observations, not a permissive verdict; archive readers re-evaluate them.
     local completedTraffic = config.trafficShadowEnabled == true
@@ -3109,6 +3109,7 @@ function script.update(dt)
         is_pb = isPbThisLap,
         is_valid = not state.lapInvalidatedThisLap,
         trace = completedTrace,
+        offTrackObservation = completedOffTrack,
         traffic = completedTraffic,
         corners = feats,
         setup_snap = state.lastSetupSnap,

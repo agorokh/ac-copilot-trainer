@@ -9,6 +9,7 @@ import json
 from collections import deque
 from dataclasses import replace
 from http import HTTPStatus
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -186,6 +187,160 @@ def test_real_target_signature_and_action_anchors_do_not_follow_later_calibratio
 def test_completed_archive_thermal_gate_accepts_complete_stable_evidence():
     runtime = _runtime(practice_drills=True)
     assert runtime._practice_archive_conditions(_thermal_record())
+
+
+def _practice_window(runtime):
+    ref = runtime.refs[0]
+    return ref.index, runtime._practice_anchors[ref.index].brake - 0.04, ref.spline_hi
+
+
+def test_practice_corner_time_covers_the_same_brake_entry_window_as_its_signature():
+    runtime = _runtime(practice_drills=True)
+    record = _reference()
+    corner, lower, upper = _practice_window(runtime)
+    fields = {name: i for i, name in enumerate(record["trace"]["fields"])}
+    rows = record["trace"]["samples"]
+    inside = [row for row in rows if lower <= row[fields["spline"]] <= upper]
+    before = [row for row in rows if row[fields["spline"]] <= lower][-1]
+    after = next(row for row in rows if row[fields["spline"]] >= upper)
+    assert len(inside) > 10 and lower < runtime.refs[0].spline_lo
+    observation = runtime._practice_observations(record)[corner]
+    elapsed = observation[1]
+    # Either exact/interpolated boundary times or their bracketing samples can
+    # describe the full window. A shorter apex-only/late-entry duration cannot.
+    minimum = (inside[-1][fields["eMs"]] - inside[0][fields["eMs"]]) / 1000.0
+    maximum = (after[fields["eMs"]] - before[fields["eMs"]]) / 1000.0
+    assert minimum <= elapsed <= maximum
+
+
+@pytest.mark.parametrize("missing", ["entry", "exit", "midcorner"])
+def test_practice_observations_cannot_stage_a_partial_target_window(missing):
+    runtime = _runtime(practice_drills=True)
+    record = _reference()
+    corner, lower, upper = _practice_window(runtime)
+    fields = {name: i for i, name in enumerate(record["trace"]["fields"])}
+    rows = record["trace"]["samples"]
+    if missing == "entry":
+        record["trace"]["samples"] = [row for row in rows if row[fields["spline"]] > lower + 0.02]
+    elif missing == "exit":
+        record["trace"]["samples"] = [row for row in rows if row[fields["spline"]] < upper - 0.02]
+    else:
+        apex = runtime.refs[0].apex_spline
+        record["trace"]["samples"] = [
+            row for row in rows if abs(row[fields["spline"]] - apex) > 0.06
+        ]
+    assert corner not in runtime._practice_observations(record)
+
+
+@pytest.mark.parametrize("corruption", ["elapsed_reversal", "spline_reversal", "sampling_gap"])
+def test_practice_observations_require_monotone_contiguous_measurements(corruption):
+    runtime = _runtime(practice_drills=True)
+    record = _reference()
+    corner, lower, upper = _practice_window(runtime)
+    fields = {name: i for i, name in enumerate(record["trace"]["fields"])}
+    rows = record["trace"]["samples"]
+    inside = [i for i, row in enumerate(rows) if lower < row[fields["spline"]] < upper]
+    middle = inside[len(inside) // 2]
+    if corruption == "elapsed_reversal":
+        rows[middle][fields["eMs"]] = rows[middle - 1][fields["eMs"]] - 1.0
+    elif corruption == "spline_reversal":
+        rows[middle][fields["spline"]] = rows[middle - 1][fields["spline"]] - 0.001
+    else:
+        # Preserve full-lap and corner boundary coverage, strict spline order
+        # and finite values, but expose a 450ms loss of temporal coverage.
+        for row in rows[middle:]:
+            row[fields["eMs"]] += 450.0
+        record["lap"]["lap_ms"] += 450
+    assert corner not in runtime._practice_observations(record)
+
+
+def test_real_magione_trace_with_a_subsecond_corner_hole_cannot_stage_a_trial():
+    # The complete committed production-sized fixture is the input; only the
+    # named missing-400ms variant is edited in memory, and endpoints stay intact.
+    path = Path(__file__).parent / "fixtures" / "magione_gt3r_reference.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    runtime = build_coach_runtime(record, use_environment=False, practice_drills=True)
+    assert runtime is not None
+    fields = {name: i for i, name in enumerate(record["trace"]["fields"])}
+    original = record["trace"]["samples"]
+    assert len(original) > 1000
+    ref = next(
+        ref
+        for ref in runtime.refs
+        if 0.0 < runtime._practice_anchors[ref.index].brake - 0.04 < ref.spline_hi < 1.0
+    )
+    lower = runtime._practice_anchors[ref.index].brake - 0.04
+    inside = [row for row in original if lower < row[fields["spline"]] < ref.spline_hi]
+    middle_time = inside[len(inside) // 2][fields["eMs"]]
+    remaining = [row for row in original if abs(row[fields["eMs"]] - middle_time) > 200.0]
+    assert remaining[0] == original[0] and remaining[-1] == original[-1]
+    gap = max(
+        b[fields["eMs"]] - a[fields["eMs"]] for a, b in zip(remaining, remaining[1:], strict=False)
+    )
+    assert 300.0 < gap < 1000.0
+    record["trace"]["samples"] = remaining
+    assert ref.index not in runtime._practice_observations(record)
+
+
+@pytest.mark.parametrize(
+    "channel,value",
+    [
+        ("speed", float("nan")),
+        ("eMs", float("inf")),
+        ("spline", None),
+        ("brake", True),
+        ("throttle", "bad"),
+        ("steer", float("nan")),
+    ],
+)
+def test_practice_observations_refuse_nonfinite_or_unmeasured_essential_channels(channel, value):
+    runtime = _runtime(practice_drills=True)
+    record = _reference()
+    corner, lower, upper = _practice_window(runtime)
+    fields = {name: i for i, name in enumerate(record["trace"]["fields"])}
+    row = next(
+        row for row in record["trace"]["samples"] if row[fields["spline"]] > (lower + upper) / 2
+    )
+    row[fields[channel]] = value
+    assert corner not in runtime._practice_observations(record)
+
+
+@pytest.mark.parametrize("corruption", ["short_row", "mapping_row", "none_row", "duplicate_field"])
+def test_practice_observations_fail_closed_without_throwing_on_malformed_rows(corruption):
+    runtime = _runtime(practice_drills=True)
+    record = _reference()
+    corner, lower, upper = _practice_window(runtime)
+    fields = {name: i for i, name in enumerate(record["trace"]["fields"])}
+    rows = record["trace"]["samples"]
+    middle = next(i for i, row in enumerate(rows) if row[fields["spline"]] > (lower + upper) / 2)
+    if corruption == "short_row":
+        rows[middle].pop()
+    elif corruption == "mapping_row":
+        rows[middle] = {name: rows[middle][i] for name, i in fields.items()}
+    elif corruption == "none_row":
+        rows[middle] = None
+    else:
+        record["trace"]["fields"].append("eMs")
+        for row in rows:
+            row.append(row[fields["eMs"]])
+    assert corner not in runtime._practice_observations(record)
+
+
+def test_thermal_abort_reason_survives_a_later_archive_with_bad_identity():
+    runtime = _runtime(practice_drills=True)
+    hot = _thermal_record()
+    index = hot["trace"]["fields"].index("tyreCoreTemp_fl")
+    hot["trace"]["samples"][len(hot["trace"]["samples"]) // 2][index] = 150.0
+    assert not runtime._practice_archive_conditions(hot)
+    before = runtime.practice_status()
+    assert before["phase"] == "aborted"
+    assert before["reason"] in {"tyre_temp_overheat", "tyre_temp_critical"}
+    malformed = _reference()
+    malformed["session_uuid"] = None
+    qualification = qualify_archive(malformed, use="human_progression")
+    assert not qualification.allowed
+    after = runtime.record_practice_archive(malformed, qualification, voice_ready=False)
+    assert after["phase"] == "aborted" and after["reason"] == before["reason"]
 
 
 def test_completed_archive_thermal_gate_does_not_inherit_normal_missing_brake_fail_open():

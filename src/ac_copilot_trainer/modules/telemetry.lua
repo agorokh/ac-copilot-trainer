@@ -455,22 +455,23 @@ end
 
 --- Finalize the just-finished lap: downsample to MAX_LAP_TRACE, clear lap buffer, return trace.
 --- Caller should call beginLapClock(simTime) for the next lap immediately after.
+---@param includeOffTrackObservation boolean|nil return the separate summary only when requested
 ---@return LapTraceSample[]
-function Telemetry:finalizeLapTrace()
-  if self.lapN <= 0 then
-    self.lapBuf = {}
-    self.lapN = 0
-    return {}
-  end
-  local out = downsampleUniform(self.lapBuf, self.lapN, MAX_LAP_TRACE)
+---@return table|nil offTrackObservation
+function Telemetry:finalizeLapTrace(includeOffTrackObservation)
+  local out = self.lapN > 0 and downsampleUniform(self.lapBuf, self.lapN, MAX_LAP_TRACE) or {}
+  local observation
   if self._offTrackObservation then
-    out.off_track_observation = {}
-    for key,value in pairs(self._offTrackObservation) do out.off_track_observation[key] = value end
+    observation = {}
+    for key,value in pairs(self._offTrackObservation) do observation[key] = value end
   end
   self.lapBuf = {}
   self.lapN = 0
   self._offTrackObservation = nil
   self._lastWheelsOutside = nil
+  -- Preserve the one-array return contract for existing callers, including
+  -- native replay bindings that expose multiple Lua returns as a Python tuple.
+  if includeOffTrackObservation == true then return out, observation end
   return out
 end
 

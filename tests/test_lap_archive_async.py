@@ -76,9 +76,12 @@ def test_native_telemetry_offtrack_measurements_and_unknown_survive_archive(tmp_
         car.splinePosition=i/3
         t:update(.05,car,{gameTime=i*.05})
       end
-      local trace=t:finalizeLapTrace()
+      local trace,observation=t:finalizeLapTrace(true)
+      for key in pairs(trace) do
+        assert(type(key)=='number' and key==math.floor(key) and key>=1 and key<=#trace)
+      end
       return require('lap_archive').buildRecord({session_uuid='native',lap_n=1,
-        lap_ms=1000,car={},sim={},trace=trace})
+        lap_ms=1000,car={},sim={},trace=trace,offTrackObservation=observation})
     """)
     )
     fields = record["trace"]["fields"]
@@ -113,11 +116,12 @@ def test_pre_downsample_excursion_summary_survives_real_bounded_json_writer(tmp_
         car.splinePosition=(i-1)/3000
         t:update(.01,car,{gameTime=i*.01})
       end
-      local trace=t:finalizeLapTrace()
+      local trace,observation=t:finalizeLapTrace(true)
       assert(#trace==2000)
+      assert(trace.off_track_observation==nil)
       for i=1,#trace do assert(trace[i].wheelsOutside==0) end
       local job=assert(require('lap_archive').createWriteJob({session_uuid='downsampled',
-        lap_n=1,lap_ms=30010,car={},sim={},trace=trace},50))
+        lap_n=1,lap_ms=30010,car={},sim={},trace=trace,offTrackObservation=observation},50))
       for i=1,100 do
         local done,ok,path=job:step(128)
         if done then assert(ok,path); return path end
@@ -147,11 +151,11 @@ def test_lap_observation_gap_is_not_a_complete_zero_event_proof(tmp_path, gap):
       elseif gap=='ambiguous_wrap' then t:update(.05,car,{gameTime=.1},false)
       else t:update(.05,car,{gameTime=.1,isInMainMenu=true}) end
       t:update(.05,car,{gameTime=.15})
-      local trace=t:finalizeLapTrace()
-      local first=trace.off_track_observation
+      local trace,first=t:finalizeLapTrace(true)
       t:beginLapClock(.15,true)
       t:update(.05,car,{gameTime=.2})
-      return {first=first,next=t:finalizeLapTrace().off_track_observation}
+      local nextTrace,nextObservation=t:finalizeLapTrace(true)
+      return {first=first,next=nextObservation}
     """)
     )
     assert result["first"]["complete"] is False
@@ -165,7 +169,8 @@ def test_mid_lap_clock_start_cannot_claim_a_complete_zero_event_lap(tmp_path):
       local t=require('telemetry').new()
       t:beginLapClock(100)
       t:update(.05,{speedKmh=100,splinePosition=.6,wheelsOutside=0},{gameTime=100.05})
-      return t:finalizeLapTrace().off_track_observation
+      local trace,observation=t:finalizeLapTrace(true)
+      return observation
     """)
     )
     assert observation["sample_count"] == 1 and observation["max_wheels_outside"] == 0
