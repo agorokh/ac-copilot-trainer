@@ -59,6 +59,11 @@ sealing, matching and conflicting end declarations, strict private-endpoint toke
 authentication, startup ordering, source/payload hashes, replay rejection and restart
 fences. Native Lua tests use actual SDK boolean fields, numeric weather enums,
 `roadTemperature` and `roadGrip`; unknown observations remain unknown.
+A due finish/reset tick whose archive ordinal is still ambiguous is deferred;
+the first bound frame emits immediately without guessing either lap or resetting
+the 300 ms continuity fence. An actual Lua-to-permit boundary regression accepts
+the closed immutable receipt. Clean-install coaching/dev/launcher extras declare
+the process-identity dependency, and the frozen build refuses its absence.
 
 The actual source launcher dialog was inspected on Windows in an isolated data root.
 Blank declarations were visibly refused; it exited without creating a campaign. Its
