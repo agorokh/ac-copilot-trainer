@@ -405,6 +405,15 @@ class WheelSlipGovernor:
             "downshift_vetoes": self.shift_vetoes,
         }
 
+    def reset(self) -> None:
+        """Begin a new stream after an authorized recovery; retain reader and audit totals."""
+        self.packet = self.fresh_at = None
+        self.last_now = -math.inf
+        self.gas_ceiling = self.brake_ceiling = 1.0
+        self.delivered_gas = self.delivered_brake = 0.0
+        self.previous_slips = None
+        self.slips = (0.0, 0.0)
+
 
 class RacingDriver:
     """Drive ``fast_line`` at racing dynamics from any starting state (pits, off-line, on-line).
@@ -832,6 +841,8 @@ class RacingDriver:
 
     def on_recovery(self) -> None:
         """Reset transient state after a teleport-to-pits recovery — re-enter OUT, clear timers."""
+        if self.slip_feedback is not None:
+            self.slip_feedback.reset()
         self.phase = PHASE_OUT
         self._stuck_since = None
         self._lap_anchor = None

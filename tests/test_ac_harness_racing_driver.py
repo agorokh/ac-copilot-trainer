@@ -460,3 +460,28 @@ def test_feedback_couples_to_bounded_wheel_response_without_parking(braking):
         delivered.append(pedal)
     assert peak < 0.2
     assert sum(delivered[-50:]) / 50 > 0.05
+
+
+def test_authorized_recovery_resets_feedback_without_replacing_reader_or_audit():
+    driver = _feedback_driver()
+    governor = driver.slip_feedback
+    native = _slip_physics(10, (0, -0.99, 0, 0.4))
+
+    def reader():
+        return native
+
+    driver.set_phys_read(reader)
+    governor.apply(1, 1, True, 0.0)
+    before = governor.summary().copy()
+    # The real harness calls on_recovery after its >.1s teleport sleeps.
+    driver.on_recovery()
+    assert driver.slip_feedback is governor and governor.read is reader
+    assert governor.summary() == before
+    native = _slip_physics(11)
+    assert governor.apply(1, 1, False, 1.5)[:2] == (0, 0)
+    native = _slip_physics(12)
+    gas, brake, _ = governor.apply(1, 1, False, 1.512)
+    assert gas == pytest.approx(0.018) and brake == pytest.approx(0.036)
+    # Freshness is still mandatory after the new stream begins.
+    with pytest.raises(ValueError, match="stale"):
+        governor.apply(1, 1, False, 1.7)

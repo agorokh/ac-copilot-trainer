@@ -3946,9 +3946,9 @@ def rig_drive(  # pragma: no cover - rig-only
     except SharedMemoryUnavailable:
         phys_reader = None
 
-    # #532: the handshake needs per-wheel angular speed (r_eff probe) from acpmf_physics. Reuse the
-    # SAME harness-owned physics map (phys_reader) rather than opening a second identical view — the
-    # controller never touches OS memory itself, and there is no redundant map (daemon review).
+    # Handshake probes and opt-in RacingDriver wheel-slip feedback BOTH bind through
+    # set_phys_read below. Reuse this harness-owned map; the driver never opens a
+    # second OS view. The closure follows _main_packet_id's reopen/close lifecycle.
     if hasattr(driver, "set_phys_read"):
         from tools.ac_harness.racing_telemetry import parse_physics as _parse_phys
         from tools.ac_harness.shared_memory import PHYSICS_MAP_BYTES
@@ -3973,6 +3973,7 @@ def rig_drive(  # pragma: no cover - rig-only
                 completed_laps = None
             return replace(physics, completed_laps=completed_laps)
 
+        # This also binds RacingDriver.slip_feedback.read in the opt-in GGV path.
         driver.set_phys_read(_read_hs_phys)
 
     def _main_packet_id() -> int | None:
