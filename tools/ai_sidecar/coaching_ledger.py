@@ -76,6 +76,7 @@ class DrillBlock:
 
     target: HumanDrillTarget
     max_laps: int = 10
+    practice_permit: Any = field(default=None, repr=False)
     phase: str = "cued"
     reason: str = "awaiting_completed_human_lap"
     attempted_laps: int = 0
@@ -164,11 +165,20 @@ class DrillBlock:
             return self._result("off_track")
         if off_track is not False or (pending is not None and pending[2] is not False):
             return self._result("off_track_evidence_unavailable")
-        if (
-            getattr(qualification, "allowed", False) is not True
-            or getattr(qualification, "authority", None) != "human"
-            or valid is not True
-        ):
+        accepted = (
+            getattr(qualification, "allowed", False) is True
+            and getattr(qualification, "authority", None) == "human"
+        )
+        if self.target.practice_only and self.practice_permit is not None:
+            from tools.human_session import HumanSessionPermit
+            from tools.lap_qualification import is_practice_human
+
+            accepted = (
+                isinstance(self.practice_permit, HumanSessionPermit)
+                and getattr(qualification, "allowed", False) is True
+                and is_practice_human(qualification)
+            )
+        if not accepted or valid is not True:
             return self._result("completed_qualified_human_lap_required")
         if condition_eligible is not True:
             return self._result("condition_ineligible")
@@ -260,14 +270,21 @@ class CoachingLedger:
             }
         return self.drill.to_dict()
 
-    def start_drill(self, target: HumanDrillTarget, *, max_laps: int = 10) -> DrillBlock:
+    def start_drill(
+        self, target: HumanDrillTarget, *, max_laps: int = 10, practice_permit: Any = None
+    ) -> DrillBlock:
         if not self.drills_enabled:
             raise ValueError("drills_disabled")
         if self.drill is not None:
             raise ValueError("drill_already_started")
         if type(max_laps) is not int or not 1 <= max_laps <= 10:
             raise ValueError("drill_lap_budget_invalid")
-        self.drill = DrillBlock(target, max_laps=max_laps)
+        if target.practice_only:
+            from tools.human_session import HumanSessionPermit
+
+            if not isinstance(practice_permit, HumanSessionPermit):
+                raise ValueError("practice_permit_required")
+        self.drill = DrillBlock(target, max_laps=max_laps, practice_permit=practice_permit)
         self._states[target.corner] = CornerState(
             target.corner, root=RootError(target.root), status=Status.ARMED
         )

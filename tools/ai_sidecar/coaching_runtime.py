@@ -303,66 +303,15 @@ class CoachRuntime:
     def _practice_observations(
         self, record: dict[str, Any]
     ) -> dict[int, tuple[CornerSignature, float]]:
-        frames = self._practice_frames(record, ("speed", "brake", "throttle", "steer"))
-        if not frames or any(
-            frame["speed"] < 0 or not 0 <= frame["brake"] <= 1 or not 0 <= frame["throttle"] <= 1
-            for frame in frames
-        ):
-            return {}
-        signatures = _reference_signatures(self.refs, self._practice_anchors, frames)
-
-        def crossing_time(position: float) -> float | None:
-            for left, right in zip(frames, frames[1:], strict=False):
-                if left["spline"] <= position <= right["spline"]:
-                    span = right["spline"] - left["spline"]
-                    if span > 0:
-                        fraction = (position - left["spline"]) / span
-                        return left["eMs"] + fraction * (right["eMs"] - left["eMs"])
-            return None
-
-        result = {}
-        for ref in self.refs:
-            # A wrapped physical corner needs adjacent-lap evidence; never join two different
-            # passes at the ends of one archive and call that a completed trial.
-            start = self._practice_anchors[ref.index].brake - 0.04
-            if not 0 <= start < ref.spline_hi <= 1 or ref.index not in signatures:
-                continue
-            start_ms, end_ms = crossing_time(start), crossing_time(ref.spline_hi)
-            if start_ms is not None and end_ms is not None and end_ms > start_ms:
-                result[ref.index] = (signatures[ref.index], (end_ms - start_ms) / 1000.0)
-        return result
+        return _practice_archive_observations(record, self.refs, self._practice_anchors)
 
     def _practice_archive_conditions(self, record: dict[str, Any]) -> bool:
-        names = [f"tyreCoreTemp_{wheel}" for wheel in _WHEELS]
-        brake_names = [f"brakeTemp_{wheel}" for wheel in _WHEELS]
-        frames = self._practice_frames(record, tuple(names + brake_names))
-        if not frames:
-            return False
-        tyres = record.get("tyres") or {}
-        optimal = _finite_float(tyres.get("optimalTempC")) or self._practice_optimal_temp_c
-        if optimal is None or optimal <= 0:
-            return False
-        for sample in frames:
-            values = [sample[name] for name in names + brake_names]
-            if any(value is None or value <= 0 for value in values[:4]) or any(
-                value is None or value < 0 for value in values[4:]
-            ):
-                return False
-            frame = {
-                "tyre_temps_c": dict(zip(_WHEELS, values[:4], strict=True)),
-                "brake_temps_c": dict(zip(_WHEELS, values[4:], strict=True)),
-                "conditions": record.get("conditions") or {},
-                "optimalTempC": optimal,
-            }
-            cap = _evaluate_frame_capability(frame, speed_kmh=0.0, ggv_model=self.ggv_model)
-            if (
-                cap.tyre_reason in {"tyre_temp_overheat", "tyre_temp_critical"}
-                and self.practice is not None
-            ):
-                self.practice.abort(cap.tyre_reason)
-            if cap.ineligible_reason or not cap.has_cond_evidence:
-                return False
-        return True
+        return practice_archive_conditions(
+            record,
+            ggv_model=self.ggv_model,
+            optimal_temp_c=self._practice_optimal_temp_c,
+            practice_session=self.practice,
+        )
 
     def record_practice_archive(
         self, record: dict[str, Any], qualification: Qualification, *, voice_ready: bool
@@ -370,7 +319,7 @@ class CoachRuntime:
         if self.practice is None:
             return self.practice_status()
         before = self.ledger.drill_target
-        qualified_human = qualification.allowed and qualification.authority == "human"
+        qualified_human = self.practice._human(qualification)
         eligible = self._practice_archive_conditions(record) if qualified_human else False
         observations = self._practice_observations(record) if qualified_human else {}
         status = self.practice.complete_archive(
@@ -600,19 +549,16 @@ class CoachRuntime:
                 self._active_cond_reason or self._active_brake_reason or self._active_tyre_reason
             )
         if self.practice is not None:
-            proof = _evaluate_frame_capability(
+            eligible, reason = practice_frame_conditions(
                 frame,
-                speed_kmh=speed,
                 ggv_model=self.ggv_model,
                 default_compound=self.reference_compound,
                 default_optimal_temp_c=self._practice_optimal_temp_c,
             )
             self.practice.observe_native(
                 dict(payload),
-                condition_eligible=proof.has_tyre_evidence
-                and not proof.ineligible_reason
-                and self._practice_optimal_temp_c is not None,
-                ineligible_reason=proof.ineligible_reason,
+                condition_eligible=eligible,
+                ineligible_reason=reason,
             )
         out: list[Advisory] = []
 
@@ -846,6 +792,168 @@ class CoachRuntime:
         return [_confirm(r) for e in events if e.kind == "confirm"]
 
 
+def _practice_archive_observations(
+    record: dict[str, Any],
+    refs: list[CornerReference],
+    anchors: dict[int, _Anchors],
+) -> dict[int, tuple[CornerSignature, float]]:
+    frames = CoachRuntime._practice_frames(record, ("speed", "brake", "throttle", "steer"))
+    if not frames or any(
+        frame["speed"] < 0 or not 0 <= frame["brake"] <= 1 or not 0 <= frame["throttle"] <= 1
+        for frame in frames
+    ):
+        return {}
+    signatures = _reference_signatures(refs, anchors, frames)
+
+    def crossing_time(position: float) -> float | None:
+        for left, right in zip(frames, frames[1:], strict=False):
+            if left["spline"] <= position <= right["spline"]:
+                span = right["spline"] - left["spline"]
+                if span > 0:
+                    fraction = (position - left["spline"]) / span
+                    return left["eMs"] + fraction * (right["eMs"] - left["eMs"])
+        return None
+
+    result = {}
+    for ref in refs:
+        # A wrapped corner needs adjacent-lap evidence; never join different passes.
+        start = anchors[ref.index].brake - 0.04
+        if not 0 <= start < ref.spline_hi <= 1 or ref.index not in signatures:
+            continue
+        start_ms, end_ms = crossing_time(start), crossing_time(ref.spline_hi)
+        if start_ms is not None and end_ms is not None and end_ms > start_ms:
+            result[ref.index] = (signatures[ref.index], (end_ms - start_ms) / 1000.0)
+    return result
+
+
+def _reference_anchors(
+    refs: list[CornerReference], geom: dict[int, CornerSignature], track_m: float, lead_s: float
+) -> dict[int, _Anchors]:
+    anchors = {}
+    for ref in refs:
+        signature = geom.get(ref.index)
+        speed = signature.entry_speed_kmh if signature else 150.0
+        lead = _lead_spline(speed, track_m, lead_s)
+        brake = (
+            signature.brake_point_spline
+            if signature and signature.brake_point_spline is not None
+            else ref.spline_lo
+        )
+        anchors[ref.index] = _Anchors(
+            brake=(brake - lead) % 1.0,
+            turn_in=(ref.spline_lo - lead) % 1.0,
+            apex=ref.apex_spline,
+        )
+    return anchors
+
+
+def practice_reference_usable(
+    record: dict[str, Any],
+    *,
+    practice_permit: Any,
+    expected_combo: tuple[str, str, str | None],
+) -> bool:
+    """Inspect one scoped warm-up candidate without constructing/replacing a collector."""
+    from tools.lap_qualification import qualify_practice_archive
+
+    qualification = qualify_practice_archive(
+        record, use="practice_reference", permit=practice_permit, expected_combo=expected_combo
+    )
+    if (
+        not qualification.allowed
+        or PracticeSession._off_track(record) is not False
+        or not practice_archive_conditions(record)
+    ):
+        return False
+    try:
+        lap = lap_trace_from_archive(record)
+        refs = build_references(lap)
+        geom = {signature.index: signature for signature in corner_signatures(lap)}
+    except (TypeError, ValueError, KeyError, IndexError, OverflowError):
+        return False
+    track = record.get("track")
+    track = track if isinstance(track, Mapping) else {}
+    length = _finite_float(track.get("lengthM")) or _DEFAULT_TRACK_M
+    anchors = _reference_anchors(refs, geom, length, _DEFAULT_LEAD_S)
+    return bool(_practice_archive_observations(record, refs, anchors))
+
+
+def practice_frame_conditions(
+    frame: dict[str, Any],
+    *,
+    ggv_model: GGVModel | None = None,
+    default_compound: str | None = None,
+    default_optimal_temp_c: float | None = None,
+) -> tuple[bool, str]:
+    """Strict live practice gate, usable before a reference exists; no authority inference."""
+    payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else frame
+    proof = _evaluate_frame_capability(
+        frame,
+        speed_kmh=None,
+        ggv_model=ggv_model or _default_ggv_model(),
+        default_compound=default_compound,
+        default_optimal_temp_c=default_optimal_temp_c,
+    )
+    if proof.ineligible_reason:
+        return False, proof.ineligible_reason
+    _, _, optimal = _extract_frame_conditions(frame, payload)
+    if (optimal or default_optimal_temp_c or 0) <= 0 or not proof.has_cond_evidence:
+        return False, "thermal_evidence_required"
+    for names, positive in (
+        (("tyre_temps_c", "tire_temps_c"), True),
+        (("brake_temps_c", "brake_temp_c"), False),
+    ):
+        raw = next(
+            (source[name] for source in (frame, payload) for name in names if name in source),
+            None,
+        )
+        if not isinstance(raw, Mapping) or any(
+            type(raw.get(wheel)) not in (int, float)
+            or _finite_float(raw[wheel]) is None
+            or raw[wheel] < 0
+            or (positive and raw[wheel] == 0)
+            for wheel in _WHEELS
+        ):
+            return False, "thermal_evidence_required"
+    return True, ""
+
+
+def practice_archive_conditions(
+    record: dict[str, Any],
+    *,
+    ggv_model: GGVModel | None = None,
+    optimal_temp_c: float | None = None,
+    practice_session: PracticeSession | None = None,
+) -> bool:
+    """The same full-row archive gate before and after a warm-up reference exists."""
+    names = [f"tyreCoreTemp_{wheel}" for wheel in _WHEELS]
+    brake_names = [f"brakeTemp_{wheel}" for wheel in _WHEELS]
+    frames = CoachRuntime._practice_frames(record, tuple(names + brake_names))
+    if not frames:
+        return False
+    tyres = record.get("tyres") or {}
+    optimal = _finite_float(tyres.get("optimalTempC")) or optimal_temp_c
+    if optimal is None or optimal <= 0:
+        return False
+    model = ggv_model or _default_ggv_model()
+    for sample in frames:
+        values = [sample[name] for name in names + brake_names]
+        if any(value <= 0 for value in values[:4]) or any(value < 0 for value in values[4:]):
+            return False
+        frame = {
+            "tyre_temps_c": dict(zip(_WHEELS, values[:4], strict=True)),
+            "brake_temps_c": dict(zip(_WHEELS, values[4:], strict=True)),
+            "conditions": record.get("conditions") or {},
+            "optimalTempC": optimal,
+        }
+        cap = _evaluate_frame_capability(frame, speed_kmh=0.0, ggv_model=model)
+        if cap.tyre_reason in {"tyre_temp_overheat", "tyre_temp_critical"} and practice_session:
+            practice_session.abort(cap.tyre_reason)
+        if cap.ineligible_reason or not cap.has_cond_evidence:
+            return False
+    return True
+
+
 def _accumulate_core(
     st: _PassState,
     r: CornerReference,
@@ -1059,9 +1167,11 @@ def _extract_frame_conditions(
     ambient_temp = _finite_float(pick_cond("ambientTempC", "ambient_temp_c"))
     if ambient_temp is not None:
         cond["ambientTempC"] = ambient_temp
-    weather = pick_cond("weatherType", "weather_type")
-    if isinstance(weather, str) and weather.strip():
-        cond["weatherType"] = weather.strip()
+    from tools.ai_sidecar.conditions_model import normalize_weather_type
+
+    weather = normalize_weather_type(pick_cond("weatherType", "weather_type"))
+    if weather is not None:
+        cond["weatherType"] = weather
 
     compound_raw = pick_cond("tyreCompound", "tyre_compound", "tire_compound")
     compound = (
@@ -1408,18 +1518,41 @@ def build_coach_runtime(
     traffic_gate_mode: str = "shadow",
     practice_drills: bool | None = None,
     practice_drill_id: str | None = None,
+    practice_session: PracticeSession | None = None,
+    practice_permit: Any = None,
+    canonical_corner_catalog: dict[str, Any] | None = None,
 ) -> CoachRuntime | None:
     """Build a :class:`CoachRuntime` from a reference archive (same input as the observer).
 
     ``use_environment=False`` is the offline seam: no ambient profile, alien source
     or pacing overrides. Explicit arguments and canonical attribution still apply.
     """
-    qualification = qualify_archive(
-        reference_archive, use="live_reference", expected_combo=expected_combo
-    )
+    if practice_permit is not None:
+        from tools.lap_qualification import qualify_practice_archive
+
+        qualification = qualify_practice_archive(
+            reference_archive,
+            use="practice_reference",
+            permit=practice_permit,
+            expected_combo=expected_combo,
+        )
+    else:
+        qualification = qualify_archive(
+            reference_archive, use="live_reference", expected_combo=expected_combo
+        )
     if diagnostics is not None:
         diagnostics.update(allowed=qualification.allowed, reason=qualification.reason)
     if not qualification.allowed:
+        return None
+    if practice_permit is not None and not practice_reference_usable(
+        reference_archive, practice_permit=practice_permit, expected_combo=expected_combo
+    ):
+        if diagnostics is not None:
+            diagnostics.update(allowed=False, reason="practice_reference_evidence_unavailable")
+        return None
+    if practice_permit is not None and practice_session is None:
+        if diagnostics is not None:
+            diagnostics.update(allowed=False, reason="practice_session_required")
         return None
     if diagnostics is not None:
         diagnostics.update(allowed=False, reason="reference_trace_unavailable")
@@ -1453,17 +1586,7 @@ def build_coach_runtime(
         tlayout = track_obj.get("layout")
         track_layout = tlayout if isinstance(tlayout, str) and tlayout.strip() else None
     reference_lap_ms = _archive_lap_ms(reference_archive)
-    anchors: dict[int, _Anchors] = {}
-    for r in refs:
-        sig = geom.get(r.index)
-        v_ref = sig.entry_speed_kmh if sig else 150.0
-        lead = _lead_spline(v_ref, track_m, lead_s)
-        bp = sig.brake_point_spline if sig and sig.brake_point_spline is not None else r.spline_lo
-        anchors[r.index] = _Anchors(
-            brake=(bp - lead) % 1.0,
-            turn_in=(r.spline_lo - lead) % 1.0,
-            apex=r.apex_spline,
-        )
+    anchors = _reference_anchors(refs, geom, track_m, lead_s)
     # reference signatures derived with the live accumulation (self-consistent diagnosis baseline)
     tr = reference_archive.get("trace") or {}
     fields = tr.get("fields") or []
@@ -1576,22 +1699,26 @@ def build_coach_runtime(
     for ref in refs:
         if ref.coachable_apex_kmh is not None and ref.index in ref_sigs:
             ref_sigs[ref.index] = replace(ref_sigs[ref.index], min_speed_kmh=ref.coachable_apex_kmh)
-    ledger = CoachingLedger(
-        hysteresis=(
-            _env_int("AC_COPILOT_COACH_HYSTERESIS", policy.hysteresis, min_value=1)
-            if use_environment
-            else policy.hysteresis
-        ),
-        assess_laps=(
-            _env_int("AC_COPILOT_COACH_ASSESS_LAPS", policy.assess_laps, min_value=0)
-            if use_environment
-            else policy.assess_laps
-        ),
-        lap_budget=(
-            _env_int("AC_COPILOT_COACH_LAP_BUDGET", policy.lap_budget, min_value=1)
-            if use_environment
-            else policy.lap_budget
-        ),
+    ledger = (
+        practice_session.ledger
+        if practice_session is not None
+        else CoachingLedger(
+            hysteresis=(
+                _env_int("AC_COPILOT_COACH_HYSTERESIS", policy.hysteresis, min_value=1)
+                if use_environment
+                else policy.hysteresis
+            ),
+            assess_laps=(
+                _env_int("AC_COPILOT_COACH_ASSESS_LAPS", policy.assess_laps, min_value=0)
+                if use_environment
+                else policy.assess_laps
+            ),
+            lap_budget=(
+                _env_int("AC_COPILOT_COACH_LAP_BUDGET", policy.lap_budget, min_value=1)
+                if use_environment
+                else policy.lap_budget
+            ),
+        )
     )
     resolved_ggv = ggv_model or _derive_combo_ggv(reference_archive, ref_lap)
     car_meta = (
@@ -1627,14 +1754,20 @@ def build_coach_runtime(
         reference_optimal_temp_c=ref_opt_temp,
     )
     requested = (
-        practice_drills
+        True
+        if practice_session is not None
+        else practice_drills
         if practice_drills is not None
         else (use_environment and os.environ.get("AC_COPILOT_COACH_DRILLS") == "1")
     )
     runtime.practice_requested = bool(requested)
     if requested:
         selected = next_drill(profile)
-        drill_id = practice_drill_id or (selected or {}).get("id")
+        drill_id = (
+            practice_session.drill_id
+            if practice_session is not None
+            else practice_drill_id or (selected or {}).get("id")
+        )
         combo = _archive_combo(reference_archive)
         if not drill_id or combo is None or capability_gate_mode != "condition_indexed":
             runtime.practice_unavailable_reason = "qualified_curriculum_reference_required"
@@ -1644,14 +1777,49 @@ def build_coach_runtime(
                 _finite_float((reference_archive.get("tyres") or {}).get("optimalTempC"))
                 or ref_opt_temp
             )
-            runtime.practice = PracticeSession(
+            runtime.practice = practice_session or PracticeSession(
                 ledger=ledger,
                 combo=combo,
                 reference_signatures=human_ref_sigs,
                 reference_qualification=qualification,
                 reference_identity=str(reference_archive.get("lap_uuid") or ""),
                 drill_id=drill_id,
+                practice_permit=practice_permit,
             )
+            if practice_session is not None:
+                if (
+                    practice_session.combo != combo
+                    or practice_session.practice_permit is not practice_permit
+                ):
+                    if diagnostics is not None:
+                        diagnostics.update(
+                            allowed=False, reason="practice_session_context_mismatch"
+                        )
+                    return None
+                if (
+                    not runtime._practice_archive_conditions(reference_archive)
+                    or PracticeSession._off_track(reference_archive) is not False
+                    or not runtime._practice_observations(reference_archive)
+                ):
+                    if diagnostics is not None:
+                        diagnostics.update(
+                            allowed=False, reason="warmup_reference_evidence_unavailable"
+                        )
+                    return None
+                try:
+                    practice_session.install_reference(
+                        human_ref_sigs, qualification, str(reference_archive.get("lap_uuid") or "")
+                    )
+                except ValueError as exc:
+                    if diagnostics is not None:
+                        diagnostics.update(allowed=False, reason=str(exc))
+                    return None
+    if canonical_corner_catalog is not None:
+        from tools.ai_sidecar.track_map import bind_reference_corners
+
+        runtime.set_corner_identity(
+            bind_reference_corners(reference_archive, runtime.refs, canonical_corner_catalog)
+        )
     return runtime
 
 
