@@ -24,7 +24,8 @@ slip limiter was unused. Opt-in GGV feedback now consumes the existing harness
 PhysFrame reader, using strict authored compound-specific front/rear radii.
 Each wheel constrains one shared brake command; either rear constrains throttle.
 It only reduces planner demands, predicts briefly with bounded influence,
-restores authority slowly after observed clearance, and suppresses downshifts
+ramps pedal application with earlier braking lookahead, restores authority slowly
+after observed clearance, and suppresses downshifts
 during braking slip. Invalid, stale or reversed native packets stop the run.
 No qualification, oracle, thermal, slip, completeness, native identity, #529
 plant fitting, recovery, reset or raw-source policy is relaxed.

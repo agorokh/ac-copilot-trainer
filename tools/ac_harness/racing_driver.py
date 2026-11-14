@@ -322,6 +322,7 @@ class WheelSlipGovernor:
         self.fresh_at: float | None = None
         self.last_now = -math.inf
         self.gas_ceiling = self.brake_ceiling = 1.0
+        self.delivered_gas = self.delivered_brake = 0.0
         self.previous_slips: tuple[float, float] | None = None
         self.slips = (0.0, 0.0)
         self.samples = self.gas_cuts = self.brake_cuts = self.shift_vetoes = 0
@@ -341,11 +342,13 @@ class WheelSlipGovernor:
             raise ValueError("Slip feedback native physics unavailable or invalid")
         if self.packet is not None and p.packet_id < self.packet:
             raise ValueError("Slip feedback native packet moved backwards")
+        rise_dt = 0.0
         if p.packet_id != self.packet:
             dt = 0.0 if self.fresh_at is None else now - self.fresh_at
             if self.fresh_at is not None and dt > 0.1:
                 raise ValueError("Slip feedback native physics stale")
             self.packet, self.fresh_at = p.packet_id, now
+            rise_dt = min(dt, 0.05)
             self.samples += 1
             speed = p.speed_kmh / 3.6
             ratios = [
@@ -380,7 +383,12 @@ class WheelSlipGovernor:
                 self.brake_ceiling = min(1.0, self.brake_ceiling + 0.5 * dt)
         elif self.fresh_at is None or now - self.fresh_at > 0.1:
             raise ValueError("Slip feedback native physics stale")
-        limited_gas, limited_brake = gas * self.gas_ceiling, brake * self.brake_ceiling
+        # Limit pedal APPLICATION too: full planner demand must not kick a rolling
+        # tyre into lock/spin before the next feedback sample. Release is immediate.
+        # Duplicate packets cannot raise either delivered command.
+        limited_gas = min(gas * self.gas_ceiling, self.delivered_gas + 1.5 * rise_dt)
+        limited_brake = min(brake * self.brake_ceiling, self.delivered_brake + 3.0 * rise_dt)
+        self.delivered_gas, self.delivered_brake = limited_gas, limited_brake
         self.gas_cuts += limited_gas < gas
         self.brake_cuts += limited_brake < brake
         # A downshift can add engine braking that pedal ABS cannot release.
@@ -459,6 +467,11 @@ class RacingDriver:
         # so don't re-brake via a long look-ahead; respond tighter to the target).
         kwargs.setdefault("lookahead_m", 4.0)
         kwargs.setdefault("lookahead_time_s", 0.15)
+        if kwargs.get("slip_radii_m") is not None:
+            # Feedback release/ramped application needs more braking headroom than
+            # the open-loop min-time tracker. Keep the baked target profile intact.
+            kwargs["lookahead_m"] = max(kwargs["lookahead_m"], 12.0)
+            kwargs["lookahead_time_s"] = max(kwargs["lookahead_time_s"], 0.5)
         kwargs.setdefault("brake_scale_mps", 2.5)
         kwargs.setdefault("throttle_scale_mps", 4.0)
         kwargs.setdefault("base_gas", 0.1)

@@ -106,7 +106,8 @@ python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track ma
   Verify the active native compound is N before Drive. Both axle radii must resolve
   from that compound's authored tyre data; no guessed or fitted radius is used.
   Any wheel can release the shared brake; either rear wheel can reduce throttle.
-  Bounded short prediction, hysteresis and slow recovery limit repeated lock/spin,
+  Bounded prediction, pedal-application ramps, earlier braking lookahead and
+  slow recovery limit repeated lock/spin,
   and braking slip suppresses new downshifts. Missing, stale or invalid physics
   interrupts the run through the harness's existing stop/cleanup path. The option
   defaults off, changes no archive qualification policy, and reports actual packet

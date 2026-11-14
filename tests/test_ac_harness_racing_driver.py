@@ -355,7 +355,7 @@ def test_slip_feedback_projects_developing_lock_before_admission_threshold():
     governor = WheelSlipGovernor((0.34, 0.34, 0.355, 0.355))
     native = _slip_physics(1)
     governor.read = lambda: native
-    assert governor.apply(1, 1, False, 0)[:2] == (1, 1)
+    assert governor.apply(1, 1, False, 0)[:2] == (0, 0)
     native = _slip_physics(2, (0, -0.05, 0, 0))
     assert governor.apply(0, 1, False, 0.01)[1] == 0
     # Re-reading a packet, even with changed bytes, cannot restore the brake.
@@ -399,7 +399,32 @@ def test_feedback_disabled_preserves_uninstrumented_driver():
     driver = RacingDriver.from_ggv_profile(_straight_line(100), [50.0] * 100)
     driver.set_phys_read(lambda: pytest.fail("ordinary driver must not read feedback"))
     assert driver.slip_feedback is None
+    assert driver.lookahead_m == 4 and driver.lookahead_time_s == 0.15
     assert driver.step((50, 0, 0), (1, 0, 0), 90, 5000, 4, 0).gas > 0
+
+
+def test_feedback_ramps_pedal_application_and_adds_braking_headroom():
+    driver = _feedback_driver()
+    governor = driver.slip_feedback
+    native = _slip_physics(1)
+    driver.set_phys_read(lambda: native)
+    assert driver.lookahead_m == 12 and driver.lookahead_time_s == 0.5
+    assert governor.apply(1, 1, False, 0)[:2] == (0, 0)
+    native = _slip_physics(2)
+    assert governor.apply(1, 1, False, 0.012)[:2] == pytest.approx((0.018, 0.036))
+    # A faster caller cannot accelerate the ramp by repeatedly reading one packet.
+    assert governor.apply(1, 1, False, 0.024)[:2] == pytest.approx((0.018, 0.036))
+    assert governor.apply(0, 0, False, 0.025)[:2] == (0, 0)
+    # The same baked profile requests braking earlier for a real upcoming speed
+    # drop, compensating for application ramps and possible feedback release.
+    target = [50.0] * 100
+    target[34:40] = [20.0] * 6
+    ordinary = RacingDriver.from_ggv_profile(_straight_line(100), target)
+    feedback = RacingDriver.from_ggv_profile(
+        _straight_line(100), target, slip_radii_m=(0.34, 0.34, 0.355, 0.355)
+    )
+    assert ordinary.profile == feedback.profile == target
+    assert feedback.target_speed_kmh(30, 180) < ordinary.target_speed_kmh(30, 180)
 
 
 def test_slip_feedback_denies_packet_rollback_and_clock_rollback():
