@@ -70,7 +70,7 @@ Rig-button binding (buttons only, never a knob detent):
 python -m tools.human_control_attestation monitor --capture-dir <dir> --vendor-snapshot <file>
 python -m tools.human_control_attestation attest --archive <lap.json> --capture-dir <dir>
 python -m tools.human_control_attestation scorecard --ledger <lap-attributions.json> --laps <dir>
-python -m tools.human_control_attestation verdict --manifest <manifest.json> --results <results.json>
+python -m tools.human_control_attestation verdict --manifest <manifest.json> --results <a.json> --results <b.json>
 ```
 
 `attest` writes nothing unless `--register` is given. `scorecard` is read-only and exits non-zero
@@ -137,7 +137,7 @@ only, never machine-wide. Note the wall-clock time of every arm change on paper.
 | 1 | `human` | 6 or more, plus one extra | Out-lap, press the declare button, then drive. The extra lap lets the vendor save again after the sixth | Certified (at least 5 of 6) |
 | 2 | `vendor_ai_mid_lap` | 2 or more | Declaration left active; switch vendor AI on part-way through one lap and off part-way through another | Abstain |
 | 3 | `vendor_ai` | 1 or more | Vendor AI on for the whole lap | Abstain |
-| 4 | `vendor_ai_record_missing` | 1 or more | Restart the monitor into `capture-b` without `--vendor-snapshot`, then a full vendor-AI lap | Abstain (`vendor_record_missing`) |
+| 4 | `vendor_ai_record_missing` | 1 or more | Restart the monitor into `capture-b` without `--vendor-snapshot`, press declare again, then a full vendor-AI lap. Before attesting, copy `capture-a\declarations.jsonl` into `capture-b` so the vendor record is the only missing signal | Abstain (`vendor_record_missing`) |
 | 5 | `native_ai` (optional) | 2 | AC's own AI on the player car, one switched on mid-lap | Abstain |
 | 6 | `project_autonomous` | 4 or more | The existing autonomous harness run, monitor still running | Abstain (`control_map_present`) |
 
@@ -148,11 +148,15 @@ its SHA-256 on the issue. Then:
 
 ```powershell
 python -m tools.human_control_attestation attest --capture-dir "$bench\capture-a" `
-  --register --ledger "$bench\bench-ledger.json" --archive <lap1.json> --archive <lap2.json> ... > "$bench\results.json"
-python -m tools.human_control_attestation verdict --manifest "$bench\manifest.json" --results "$bench\results.json"
+  --register --ledger "$bench\bench-ledger.json" --archive <lap1.json> --archive <lap2.json> ... > "$bench\results-a.json"
+python -m tools.human_control_attestation attest --capture-dir "$bench\capture-b" `
+  --register --ledger "$bench\bench-ledger.json" --archive <lapN.json> ... > "$bench\results-b.json"
+python -m tools.human_control_attestation verdict --manifest "$bench\manifest.json" `
+  --results "$bench\results-a.json" --results "$bench\results-b.json"
 ```
 
-Use `capture-b` for the laps captured in the second monitor run. The bench ledger is a scratch
+Each archive goes to the `attest` call for the capture directory it was recorded under, and
+`verdict` takes one `--results` per call. The bench ledger is a scratch
 file: the production ledger is not written, so the signals are tested rather than the
 "already attributed" guard.
 

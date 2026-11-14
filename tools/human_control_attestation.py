@@ -973,7 +973,8 @@ def main(argv: list[str] | None = None) -> int:
     score.add_argument("--first", type=int)
     verdict = commands.add_parser("verdict", help="apply the bench acceptance rule")
     verdict.add_argument("--manifest", required=True, type=Path)
-    verdict.add_argument("--results", required=True, type=Path)
+    # One results file per capture directory; a bench session has at least two.
+    verdict.add_argument("--results", required=True, type=Path, action="append")
     args = parser.parse_args(argv)
     try:
         with _ledger_scope(getattr(args, "ledger", None)):
@@ -1019,9 +1020,14 @@ def _run(args: argparse.Namespace) -> int:
         clean = not report["certified"] and not report["signals_clear_without_ledger_guard"]
         return 0 if clean else 1
     manifest = _loads(_stable_bytes(args.manifest))
-    results = _loads(_stable_bytes(args.results))
-    rows = results.get("results") if isinstance(results, dict) else None
-    report = bench_verdict(manifest, rows if isinstance(rows, list) else [])
+    rows: list[Any] = []
+    for path in args.results:
+        results = _loads(_stable_bytes(path))
+        part = results.get("results") if isinstance(results, dict) else None
+        if not isinstance(part, list):
+            raise _InputError("results_invalid")
+        rows.extend(part)
+    report = bench_verdict(manifest, rows)
     print(json.dumps(report, indent=2))
     return 0 if report["verdict"] == "PASS" else 1
 

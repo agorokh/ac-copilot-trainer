@@ -1045,6 +1045,20 @@ def test_attest_and_verdict_cli_round_trip(tmp_path, ledger, capsys, monkeypatch
     )
     assert main(["verdict", "--manifest", str(manifest), "--results", str(results)]) == 1
     assert json.loads(capsys.readouterr().out)["verdict"] == "INCONCLUSIVE"
+    # A bench session spans several capture directories, one results file each.
+    bench_manifest, bench_results = _bench()
+    manifest.write_text(json.dumps(bench_manifest), encoding="utf-8")
+    first, second = tmp_path / "results-a.json", tmp_path / "results-b.json"
+    first.write_text(json.dumps({"results": bench_results[:9]}), encoding="utf-8")
+    second.write_text(json.dumps({"results": bench_results[9:]}), encoding="utf-8")
+    both = ["verdict", "--manifest", str(manifest), "--results", str(first)]
+    assert main(both) == 1
+    assert json.loads(capsys.readouterr().out)["verdict"] == "INCONCLUSIVE"
+    assert main([*both, "--results", str(second)]) == 0
+    assert json.loads(capsys.readouterr().out)["verdict"] == "PASS"
+    second.write_text(json.dumps({"results": "none"}), encoding="utf-8")
+    assert main([*both, "--results", str(second)]) == 2
+    assert json.loads(capsys.readouterr().out)["reason"] == "results_invalid"
     manifest.write_text("{", encoding="utf-8")
     assert main(["verdict", "--manifest", str(manifest), "--results", str(results)]) == 2
 
