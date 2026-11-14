@@ -55,6 +55,7 @@ class LapSource:
     lap_n: int
     lap_uuid: str
     lap_ms: float
+    authority: str = "unknown"  # control authority reported by the analysis qualification
 
 
 @dataclass
@@ -122,7 +123,17 @@ def discover_sessions(
         ):
             rejected.append({"path": str(file), "reason": "session_or_lap_identity_unavailable"})
             continue
-        eligible.append(LapSource(str(file), digest, record, lap_n, lap_uuid, float(lap_ms)))
+        eligible.append(
+            LapSource(
+                str(file),
+                digest,
+                record,
+                lap_n,
+                lap_uuid,
+                float(lap_ms),
+                str(qualification.authority),
+            )
+        )
     grouped: dict[tuple[str, tuple[str, str, str | None]], SessionPlan] = {}
     for lap in eligible:
         combo = archive_combo(lap.record)
@@ -188,6 +199,7 @@ def _drive(
             "lap_uuid": lap.lap_uuid,
             "lap_ms": lap.lap_ms,
             "sha256": lap.sha256,
+            "authority": lap.authority,
             "replayed": reason is None,
             "skip_reason": reason,
         }
