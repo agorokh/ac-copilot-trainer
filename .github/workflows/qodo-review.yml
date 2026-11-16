@@ -43,7 +43,7 @@ jobs:
     steps:
       - name: Run PR-Agent
         # Pinned SHA — do not use @main (third-party code + tokens). Bump intentionally.
-        uses: qodo-ai/pr-agent@efdde4afe14aa401a3889012c7f3e9ef3081a430
+        uses: qodo-ai/pr-agent@e673a02076ce09a4726c3d0c3cc85780e59ca52b
         env:
           # Future: inject via doppler/cli-action instead of per-repo secret.
           OPENAI_KEY: ${{ secrets.OPENAI_KEY }}  # pragma: allowlist secret
