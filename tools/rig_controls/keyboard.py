@@ -135,10 +135,11 @@ def decode_packet(data: bytes, expected_device: int):
         raise ValueError("Raw Input size mismatch")
     if header.kind != 1 or header.device != expected_device:
         return None
-    if len(data) != ctypes.sizeof(Header) + ctypes.sizeof(Key):
+    # Read the keyboard member, not the size of RAWINPUT's enclosing union.
+    if len(data) < ctypes.sizeof(Header) + ctypes.sizeof(Key):
         raise ValueError("truncated Raw Input keyboard")
     key = Key.from_buffer_copy(data, ctypes.sizeof(Header))
-    if key.vk == 255:
+    if key.scan == 0xFF or key.vk >= 255:
         raise ValueError("keyboard overrun; discard pending declaration")
     if key.message not in (0x100, 0x101, 0x104, 0x105):
         raise ValueError("unexpected Raw Input keyboard message")

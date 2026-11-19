@@ -267,6 +267,22 @@ def test_packet_ignores_other_keyboards_and_non_keyboard_devices():
     assert keyboard.decode_packet(packet(kind=0), 7) is None
 
 
+def test_keyboard_packet_accepts_unused_rawinput_union_padding():
+    # RAWINPUT's union can occupy more space than its RAWKEYBOARD member.
+    value = bytearray(packet() + b"\xcd" * 8)
+    header = keyboard.Header.from_buffer(value)
+    header.size = len(value)
+    assert keyboard.decode_packet(value, 7) == (0x41, True)
+
+
+def test_makecode_overrun_rejects_an_otherwise_recognized_key():
+    value = bytearray(packet())
+    key = keyboard.Key.from_buffer(value, ctypes.sizeof(keyboard.Header))
+    key.scan = 0xFF  # KEYBOARD_OVERRUN_MAKE_CODE, independently of VKey.
+    with pytest.raises(ValueError, match="overrun"):
+        keyboard.decode_packet(value, 7)
+
+
 @pytest.mark.parametrize("value", [b"", packet()[:-1], packet(vk=255)])
 def test_corrupt_packet_and_overrun_fail_closed(value):
     with pytest.raises(ValueError):

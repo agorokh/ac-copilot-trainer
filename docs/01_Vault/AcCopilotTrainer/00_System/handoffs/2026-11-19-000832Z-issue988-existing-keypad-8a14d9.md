@@ -67,6 +67,25 @@ One isolated physical declaration check is awaiting the operator's response.
 Candidate Game Point is scoped to a disposable validation-only journal, with no
 AC session or capture monitor started; normal user/machine opt-in remains unset.
 
+Round 2 on 865af62 passed the independence floor: Antigravity and Grok returned
+zero findings (review 5968017293); Cursor did not run because of a non-quota
+error. Exact-head full ci-fast passed 6546 tests, 26 skips, 88% coverage, with
+required hosted checks green. One intervening local policy run caught the private
+gate-runtime extraction under scratch. Moved that input outside the public tree
+to the product DeveloperTools directory and reran the complete check successfully;
+no policy/test skip was added.
+
+Own pre-merge audit then reproduced two decoder failures in regression tests:
+valid RAWINPUT union padding was rejected, and KEYBOARD_OVERRUN_MAKE_CODE with
+an otherwise recognized VKey was accepted. The decoder now requires a complete
+keyboard member while permitting trailing union storage, and rejects both the
+overrun scan and invalid VKey range. Microsoft RAWINPUT/RAWKEYBOARD definitions
+ground these cases. Both tests failed before the change; 177 focused tests now
+pass. Fresh native supervisor registration/read/default-off/shutdown proof passes
+(20 context reads in 0.1899 s). The old validation GUI was closed before updating
+the candidate; no physical declaration has been recorded. The existing one-button
+prompt is paused until the updated package is ready. No new assignment exercise.
+
 Tier-3 task-specific canonical prefetch succeeded for ac_copilot, retaining its
 endpoint-drift warning. Council attempt 454c7b816d3c4973af305af598ed144e had 1/6
 answers and no quorum; five seats failed. Its answer discussed macOS despite this
