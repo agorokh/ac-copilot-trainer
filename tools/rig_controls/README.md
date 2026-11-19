@@ -1,9 +1,36 @@
 # External controls: profiles owned by Game Point
 
-Prepared for workstation-ops #3863. Hardware has not been flashed. The controller
+Prepared for workstation-ops #3863. The managed controller
 only opens the new managed firmware's unique vendor HID collection, validates its
 capability, then writes a profile lease. Stock `1189:8890`, ROM `4348:55E0` and the
 separate baseline firmware cannot receive profile output from this controller.
+
+## Existing baseline keypad: #988 declaration compatibility
+
+The already-installed baseline keyboard does not need a firmware change for a
+human-control declaration. Use `profiles.attestation-baseline.json` as a separate
+Game Point `keypad_profiles` file. Its explicit `backend: baseline_keyboard` reads
+Windows Raw Input from exactly one `1209:C55D` keyboard. Other keyboards are
+ignored; no device/ambiguous devices, input errors, disconnects or a stalled reader
+make the row unavailable. Backend changes require restarting Game Point.
+
+The known Ctrl+Alt+A/M/S shortcuts correspond to the three existing buttons.
+The example declares on the Content Manager button (A) and clears on the Steam
+button (S), while `acs.exe` is running; the Minecraft button is a no-op for
+attestation. Outside AC all declaration bindings are no-ops. The existing
+application shortcuts **still execute**: this backend does not intercept them,
+inject keys, change their assignments, send HID output, or control lighting.
+Declare before the scored lap and return to AC before crossing its start. A pause
+or non-live frame during the scored lap remains disqualifying under #988.
+
+Both `AC_COPILOT_HUMAN_CONTROL_ATTESTATION=1` and the declaration-journal path are
+still required, in the operator-attended bench process only. Without them, input
+cannot write a declaration. Game Point shows `baseline keyboard (read-only)` and
+`attestation disabled` or the last recorded action. This is an intent record,
+never a certification of human control. The full capture-time witness is unchanged.
+Only `noop`/button `attest` actions are supported; knob, key-injection, rig-action
+and color-control bindings are rejected. Other Game Point racing/shaker work and
+managed-firmware physical qualification keep their existing owners.
 
 ## What is ready
 

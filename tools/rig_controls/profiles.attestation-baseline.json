@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "backend": "baseline_keyboard",
+  "default": "idle",
+  "manual_override": null,
+  "profiles": [
+    {
+      "name": "idle",
+      "rgb": [255, 0, 0],
+      "bindings": {
+        "button_1": {"action": "noop"},
+        "button_2": {"action": "noop"},
+        "button_3": {"action": "noop"},
+        "knob_cw": {"action": "noop"},
+        "knob_ccw": {"action": "noop"},
+        "knob_press": {"action": "noop"}
+      }
+    },
+    {
+      "name": "attestation-baseline",
+      "priority": 10,
+      "rgb": [255, 0, 0],
+      "when": {"running_process": ["acs.exe"]},
+      "bindings": {
+        "button_1": {"action": "attest", "name": "human_control.declare"},
+        "button_2": {"action": "noop"},
+        "button_3": {"action": "attest", "name": "human_control.clear"},
+        "knob_cw": {"action": "noop"},
+        "knob_ccw": {"action": "noop"},
+        "knob_press": {"action": "noop"}
+      }
+    }
+  ]
+}

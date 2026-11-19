@@ -1646,6 +1646,12 @@ class GamePointSupervisor:
         except (OSError, ValueError, ImportError) as exc:
             return ProbeResult("keypad", False, "unavailable", str(exc))
         detail = status.get("error") or status.get("profile") or "awaiting prepared keypad"
+        if status.get("backend") == "baseline_keyboard":
+            detail += "; baseline keyboard (read-only, existing shortcuts retained)"
+            if not status.get("attestation_enabled"):
+                detail += "; attestation disabled"
+        if status.get("declaration"):
+            detail += "; last recorded: " + status["declaration"]
         if status.get("reload_error"):
             detail += "; invalid config reload rejected"
         if status.get("action_error"):

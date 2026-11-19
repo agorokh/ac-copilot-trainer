@@ -153,6 +153,7 @@ class Actions:
         self.counts = {}
         self.last_error = ""
         self.last_unavailable = ""
+        self.last_attestation = ""
 
     def perform(self, binding: Binding, pressed: bool, impulse: bool = False):
         if binding.action == "noop":
@@ -163,6 +164,7 @@ class Actions:
             return
         if binding.action == "attest":
             if pressed and not impulse:
+                self.last_attestation = ""
                 sink = self.declare
                 if sink is None:
                     from tools.human_control_attestation import declaration_sink
@@ -176,6 +178,9 @@ class Actions:
                     except (OSError, ValueError) as exc:
                         # A lost declaration must be visible; the lap then abstains.
                         self.last_error = f"{binding.name}: declaration not recorded ({exc})"
+                    else:
+                        self.last_error = self.last_unavailable = ""
+                        self.last_attestation = binding.name
             return
         keys = binding.keys if pressed else tuple(reversed(binding.keys))
         for key in keys:

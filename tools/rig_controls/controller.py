@@ -37,6 +37,8 @@ class Controller:
     def reload(self, path: Path) -> bool:
         try:
             config = load_config(path)
+            if config.backend != self.config.backend:
+                raise ValueError("changing keypad backend requires restarting Game Point")
         except (OSError, UnicodeError, ValueError) as exc:
             self.reload_error = str(exc)
             return False

@@ -85,8 +85,11 @@ if any already-attributed lap would be certified.
   (`training-evaluation-snapshot-v1.json`). On 2026-11-14 it was last written 2026-10-15 while
   59 native laps in 27 sessions were captured after it, so it is not written for every session.
   A lap without a covering record always abstains.
-- **Declaration hardware.** The `attest` binding needs the managed keypad firmware, which is not
-  flashed (workstation-ops#3863).
+- **Declaration hardware.** Game Point supports the existing baseline keypad through the
+  explicit `baseline_keyboard` profile backend, as well as the managed HID backend.
+  The baseline path preserves Ctrl+Alt+A/M/S and their application actions; it does not
+  require reflashing or repeating the old button-assignment exercise. One real declaration
+  through the new software path still needs an operator-attended check.
 - **Other input injectors.** A virtual controller or any path not listed above is not observed.
 - **Track layout in the vendor join.** The vendor key's layout field is not understood, so only
   track and car are compared.
@@ -112,8 +115,9 @@ prerequisites hold.
 
 1. The change is merged and the rig's primary checkout is on it, so new archives carry
    `trace.control_observation`. Check one archive before starting.
-2. A working declaration surface (flashed managed keypad with an `attest` binding, or an
-   operator decision on another surface).
+2. A working declaration surface: the existing baseline keypad with Game Point's
+   `profiles.attestation-baseline.json`, or a managed keypad with an `attest` binding.
+   Stage a separate profile; preserve the user's ordinary mappings.
 3. Racing Lab observes the session (launch from it) so the vendor record is written.
 
 **Setup** (one PowerShell window in the interactive desktop session, never over SSH)
@@ -129,6 +133,15 @@ python -m tools.human_control_attestation monitor --capture-dir "$bench\capture-
 
 Start the keypad worker from a shell with the same two variables. Set them for the bench shells
 only, never machine-wide. Note the wall-clock time of every arm change on paper.
+
+Game Point normally owns the worker. In the bench shell, point
+`AC_COPILOT_KEYPAD_PROFILES` at `tools/rig_controls/profiles.attestation-baseline.json`
+(or a validated, separate installed copy), then launch Game Point normally. The example
+uses the already-established Content Manager button to declare and Steam button to clear.
+Their normal application shortcuts remain active, so return to AC **before** the scored
+lap starts; do not declare by switching windows in the middle of a scored lap. The
+Keypad row distinguishes the read-only baseline backend, disabled attestation and the
+last recorded declaration. A declaration alone never grants human authority.
 
 **Arms**
 
