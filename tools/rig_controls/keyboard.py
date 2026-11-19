@@ -34,6 +34,8 @@ class ShortcutDecoder:
         letters = {0x41: 0, 0x4D: 1, 0x53: 2}
         relevant = set(letters) | {0x10, 0x11, 0x12, 0x5B, 0x5C, *range(0xA0, 0xA6)}
         if vk not in relevant:
+            # An unexpected key must not leave a partly matched chord armed.
+            self.reset()
             return None
         if not pressed:
             self.held.discard(vk)
@@ -93,7 +95,7 @@ class KeyboardController(Controller):
                     control, down = event
                     self.actions.perform(self.active.bindings[control], down)
         except (OSError, ValueError, RuntimeError) as exc:
-            self.error = str(exc)
+            self.error = f"{type(exc).__name__}: {exc}"
             self.close()
             self.retry_at = now + 1.0
 
@@ -190,7 +192,7 @@ class RawKeyboardSource:
         except Exception as exc:
             # ctypes callbacks cannot propagate errors. Surface them at read(),
             # where the controller closes this source before any action is routed.
-            self.error = str(exc)
+            self.error = f"{type(exc).__name__}: {exc}"
         return self.api.default(hwnd, message, wparam, lparam)
 
     def read(self):
@@ -320,8 +322,9 @@ class _WindowsAPI:  # pragma: no cover - exercised by the native rig readback
             0, name, "", 0, 0, 0, 0, 0, PTR(-3), None, self.instance, None
         )
         if not window:
+            error = ctypes.WinError()
             self.user.UnregisterClassW(name, self.instance)
-            raise ctypes.WinError()
+            raise error
         return atom, window
 
     def register(self, window):

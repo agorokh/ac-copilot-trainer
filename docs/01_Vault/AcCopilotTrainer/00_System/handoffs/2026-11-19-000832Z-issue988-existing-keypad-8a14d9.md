@@ -35,6 +35,17 @@ initial topology. Regression tests added: 79 focused tests pass. Native reader
 registered, pumped and closed cleanly on the rig without output reports or a
 declaration. Initial format/lint errors corrected. No real lap evidence generated.
 
+The production Game Point supervisor probe exposed the old tasklist subprocess's
+400 ms timeout. Replaced it with a native Toolhelp executable-name snapshot,
+failing closed on incomplete enumeration. The same real probe now reports active,
+idle baseline keyboard, attestation disabled; twenty process-context reads took
+0.2161 seconds total. Windows returned INPUTSINK (256) and no NOLEGACY flags;
+registration was empty before and after supervisor shutdown. Requested registration
+also enables DEVNOTIFY. Receipt: `.scratch/issue988-integration/native-launcher-proof.json`.
+Unknown keys reset partial chords; callback exceptions remain visible even with
+empty messages. Combined focused suites now pass 171 tests. Draft implementation
+carrier: https://github.com/agorokh/ac-copilot-trainer/pull/1014.
+
 Tier-3 task-specific canonical prefetch succeeded for ac_copilot, retaining its
 endpoint-drift warning. Council attempt 454c7b816d3c4973af305af598ed144e had 1/6
 answers and no quorum; five seats failed. Its answer discussed macOS despite this

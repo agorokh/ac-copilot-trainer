@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import csv
 import ctypes
-import io
 import os
-import subprocess
 
 from tools.rig_controls.profiles import Binding, Context
 
@@ -45,6 +42,47 @@ def _libraries():
     )
 
 
+class _ProcessEntry(ctypes.Structure):
+    _fields_ = [
+        ("size", ctypes.c_uint32),
+        ("usage", ctypes.c_uint32),
+        ("pid", ctypes.c_uint32),
+        ("heap", ctypes.c_size_t),
+        ("module", ctypes.c_uint32),
+        ("threads", ctypes.c_uint32),
+        ("parent", ctypes.c_uint32),
+        ("priority", ctypes.c_int32),
+        ("flags", ctypes.c_uint32),
+        ("exe", ctypes.c_wchar * 260),
+    ]
+
+
+def _running_processes(kernel):
+    """Read executable names directly; spawning tasklist can stall the input worker."""
+    kernel.CreateToolhelp32Snapshot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+    kernel.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    for function in (kernel.Process32FirstW, kernel.Process32NextW):
+        function.argtypes = [ctypes.c_void_p, ctypes.POINTER(_ProcessEntry)]
+        function.restype = ctypes.c_int
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = kernel.CreateToolhelp32Snapshot(2, 0)  # TH32CS_SNAPPROCESS
+    if handle == ctypes.c_void_p(-1).value or handle is None:
+        raise OSError("running-process snapshot could not be opened")
+    try:
+        entry = _ProcessEntry()
+        entry.size = ctypes.sizeof(entry)
+        names = set()
+        found = kernel.Process32FirstW(handle, ctypes.byref(entry))
+        while found:
+            names.add(entry.exe.casefold())
+            found = kernel.Process32NextW(handle, ctypes.byref(entry))
+        if ctypes.get_last_error() != 18:  # ERROR_NO_MORE_FILES is the only normal end.
+            raise OSError("running-process snapshot could not be read completely")
+        return frozenset(names)
+    finally:
+        kernel.CloseHandle(handle)
+
+
 def foreground_context(include_running: bool = False) -> Context:
     user, kernel = _libraries()
     user.GetForegroundWindow.restype = ctypes.c_void_p
@@ -75,22 +113,7 @@ def foreground_context(include_running: bool = False) -> Context:
                     executable = buf.value.rsplit("\\", 1)[-1]
             finally:
                 kernel.CloseHandle(handle)
-    running = frozenset()
-    if include_running:
-        try:
-            result = subprocess.run(
-                ["tasklist.exe", "/FO", "CSV", "/NH"],
-                capture_output=True,
-                text=True,
-                timeout=0.4,
-                check=True,
-                creationflags=0x08000000,
-            )
-        except subprocess.SubprocessError as exc:
-            raise OSError("running-process condition could not be read") from exc
-        running = frozenset(
-            row[0].casefold() for row in csv.reader(io.StringIO(result.stdout)) if row
-        )
+    running = _running_processes(kernel) if include_running else frozenset()
     return Context(executable, title.value, running)
 
 

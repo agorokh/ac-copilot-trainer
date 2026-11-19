@@ -4,10 +4,11 @@ import ctypes
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
-from tools.rig_controls import keyboard
+from tools.rig_controls import keyboard, windows
 from tools.rig_controls.controller import Controller
 from tools.rig_controls.profiles import Context, load_config, parse_config
 from tools.rig_controls.runtime import Worker
@@ -23,6 +24,41 @@ RELEASE = [(0x11, False), (0x12, False), (0x41, False)]
 
 def data():
     return json.loads(PROFILE.read_text())
+
+
+@pytest.mark.parametrize("end_error", [18, 5])
+def test_process_snapshot_is_complete_or_fails_closed(monkeypatch, end_error):
+    def first(handle, pointer):
+        entry = ctypes.cast(pointer, ctypes.POINTER(windows._ProcessEntry)).contents
+        assert entry.size == ctypes.sizeof(entry)
+        entry.exe = "ACS.EXE"
+        return 1
+
+    api = SimpleNamespace(
+        CreateToolhelp32Snapshot=Mock(return_value=9),
+        Process32FirstW=Mock(side_effect=first),
+        Process32NextW=Mock(return_value=0),
+        CloseHandle=Mock(),
+    )
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: end_error, raising=False)
+    if end_error == 18:
+        assert windows._running_processes(api) == frozenset({"acs.exe"})
+    else:
+        with pytest.raises(OSError, match="completely"):
+            windows._running_processes(api)
+    api.CloseHandle.assert_called_once_with(9)
+
+
+def test_process_snapshot_open_failure_does_not_close_invalid_handle():
+    api = SimpleNamespace(
+        CreateToolhelp32Snapshot=Mock(return_value=ctypes.c_void_p(-1).value),
+        Process32FirstW=Mock(),
+        Process32NextW=Mock(),
+        CloseHandle=Mock(),
+    )
+    with pytest.raises(OSError, match="opened"):
+        windows._running_processes(api)
+    api.CloseHandle.assert_not_called()
 
 
 class Source:
@@ -188,6 +224,14 @@ def test_decoder_needs_per_device_modifiers_and_rejects_extra_modifiers():
     assert decoder.feed(0xFF, True) is None
 
 
+def test_unknown_key_cancels_partial_shortcut():
+    decoder = keyboard.ShortcutDecoder()
+    decoder.feed(0x11, True)
+    decoder.feed(0x12, True)
+    decoder.feed(0x42, True)
+    assert decoder.feed(0x41, True) is None
+
+
 def packet(device=7, vk=0x41, pressed=True, kind=1):
     header = keyboard.Header(
         kind, ctypes.sizeof(keyboard.Header) + ctypes.sizeof(keyboard.Key), device, 0
@@ -334,6 +378,20 @@ def test_close_continues_after_unregister_failure(monkeypatch):
     with pytest.raises(OSError, match="remove failed"):
         source.close()
     assert api.closed == ["remove", "destroy", "unregister"]
+
+
+def test_empty_callback_exception_is_still_a_failure(monkeypatch):
+    api = API()
+
+    def broken_packet(handle):
+        raise OSError()
+
+    api.packet = broken_packet
+    source = raw_source(monkeypatch, api)
+    source._message(2, 0xFF, 0, 1)
+    with pytest.raises(OSError, match="OSError"):
+        source.read()
+    source.close()
 
 
 def test_worker_uses_same_lifecycle_for_baseline(tmp_path):
