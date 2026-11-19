@@ -204,7 +204,6 @@ class Actions:
             return
         if binding.action == "attest":
             if pressed and not impulse:
-                self.last_attestation = ""
                 sink = self._declaration_sink()
                 if sink is None:
                     self.last_unavailable = f"{binding.name}: attestation not enabled"

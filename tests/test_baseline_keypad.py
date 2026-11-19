@@ -195,6 +195,27 @@ def test_failed_write_is_visible_and_never_reported_recorded():
     assert not actions.last_attestation
 
 
+def test_failed_followup_preserves_last_recorded_without_acknowledging_failure(tmp_path):
+    from tools.human_control_attestation import record_declaration
+
+    journal = tmp_path / "declarations.jsonl"
+    c, source, actions = controller(lambda action: record_declaration(journal, action))
+    source.events = PRESS + RELEASE
+    c.step(ACTIVE, 0.02)
+    recorded = journal.read_bytes()
+
+    def broken_sink(action):
+        raise OSError("journal not writable")
+
+    actions.declare = broken_sink
+    source.events = [(0x11, True), (0x12, True), (0x53, True), (0x53, False)]
+    c.step(ACTIVE, 0.04)
+    assert journal.read_bytes() == recorded
+    assert actions.last_attestation == "human_control.declare"
+    assert "human_control.clear: declaration not recorded" in actions.last_error
+    c.close()
+
+
 def test_desktop_and_context_change_do_not_reinterpret_pending_shortcuts():
     called = []
     c, source, _ = controller(called.append)

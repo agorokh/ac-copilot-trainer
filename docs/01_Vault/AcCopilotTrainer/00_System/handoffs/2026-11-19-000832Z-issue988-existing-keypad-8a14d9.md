@@ -86,6 +86,21 @@ pass. Fresh native supervisor registration/read/default-off/shutdown proof passe
 the candidate; no physical declaration has been recorded. The existing one-button
 prompt is paused until the updated package is ready. No new assignment exercise.
 
+Round 3 on 7b19d42 passed independent review with no medium-or-higher findings
+(review 5968136526; all three responding lenses). Its local full ci-fast and
+required hosted checks passed. The rebuilt candidate matches all six compiled
+integration modules at that ref, includes HID, passes its endpoint self-test and
+shows active baseline input in its real GUI; the one-button check is ready again.
+Saved Windows shortcuts were read directly: A is Content Manager in the Start
+Menu, M is Minecraft and S is Steam. No shortcut was saved or reassigned.
+
+Cursor's small status-history finding was adopted: a failed follow-up press now
+retains the last successfully recorded action, matching the unchanged journal.
+The failed attempt still has an explicit action error and fails launcher health;
+it is never acknowledged as a new record. A regression exercises success followed
+by a failed clear and verifies both the journal and status. 178 focused tests pass.
+The hardware input path is unchanged; no additional physical check was requested.
+
 Tier-3 task-specific canonical prefetch succeeded for ac_copilot, retaining its
 endpoint-drift warning. Council attempt 454c7b816d3c4973af305af598ed144e had 1/6
 answers and no quorum; five seats failed. Its answer discussed macOS despite this
