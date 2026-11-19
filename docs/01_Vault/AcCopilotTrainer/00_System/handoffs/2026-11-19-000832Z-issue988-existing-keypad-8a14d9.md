@@ -46,6 +46,27 @@ Unknown keys reset partial chords; callback exceptions remain visible even with
 empty messages. Combined focused suites now pass 171 tests. Draft implementation
 carrier: https://github.com/agorokh/ac-copilot-trainer/pull/1014.
 
+Final first-head ci-fast passed 6542 tests, 26 skips, 88.00% coverage, all checks.
+The actual packaged UI reported active baseline input with attestation disabled;
+owned endpoint self-test passed and shutdown released the listener. Native second-
+instance proof refused another controller while the original reader remained
+active. Receipt: `.scratch/issue988-integration/native-ownership-proof.json`.
+
+Round 1 reviewed df36d168: Cursor's Toolhelp completion concern is addressed by
+clearing last-error before each read and matching the existing entry_launcher
+Next-call compatibility convention (0 or 18). First-call failure always abstains,
+and explicit Next errors discard partial results. Antigravity's runtime dependency
+concern is addressed by exposing availability through the existing Actions
+integration boundary. Grok's suggestion to use SimulatedOwnership for real
+baseline hardware is rejected: Ownership is solely a machine-wide mutex, with no
+HID open, lease or output. Removing it permits duplicate declaration dispatchers.
+The real two-instance proof above exercises this exact distinction. Focused
+regressions now pass 175 tests. No attestation qualification policy changed.
+
+One isolated physical declaration check is awaiting the operator's response.
+Candidate Game Point is scoped to a disposable validation-only journal, with no
+AC session or capture monitor started; normal user/machine opt-in remains unset.
+
 Tier-3 task-specific canonical prefetch succeeded for ac_copilot, retaining its
 endpoint-drift warning. Council attempt 454c7b816d3c4973af305af598ed144e had 1/6
 answers and no quorum; five seats failed. Its answer discussed macOS despite this

@@ -72,11 +72,17 @@ def _running_processes(kernel):
         entry = _ProcessEntry()
         entry.size = ctypes.sizeof(entry)
         names = set()
+        ctypes.set_last_error(0)
         found = kernel.Process32FirstW(handle, ctypes.byref(entry))
+        if not found:
+            raise OSError("running-process snapshot has no readable first entry")
         while found:
             names.add(entry.exe.casefold())
+            ctypes.set_last_error(0)
             found = kernel.Process32NextW(handle, ctypes.byref(entry))
-        if ctypes.get_last_error() != 18:  # ERROR_NO_MORE_FILES is the only normal end.
+        # Match entry_launcher's existing Toolhelp compatibility convention, but
+        # only after a successful First call. Initial failure never means empty.
+        if ctypes.get_last_error() not in (0, 18):
             raise OSError("running-process snapshot could not be read completely")
         return frozenset(names)
     finally:
@@ -178,6 +184,17 @@ class Actions:
         self.last_unavailable = ""
         self.last_attestation = ""
 
+    def _declaration_sink(self):
+        if self.declare is not None:
+            return self.declare
+        from tools.human_control_attestation import declaration_sink
+
+        return declaration_sink()
+
+    @property
+    def attestation_enabled(self):
+        return self._declaration_sink() is not None
+
     def perform(self, binding: Binding, pressed: bool, impulse: bool = False):
         if binding.action == "noop":
             return
@@ -188,11 +205,7 @@ class Actions:
         if binding.action == "attest":
             if pressed and not impulse:
                 self.last_attestation = ""
-                sink = self.declare
-                if sink is None:
-                    from tools.human_control_attestation import declaration_sink
-
-                    sink = declaration_sink()
+                sink = self._declaration_sink()
                 if sink is None:
                     self.last_unavailable = f"{binding.name}: attestation not enabled"
                 else:

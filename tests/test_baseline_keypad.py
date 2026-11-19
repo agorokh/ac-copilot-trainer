@@ -26,9 +26,10 @@ def data():
     return json.loads(PROFILE.read_text())
 
 
-@pytest.mark.parametrize("end_error", [18, 5])
+@pytest.mark.parametrize("end_error", [0, 18, 5])
 def test_process_snapshot_is_complete_or_fails_closed(monkeypatch, end_error):
     def first(handle, pointer):
+        reset.assert_called_with(0)
         entry = ctypes.cast(pointer, ctypes.POINTER(windows._ProcessEntry)).contents
         assert entry.size == ctypes.sizeof(entry)
         entry.exe = "ACS.EXE"
@@ -41,11 +42,30 @@ def test_process_snapshot_is_complete_or_fails_closed(monkeypatch, end_error):
         CloseHandle=Mock(),
     )
     monkeypatch.setattr(ctypes, "get_last_error", lambda: end_error, raising=False)
-    if end_error == 18:
+    reset = Mock()
+    monkeypatch.setattr(ctypes, "set_last_error", reset, raising=False)
+    if end_error in (0, 18):
         assert windows._running_processes(api) == frozenset({"acs.exe"})
     else:
         with pytest.raises(OSError, match="completely"):
             windows._running_processes(api)
+    api.CloseHandle.assert_called_once_with(9)
+    assert reset.call_count == 2
+
+
+@pytest.mark.parametrize("error", [0, 18, 5])
+def test_initial_process_snapshot_failure_is_never_an_empty_success(monkeypatch, error):
+    api = SimpleNamespace(
+        CreateToolhelp32Snapshot=Mock(return_value=9),
+        Process32FirstW=Mock(return_value=0),
+        Process32NextW=Mock(),
+        CloseHandle=Mock(),
+    )
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: error, raising=False)
+    monkeypatch.setattr(ctypes, "set_last_error", Mock(), raising=False)
+    with pytest.raises(OSError, match="first entry"):
+        windows._running_processes(api)
+    api.Process32NextW.assert_not_called()
     api.CloseHandle.assert_called_once_with(9)
 
 
@@ -410,5 +430,6 @@ def test_worker_uses_same_lifecycle_for_baseline(tmp_path):
     assert called == ["human_control.declare"]
     assert worker.status()["backend"] == "baseline_keyboard"
     assert worker.status()["declaration"] == "human_control.declare"
+    assert worker.status()["attestation_enabled"]
     worker.stop()
     assert source.closed

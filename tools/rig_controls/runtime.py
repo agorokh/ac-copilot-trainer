@@ -40,6 +40,8 @@ class Worker:
         self._status = self.controller.status()
         self._thread = None
         self.reload_at = 0.0
+        # Ownership is only the shared process mutex, never a HID lease or write.
+        # Both real backends need it; simulated ownership is for injected test I/O.
         self.owner_factory = owner_factory or (
             Ownership if opener is open_device and keyboard_source is None else SimulatedOwnership
         )
@@ -91,9 +93,9 @@ class Worker:
         snapshot["action_unavailable"] = getattr(self.controller.actions, "last_unavailable", "")
         snapshot["declaration"] = getattr(self.controller.actions, "last_attestation", "")
         if self.controller.config.backend == "baseline_keyboard":
-            from tools.human_control_attestation import declaration_sink
-
-            snapshot["attestation_enabled"] = declaration_sink() is not None
+            snapshot["attestation_enabled"] = bool(
+                getattr(self.controller.actions, "attestation_enabled", False)
+            )
         with self._lock:
             self._status = snapshot
 
