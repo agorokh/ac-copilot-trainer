@@ -22,17 +22,28 @@ class Worker:
         actions=None,
         context_provider=None,
         owner_factory=None,
+        keyboard_source=None,
     ):
         self.path = path
-        self.controller = Controller(load_config(path), opener, actions or Actions())
+        config = load_config(path)
+        if config.backend == "baseline_keyboard":
+            from tools.rig_controls.keyboard import KeyboardController, RawKeyboardSource
+
+            self.controller = KeyboardController(
+                config, keyboard_source or RawKeyboardSource, actions or Actions()
+            )
+        else:
+            self.controller = Controller(config, opener, actions or Actions())
         self.context_provider = context_provider
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._status = self.controller.status()
         self._thread = None
         self.reload_at = 0.0
+        # Ownership is only the shared process mutex, never a HID lease or write.
+        # Both real backends need it; simulated ownership is for injected test I/O.
         self.owner_factory = owner_factory or (
-            Ownership if opener is open_device else SimulatedOwnership
+            Ownership if opener is open_device and keyboard_source is None else SimulatedOwnership
         )
         self.owner = None
         self._running = frozenset()
@@ -80,6 +91,11 @@ class Worker:
         snapshot = self.controller.status()
         snapshot["action_error"] = getattr(self.controller.actions, "last_error", "")
         snapshot["action_unavailable"] = getattr(self.controller.actions, "last_unavailable", "")
+        snapshot["declaration"] = getattr(self.controller.actions, "last_attestation", "")
+        if self.controller.config.backend == "baseline_keyboard":
+            snapshot["attestation_enabled"] = bool(
+                getattr(self.controller.actions, "attestation_enabled", False)
+            )
         with self._lock:
             self._status = snapshot
 

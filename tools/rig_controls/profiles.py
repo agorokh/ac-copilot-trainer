@@ -81,6 +81,7 @@ class Config:
     profiles: tuple[Profile, ...]
     default: str
     manual_override: str | None = None
+    backend: str = "managed_hid"
 
     def select(self, context: Context) -> Profile:
         if self.manual_override:
@@ -151,11 +152,14 @@ def _binding(value: object) -> Binding:
 def parse_config(value: object) -> Config:
     data = _object(
         value,
-        {"version", "default", "manual_override", "profiles"},
+        {"version", "default", "manual_override", "profiles", "backend"},
         {"version", "default", "profiles"},
     )
     if type(data["version"]) is not int or data["version"] != 1:
         raise ValueError("unsupported profile version")
+    backend = data.get("backend", "managed_hid")
+    if backend not in ("managed_hid", "baseline_keyboard"):
+        raise ValueError("unsupported keypad backend")
     default = _text(data["default"])
     rows = data["profiles"]
     if not isinstance(rows, list) or not 1 <= len(rows) <= 32:
@@ -189,6 +193,14 @@ def parse_config(value: object) -> Config:
         if name == default and when:
             raise ValueError("default profile must be unconditional")
         parsed = tuple(_binding(bindings[c]) for c in CONTROLS)
+        if backend == "baseline_keyboard" and (
+            any(b.action not in {"noop", "attest"} for b in parsed)
+            or any(b.action != "noop" for b in parsed[3:])
+            or rgb != [255, 0, 0]
+        ):
+            raise ValueError(
+                "baseline keyboard supports button attestation only, without RGB control"
+            )
         if any(
             binding.action == "attest" and control not in ATTEST_CONTROLS
             for control, binding in zip(CONTROLS, parsed, strict=True)
@@ -210,7 +222,7 @@ def parse_config(value: object) -> Config:
         manual = _text(manual)
     if default not in names or (manual is not None and manual not in names):
         raise ValueError("default/manual profile does not exist")
-    return Config(tuple(profiles), default, manual)
+    return Config(tuple(profiles), default, manual, backend)
 
 
 def load_config(path: Path) -> Config:
