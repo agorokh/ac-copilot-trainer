@@ -270,11 +270,24 @@ class LauncherView:
                 highlightbackground=theme.GRAPHITE if primary else theme.LINE_2,
             )
             button.grid(row=0, column=column, sticky="nsew", padx=(0 if column == 0 else 9, 0))
-        if "moza_offline_report" in actions:
+        secondary = [
+            (label, actions[key])
+            for label, key in (
+                ("OFFLINE REPORT", "moza_offline_report"),
+                ("HUMAN SESSION", "human_session"),
+                ("LAP ATTESTATION", "lap_attestation"),
+            )
+            if key in actions
+        ]
+        extras = tk.Frame(row, bg=theme.GRAPHITE)
+        if secondary:
+            extras.grid(row=1, column=0, columnspan=len(_BUTTONS), sticky="ew", pady=(9, 0))
+        for column, (label, action) in enumerate(secondary):
+            extras.columnconfigure(column, weight=1, uniform="secondary")
             tk.Button(
-                row,
-                text="OFFLINE REPORT",
-                command=actions["moza_offline_report"],
+                extras,
+                text=label,
+                command=action,
                 cursor="hand2",
                 relief="flat",
                 bd=0,
@@ -287,25 +300,7 @@ class LauncherView:
                 activeforeground=theme.CHALK,
                 highlightthickness=1,
                 highlightbackground=theme.LINE_2,
-            ).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(9, 0))
-        if "human_session" in actions:
-            tk.Button(
-                row,
-                text="HUMAN SESSION",
-                command=actions["human_session"],
-                cursor="hand2",
-                relief="flat",
-                bd=0,
-                padx=10,
-                pady=11,
-                font=(self._f_disp, 10, "bold"),
-                bg=theme.RAISE,
-                fg=theme.CHALK,
-                activebackground=theme.SLAB,
-                activeforeground=theme.CHALK,
-                highlightthickness=1,
-                highlightbackground=theme.LINE_2,
-            ).grid(row=1, column=3, columnspan=2, sticky="ew", padx=(9, 0), pady=(9, 0))
+            ).grid(row=0, column=column, sticky="ew", padx=(9 if column else 0, 0))
 
     def _build_simhub_toggle(
         self,
@@ -455,6 +450,57 @@ _HUMAN_SESSION_FIELDS = (
     ("tc_level", "TC exact level", ()),
     ("stability_level", "Stability exact level", ()),
 )
+
+
+class LapAttestationView:
+    """Local operator controls for the active #988 declaration journal."""
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        *,
+        enabled: bool,
+        on_declare: Callable[[], str],
+        on_clear: Callable[[], str],
+    ) -> None:
+        self.window = tk.Toplevel(parent)
+        self.window.title("Game Point · Lap attestation")
+        self.window.transient(parent)
+        self.window.configure(bg=theme.GRAPHITE)
+        apply_dark_title_bar(self.window)
+        frame = tk.Frame(self.window, bg=theme.GRAPHITE, padx=18, pady=16)
+        frame.pack(fill="both", expand=True)
+        frame.columnconfigure(0, weight=1)
+        frame.columnconfigure(1, weight=1)
+        message = tk.StringVar(
+            self.window,
+            value=(
+                "Declare before the timed lap, then return to Assetto Corsa before crossing "
+                "the start line. Clear if control changes. The lap is checked against "
+                "capture evidence."
+                if enabled
+                else "Attestation is off. Open Game Point from the configured capture session."
+            ),
+        )
+        tk.Label(
+            frame,
+            textvariable=message,
+            wraplength=380,
+            justify="left",
+            anchor="w",
+            bg=theme.GRAPHITE,
+            fg=theme.CHALK,
+            font=("Segoe UI", 10),
+        ).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        for column, (text, action) in enumerate(
+            (("Declare human control", on_declare), ("Clear declaration", on_clear))
+        ):
+            tk.Button(
+                frame,
+                text=text,
+                command=lambda action=action: message.set(action()),
+                state="normal" if enabled else "disabled",
+            ).grid(row=1, column=column, sticky="ew", padx=(0, 8 if column == 0 else 0))
 
 
 class HumanSessionView:

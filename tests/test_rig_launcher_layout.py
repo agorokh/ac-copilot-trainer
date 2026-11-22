@@ -1,5 +1,6 @@
 """Check actual Tk widget allocation at normal and enlarged font scaling."""
 
+import json
 import sys
 from dataclasses import replace
 
@@ -27,7 +28,13 @@ def test_fresh_launcher_and_minimum_size_show_all_controls(scaling, tk_root):
         root.tk.call("tk", "scaling", scaling)
         view = build_launcher_view(
             root,
-            actions=_NOOP_ACTIONS,
+            actions={
+                **_NOOP_ACTIONS,
+                **dict.fromkeys(
+                    ("moza_offline_report", "human_session", "lap_attestation"),
+                    _NOOP_ACTIONS["refresh"],
+                ),
+            },
             status_path="status.json",
             on_toggle_simhub=lambda enabled: None,
         )
@@ -57,7 +64,8 @@ def test_fresh_launcher_and_minimum_size_show_all_controls(scaling, tk_root):
             width, height = root.winfo_width(), root.winfo_height()
             controls = [w for w in _descendants(root) if isinstance(w, tk.Button)]
             labels = [w for w in _descendants(root) if isinstance(w, tk.Label)]
-            assert len(controls) == len(_BUTTONS)
+            assert len(controls) == len(_BUTTONS) + 3
+            assert any(w.cget("text") == "LAP ATTESTATION" for w in controls)
             assert any(w.cget("text") == "DASH-CONNECTED" for w in labels)
             assert any(w.cget("text") == "BANK_MISSING" for w in labels)
             for widget in controls + labels:
@@ -77,6 +85,47 @@ def test_fresh_launcher_and_minimum_size_show_all_controls(scaling, tk_root):
         assert (root.winfo_width(), root.winfo_height()) == enlarged
     finally:
         root.destroy()
+
+
+@pytest.mark.parametrize("mode", ["disabled", "unconfigured", "unwritable", "configured"])
+def test_game_point_lap_attestation_buttons(tk_root, tmp_path, monkeypatch, mode):
+    from tools.human_control_attestation import DECLARATION_JOURNAL_ENV
+    from tools.lap_qualification import HUMAN_ATTESTATION_ENV
+    from tools.rig_launcher.app import _open_lap_attestation_window
+
+    journal = tmp_path / "declarations.jsonl"
+    monkeypatch.setenv(HUMAN_ATTESTATION_ENV, "0" if mode == "disabled" else "1")
+    if mode == "unconfigured":
+        monkeypatch.delenv(DECLARATION_JOURNAL_ENV, raising=False)
+    else:
+        monkeypatch.setenv(DECLARATION_JOURNAL_ENV, str(journal))
+    if mode == "unwritable":
+        journal.mkdir()
+    view = _open_lap_attestation_window(parent=tk_root)
+    try:
+        declare, clear = [w for w in _descendants(view.window) if isinstance(w, tk.Button)]
+        [status] = [w for w in _descendants(view.window) if isinstance(w, tk.Label)]
+        assert declare.cget("text") == "Declare human control"
+        assert clear.cget("text") == "Clear declaration"
+        declare.invoke()
+        displayed = status.getvar(status.cget("textvariable"))
+        if mode in {"disabled", "unconfigured"}:
+            assert all(button.cget("state") == "disabled" for button in (declare, clear))
+            assert "Attestation is off" in displayed and not journal.exists()
+        elif mode == "unwritable":
+            assert "Could not write" in displayed
+        else:
+            assert "Declaration recorded" in displayed
+            clear.invoke()
+            assert "Clear recorded" in status.getvar(status.cget("textvariable"))
+            events = [json.loads(line) for line in journal.read_text().splitlines()]
+            assert [event["action"] for event in events] == [
+                "human_control.declare",
+                "human_control.clear",
+            ]
+            assert {event["surface"] for event in events} == {"game_point"}
+    finally:
+        view.window.destroy()
 
 
 @pytest.fixture(scope="module")

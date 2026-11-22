@@ -50,6 +50,7 @@ from tools.human_control_attestation import (
 from tools.lap_qualification import (
     ATTRIBUTIONS_ENV,
     HUMAN_ATTESTATION_DECLARATION_TTL_MS,
+    HUMAN_ATTESTATION_DECLARE_ACTION,
     HUMAN_ATTESTATION_ENV,
     HUMAN_ATTESTATION_REFERENCE_SECTION,
     HUMAN_ATTESTATION_SECTIONS,
@@ -127,6 +128,32 @@ def test_clean_capture_certifies_with_evidence_bound_to_the_payload_hash():
     assert witness["control_map"]["present_count"] == 0
     assert witness["control_map"]["first_ms"] <= DECLARED_MS
     assert witness["vendor_practice"]["lap"]["ai_intervened"] is False
+
+
+def test_game_point_declaration_preserves_source_and_can_be_cleared_by_keypad(tmp_path):
+    archive = write_archive(tmp_path)
+    capture = write_capture(tmp_path, declarations=[])
+    journal_path = capture / "declarations.jsonl"
+    producer.record_declaration(
+        journal_path, HUMAN_ATTESTATION_DECLARE_ACTION, surface="game_point", now_ms=DECLARED_MS
+    )
+    result = attest_archive(archive, capture)
+    assert result.verified
+    [evidence] = result.qualification["evidence"]
+    assert evidence["witness"]["declaration"]["surface"] == "game_point"
+    record = native_record()
+    record["qualification"] = result.qualification
+    decision = qualify_archive(record, use="human_progression")
+    assert decision.allowed and decision.authority == "human"
+
+    producer.record_declaration(journal_path, producer.CLEAR_ACTION, now_ms=LAP_START + 1)
+    assert "declaration_cleared" in attest_archive(archive, capture).reasons
+
+
+@pytest.mark.parametrize("surface", ["unrecognized_ui", [], None])
+def test_unrecognized_declaration_surface_abstains(tmp_path, surface):
+    capture = write_capture(tmp_path, declarations=[{**declaration(), "surface": surface}])
+    assert "declaration_journal_invalid" in attest_archive(write_archive(tmp_path), capture).reasons
 
 
 def test_producer_is_default_off(monkeypatch, tmp_path, ledger):

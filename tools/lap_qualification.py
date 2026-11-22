@@ -76,6 +76,7 @@ HUMAN_ATTESTATION_DECLARATION_TTL_MS = 20 * 60 * 1000
 HUMAN_ATTESTATION_VENDOR_LAP_TOLERANCE_MS = 1
 HUMAN_ATTESTATION_NATIVE_SOURCE = "car.isAIControlled"
 HUMAN_ATTESTATION_DECLARE_ACTION = "human_control.declare"
+HUMAN_ATTESTATION_DECLARATION_SURFACES = ("rig_controls", "game_point")
 # AC lap time excludes paused time; wall-clock elapsed (1 s resolution at both ends)
 # must agree with it or the capture window no longer brackets the lap.
 HUMAN_ATTESTATION_WALL_CLOCK_TOLERANCE_MS = 2500
@@ -601,7 +602,7 @@ def human_witness_reasons(
     declared_ms = declaration.get("declared_ms")
     coverage_start = start_ms
     if (
-        declaration.get("surface") != "rig_controls"
+        declaration.get("surface") not in HUMAN_ATTESTATION_DECLARATION_SURFACES
         or declaration.get("action") != HUMAN_ATTESTATION_DECLARE_ACTION
         or not _is_hash(declaration.get("journal_sha256"))
         or type(declared_ms) is not int

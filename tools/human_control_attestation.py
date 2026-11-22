@@ -11,7 +11,7 @@ a telemetry classifier and it never infers a human from the absence of a signal:
 * native game AI - CSP's per-frame ``car.isAIControlled`` summary inside the archive;
 * vendor AI driving - the vendor practice record's AI-intervened label, joined by
   session window, combo and lap duration (it shares no session identifier);
-* operator declaration - a rig-button event; necessary, never sufficient.
+* operator declaration from Game Point or the rig controls; necessary, never sufficient.
 
 The decision itself lives in ``tools.lap_qualification.human_witness_reasons`` so the
 producer and every later reader apply one rule. A lap that already has a ledger
@@ -32,11 +32,13 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from tools.lap_qualification import (
     _UNITS,
     ATTRIBUTIONS_ENV,
+    HUMAN_ATTESTATION_DECLARATION_SURFACES,
     HUMAN_ATTESTATION_DECLARE_ACTION,
     HUMAN_ATTESTATION_MAX_PROBE_GAP_MS,
     HUMAN_ATTESTATION_ORIGIN,
@@ -68,7 +70,8 @@ DECLARATION_JOURNAL = "declarations.jsonl"
 VENDOR_DIR = "vendor"
 DECLARATION_JOURNAL_ENV = "AC_COPILOT_HUMAN_DECLARATION_JOURNAL"
 CLEAR_ACTION = "human_control.clear"
-DECLARATION_ACTIONS = frozenset({HUMAN_ATTESTATION_DECLARE_ACTION, CLEAR_ACTION})
+DECLARATION_ACTIONS = (HUMAN_ATTESTATION_DECLARE_ACTION, CLEAR_ACTION)
+_DECLARATION_WRITE_LOCK = Lock()
 DISABLED = "human_control_attestation_disabled"
 ERROR_FILE_NOT_FOUND = 2
 MAX_VENDOR_BYTES = 1_000_000
@@ -211,7 +214,7 @@ def _declaration_facts(
         events = parse_journal(raw)
         if any(
             event["kind"] != "declaration"
-            or event.get("surface") != "rig_controls"
+            or event.get("surface") not in HUMAN_ATTESTATION_DECLARATION_SURFACES
             or event.get("action") not in DECLARATION_ACTIONS
             for event in events
         ):
@@ -219,13 +222,14 @@ def _declaration_facts(
     except _InputError:
         reasons.append("declaration_journal_invalid")
         return None
-    declared = [e["t_ms"] for e in events if e["action"] == HUMAN_ATTESTATION_DECLARE_ACTION]
+    declared = [e for e in events if e["action"] == HUMAN_ATTESTATION_DECLARE_ACTION]
     if not declared:
         return None
-    before = [t for t in declared if t <= lap_start]
-    declared_ms = max(before) if before else min(declared)
+    before = [e for e in declared if e["t_ms"] <= lap_start]
+    selected = before[-1] if before else declared[0]
+    declared_ms = selected["t_ms"]
     return {
-        "surface": "rig_controls",
+        "surface": selected["surface"],
         "action": HUMAN_ATTESTATION_DECLARE_ACTION,
         "journal_sha256": hashlib.sha256(raw).hexdigest(),
         "declared_ms": declared_ms,
@@ -835,32 +839,39 @@ def bench_verdict(
 
 
 # --------------------------------------------------------------------------------------
-# Declaration sink (rig button) and capture monitor
+# Operator declaration sink and capture monitor
 # --------------------------------------------------------------------------------------
-def record_declaration(path: Path, action: str, *, now_ms: int | None = None) -> None:
+def record_declaration(
+    path: Path, action: str, *, surface: str = "rig_controls", now_ms: int | None = None
+) -> None:
     """Append one operator declaration event; the file is only ever appended to."""
     if action not in DECLARATION_ACTIONS:
         raise ValueError("unknown declaration action")
-    event = {
-        "kind": "declaration",
-        "t_ms": int(time.time() * 1000) if now_ms is None else now_ms,
-        "surface": "rig_controls",
-        "action": action,
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as output:
-        output.write(json.dumps(event, sort_keys=True) + "\n")
-        output.flush()
-        os.fsync(output.fileno())
+    if surface not in HUMAN_ATTESTATION_DECLARATION_SURFACES:
+        raise ValueError("unknown declaration surface")
+    # The launcher GUI and keypad worker share one process and may both append.
+    # Timestamp inside the same lock so their records preserve journal order.
+    with _DECLARATION_WRITE_LOCK:
+        event = {
+            "kind": "declaration",
+            "t_ms": int(time.time() * 1000) if now_ms is None else now_ms,
+            "surface": surface,
+            "action": action,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as output:
+            output.write(json.dumps(event, sort_keys=True) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
 
 
-def declaration_sink() -> Callable[[str], None] | None:
-    """The rig-button target, or ``None`` while attestation is off or unconfigured."""
+def declaration_sink(*, surface: str = "rig_controls") -> Callable[[str], None] | None:
+    """Return the surface's journal writer while process-local capture is configured."""
     target = os.environ.get(DECLARATION_JOURNAL_ENV)
     if not human_attestation_enabled() or not target or not target.strip():
         return None
     path = Path(target).expanduser()
-    return lambda action: record_declaration(path, action)
+    return lambda action: record_declaration(path, action, surface=surface)
 
 
 def _win_open_existing(name: str) -> tuple[bool, int]:  # pragma: no cover - rig-only
