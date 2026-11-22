@@ -255,9 +255,9 @@ class _Agg:
 def _compute_lap_scalars(rec: dict, *, fuel_effect_s_per_kg: float) -> dict[str, Any]:
     """One-pass per-lap scalar features from the trace samples (issue #488 Part C).
 
-    Returns a dict keyed by :data:`_LAP_SCALAR_NAMES` (the age/stint fields are added later in
-    :func:`_materialize_analytics_tables`). Robust to missing channels — an absent field yields a
-    ``None`` feature, never a crash — so older/narrower archives still project cleanly.
+    Returns the lake columns plus the correctly named native fuel-volume read for the audit.
+    The age/stint fields are added later in :func:`_materialize_analytics_tables`.
+    Missing channels yield ``None`` so older/narrower archives still project cleanly.
     """
     trace = rec.get("trace") or {}
     fields = trace.get("fields") or []
@@ -388,7 +388,9 @@ def _compute_lap_scalars(rec: dict, *, fuel_effect_s_per_kg: float) -> dict[str,
         "track_temp_c": _num(cond.get("trackTempC")),
         "grip_level": _num(cond.get("trackGripLevel")),
         "is_dirty": dirty,
-        "fuel_start_kg": fuel.first,
+        # Keep the existing lake schema and its correction model stable. Native fuel is in L.
+        "fuel_start_l": fuel_start,
+        "fuel_start_kg": fuel_start,
         "fuel_end_kg": fuel.last,
         "fuel_used_kg": (
             fuel.first - fuel.last if fuel.first is not None and fuel.last is not None else None

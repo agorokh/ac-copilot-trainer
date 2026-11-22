@@ -174,6 +174,26 @@ def test_supported_stratum_abstains_when_nuisance_can_mimic_improvement(tmp_path
     assert "improvement_ms" not in report
 
 
+def test_versioned_capture_uses_measured_litres_and_does_not_backfill_missing_fields(tmp_path):
+    conditions = {
+        **_record("template")["conditions"],
+        "progressionVersion": 1,
+        "meanTyreCoreTempC": 84,
+        "startFuelL": 17.8,
+    }
+    conditions["assists"].update(abs_mode=2, tc_mode=3, auto_shifter=False, auto_blip=False)
+    _write(tmp_path, _record("complete", conditions=conditions))
+    _write(tmp_path, _record("missing", conditions={"progressionVersion": 1, "ambientTempC": 20}))
+    report = audit_archives([tmp_path], combo=COMBO, split=SPLIT)
+    assert report["fuel_band_unit"] == "L"
+    assert report["strata"][0]["dimensions"]["fuel_band"] == "17"
+    assert report["excluded_sessions"]["missing"] == [
+        "missing:assists",
+        "missing:fuel_band",
+        "missing:thermal_band",
+    ]
+
+
 def test_attribution_change_preserves_schema_and_withholds_results(tmp_path, monkeypatch):
     for day in (14, 15):
         for index in range(4):

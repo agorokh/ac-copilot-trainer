@@ -162,13 +162,23 @@ from the stratum with the most eligible laps, with a deterministic dimension
 order for ties. Sessions crossing the split or lacking a timestamp abstain.
 Every retained stratum must have at least three sessions on each side.
 
-Strata match setup hash, tyre compound, 5 °C bands for ambient, track and mean
-tyre core temperature, and 1 kg starting-fuel bands. They also require traffic
-clearance and explicit `conditions.assists` readings for `abs`,
-`traction_control`, `stability_control` and `auto_clutch`. Archives without
-these readings contribute to missingness rather than matched support. The
-routine native archive writer does not currently export that complete assists
-block.
+Strata match setup hash, tyre compound, 5 °C bands for ambient, road and mean
+tyre core temperature, and 1 L starting-fuel bands. The audit reports
+`fuel_band_unit: "L"`. Existing lake columns named `fuel_*_kg` retain their
+historical representation for callers.
+
+For a prospective native capture, set `trafficShadowEnabled=true` through the
+documented session-only configuration before the first finish boundary.
+The shadow collector leaves live cue decisions untouched. Discard the partial
+out-lap and check the next full lap for positive traffic clearance.
+Version 1 progression conditions carry measured starting fuel and mean tyre core
+temperature from the retained native samples before trace serialization. Road
+temperature comes from CSP's `roadTemperature`. Capture snapshots the assist
+policy through `ac.getAssists()` and watches effective ABS and TC modes on
+every observed lap frame. The archive omits assists if any read fails, the
+settings change, or the capture is interrupted. The first partial lap cannot
+carry a settings verdict. Current CSP 0.3.1 supports these reads. Older builds
+without the API yield missing assists.
 
 The audit reports included and excluded session IDs, per-stratum counts and
 reasons, and missing confounders across the selected combo's archives. Its
@@ -178,7 +188,7 @@ session count. The report includes a session bootstrap interval and a
 one-sided within-stratum permutation result. Calibration runs 1,000 whole-session
 trials per scenario with random null labels, injected 200–500 ms improvements,
 and a nuisance-only sensitivity test that keeps the observed period's
-conditions and shifts pace by 30 ms/°C track, 20 ms/°C tyre, and 30 ms/kg fuel
+conditions and shifts pace by 30 ms/°C track, 20 ms/°C tyre, and 30 ms/L fuel
 in either direction. The audit returns `cannot_identify` when overlap is
 insufficient or calibration misses its false-claim or power thresholds. A
 reported estimate describes the matched archive subset and measured conditions.

@@ -56,7 +56,7 @@ class Conditions:
     stratum: Stratum
     track_temp: float
     tyre_temp: float
-    fuel: float
+    fuel_l: float
 
 
 @dataclass(frozen=True)
@@ -90,19 +90,12 @@ def _record_time(record: dict) -> datetime | None:
 
 
 def _conditions(record: dict, traffic_clear: bool) -> tuple[Conditions | None, list[str]]:
-    """Use the same native tyre and fuel reductions as the lake. Never use corrected lap time."""
+    """Prefer measured native conditions and preserve eligibility for pre-version captures."""
     setup_data = _mapping(record.get("setup"))
     setup = _text(setup_data.get("hash"))
     tyres = _mapping(record.get("tyres"))
     compound = _text(tyres.get("name")) or _text(tyres.get("longName"))
     recorded = _mapping(record.get("conditions"))
-    features = _compute_lap_scalars(
-        {
-            "trace": record["trace"],
-            "tyres": {"name": compound},
-        },
-        fuel_effect_s_per_kg=DEFAULT_FUEL_EFFECT_S_PER_KG,
-    )
     # Match the complete recorded configuration. Empty and partial modes are unknown.
     assists = _mapping(recorded.get("assists"))
     assists_complete = set(assists) >= {
@@ -113,8 +106,40 @@ def _conditions(record: dict, traffic_clear: bool) -> tuple[Conditions | None, l
     } and all(type(v) in (bool, int) or _number(v) is not None for v in assists.values())
     track = _number(recorded.get("trackTempC"))
     ambient = _number(recorded.get("ambientTempC"))
-    wheels = [_number(features[f"core_temp_avg_{wheel}"]) for wheel in ("fl", "fr", "rl", "rr")]
-    fuel = _number(features["fuel_start_kg"])
+    if "progressionVersion" not in recorded:
+        # Older inputs have the historical trace columns. A versioned capture
+        # must use its explicit observations to distinguish unavailable from zero.
+        features = _compute_lap_scalars(
+            {"trace": record["trace"], "tyres": {"name": compound}},
+            fuel_effect_s_per_kg=DEFAULT_FUEL_EFFECT_S_PER_KG,
+        )
+        wheels = [_number(features[f"core_temp_avg_{wheel}"]) for wheel in ("fl", "fr", "rl", "rr")]
+        tyre = mean(wheels) if all(value is not None for value in wheels) else None
+        fuel_l = _number(features["fuel_start_l"])
+    elif type(recorded["progressionVersion"]) is int and recorded["progressionVersion"] == 1:
+        tyre = _number(recorded.get("meanTyreCoreTempC"))
+        fuel_l = _number(recorded.get("startFuelL"))
+        stability = _number(assists.get("stability_control"))
+        assists_complete = (
+            assists_complete
+            and stability is not None
+            and 0 <= stability <= 1
+            and all(
+                type(assists.get(key)) is int and assists[key] in (0, 1, 2)
+                for key in ("abs", "traction_control")
+            )
+            and all(
+                type(assists.get(key)) is int and assists[key] >= 0
+                for key in ("abs_mode", "tc_mode")
+            )
+            and all(
+                type(assists.get(key)) is bool
+                for key in ("auto_clutch", "auto_shifter", "auto_blip")
+            )
+        )
+    else:
+        tyre = fuel_l = None
+        assists_complete = False
     missing = [
         name
         for name, absent in zip(
@@ -122,8 +147,8 @@ def _conditions(record: dict, traffic_clear: bool) -> tuple[Conditions | None, l
             (
                 not setup,
                 not compound,
-                track is None or ambient is None or any(value is None for value in wheels),
-                fuel is None or fuel < 0,
+                track is None or ambient is None or tyre is None,
+                fuel_l is None or fuel_l < 0,
                 not assists_complete,
                 not traffic_clear,
             ),
@@ -133,23 +158,22 @@ def _conditions(record: dict, traffic_clear: bool) -> tuple[Conditions | None, l
     ]
     if missing:
         return None, missing
-    assert track is not None and ambient is not None and fuel is not None
-    tyre = mean(value for value in wheels if value is not None)
+    assert track is not None and ambient is not None and tyre is not None and fuel_l is not None
     thermal_band = "/".join(str(5 * math.floor(value / 5)) for value in (ambient, track, tyre))
     stratum = (
         setup,
         compound,
         thermal_band,
-        str(math.floor(fuel)),
+        str(math.floor(fuel_l)),
         json.dumps(assists, sort_keys=True, separators=(",", ":")),
         "clear",
     )
-    return Conditions(stratum, track, tyre, fuel), []
+    return Conditions(stratum, track, tyre, fuel_l), []
 
 
 def _nuisance(row: Conditions) -> float:
-    """Frozen synthetic challenge in ms, including within-band drift."""
-    return 30 * row.track_temp + 20 * row.tyre_temp + 30 * row.fuel
+    """Synthetic sensitivity challenge: ms per degree C for temperatures and per litre for fuel."""
+    return 30 * row.track_temp + 20 * row.tyre_temp + 30 * row.fuel_l
 
 
 def _assignment(rng: random.Random, sizes: list[tuple[int, int]]) -> Assignment:
@@ -392,6 +416,7 @@ def audit_archives(inputs: Iterable[str | Path], *, combo: Combo | None, split: 
         "combo": dict(zip(("car_id", "track_id", "layout"), combo or (None,) * 3, strict=True)),
         "split_utc": cutoff.isoformat(),
         "archive_count": 0,
+        "fuel_band_unit": "L",
         "combo_archive_count": None,
         "unreadable_archives": [],
         "missing_by_dimension": dict.fromkeys(DIMENSIONS),

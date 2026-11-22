@@ -15,7 +15,8 @@
 --     lap_uuid, session_uuid, exported_at,
 --     car = { id, displayName? },
 --     track = { id, layout?, lengthM? },
---     conditions = { trackGripLevel?, ambientTempC?, trackTempC?, weatherType? },
+--     conditions = { trackGripLevel?, ambientTempC?, trackTempC?, weatherType?,
+--       progressionVersion?, assists?, startFuelL?, meanTyreCoreTempC? },
 --     lap = { lap_n, lap_ms, is_pb, is_valid },
 --     setup = { hash, path?, snapshot = { <flat INI key=value map> } },
 --     trace = {
@@ -35,6 +36,7 @@ local M = {}
 
 local persistence = require("persistence")
 local ch = require("csp_helpers")
+local progressionCapture = require("progression_capture")
 
 local SCHEMA_VERSION = 1
 
@@ -308,8 +310,8 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
   pcall(function() trackGrip = tonumber(sim and sim.trackGripLevel) end)
   local ambient = nil
   pcall(function() ambient = tonumber(sim and sim.ambientTemperature) end)
-  local trackTemp = nil
-  pcall(function() trackTemp = tonumber(sim and sim.trackTemperature) end)
+  local trackTemp = progressionCapture.finite(ch.safeCarField(sim, "roadTemperature", nil))
+  ambient = progressionCapture.finite(ambient)
   local weatherType = nil
   -- CSP sim.weatherType is an ac.WeatherType enum (integer-valued); capture it as a number so the
   -- conditions model can consume it (issue #478 Part D). pcall-guarded like the other sim reads.
@@ -425,6 +427,17 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
     end
   end
 
+  local conditions = {
+    trackGripLevel = trackGrip, ambientTempC = ambient, trackTempC = trackTemp, weatherType = weatherType,
+  }
+  local progression = opts.progressionObservation
+  if type(progression) == "table" then
+    conditions.progressionVersion = 1
+    conditions.assists = progression.complete == true and progression.assists or nil
+    conditions.startFuelL, conditions.meanTyreCoreTempC =
+      progressionCapture.traceConditions(opts.trace or {})
+  end
+
   return {
     schema_version = SCHEMA_VERSION,
     source = "in_game",
@@ -445,12 +458,7 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
       layout_available = layoutAvailable,
       lengthM = trackLengthM,
     },
-    conditions = {
-      trackGripLevel = trackGrip,
-      ambientTempC = ambient,
-      trackTempC = trackTemp,
-      weatherType = weatherType,
-    },
+    conditions = conditions,
     lap = {
       lap_n = tonumber(opts.lap_n) or 0,
       lap_ms = tonumber(opts.lap_ms) or 0,
