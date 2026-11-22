@@ -2872,12 +2872,13 @@ function script.update(dt)
     if carLapInvalidatedFlag(car) then
       state.lapInvalidatedThisLap = true
     end
-    local completedTrace, completedOffTrack, completedControl = tel:finalizeLapTrace(true)
+    tel:observeProgression(car, config.trafficShadowEnabled)
+    local completedTrace, completedOffTrack, completedControl, completedProgression = tel:finalizeLapTrace(true)
     -- The first partial lap after arming/reset is explicitly incomplete. Store raw
     -- scalar observations, not a permissive verdict; archive readers re-evaluate them.
     local completedTraffic = config.trafficShadowEnabled == true
         and wsBridge.trafficShadow:finishLap(os.preciseClock()) or nil
-    tel:beginLapClock(ch.simSeconds(sim), true)
+    tel:beginLapClock(ch.simSeconds(sim), true, config.trafficShadowEnabled)
     resetDeltaSmoother()
     state.deltaRefStale = false  -- clean lap clock re-armed at the s/f line: delta valid again (#185)
     -- car.previousLapTimeMs is valid; car.lastLapTimeMs may not exist on the C-struct (throws, not nil).
@@ -3115,6 +3116,7 @@ function script.update(dt)
         trace = completedTrace,
         offTrackObservation = completedOffTrack,
         controlObservation = completedControl,
+        progressionObservation = completedProgression,
         traffic = completedTraffic,
         corners = feats,
         setup_snap = state.lastSetupSnap,
@@ -3174,7 +3176,7 @@ function script.update(dt)
     teleported = teleported,
   })
   tel:setRecording(state.recording)
-  tel:update(dt, car, sim, resetDecision.pendingWrapLapCount == nil)
+  tel:update(dt, car, sim, resetDecision.pendingWrapLapCount == nil, config.trafficShadowEnabled)
 
   if not sim.isInMainMenu and state.lastLapCount >= 0 and lc == state.lastLapCount then
     if carLapInvalidatedFlag(car) then

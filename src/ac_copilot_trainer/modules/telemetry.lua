@@ -3,6 +3,7 @@
 local ch = require("csp_helpers")
 local wheel_read = require("wheel_read")
 local chassis_read = require("chassis_read")
+local progressionCapture = require("progression_capture")
 
 local M = {}
 
@@ -184,6 +185,7 @@ end
 function Telemetry:setRecording(on)
   if not on and self._offTrackObservation then self._offTrackObservation.complete = false end
   if not on and self._controlObservation then self._controlObservation.complete = false end
+  if not on and self._progressionCapture then self._progressionCapture.complete = false end
   self.recording = on and true or false
 end
 
@@ -204,7 +206,8 @@ end
 --- Begin a new lap trace clock (call on lap boundary or session start).
 ---@param simTime number
 ---@param fullLapBoundary boolean|nil true only after a confirmed native finish boundary
-function Telemetry:beginLapClock(simTime, fullLapBoundary)
+---@param captureProgression boolean|nil arm at a confirmed lap boundary
+function Telemetry:beginLapClock(simTime, fullLapBoundary, captureProgression)
   self.lapT0 = simTime
   self.lapBuf = {}
   self.lapN = 0
@@ -212,6 +215,8 @@ function Telemetry:beginLapClock(simTime, fullLapBoundary)
     max_wheels_outside=-1, event_count=0, complete=fullLapBoundary == true, source="car.wheelsOutside",
     event_count_basis="positive_runs_unknown_breaks_run" }
   self._lastWheelsOutside = nil
+  self._progressionCapture = captureProgression == true and fullLapBoundary == true
+    and { complete = true } or nil
   -- Issue #988: per-frame CSP control-authority facts, summarized before any
   -- downsampling. Raw counts only; readers decide. Unknown is never "not AI".
   -- Wall-clock start: AC lap time excludes pauses, so readers compare both.
@@ -219,6 +224,17 @@ function Telemetry:beginLapClock(simTime, fullLapBoundary)
     unknown_count=0, ai_controlled_count=0, user_controlled_count=0, not_live_count=0,
     complete=fullLapBoundary == true }
   self._controlWallStart = (os and os.time and os.time()) or nil
+end
+
+function Telemetry:observeProgression(car, enabled)
+  local capture = self._progressionCapture
+  if not capture or not capture.complete then return end
+  local assists = enabled == true and progressionCapture.readAssists(car) or nil
+  if not assists or (capture.assists and not progressionCapture.sameAssists(capture.assists, assists)) then
+    capture.complete = false
+    return
+  end
+  capture.assists = capture.assists or assists
 end
 
 --- Drop samples older than (now - bufferSeconds).
@@ -242,12 +258,15 @@ end
 ---@param car ac.StateCar
 ---@param sim ac.StateSim
 ---@param recordLap boolean|nil false defers only lap sampling during an ambiguous finish wrap
-function Telemetry:update(dt, car, sim, recordLap)
+---@param captureProgression boolean|nil current session capture setting
+function Telemetry:update(dt, car, sim, recordLap, captureProgression)
   if not self.recording or sim.isInMainMenu then
     if self._offTrackObservation then self._offTrackObservation.complete = false end
     if self._controlObservation then self._controlObservation.complete = false end
+    if self._progressionCapture then self._progressionCapture.complete = false end
     return
   end
+  self:observeProgression(car, captureProgression)
   local t = ch.simSeconds(sim)
   -- car.steer is a valid ac.StateCar field (confirmed from CMRT-Essential-HUD).
   -- car.steering does NOT exist on the C-struct and would throw — removed.
@@ -486,6 +505,7 @@ end
 ---@return LapTraceSample[]
 ---@return table|nil offTrackObservation
 ---@return table|nil controlObservation issue #988 control-authority summary, same opt-in
+---@return table|nil progressionObservation #957 complete lap settings when observed
 function Telemetry:finalizeLapTrace(includeOffTrackObservation)
   local out = self.lapN > 0 and downsampleUniform(self.lapBuf, self.lapN, MAX_LAP_TRACE) or {}
   local observation
@@ -508,9 +528,15 @@ function Telemetry:finalizeLapTrace(includeOffTrackObservation)
   self._offTrackObservation = nil
   self._controlObservation = nil
   self._lastWheelsOutside = nil
+  local progression = self._progressionCapture
+  self._progressionCapture = nil
   -- Preserve the one-array return contract for existing callers, including
   -- native replay bindings that expose multiple Lua returns as a Python tuple.
-  if includeOffTrackObservation == true then return out, observation, control end
+  -- Keep the existing three-return arity when this optional capture was not armed.
+  if includeOffTrackObservation == true then
+    if progression then return out, observation, control, progression end
+    return out, observation, control
+  end
   return out
 end
 

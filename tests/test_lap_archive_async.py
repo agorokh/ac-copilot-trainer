@@ -362,7 +362,7 @@ def test_archive_write_job_streams_trace_over_multiple_steps(tmp_path: pathlib.P
             trackLengthM = 2507,
             trackGripLevel = 0.98,
             ambientTemperature = 21,
-            trackTemperature = 29,
+            roadTemperature = 29,
           },
           lap_n = 3,
           lap_ms = 81234,
@@ -415,6 +415,7 @@ def test_archive_write_job_streams_trace_over_multiple_steps(tmp_path: pathlib.P
     assert record["corners"][0]["brakePointSpline"] == 0.89
     assert record["lap"]["lap_n"] == 3
     assert record["lap"]["lap_ms"] == 81234
+    assert record["conditions"]["trackTempC"] == 29
     assert record["trace"]["samples_count"] == 6
     assert len(record["trace"]["samples"]) == 6
     # The Lua writer emits its own TRACE_FIELDS; assert against the canonical Python mirror so this
@@ -636,6 +637,74 @@ def test_native_control_authority_counts_survive_downsampling_and_the_real_write
     }
     assert record["trace"]["control_observation"]["wall_elapsed_s"] in (0, 1)
     assert record["trace"]["off_track_observation"]["sample_count"] == 2999
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    ["complete", "changed", "missing_api", "interrupted", "partial", "missing_measurements"],
+)
+def test_progression_capture_observes_native_conditions_and_assists(tmp_path, scenario):
+    rt = _runtime(tmp_path)
+    rt.globals()["_scenario"] = scenario
+    path = rt.execute("""
+      local t = require('telemetry').new()
+      local sim = {ambientTemperature=21, roadTemperature=29, isLive=true}
+      local car = {speedKmh=100, fuel=32.25, physicsAvailable=true,
+        absModes=4, absMode=2, tractionControlModes=5, tractionControlMode=3, wheels={}}
+      for i=0,3 do car.wheels[i] = {tyreCoreTemperature=80+i} end
+      local conditions = {abs='factory', tractionControl='on', stability=.2,
+        autoClutch=false, autoShifter=false, autoBlip=true}
+      if _scenario ~= 'missing_api' then ac.getAssists = function() return conditions end end
+      if _scenario == 'missing_measurements' then
+        car.fuel = nil
+        car.wheels[3].tyreCoreTemperature = nil
+        sim.roadTemperature = nil
+      end
+      t:beginLapClock(0, _scenario~='partial', true)
+      for i=1,4 do
+        car.splinePosition=i/4
+        sim.gameTime=i*.05
+        car.absMode = _scenario=='changed' and i==2 and 1 or 2
+        t:update(.05,car,sim,true,not (_scenario=='interrupted' and i==2))
+      end
+      t:observeProgression(car,true)
+      local trace,offTrack,control,progression=t:finalizeLapTrace(true)
+      local job=assert(require('lap_archive').createWriteJob({
+        session_uuid='capture',lap_n=1,lap_ms=1000,car=car,sim=sim,trace=trace,
+        progressionObservation=progression,controlObservation=control,
+        offTrackObservation=offTrack,
+      },50))
+      local done,ok,out=job:step(128)
+      assert(done and ok,out)
+      return out
+    """)
+    record = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    conditions = record["conditions"]
+    assert conditions["ambientTempC"] == 21
+    if scenario == "partial":
+        assert "progressionVersion" not in conditions
+    else:
+        assert conditions["progressionVersion"] == 1
+    if scenario == "missing_measurements":
+        assert {"startFuelL", "meanTyreCoreTempC", "trackTempC"}.isdisjoint(conditions)
+    else:
+        assert conditions["trackTempC"] == 29
+        if scenario != "partial":
+            assert conditions["startFuelL"] == 32.25
+            assert conditions["meanTyreCoreTempC"] == 81.5
+    if scenario in {"complete", "missing_measurements"}:
+        assert conditions["assists"] == {
+            "abs": 1,
+            "traction_control": 2,
+            "abs_mode": 2,
+            "tc_mode": 3,
+            "stability_control": 0.2,
+            "auto_clutch": False,
+            "auto_shifter": False,
+            "auto_blip": True,
+        }
+    else:
+        assert "assists" not in conditions
 
 
 def test_unread_control_authority_is_unknown_and_never_zero_filled(tmp_path):
