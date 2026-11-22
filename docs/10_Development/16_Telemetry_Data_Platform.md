@@ -143,6 +143,45 @@ DuckDB file carries the same version. Read the surface back with
 `tools.coaching_lake.read_parquet_surface(out_dir, grain)`, which uses DuckDB `union_by_name` so an
 older Parquet generation (fewer columns) still loads after the schema grows additively.
 
+## Condition-matched progression audit (#957)
+
+Run against the immutable lap archives used to build the lake. Install the
+`analytics` extra and choose a combo and UTC date before inspecting lap times.
+Omit `--layout` for a track with no layout identifier.
+
+```bash
+python -m tools.coaching_lake.progression_audit --lap-dir journal/laps \
+  --car ks_porsche_911_gt3_r_2016 --track spa --split 2026-11-15
+```
+
+The command prints JSON. It uses the current human-progression qualification
+and positive traffic-clear evidence from the original archive, then aggregates
+the qualified projection in an in-memory DuckDB database. The source and
+attribution ledger are read-only. Each session contributes its median lap time
+from the stratum with the most eligible laps, with a deterministic dimension
+order for ties. Sessions crossing the split or lacking a timestamp abstain.
+Every retained stratum must have at least three sessions on each side.
+
+Strata match setup hash, tyre compound, 5 °C bands for ambient, track and mean
+tyre core temperature, and 1 kg starting-fuel bands. They also require traffic
+clearance and explicit `conditions.assists` readings for `abs`,
+`traction_control`, `stability_control` and `auto_clutch`. Archives without
+these readings contribute to missingness rather than matched support. The
+routine native archive writer does not currently export that complete assists
+block.
+
+The audit reports included and excluded session IDs, per-stratum counts and
+reasons, and missing confounders. Its estimate is earlier minus later lap time,
+averaged across retained strata with weights equal to the smaller period's
+session count. The report includes a session bootstrap interval and a
+one-sided within-stratum permutation result. Calibration runs 1,000 whole-session
+trials per scenario with random null labels, injected 200–500 ms improvements,
+and a nuisance-only sensitivity test that keeps the observed period's
+conditions and shifts pace by 30 ms/°C track, 20 ms/°C tyre, and 30 ms/kg fuel
+in either direction. The audit returns `cannot_identify` when overlap is
+insufficient or calibration misses its false-claim or power thresholds. A
+reported estimate describes the matched archive subset and measured conditions.
+
 ## Driver Profile
 
 Update the local profile:

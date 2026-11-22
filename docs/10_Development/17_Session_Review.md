@@ -54,6 +54,16 @@ Use JSON output when a launcher or rig surface needs the paths:
 python -m tools.session_review --lap-dir journal/laps --json
 ```
 
+To include the offline condition-matched progression audit in the saved JSON
+for the reviewed session's combo, pass a predeclared UTC split date:
+
+```bash
+python -m tools.session_review --lap-dir journal/laps --progression-split 2026-11-15
+```
+
+Read the saved JSON's `progression` field for the estimate or
+`cannot_identify` reason. See the [audit inputs and method](16_Telemetry_Data_Platform.md#condition-matched-progression-audit-957).
+
 Runtime integration:
 
 - When the Lua trainer reaches the main menu after a driven session, it drains
