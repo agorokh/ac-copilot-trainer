@@ -214,7 +214,7 @@ def _num(v: Any) -> float | None:
         return None
     try:
         f = float(v)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return None
     return f if math.isfinite(f) else None
 

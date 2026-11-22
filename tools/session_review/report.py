@@ -18,7 +18,7 @@ import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from html import escape as html_escape
 from pathlib import Path
 from statistics import median
@@ -26,6 +26,7 @@ from typing import Any, TextIO
 
 from tools.ai_sidecar.coach_report import build_structured_debrief
 from tools.lap_archive_export import (
+    LapArchiveExportError,
     iter_lap_archive_paths,
     lap_is_valid,
     load_lap_archive_snapshot,
@@ -708,10 +709,13 @@ def build_session_report(
     generated_at: str | None = None,
     reference_source: str = "auto",
     reference_path: str | Path | None = None,
+    progression_split: date | None = None,
 ) -> dict[str, Any]:
     """Build a JSON-serializable session review report."""
+    if progression_split is not None:
+        inputs = tuple(inputs)
     laps, load_skipped = _load_laps(inputs)
-    return _build_report_from_laps(
+    report = _build_report_from_laps(
         laps,
         load_skipped,
         session=session,
@@ -721,6 +725,17 @@ def build_session_report(
         reference_source=reference_source,
         reference_path=reference_path,
     )
+    if progression_split is not None:
+        from tools.coaching_lake.progression_audit import audit_archives
+
+        _, selected = _select_session(laps, session)
+        combos = {archive_combo(lap.record) for lap in selected}
+        combo = next(iter(combos)) if len(combos) == 1 else None
+        try:
+            report["progression"] = audit_archives(inputs, combo=combo, split=progression_split)
+        except (ImportError, LapArchiveExportError) as exc:
+            raise SessionReviewError(str(exc)) from exc
+    return report
 
 
 def _build_report_from_laps(
@@ -2169,6 +2184,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional explicit lap_*.json archive to use as the reference.",
     )
+    parser.add_argument(
+        "--progression-split",
+        type=date.fromisoformat,
+        help="Include the offline progression audit for the reviewed combo at this UTC date.",
+    )
     parser.add_argument("--json", action="store_true", help="Print machine-readable result paths.")
     return parser
 
@@ -2193,6 +2213,7 @@ def main(
             grip_ceiling_g=args.grip_ceiling_g,
             reference_source=args.reference_source,
             reference_path=args.reference_path,
+            progression_split=args.progression_split,
         )
         written = write_session_report(report, output_dir=args.output_dir)
     except SessionReviewError as exc:
