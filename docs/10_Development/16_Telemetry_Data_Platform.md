@@ -171,7 +171,8 @@ routine native archive writer does not currently export that complete assists
 block.
 
 The audit reports included and excluded session IDs, per-stratum counts and
-reasons, and missing confounders. Its estimate is earlier minus later lap time,
+reasons, and missing confounders across the selected combo's archives. Its
+estimate is earlier minus later lap time,
 averaged across retained strata with weights equal to the smaller period's
 session count. The report includes a session bootstrap interval and a
 one-sided within-stratum permutation result. Calibration runs 1,000 whole-session

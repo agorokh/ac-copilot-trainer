@@ -10,7 +10,7 @@ from test_lap_qualification import archive, assessment
 from test_traffic_eligibility import _capture
 
 from tools.coaching_lake.progression_audit import audit_archives, main
-from tools.session_review.report import build_session_report
+from tools.session_review.report import main as session_review_main
 
 COMBO = ("synthetic-car", "synthetic-track", None)
 SPLIT = date(2026, 11, 15)
@@ -65,7 +65,9 @@ def _isolated_ledger(tmp_path, monkeypatch):
     monkeypatch.setenv("AC_COPILOT_LAP_ATTRIBUTIONS", str(path))
 
 
-def test_supported_comparison_calibrates_and_estimates_from_real_entrypoints(tmp_path, capsys):
+def test_supported_comparison_calibrates_and_estimates_from_real_entrypoints(
+    tmp_path, capsys, monkeypatch
+):
     for day, adjustment in ((14, 0), (15, -200)):
         for index in range(4):
             _write(tmp_path, _record(f"{day}-{index}", day=day, lap_ms=60_000 + index + adjustment))
@@ -93,10 +95,24 @@ def test_supported_comparison_calibrates_and_estimates_from_real_entrypoints(tmp
     assert report["calibration"]["detection_power_by_shift_ms"]["300"] >= 0.8
     assert len(report["included_sessions"]) == 8
 
-    session = build_session_report(
-        iter([tmp_path]), reference_source="none", progression_split=SPLIT
+    monkeypatch.chdir(tmp_path)
+    assert (
+        session_review_main(
+            [
+                "--lap-dir",
+                str(tmp_path),
+                "--reference-source",
+                "none",
+                "--progression-split",
+                SPLIT.isoformat(),
+                "--json",
+            ]
+        )
+        == 0
     )
-    assert session["progression"] == report
+    receipt = json.loads(capsys.readouterr().out)
+    with open(receipt["json"], encoding="utf-8") as stream:
+        assert json.load(stream)["progression"] == report
 
 
 def test_laps_are_never_counted_as_independent_sessions(tmp_path):

@@ -294,7 +294,7 @@ def _project(
     snapshots: list[ArchiveQualificationSnapshot],
     combo: Combo,
     cutoff: datetime,
-) -> tuple[dict[Stratum, list[Session]], dict, dict]:
+) -> tuple[dict[Stratum, list[Session]], dict, dict, int]:
     """Project the immutable lake inputs at one row per independent session."""
     import duckdb
 
@@ -314,12 +314,21 @@ def _project(
     missing: Counter[str] = Counter()
     rejected: dict[str, set[str]] = defaultdict(set)
     projected = []
+    combo_archive_count = 0
     for index, (snapshot, record) in enumerate(zip(snapshots, records, strict=True)):
         if archive_combo(record) != combo:
             continue
+        combo_archive_count += 1
         uid = _text(record.get("session_uuid"))
         qualified = snapshot.qualify(use="human_progression", expected_combo=combo)
         traffic = archive_traffic_eligibility(record)
+        condition, absent = _conditions(record, traffic is not None and traffic.eligible)
+        # Occupied traffic is a known ineligible value, not missing evidence.
+        missing.update(
+            field
+            for field in absent
+            if field != "traffic_eligibility" or traffic is None or traffic.status == "unknown"
+        )
         if (
             not uid
             or index in duplicates
@@ -329,15 +338,11 @@ def _project(
             rejected[uid].add(
                 duplicates.get(index) or ("session_uuid_missing" if not uid else qualified.reason)
             )
-            if traffic is None or traffic.status == "unknown":
-                missing["traffic_eligibility"] += 1
             continue
         if len(timestamps[uid]) != 1 or None in timestamps[uid]:
             rejected[uid].add("session_spans_cutoff_or_has_missing_timestamp")
             continue
-        condition, absent = _conditions(record, traffic is not None and traffic.eligible)
         if condition is None:
-            missing.update(absent)
             rejected[uid].update(f"missing:{field}" for field in absent)
             continue
         lap_ms = _number(_mapping(record.get("lap")).get("lap_ms"))
@@ -376,7 +381,7 @@ def _project(
             ).fetchall()
         for uid, later, stratum, lap_ms, nuisance_ms in rows:
             cells[tuple(stratum)].append(Session(uid, later, lap_ms, nuisance_ms))
-    return cells, dict(rejected), {name: missing[name] for name in DIMENSIONS}
+    return cells, dict(rejected), {name: missing[name] for name in DIMENSIONS}, combo_archive_count
 
 
 def audit_archives(inputs: Iterable[str | Path], *, combo: Combo, split: date) -> dict:
@@ -389,7 +394,7 @@ def audit_archives(inputs: Iterable[str | Path], *, combo: Combo, split: date) -
         except (LapArchiveExportError, UnicodeError):
             unreadable.append(path.name)
     cutoff = datetime.combine(split, time.min, tzinfo=UTC)
-    cells, rejected, missing = _project(snapshots, combo, cutoff)
+    cells, rejected, missing, combo_archive_count = _project(snapshots, combo, cutoff)
     matched = []
     strata = []
     for key, cell in sorted(cells.items()):
@@ -432,6 +437,7 @@ def audit_archives(inputs: Iterable[str | Path], *, combo: Combo, split: date) -
         "combo": dict(zip(("car_id", "track_id", "layout"), combo, strict=True)),
         "split_utc": cutoff.isoformat(),
         "archive_count": len(snapshots),
+        "combo_archive_count": combo_archive_count,
         "unreadable_archives": unreadable,
         "missing_by_dimension": missing,
         "included_sessions": included,

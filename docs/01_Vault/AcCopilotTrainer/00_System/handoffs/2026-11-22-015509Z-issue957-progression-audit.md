@@ -21,10 +21,12 @@ and optional session-review JSON path are in [PR #1017](https://github.com/agoro
 | Abstain with a specific reason when matching or independent session support fails | Tested split-crossing sessions, identity collisions, unknown and occupied traffic, missing assists and temperatures, and repeated laps from two later sessions. The rig audit returned `cannot_identify` with `no_complete_human_qualified_traffic_clean_sessions`. |
 | Run the frozen 1,000-trial null, nuisance and 200–500 ms shift calibrations | Supported fixtures exercised both calibration outcomes and published the 200 ms estimate only after the successful run. The actual rig corpus produced `calibration.status = inconclusive` before estimation. |
 
-The documented rig SSH path ran revision `cbd72fae`'s audit CLI from stdin
+The documented rig SSH path ran the audit CLI from stdin
 over the existing Assetto Corsa journal. The smoke comparison used Porsche
 911 GT3 R 2016 at Magione and a November 15 UTC split. It excluded 11 sessions
-and retained zero, with 23 archives lacking positive traffic clearance. An
+and retained zero. All 23 archives for the combo lacked positive traffic
+clearance, complete thermal conditions and an assists configuration. Four
+lacked a setup hash. An
 independent corpus inventory using `ArchiveQualificationSnapshot` counted
 142 shared, 33 AI and 27 legacy-unknown archive decisions, with zero
 human-qualified, traffic-clear sessions across combos. The aggregate audit
