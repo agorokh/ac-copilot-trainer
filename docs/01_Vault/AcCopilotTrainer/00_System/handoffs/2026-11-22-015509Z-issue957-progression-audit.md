@@ -33,6 +33,11 @@ human-qualified, traffic-clear sessions across combos. The aggregate audit
 receipt is `.scratch/issue957-rig-audit-summary.json`. No simulator or
 attestation settings changed.
 
+The first independent review caught an inconsistent report shape when the
+attribution ledger changes during analysis. The audit now retains its schema
+and withholds stale session and calibration results. The focused suite,
+including the race and ambiguous-combo regressions, passed 183 tests.
+
 The audit requires the recorded assists configuration. The current native
 archive producer has no complete assists block. Captures missing it cannot
 qualify for a matched estimate. Review and merge remain under PR #1017.

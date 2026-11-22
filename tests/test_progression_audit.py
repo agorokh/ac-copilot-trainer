@@ -10,6 +10,7 @@ from test_lap_qualification import archive, assessment
 from test_traffic_eligibility import _capture
 
 from tools.coaching_lake.progression_audit import audit_archives, main
+from tools.lap_qualification import ArchiveQualificationSnapshot, AttributionError
 from tools.session_review.report import main as session_review_main
 
 COMBO = ("synthetic-car", "synthetic-track", None)
@@ -171,3 +172,26 @@ def test_supported_stratum_abstains_when_nuisance_can_mimic_improvement(tmp_path
     assert report["reason"] == "calibration_failed"
     assert report["calibration"]["nuisance_false_improvement_rate"] > 0.05
     assert "improvement_ms" not in report
+
+
+def test_attribution_change_preserves_schema_and_withholds_results(tmp_path, monkeypatch):
+    for day in (14, 15):
+        for index in range(4):
+            _write(tmp_path, _record(f"{day}-{index}", day=day, lap_ms=60_000 + index))
+
+    def changed(_snapshot):
+        raise AttributionError("attribution_changed_during_analysis")
+
+    monkeypatch.setattr(ArchiveQualificationSnapshot, "assert_current", changed)
+    report = audit_archives([tmp_path], combo=COMBO, split=SPLIT)
+    assert report["schema_version"] == 1
+    assert report["combo"] == dict(zip(("car_id", "track_id", "layout"), COMBO, strict=True))
+    assert report["status"] == "cannot_identify"
+    assert report["reason"] == "attribution_changed_during_analysis"
+    assert report["calibration"] == {"status": "inconclusive"}
+    assert report["included_sessions"] == report["strata"] == []
+    assert report["excluded_sessions"] == {}
+    assert "improvement_ms" not in report
+    ambiguous = audit_archives([tmp_path], combo=None, split=SPLIT)
+    assert ambiguous.keys() == report.keys()
+    assert ambiguous["reason"] == "session_combo_ambiguous"

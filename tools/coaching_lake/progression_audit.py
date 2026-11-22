@@ -384,8 +384,25 @@ def _project(
     return cells, dict(rejected), {name: missing[name] for name in DIMENSIONS}, combo_archive_count
 
 
-def audit_archives(inputs: Iterable[str | Path], *, combo: Combo, split: date) -> dict:
+def audit_archives(inputs: Iterable[str | Path], *, combo: Combo | None, split: date) -> dict:
     """Compare sessions entirely before/after a predeclared midnight UTC cutoff."""
+    cutoff = datetime.combine(split, time.min, tzinfo=UTC)
+    report = {
+        "schema_version": 1,
+        "combo": dict(zip(("car_id", "track_id", "layout"), combo or (None,) * 3, strict=True)),
+        "split_utc": cutoff.isoformat(),
+        "archive_count": 0,
+        "combo_archive_count": None,
+        "unreadable_archives": [],
+        "missing_by_dimension": dict.fromkeys(DIMENSIONS),
+        "included_sessions": [],
+        "excluded_sessions": {},
+        "strata": [],
+        "calibration": {"status": "inconclusive"},
+    }
+    if combo is None:
+        return {**report, "status": "cannot_identify", "reason": "session_combo_ambiguous"}
+
     snapshots = []
     unreadable = []
     for path in sorted({path.resolve() for path in iter_lap_archive_paths(inputs)}):
@@ -393,7 +410,7 @@ def audit_archives(inputs: Iterable[str | Path], *, combo: Combo, split: date) -
             snapshots.append(load_lap_archive_snapshot(path))
         except (LapArchiveExportError, UnicodeError):
             unreadable.append(path.name)
-    cutoff = datetime.combine(split, time.min, tzinfo=UTC)
+    report.update(archive_count=len(snapshots), unreadable_archives=unreadable)
     cells, rejected, missing, combo_archive_count = _project(snapshots, combo, cutoff)
     matched = []
     strata = []
@@ -428,17 +445,14 @@ def audit_archives(inputs: Iterable[str | Path], *, combo: Combo, split: date) -
         for snapshot in snapshots:
             snapshot.assert_current()
     except AttributionError as exc:
-        return {"status": "cannot_identify", "reason": str(exc)}
+        # Keep the report schema, but discard all qualification-dependent data.
+        return {**report, "status": "cannot_identify", "reason": str(exc)}
     included = sorted(row.uid for cell in matched for row in cell)
     projected = {row.uid for cell in cells.values() for row in cell}
     matched_ids = set(included)
     return {
-        "schema_version": 1,
-        "combo": dict(zip(("car_id", "track_id", "layout"), combo, strict=True)),
-        "split_utc": cutoff.isoformat(),
-        "archive_count": len(snapshots),
+        **report,
         "combo_archive_count": combo_archive_count,
-        "unreadable_archives": unreadable,
         "missing_by_dimension": missing,
         "included_sessions": included,
         "excluded_sessions": {

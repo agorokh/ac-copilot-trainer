@@ -730,18 +730,11 @@ def build_session_report(
 
         _, selected = _select_session(laps, session)
         combos = {archive_combo(lap.record) for lap in selected}
-        if len(combos) == 1 and None not in combos:
-            combo = combos.pop()
-            assert combo is not None
-            try:
-                report["progression"] = audit_archives(inputs, combo=combo, split=progression_split)
-            except (ImportError, LapArchiveExportError) as exc:
-                raise SessionReviewError(str(exc)) from exc
-        else:
-            report["progression"] = {
-                "status": "cannot_identify",
-                "reason": "session_combo_ambiguous",
-            }
+        combo = next(iter(combos)) if len(combos) == 1 else None
+        try:
+            report["progression"] = audit_archives(inputs, combo=combo, split=progression_split)
+        except (ImportError, LapArchiveExportError) as exc:
+            raise SessionReviewError(str(exc)) from exc
     return report
 
 
