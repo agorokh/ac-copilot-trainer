@@ -265,6 +265,46 @@ def test_decoder_needs_per_device_modifiers_and_rejects_extra_modifiers():
     assert decoder.feed(0xFF, True) is None
 
 
+def test_captured_content_manager_hotkey_declaration_dispatches_once():
+    # Windows Raw Input on the rig delivered the two modifier makes and three
+    # breaks. Content Manager launched, but no letter make reached either reader.
+    captured = (
+        (0x1D, 0, 0x11, 0x100),
+        (0x38, 0, 0x12, 0x100),
+        (0x1D, 1, 0x11, 0x105),
+        (0x38, 1, 0x12, 0x101),
+        (0x1E, 1, 0x41, 0x101),
+    )
+    calls = []
+    keypad, source, _ = controller(sink=calls.append)
+    for index, (scan, flags, vk, message) in enumerate(captured, start=1):
+        key = keyboard.Key(scan, flags, 0, vk, message, 0)
+        header = keyboard.Header(1, ctypes.sizeof(keyboard.Header) + ctypes.sizeof(key), 7, 1)
+        source.events = [keyboard.decode_packet(bytes(header) + bytes(key), 7)]
+        keypad.step(ACTIVE, index * 0.005)
+
+    keypad.step(ACTIVE, 0.04)
+    assert calls == ["human_control.declare"]
+
+
+@pytest.mark.parametrize(
+    "prefix, finish",
+    [
+        ([], 0.04),
+        ([(0x11, True), (0x12, True), (0x12, False), (0x11, False)], 0.04),
+        ([(0x10, True), (0x11, True), (0x12, True), (0x11, False), (0x12, False)], 0.04),
+        ([(0x11, True), (0x11, True), (0x12, True), (0x11, False), (0x12, False)], 0.04),
+        ([(0x11, True), (0x12, True), (0x11, False), (0x12, False)], 0.3),
+        ([(0x11, True), (0x12, True), (0x11, False), (0x12, False)], -0.04),
+    ],
+)
+def test_letter_release_abstains_without_a_fresh_keypad_modifier_cycle(prefix, finish):
+    decoder = keyboard.ShortcutDecoder()
+    for index, (vk, pressed) in enumerate(prefix):
+        assert decoder.feed(vk, pressed, now=index * 0.005) is None
+    assert decoder.feed(0x41, False, now=finish) is None
+
+
 def test_unknown_key_cancels_partial_shortcut():
     decoder = keyboard.ShortcutDecoder()
     decoder.feed(0x11, True)

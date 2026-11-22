@@ -10,6 +10,7 @@ from __future__ import annotations
 import ctypes
 import os
 from collections import deque
+from time import monotonic
 
 from tools.rig_controls.controller import Controller
 
@@ -19,29 +20,58 @@ def is_baseline_keyboard(path: str) -> bool:
     return any({"VID_1209", "PID_C55D"} <= set(part.split("&")) for part in parts)
 
 
+SHORTCUT_BUTTONS = {0x41: 0, 0x4D: 1, 0x53: 2}
+MISSING_KEYDOWN_PREFIX = ((0x11, True), (0x12, True), (0x11, False), (0x12, False))
+HOTKEY_RELEASE_WINDOW_S = 0.15
+
+
 class ShortcutDecoder:
     """Per-device key state: no global modifier state or repeat declarations."""
 
     def __init__(self):
         self.held = set()
         self.active = set()
+        self.recent = deque(maxlen=len(MISSING_KEYDOWN_PREFIX))
 
     def reset(self):
         self.held.clear()
         self.active.clear()
+        self.recent.clear()
 
-    def feed(self, vk: int, pressed: bool):
-        letters = {0x41: 0, 0x4D: 1, 0x53: 2}
-        relevant = set(letters) | {0x10, 0x11, 0x12, 0x5B, 0x5C, *range(0xA0, 0xA6)}
+    def feed(self, vk: int, pressed: bool, *, now: float | None = None):
+        now = monotonic() if now is None else now
+        relevant = set(SHORTCUT_BUTTONS) | {0x10, 0x11, 0x12, 0x5B, 0x5C, *range(0xA0, 0xA6)}
         if vk not in relevant:
             # An unexpected key must not leave a partly matched chord armed.
             self.reset()
             return None
+
+        key = (vk, pressed)
+        if self.recent and now < self.recent[-1][1]:
+            self.recent.clear()
+        # The Windows shortcut can launch even when Raw Input omits the
+        # letter make. Accept only the keypad's observed release sequence.
+        if (
+            not pressed
+            and vk in SHORTCUT_BUTTONS
+            and not self.held
+            and not self.active
+            and self.recent
+            and now - self.recent[0][1] <= HOTKEY_RELEASE_WINDOW_S
+            and tuple(event for event, _ in self.recent) == MISSING_KEYDOWN_PREFIX
+        ):
+            self.recent.clear()
+            return SHORTCUT_BUTTONS[vk], True
+        if key == MISSING_KEYDOWN_PREFIX[0] and self.held:
+            self.recent.clear()
+        else:
+            self.recent.append((key, now))
+
         if not pressed:
             self.held.discard(vk)
             if vk in self.active:
                 self.active.remove(vk)
-                return letters[vk], False
+                return SHORTCUT_BUTTONS[vk], False
             return None
         if vk in self.held:
             return None
@@ -49,9 +79,9 @@ class ShortcutDecoder:
         ctrl = self.held & {0x11, 0xA2, 0xA3}
         alt = self.held & {0x12, 0xA4, 0xA5}
         extra = self.held & {0x10, 0xA0, 0xA1, 0x5B, 0x5C}
-        if vk in letters and ctrl and alt and not extra:
+        if vk in SHORTCUT_BUTTONS and ctrl and alt and not extra:
             self.active.add(vk)
-            return letters[vk], True
+            return SHORTCUT_BUTTONS[vk], True
         return None
 
 
@@ -90,7 +120,7 @@ class KeyboardController(Controller):
                 # Do not reinterpret a shortcut queued under the previous context/profile.
                 return
             for vk, pressed in events:
-                event = self.keys.feed(vk, pressed)
+                event = self.keys.feed(vk, pressed, now=now)
                 if event is not None:
                     control, down = event
                     self.actions.perform(self.active.bindings[control], down)
