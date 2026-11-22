@@ -16,7 +16,7 @@ input statistics, and never infers a human from a missing signal.
 | Project autonomous driver | CSP Custom-AI sections `Car0` / `CarControls0` (bare and `Local\`) | Read-only `OpenFileMapping` probe every 100 ms by the capture monitor | Every sample from the declaration to the lap end reads *absent*, no gap over 500 ms, and AC's own `acpmf_physics` opens through the same opener (positive control) |
 | Native game AI, pause, replay | CSP `car.isAIControlled`, `car.isUserControlled`, `sim.isLive`, plus wall-clock elapsed time | Counted on every frame of an open lap by the trainer app, stored in the archive as `trace.control_observation` | Complete lap, zero unknown frames, zero AI frames, every frame user-controlled and live, at least 10 frames per second, and wall-clock elapsed within 2.5 s of the lap time |
 | Vendor AI driving | The vendor practice record's `aiIntervened` label | Rolling snapshot file, preserved by the capture monitor | The latest read of a record saved after the finish covers the lap by session window, matches track and car, matches exactly one lap by duration (1 ms) with the same lap number, and labels it not intervened, `eligible`, complete and finalized. No read of that vendor session disagrees or marks the lap number as AI, and the last look at the file succeeded |
-| (operator intent) | Declaration from a rig button via `tools/rig_controls` | Appended to `declarations.jsonl` | Declared before the lap started, at most 20 minutes before it ended, not cleared since. Necessary, never sufficient |
+| (operator intent) | Declaration from Game Point or an optional rig button | Appended to `declarations.jsonl` with the input surface | Declared before the lap started, at most 20 minutes before it ended, not cleared since. Necessary, never sufficient |
 
 A probe that fails for any reason other than "file not found" is `error`, not `absent`. A torn
 journal line, a clock that runs backwards, a duplicate JSON key in a journal, vendor file or
@@ -54,7 +54,13 @@ reader call the same function, so a stored verdict is never trusted.
 | Variable | Meaning |
 |---|---|
 | `AC_COPILOT_HUMAN_CONTROL_ATTESTATION` | Only the value `1` enables the producer, registration and the human-only uses of attested laps. Unset by default. |
-| `AC_COPILOT_HUMAN_DECLARATION_JOURNAL` | File the rig-button `attest` binding appends to. Unset means the button reports "attestation not enabled". |
+| `AC_COPILOT_HUMAN_DECLARATION_JOURNAL` | Capture directory's `declarations.jsonl`. Game Point and the optional rig-button binding append to this same journal. |
+
+In the Game Point started from the capture shell, open **Lap attestation**.
+Select **Declare human control** before the timed lap, then return to AC before
+crossing the start line. **Clear declaration** withdraws the declaration on
+either input surface. Both actions require the process-local opt-in and journal
+path. The capture monitor collects the independent evidence used by `attest`.
 
 Rig-button binding (buttons only, never a knob detent):
 
@@ -115,9 +121,8 @@ prerequisites hold.
 
 1. The change is merged and the rig's primary checkout is on it, so new archives carry
    `trace.control_observation`. Check one archive before starting.
-2. A working declaration surface: the existing baseline keypad with Game Point's
-   `profiles.attestation-baseline.json`, or a managed keypad with an `attest` binding.
-   Stage a separate profile; preserve the user's ordinary mappings.
+2. Game Point's **Lap attestation** window, or an optional keypad profile with
+   an `attest` binding. Keep any keypad profile separate from ordinary mappings.
 3. Racing Lab observes the session (launch from it) so the vendor record is written.
 
 **Setup** (one PowerShell window in the interactive desktop session, never over SSH)
@@ -131,10 +136,10 @@ python -m tools.human_control_attestation monitor --capture-dir "$bench\capture-
   --vendor-snapshot "$env:LOCALAPPDATA\MOZA Racing Lab\training-evaluation\training-evaluation-snapshot-v1.json"
 ```
 
-Start the keypad worker from a shell with the same two variables. Set them for the bench shells
+Start Game Point from a shell with the same two variables. Set them for the bench shells
 only, never machine-wide. Note the wall-clock time of every arm change on paper.
 
-Game Point normally owns the worker. In the bench shell, point
+For optional keypad use, point
 `AC_COPILOT_KEYPAD_PROFILES` at `tools/rig_controls/profiles.attestation-baseline.json`
 (or a validated, separate installed copy), then launch Game Point normally. The example
 uses the already-established Content Manager button to declare and Steam button to clear.

@@ -430,6 +430,35 @@ def _open_human_session_window(supervisor: GamePointSupervisor, *, parent: Any) 
     return view
 
 
+def _open_lap_attestation_window(*, parent: Any) -> Any:
+    from tools.human_control_attestation import (
+        CLEAR_ACTION,
+        HUMAN_ATTESTATION_DECLARE_ACTION,
+        declaration_sink,
+    )
+    from tools.rig_launcher.view import LapAttestationView
+
+    def apply(action: str, success: str) -> str:
+        sink = declaration_sink(surface="game_point")
+        if sink is None:
+            return "Attestation is off. Open Game Point from the configured capture session."
+        try:
+            sink(action)
+        except (OSError, ValueError):
+            return "Could not write the declaration journal. Check the configured capture folder."
+        return success
+
+    return LapAttestationView(
+        parent,
+        enabled=declaration_sink(surface="game_point") is not None,
+        on_declare=lambda: apply(
+            HUMAN_ATTESTATION_DECLARE_ACTION,
+            "Declaration recorded. Return to Assetto Corsa before the timed lap starts.",
+        ),
+        on_clear=lambda: apply(CLEAR_ACTION, "Clear recorded."),
+    )
+
+
 def run_gui(supervisor: GamePointSupervisor) -> int:
     from tools.rig_launcher.chrome import (
         apply_dark_title_bar,
@@ -458,6 +487,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
     _poll_busy: dict[str, bool] = {"v": False}
     offline_view: Any | None = None
     human_view: Any | None = None
+    lap_attestation_view: Any | None = None
 
     def _poll_worker() -> None:
         try:
@@ -608,6 +638,13 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
             return
         human_view = _open_human_session_window(supervisor, parent=root)
 
+    def open_lap_attestation() -> None:
+        nonlocal lap_attestation_view
+        if lap_attestation_view is not None and lap_attestation_view.window.winfo_exists():
+            lap_attestation_view.window.lift()
+            return
+        lap_attestation_view = _open_lap_attestation_window(parent=root)
+
     def poll_tick() -> None:
         # Continuous re-poll so the tablet tunnel keeper (and every other probe) self-heals
         # while the launcher is open — an unplug / tablet sleep / `adb kill-server` after launch
@@ -638,6 +675,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
                 "setup_diff": open_setup_diff,
                 "moza_offline_report": open_offline_report,
                 "human_session": open_human_session,
+                "lap_attestation": open_lap_attestation,
             },
             status_path=str(supervisor.paths.status_path),
             port=supervisor.config.port,
